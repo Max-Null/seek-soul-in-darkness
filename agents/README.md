@@ -17,6 +17,7 @@ oc-plus 的 agent 是「.md frontmatter 定义角色 + 正文是 persona」；DS
 | 参谋 | subagent | (继承) | subagent | `temperature: 0.7`（待核实）+ persona + `toolFilter: read/web_search` |
 | 军师 | subagent | (继承) | subagent | `temperature: 0.3`（待核实）+ persona + `toolFilter: read/glob/grep/web_search` |
 | 制图师 | subagent | DS_MODEL_VISION (kimi k3) | subagent | `model: kimi-k3` + persona + `toolFilter: read` |
+| 助理 | subagent | DS_MODEL_LOW | subagent | `temperature: 0.3`（待核实）+ persona + `toolFilter: read` |
 | 侦查兵 | all | DS_MODEL_LOW_ANTHROPIC | **退役** | DSH 原生 `web_search` 替代 |
 
 ## 适配点（M3 细化，当前仅记录）
