@@ -7,10 +7,10 @@ Repository understanding and hierarchical codemap generation.
 Codemap helps orchestrators map and understand codebases by:
 
 1. Selecting relevant code/config files using LLM judgment
-2. Creating `.slim/codemap.json` for change tracking
+2. Creating `.dsh/codemap.json` for change tracking
 3. Generating empty `codemap.md` templates for fixers to fill in
 
-Legacy `.slim/cartography.json` state is migrated to `.slim/codemap.json` automatically.
+Legacy `.dsh/cartography.json` state is migrated to `.dsh/codemap.json` automatically.
 
 ## Commands
 
@@ -27,7 +27,7 @@ node codemap.mjs update --root /repo
 
 ## Outputs
 
-### .slim/codemap.json
+### .dsh/codemap.json
 
 ```json
 {

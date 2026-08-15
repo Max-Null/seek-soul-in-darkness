@@ -17,12 +17,12 @@ filesystem/git operations directly.
 
 ### Step 1: Check Existing State
 
-First check whether `.slim/clonedeps.json` exists.
+First check whether `.dsh/clonedeps.json` exists.
 
 If it exists:
 
 1. Read it before asking librarian for a new plan.
-2. Check whether each listed `path` exists under `.slim/clonedeps/repos/`.
+2. Check whether each listed `path` exists under `.dsh/clonedeps/repos/`.
 3. Reuse existing cloned repos when they already satisfy the user's task.
 4. Only ask librarian for new recommendations if the existing manifest is
    missing, stale, or insufficient for the current task.
@@ -112,7 +112,7 @@ while the `.ignore` allowlist keeps them readable to OpenCode.
 
 ```gitignore
 # BEGIN oh-my-opencode-slim clonedeps
-.slim/clonedeps/repos/
+.dsh/clonedeps/repos/
 # END oh-my-opencode-slim clonedeps
 ```
 
@@ -120,13 +120,13 @@ while the `.ignore` allowlist keeps them readable to OpenCode.
 
 ```ignore
 # BEGIN oh-my-opencode-slim clonedeps
-!.slim/
-!.slim/clonedeps.json
-!.slim/clonedeps/
-!.slim/clonedeps/repos/
-!.slim/clonedeps/repos/**
-.slim/clonedeps/repos/**/.git/
-.slim/clonedeps/repos/**/.git/**
+!.dsh/
+!.dsh/clonedeps.json
+!.dsh/clonedeps/
+!.dsh/clonedeps/repos/
+!.dsh/clonedeps/repos/**
+.dsh/clonedeps/repos/**/.git/
+.dsh/clonedeps/repos/**/.git/**
 # END oh-my-opencode-slim clonedeps
 ```
 
@@ -135,7 +135,7 @@ while the `.ignore` allowlist keeps them readable to OpenCode.
 Create one folder per source repository under:
 
 ```text
-.slim/clonedeps/repos/<safe-repo-name>/
+.dsh/clonedeps/repos/<safe-repo-name>/
 ```
 
 Derive the safe name from the repository owner/name, not from the package name.
@@ -148,7 +148,7 @@ point each manifest entry at the same repo path with different `packagePath`
 values as needed. Do not create ecosystem folders, per-package clone folders, or
 per-version folders. If two different source repositories normalize to the same
 safe name, disambiguate manually and record the chosen path in
-`.slim/clonedeps.json`.
+`.dsh/clonedeps.json`.
 
 Clone/fetch with normal git commands. For an existing clone, first verify that
 `git remote get-url origin` matches the approved repo URL. If it does not match,
@@ -159,7 +159,7 @@ Safe manual git pattern:
 1. `git ls-remote <repoUrl> <ref>` to verify the ref where practical.
 2. Clone without submodules/recursive behavior.
 3. Prefer shallow fetch/clone where practical.
-4. Clone into a temporary directory under `.slim/clonedeps/repos/`, then move it
+4. Clone into a temporary directory under `.dsh/clonedeps/repos/`, then move it
    into the final safe-name path after checkout succeeds.
 5. Remove failed temporary clones.
 
@@ -167,7 +167,7 @@ Do not run dependency install/build/test scripts from cloned repositories.
 
 ### Step 6: Write Local State
 
-Write `.slim/clonedeps.json` so future agents know what exists:
+Write `.dsh/clonedeps.json` so future agents know what exists:
 
 ```json
 {
@@ -179,7 +179,7 @@ Write `.slim/clonedeps.json` so future agents know what exists:
       "resolvedVersion": "1.3.17",
       "repoUrl": "https://github.com/opencode-ai/opencode.git",
       "ref": "v1.3.17",
-      "path": ".slim/clonedeps/repos/opencode-ai__opencode",
+      "path": ".dsh/clonedeps/repos/opencode-ai__opencode",
       "packagePath": "packages/plugin",
       "reason": "Plugin API source used by the project"
     },
@@ -188,7 +188,7 @@ Write `.slim/clonedeps.json` so future agents know what exists:
       "resolvedVersion": "1.3.17",
       "repoUrl": "https://github.com/opencode-ai/opencode.git",
       "ref": "v1.3.17",
-      "path": ".slim/clonedeps/repos/opencode-ai__opencode",
+      "path": ".dsh/clonedeps/repos/opencode-ai__opencode",
       "packagePath": "packages/sdk/js",
       "reason": "Core SDK source used to inspect runtime behavior"
     }
@@ -199,9 +199,9 @@ Write `.slim/clonedeps.json` so future agents know what exists:
 If a clone fails after earlier clones succeeded, still write state for the
 successful clones so future inspection is not misleading.
 
-Do not add `.slim/clonedeps.json` to `.gitignore`. It is small, reviewable
+Do not add `.dsh/clonedeps.json` to `.gitignore`. It is small, reviewable
 project metadata that can be committed. Only the cloned repository contents
-under `.slim/clonedeps/repos/` should be ignored.
+under `.dsh/clonedeps/repos/` should be ignored.
 
 ### Step 7: Register Dependency Source in AGENTS.md
 
@@ -218,23 +218,23 @@ sentence so future agents do not need an extra read just to know what is there:
 ## Cloned Dependency Source
 
 Read-only dependency source repositories are available under
-`.slim/clonedeps/repos/` for inspection. Do not edit these clones.
+`.dsh/clonedeps/repos/` for inspection. Do not edit these clones.
 
-- `.slim/clonedeps/repos/<safe-name>/` - `<repo>` at `<ref>`; <one sentence on
+- `.dsh/clonedeps/repos/<safe-name>/` - `<repo>` at `<ref>`; <one sentence on
   why this source is useful>.
-- `.slim/clonedeps/repos/<safe-name-2>/` - `<repo>` at `<ref>`; <one sentence on
+- `.dsh/clonedeps/repos/<safe-name-2>/` - `<repo>` at `<ref>`; <one sentence on
   why this source is useful>.
 ```
 
-Also keep `.slim/clonedeps.json` updated as the structured manifest, but do not
+Also keep `.dsh/clonedeps.json` updated as the structured manifest, but do not
 make agents read it for the basic repo list.
 
 ## Cleanup
 
 When the user asks to clean cloned dependencies, remove:
 
-- `.slim/clonedeps/repos/`
+- `.dsh/clonedeps/repos/`
 - the managed clonedeps marker blocks from `.gitignore` and `.ignore`
 
-Ask before removing `.slim/clonedeps.json` or the `AGENTS.md` section because
+Ask before removing `.dsh/clonedeps.json` or the `AGENTS.md` section because
 they may be intentional project metadata.
