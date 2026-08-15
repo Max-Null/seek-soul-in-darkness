@@ -186,6 +186,8 @@ fractal 双星系统 → DSH 的精确映射：
 
 DSH 原生支持 per-child 的 `model` / `persona` / `toolFilter`（`SubagentStartRequest`）；四阶段流程（研究→综合→实现→验证）由主 agent 编排逻辑 + `ctx.subagents.start()` 实现。⚠️ 温度（temp 0.1/0.3/0.7）是否 per-child 透传待实测。
 
+**关键红利：非阻塞委派**。DSH subagent 有同步 one-shot / 后台 one-shot（Task 管理）/ continuable child（独立 session）三种模式；非阻塞模式下 child 独立运行，完成时以 settlement notice 异步结算给主 agent（空闲 → 新轮；正忙 → steer 到 step boundary，不打断）。这从根本上解决了 OC `task` 工具同步阻塞的底层问题——工匠 ×N 并行、军师后台审查、参谋后台纠偏，都是**真并行**，主 agent 派发后继续，永不干等。
+
 ### 4.4 14 技能包（M3 并行）
 
 8 个 mxy-*（编码工作流）+ 6 个 omo-*（研发增强）→ DSH `skill` 机制打包。技能内容（prompt/步骤）可整体迁移，机制从 OC skill 换成 DSH skill。
