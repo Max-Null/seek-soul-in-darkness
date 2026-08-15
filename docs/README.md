@@ -22,3 +22,9 @@
 - [记忆 UI 面板实现设计](设计/2026-08-16-记忆UI面板-实现设计.md)
 - [桌面壳最小闭环搭建步骤](设计/2026-08-16-桌面壳最小闭环-搭建步骤.md)
 - [壳级能力设计（DSH × 壳协同）](设计/SSiD-壳级能力设计.md)
+
+## 资产（oc-plus 迁移）
+
+- `skills/` — 14 个技能（8 mxy + 6 omo）迁为 DSH skill 格式
+- `agents/` — 6 个 agent 定义 + 迁移映射表（见 `agents/README.md`）
+- `presets/ssid-double-star/` — 双星主 agent preset（工具集 + persona）
