@@ -22,7 +22,9 @@
 | 7 | 品牌皮肤 | `ssid-skin` | M4 | 🔲 | 思灵主题（深渊/巨鲸之眼） |
 | 8 | 自研壳 | `ssid-shell`（非 DSH 插件，Electron 壳） | M4 | 🔲 | 参考 anywhere-labs，不换皮 |
 | 9 | 草稿润色 | `@max-null/dsh-polish`（新） | M3（可并行） | 🔲 | host 侧 `ctx.llm.stream`（flash、不带历史）+ client 侧输入框按钮 + `setDraft` 回填 |
-| 10 | 零散面板 | 诊断/PDF/文件修改卡/上下文 | M4 后 | 🔲 | 逐项评估「原生有/自研」 |
+| 10 | 文件预览面板 | `@max-null/dsh-preview`（新） | M4 后 | 🔲 | 多格式渲染（mammoth/xlsx/pdfjs/html/md）；DSH 原生仅图片（`ui-attachment` "Images only"），非图片预览全空白 |
+| 11 | 划选内容发送 | dsh-preview 子能力 | M4 后 | 🔲 | 预览面板划选 → 发送，复用 `ui-input-trigger` 的 `ReferenceInsert` / `setDraft` |
+| 12 | 零散面板 | 诊断/文件修改卡/上下文 | M4 后 | 🔲 | 逐项评估「原生有/自研」 |
 
 ## 二、预制插件清单（开箱即用）
 
