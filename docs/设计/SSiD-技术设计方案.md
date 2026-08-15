@@ -173,16 +173,18 @@ flowchart TB
 
 ### 4.3 四 agent 编排（M3）
 
-fractal 双星系统 → DSH：
+fractal 双星系统 → DSH 的精确映射：
 
-| fractal agent | DSH 落点 |
-|---|---|
-| 双星（primary，temp 0.2） | 主 agent preset |
-| 工匠（subagent，temp 0.1，带 LSP） | subagent + LSP capability |
-| 参谋（subagent，temp 0.7，战术纠偏） | subagent |
-| 军师（subagent，temp 0.3，战略审查） | subagent |
+| fractal agent | DSH 实现 | 定制点 |
+|---|---|---|
+| 双星（primary，temp 0.2） | 一个 **preset**（`ssid-double-star`，默认挂载） | 工具 + prompt section |
+| 工匠（subagent，temp 0.1，带 LSP） | subagent | `persona` + `model`(flash) + `toolFilter`(编码工具) |
+| 参谋（subagent，temp 0.7，战术纠偏） | subagent | `persona`(纠偏) + `model` |
+| 军师（subagent，temp 0.3，独立审查） | subagent | `persona`(审查) + 独立 `model` |
+| 助理（赛博分身） | subagent | `persona` |
+| 制图师（vision + kimi k3） | subagent | `persona`(视觉) + `model`(kimi k3) + `toolFilter`(读图工具) |
 
-四阶段流程（研究→综合→实现→验证）由主 agent 编排逻辑实现，DSH 的 subagent 是原生能力。
+DSH 原生支持 per-child 的 `model` / `persona` / `toolFilter`（`SubagentStartRequest`）；四阶段流程（研究→综合→实现→验证）由主 agent 编排逻辑 + `ctx.subagents.start()` 实现。⚠️ 温度（temp 0.1/0.3/0.7）是否 per-child 透传待实测。
 
 ### 4.4 14 技能包（M3 并行）
 
