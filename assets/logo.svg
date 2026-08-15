@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <rect width="256" height="256" rx="48" fill="#1a1a2e"/>
+  <g fill="none" stroke="#0ea5e9">
+    <circle cx="128" cy="128" r="52" stroke-width="2" opacity="0.45"/>
+    <circle cx="128" cy="128" r="80" stroke-width="2" opacity="0.35"/>
+    <circle cx="128" cy="128" r="106" stroke-width="2" opacity="0.28"/>
+  </g>
+  <circle cx="128.0" cy="180.0" r="3.5" fill="#0ea5e9" opacity="0.9"/><circle cx="128.0" cy="76.0" r="3.5" fill="#0ea5e9" opacity="0.9"/>
+  <circle cx="208.0" cy="128.0" r="3.5" fill="#0ea5e9" opacity="0.8"/><circle cx="184.6" cy="184.6" r="3.5" fill="#0ea5e9" opacity="0.8"/><circle cx="128.0" cy="208.0" r="3.5" fill="#0ea5e9" opacity="0.8"/><circle cx="71.4" cy="184.6" r="3.5" fill="#0ea5e9" opacity="0.8"/><circle cx="48.0" cy="128.0" r="3.5" fill="#0ea5e9" opacity="0.8"/><circle cx="71.4" cy="71.4" r="3.5" fill="#0ea5e9" opacity="0.8"/><circle cx="128.0" cy="48.0" r="3.5" fill="#0ea5e9" opacity="0.8"/><circle cx="184.6" cy="71.4" r="3.5" fill="#0ea5e9" opacity="0.8"/>
+  <circle cx="203.0" cy="203.0" r="4" fill="#0ea5e9" opacity="0.9"/><circle cx="53.0" cy="203.0" r="4" fill="#0ea5e9" opacity="0.9"/><circle cx="53.0" cy="53.0" r="4" fill="#0ea5e9" opacity="0.9"/><circle cx="203.0" cy="53.0" r="4" fill="#0ea5e9" opacity="0.9"/>
+  <!-- 瞳孔：虹膜 + 瞳孔 + 高光 -->
+  <circle cx="128" cy="128" r="38" fill="#0369a1"/>
+  <circle cx="128" cy="128" r="27" fill="#0ea5e9"/>
+  <circle cx="128" cy="128" r="13" fill="#0b1220"/>
+  <circle cx="119" cy="118" r="7" fill="#fff" opacity="0.9"/>
+  <circle cx="139" cy="135" r="3" fill="#fff" opacity="0.5"/>
+</svg>
