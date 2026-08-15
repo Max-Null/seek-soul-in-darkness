@@ -115,6 +115,14 @@ flowchart TB
 - **SSiD 壳自研**：单实例锁、起 Host、loopback 加载、托盘、自动更新、打包，代码自写，承载思灵品牌。
 - 壳实现细节见 [`2026-08-16-桌面壳最小闭环-搭建步骤.md`](2026-08-16-桌面壳最小闭环-搭建步骤.md)。
 
+### 2.4 壳级能力层（DSH × 壳协同）
+
+**关键**：有些能力（系统通知、唤起窗口、托盘角标、新开窗口、自动更新）单靠 DSH 插件做不到，需要壳层。
+
+- 自研壳 = Electron main + 一组「壳级 Host 插件」，暴露 `ctx.desktop` 服务（`notify` / `activateWindow` / `setTrayBadge` / `createWindow` / `refreshEngine`）。
+- 业务插件通过 `inject: ['desktop']` + `ctx.desktop.notify(...)` 触发壳能力，无需 import Electron。
+- 详见 [`SSiD-壳级能力设计.md`](SSiD-壳级能力设计.md)。
+
 ## 三、迁移映射（三代资产 → DSH）
 
 ### 3.1 结论
@@ -260,4 +268,5 @@ sequenceDiagram
 | 插件清单 | [`SSiD-插件清单.md`](SSiD-插件清单.md) |
 | 记忆 UI 设计 | [`2026-08-16-记忆UI面板-实现设计.md`](2026-08-16-记忆UI面板-实现设计.md) |
 | 壳步骤 | [`2026-08-16-桌面壳最小闭环-搭建步骤.md`](2026-08-16-桌面壳最小闭环-搭建步骤.md) |
+| 壳级能力 | [`SSiD-壳级能力设计.md`](SSiD-壳级能力设计.md) |
 | 品牌 | [`../品牌/品牌手册.md`](../品牌/品牌手册.md) |
