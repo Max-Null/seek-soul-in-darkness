@@ -155,6 +155,15 @@ flowchart TB
 
 ### 4.2 记忆（M1 + M2）
 
+**关键架构判断：监督者形态分两种**——审查型用 subagent，后台型用插件：
+
+| 监督类型 | 形态 | 机制 | fractal 对应 |
+|---|---|---|---|
+| 审查型（主 agent 主动请审查） | subagent | 主 agent 派，审查完 report 回来 | 军师 |
+| 后台型（自动监视 + 触发干预） | **插件**（非 subagent） | 监听 `session/event` + `agent/*`，`agent.steer/inject` 干预 | 分形 Guardian |
+
+subagent 天生隶属 parent（`parentSession` header），是"主 agent 的手下"而非第三方；真正的第三方监督者是插件（独立挂事件流旁观 + 注入干预）。嵌套委派（子 agent 互调）DSH 原生支持，受 `delegationDepth` + `maxDepth` 控制。
+
 **M1 · 记忆 UI 面板**（施工图见 [`2026-08-16-记忆UI面板-实现设计.md`](2026-08-16-记忆UI面板-实现设计.md)）：
 
 ```
