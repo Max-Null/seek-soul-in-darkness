@@ -21,7 +21,8 @@
 | 6 | 14 技能包 | `ssid-skills` | M3 | 🔲 | 8 mxy + 6 omo → DSH skill |
 | 7 | 品牌皮肤 | `ssid-skin` | M4 | 🔲 | 思灵主题（深渊/巨鲸之眼） |
 | 8 | 自研壳 | `ssid-shell`（非 DSH 插件，Electron 壳） | M4 | 🔲 | 参考 anywhere-labs，不换皮 |
-| 9 | 零散面板 | 诊断/PDF/文件修改卡/上下文 | M4 后 | 🔲 | 逐项评估「原生有/自研」 |
+| 9 | 草稿润色 | `@max-null/dsh-polish`（新） | M3（可并行） | 🔲 | host 侧 `ctx.llm.stream`（flash、不带历史）+ client 侧输入框按钮 + `setDraft` 回填 |
+| 10 | 零散面板 | 诊断/PDF/文件修改卡/上下文 | M4 后 | 🔲 | 逐项评估「原生有/自研」 |
 
 ## 二、预制插件清单（开箱即用）
 
