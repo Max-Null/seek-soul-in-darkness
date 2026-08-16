@@ -18,8 +18,8 @@ const kernel = await bootKernel()
 const ctx = kernel.ctx
 const habit = ctx.get('habit')
 const memory = ctx.get('memory')
-log('habit service:', habit ? 'PRESENT' : 'ABSENT')
-log('memory service:', memory ? 'PRESENT' : 'ABSENT')
+log(`habit service: ${habit ? 'PRESENT' : 'ABSENT'}`)
+log(`memory service: ${memory ? 'PRESENT' : 'ABSENT'}`)
 
 if (habit === undefined) {
   await kernel.shutdown(1)
