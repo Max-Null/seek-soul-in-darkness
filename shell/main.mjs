@@ -54,6 +54,7 @@ async function start() {
     title: WINDOW_TITLE,
     icon: asset('icon.png'),
     frame: false,
+    backgroundColor: '#0f141d',
     show: false,
     webPreferences: { sandbox: true, contextIsolation: true },
   })
@@ -99,12 +100,94 @@ async function start() {
   // addBrowserView（不是 setBrowserView）——setBrowserView 会移除上面的 titleBar。
   const mainView = new BrowserView({ webPreferences: { sandbox: true, contextIsolation: true } })
   win.addBrowserView(mainView)
-  // 官方 UI 渲染进程的诊断通道：console 转发到主进程 stderr。
+  // 官方 UI 渲染进程的诊断通道：console 转发到主进程 stderr；
+  // [theme-sync] 标记触发标题栏主题即时同步。
   mainView.webContents.on('console-message', (_event, ...args) => {
     const details = typeof args[0] === 'object' && args[0] !== null ? args[0] : { level: args[0], message: args[1] }
-    process.stderr.write(`[main-ui:${details.level}] ${details.message ?? ''}\n`)
+    const message = details.message ?? ''
+    if (message.includes('[theme-sync]')) {
+      requestThemeSync()
+      return
+    }
+    process.stderr.write(`[main-ui:${details.level}] ${message}\n`)
   })
   await mainView.webContents.loadURL(`http://127.0.0.1:${kernel.port}/`)
+
+  // ── 主题跟随：titleBar 是独立 BrowserView，拿不到官方 UI 的 --dsw-* 变量。
+  // 实时路径：mainView 注入 MutationObserver，body 样式/主题属性变化时打
+  // [theme-sync] 标记（console 转发）→ 主进程防抖同步。5s 轮询兜底。
+  let themeSyncTimer = null
+  const requestThemeSync = () => {
+    if (themeSyncTimer !== null) return
+    themeSyncTimer = setTimeout(() => {
+      themeSyncTimer = null
+      void syncTitlebarTheme()
+    }, 100)
+  }
+  const syncTitlebarTheme = async () => {
+    try {
+      const tokens = await mainView.webContents.executeJavaScript(`(() => {
+        // 深色主题变量挂在 body[data-ds-dark-theme]，读 body 的 computed style。
+        // 跟随策略：token 优先（官方主题/皮肤插件重写 token 时命中），
+        // body 实际计算样式兜底（dsh-skin 这类 inline-style 皮肤直改 body）。
+        const readVar = (name) => {
+          const value = getComputedStyle(document.body).getPropertyValue(name).trim()
+          return value === '' ? null : value
+        }
+        const bodyStyle = getComputedStyle(document.body)
+        return {
+          bg: readVar('--dsw-specific-sidebar-fill') ?? bodyStyle.backgroundColor,
+          fg: readVar('--dsw-alias-label-primary') ?? bodyStyle.color,
+          muted: readVar('--dsw-alias-label-secondary') ?? bodyStyle.color,
+          border: readVar('--dsw-alias-border-l2') ?? 'rgba(128, 148, 168, .25)',
+        }
+      })()`)
+      if (tokens !== null && typeof tokens === 'object' && tokens.bg !== null && tokens.bg !== undefined) {
+        await titleBar.webContents.executeJavaScript(`(() => {
+          const set = (name, value) => {
+            if (value !== null && value !== undefined && value !== '') {
+              document.documentElement.style.setProperty(name, value)
+            }
+          }
+          set('--titlebar-bg', ${JSON.stringify(tokens.bg)})
+          set('--titlebar-fg', ${JSON.stringify(tokens.fg)})
+          set('--titlebar-muted', ${JSON.stringify(tokens.muted)})
+          set('--titlebar-border', ${JSON.stringify(tokens.border)})
+        })()`)
+      }
+    } catch (error) {
+      // UI 未就绪或切换中：下一轮同步再试
+      process.stderr.write(`[titlebar-theme] sync failed: ${error instanceof Error ? error.message : String(error)}\n`)
+    }
+  }
+  const injectThemeObserver = () => {
+    void mainView.webContents.executeJavaScript(`(() => {
+      if (window.__ssidThemeObserver !== undefined) return 'already'
+      const flag = () => { console.log('[theme-sync]') }
+      const observer = new MutationObserver(flag)
+      for (const target of [document.documentElement, document.body]) {
+        observer.observe(target, {
+          attributes: true,
+          attributeFilter: ['style', 'class', 'data-ds-dark-theme'],
+        })
+      }
+      window.__ssidThemeObserver = observer
+      return 'installed'
+    })()`).then((result) => {
+      process.stderr.write(`[theme-observer] ${String(result)}\n`)
+    }).catch((error) => {
+      process.stderr.write(`[theme-observer] failed: ${error instanceof Error ? error.message : String(error)}\n`)
+    })
+  }
+  // console 转发通道里识别 [theme-sync] 标记 → 防抖同步。
+  // dom-ready 监听覆盖后续导航；loadURL 已完成，立即注入一次。
+  mainView.webContents.on('dom-ready', () => {
+    injectThemeObserver()
+    void syncTitlebarTheme()
+  })
+  injectThemeObserver()
+  void syncTitlebarTheme()
+  setInterval(() => { void syncTitlebarTheme() }, 5000)
 
   const TITLEBAR_HEIGHT = 36
   const layout = () => {
