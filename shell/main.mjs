@@ -20,11 +20,19 @@
 
 import { register } from 'tsx/esm/api'
 import { app, BrowserView, BrowserWindow, ipcMain, Menu, nativeImage, Notification, Tray } from 'electron'
+import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 // tsx ESM loader: transpiles kernel.ts and resolves @deepseek-ai/dsh-* to the
 // adjacent DSH checkout source. Must run before any TS import.
 register()
+// 壳版本注入（ssid-panels 的 about API 读取；boot 前设置）。
+try {
+  const shellPkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
+  if (typeof shellPkg.version === 'string') process.env.SSID_SHELL_VERSION = shellPkg.version
+} catch {
+  // 版本缺失不影响启动
+}
 const { bootKernel } = await import('./kernel.ts')
 
 /** App name / window title. */

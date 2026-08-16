@@ -5,16 +5,18 @@
 <title>思灵</title>
 <style>
   :root {
-    --bg: #0A0E14;
+    /* 由主进程从官方 UI 读取 --dsw-alias-* token 后注入；fallback 为
+       DSH 深色主题近似值（浅色主题/皮肤插件下会被注入值覆盖）。 */
+    --titlebar-bg: #0f141d;
+    --titlebar-fg: #d8e0ea;
+    --titlebar-muted: #67748a;
+    --titlebar-border: #1e2836;
     --accent: #4FC3F7;
-    --fg: #d8e0ea;
-    --muted: #67748a;
-    --hover: rgba(79, 195, 247, .08);
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; overflow: hidden; }
   body {
-    background: var(--bg);
+    background: var(--titlebar-bg);
     font-family: system-ui, 'Segoe UI', sans-serif;
     user-select: none;
   }
@@ -22,6 +24,7 @@
     height: 100%;
     display: flex;
     align-items: center;
+    border-bottom: 1px solid var(--titlebar-border);
     -webkit-app-region: drag; /* 整条可拖拽，按钮单独 no-drag */
   }
   .brand {
@@ -34,7 +37,7 @@
   .brand svg { width: 15px; height: 15px; filter: drop-shadow(0 0 4px rgba(79, 195, 247, .4)); }
   .brand .name {
     font-size: 12px;
-    color: var(--fg);
+    color: var(--titlebar-fg);
     letter-spacing: .14em;
   }
   .spacer { flex: 1; height: 100%; }
@@ -44,21 +47,20 @@
     -webkit-app-region: no-drag;
   }
   .controls button {
-    width: 44px;
+    width: 52px;
     height: 100%;
     background: none;
     border: none;
-    color: var(--fg);
-    font-size: 12px;
+    color: var(--titlebar-fg);
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
     transition: background .12s;
   }
-  .controls button:hover { background: var(--hover); }
+  .controls button:hover { background: rgba(128, 148, 168, .14); }
   .controls button.close:hover { background: #e81123; color: #fff; }
-  .controls svg { width: 10px; height: 10px; }
+  .controls svg { width: 13px; height: 13px; }
 </style>
 </head>
 <body>
