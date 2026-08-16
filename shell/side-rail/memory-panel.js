@@ -2,8 +2,18 @@
 const listEl = document.getElementById('list')
 const queryEl = document.getElementById('query')
 const tabs = document.querySelectorAll('.tabs button')
+const toggleEl = document.getElementById('toggle')
 
 let activeStatus = 'auto'
+
+// 收起/展开：主进程改布局，这里同步 UI 形态。
+// 侧栏在窗口右缘：展开态按钮指向右（收起方向），收起态指向左（展开方向）。
+toggleEl.addEventListener('click', () => { window.ssid.toggleRail() })
+window.ssid.onRailState((collapsed) => {
+  document.body.classList.toggle('collapsed', collapsed)
+  toggleEl.textContent = collapsed ? '«' : '»'
+  if (!collapsed) render()
+})
 
 function recordCard(record) {
   const li = document.createElement('li')

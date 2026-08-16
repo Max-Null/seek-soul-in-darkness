@@ -24,8 +24,12 @@ import { fileURLToPath } from 'node:url'
 register()
 const { bootKernel } = await import('./kernel.ts')
 
-/** Side rail width (px). */
+/** Side rail width (px) when expanded / collapsed. */
 const SIDE_RAIL_WIDTH = 320
+const SIDE_RAIL_COLLAPSED_WIDTH = 36
+
+/** Current side rail state; toggled via ssid:rail:toggle. */
+let railCollapsed = false
 
 /** App name / window title. */
 const PRODUCT_NAME = 'SiLing'
@@ -50,12 +54,11 @@ async function start() {
   }
 
   // ── IPC: memory panel data bridge - in-process host service reads ───────
-  // Empty until dsh-memory is added to the profile; method shape mirrors the
-  // dsh-memory host service.
+  // MemoryEngine API: list / search / setStatus(id, status) / forget(id).
   const memory = kernel.get('memory')
   ipcMain.handle('ssid:memory:list', () => memory?.list?.() ?? [])
   ipcMain.handle('ssid:memory:search', (_event, query) => memory?.search?.(query) ?? [])
-  ipcMain.handle('ssid:memory:confirm', (_event, id) => memory?.confirm?.(id) ?? null)
+  ipcMain.handle('ssid:memory:confirm', (_event, id) => memory?.setStatus?.(id, 'auto') ?? null)
   ipcMain.handle('ssid:memory:forget', (_event, id) => memory?.forget?.(id) ?? false)
 
   // ── window + dual BrowserView (official UI + side rail) ────────────────
@@ -84,11 +87,21 @@ async function start() {
 
   const layout = () => {
     const [width, height] = win.getContentSize()
-    mainView.setBounds({ x: 0, y: 0, width: width - SIDE_RAIL_WIDTH, height })
-    sideRail.setBounds({ x: width - SIDE_RAIL_WIDTH, y: 0, width: SIDE_RAIL_WIDTH, height })
+    const railWidth = railCollapsed ? SIDE_RAIL_COLLAPSED_WIDTH : SIDE_RAIL_WIDTH
+    mainView.setBounds({ x: 0, y: 0, width: width - railWidth, height })
+    sideRail.setBounds({ x: width - railWidth, y: 0, width: railWidth, height })
   }
   win.on('resize', layout)
   layout()
+
+  // 侧栏收起/展开：主进程改布局，侧栏页面同步 UI 状态。
+  ipcMain.handle('ssid:rail:toggle', () => {
+    railCollapsed = !railCollapsed
+    layout()
+    sideRail.webContents.send('ssid:rail-state', railCollapsed)
+    return railCollapsed
+  })
+
   win.show()
 }
 
