@@ -7,3 +7,7 @@ build/
 .dsh/
 
 dist-electron/
+
+kernel.bundle.mjs
+exe-stderr.log
+exe-stdout.log

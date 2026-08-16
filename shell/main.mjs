@@ -25,7 +25,10 @@ import { fileURLToPath } from 'node:url'
 
 // tsx ESM loader: transpiles kernel.ts and resolves @deepseek-ai/dsh-* to the
 // adjacent DSH checkout source. Must run before any TS import.
-register()
+// 打包版（app.isPackaged）改用预编译的 kernel.bundle.mjs，不加载 tsx。
+if (!app.isPackaged) {
+  register()
+}
 // 壳版本注入（ssid-panels 的 about API 读取；boot 前设置）。
 try {
   const shellPkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
@@ -33,7 +36,9 @@ try {
 } catch {
   // 版本缺失不影响启动
 }
-const { bootKernel } = await import('./kernel.ts')
+const { bootKernel } = app.isPackaged
+  ? await import('./kernel.bundle.mjs')
+  : await import('./kernel.ts')
 
 /** App name / window title. */
 const PRODUCT_NAME = 'SSiD'

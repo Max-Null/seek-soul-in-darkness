@@ -18,20 +18,24 @@
  * src 目录内。
  */
 
-import { registerHooks } from 'node:module'
-
-/**
- * loader 包源码目录的 URL 前缀（带尾部斜杠）。tsx paths 把
- * `@deepseek-ai/cordis-plugin-loader` 解析到 DSH checkout 的
- * `vendor/loader/src`，loader 的 import 请求 parentURL 形如
- * `file:///.../vendor/loader/src/config/tree.ts`。保持 URL 形式比较——
- * parentURL 是 file:// URL，不能和 fileURLToPath 后的磁盘路径比较。
- */
-const LOADER_SRC_PREFIX = new URL('.', import.meta.resolve('@deepseek-ai/cordis-plugin-loader')).href
+import { createRequire, registerHooks } from 'node:module'
+import { pathToFileURL } from 'node:url'
 
 /** 是否是需要 Node 包解析的 bare specifier。 */
 function isBareSpecifier(specifier: string): boolean {
   return !specifier.startsWith('.') && !specifier.startsWith('/') && !URL.canParse(specifier)
+}
+
+/**
+ * loader 包源码目录的 URL 前缀（带尾部斜杠）。运行时从 profile 解析
+ * （不依赖模块顶层的 import.meta.resolve——打包后它无法解析 bare 名）。
+ * 开发版经 tsx paths、打包版经 profile 平面 symlink，都命中 DSH checkout
+ * 的 vendor/loader/src。保持 URL 形式比较——parentURL 是 file:// URL。
+ */
+function loaderSrcPrefix(profileBaseUrl: string): string {
+  const profileRequire = createRequire(profileBaseUrl)
+  const pkgPath = profileRequire.resolve('@deepseek-ai/cordis-plugin-loader/package.json')
+  return new URL('.', pathToFileURL(pkgPath)).href
 }
 
 /**
@@ -40,10 +44,14 @@ function isBareSpecifier(specifier: string): boolean {
  * @returns 幂等的注销函数。
  */
 export function installProfilePackageResolver(profileBaseUrl: string): () => void {
+  const prefix = loaderSrcPrefix(profileBaseUrl)
+  // bundle 形态下 loader 代码内联进 kernel.bundle.mjs，其 import 的
+  // parentURL 是 bundle 自身；源码形态下是 checkout 的 vendor/loader/src。
+  const selfUrl = import.meta.url
   const hooks = registerHooks({
     resolve(specifier, context, nextResolve) {
       const parent = context.parentURL ?? ''
-      const fromLoader = parent.startsWith(LOADER_SRC_PREFIX)
+      const fromLoader = parent.startsWith(prefix) || parent === selfUrl
       if (!fromLoader || !isBareSpecifier(specifier)) {
         return nextResolve(specifier, context)
       }

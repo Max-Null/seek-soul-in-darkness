@@ -8,7 +8,8 @@
     "start": "electron .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "smoke": "node --import tsx/esm boot-smoke.ts",
-    "pack": "electron-builder --win portable"
+    "pack": "npm run bundle-kernel && electron-builder --win portable",
+    "bundle-kernel": "esbuild kernel.ts --bundle --platform=node --format=esm --outfile=kernel.bundle.mjs --external:node:* --external:*.node"
   },
   "main": "main.mjs",
   "author": "MaxNull",
@@ -18,6 +19,10 @@
     "directories": {
       "output": "dist-electron"
     },
+    "asarUnpack": [
+      "node_modules/tsx/**",
+      "node_modules/@esbuild/**"
+    ],
     "win": {
       "target": "portable",
       "icon": "assets/icon.png"
