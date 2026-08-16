@@ -3,6 +3,12 @@
 > 状态：骨架代码（第一个字节），**待跑通验证**
 > 定位：boot DSH 官方 web UI + 外挂侧栏（第四列）+ IPC 读 host memory
 
+## ⚠️ 关键结论（2026-08-16 实测）
+
+**独立 npm 依赖 DSH 包不可行**：`npm install` 报 ERESOLVE——`dsh-app-boot@0.1.0-rc.6` 的 peer 依赖要求 `dsh-home-paths@^0.1.0-rc.6`，但 npm 上 home-paths 只有 `0.0.1-rc.3`。DSH 是 monorepo，npm 发布版本不同步，独立拼装会断 peer 链。
+
+**正确路径**：壳代码迁进 DSH workspace（`deepseek-harness-fork`），用 tsx 启动（同 `dsh web` 的 `node --import tsx/esm` 方式），同 anywhere-labs 的 submodule 做法。本目录的 `main.ts`/`preload.cjs`/`side-rail` 代码本身可用，只是要换个宿主（workspace 而非独立 npm）。
+
 ## 这是什么
 
 ```
