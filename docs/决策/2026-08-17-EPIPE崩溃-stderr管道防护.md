@@ -33,8 +33,9 @@ Electron 主进程弹出 `A JavaScript error occurred in the main process`：
 ## 验证
 
 - [x] `node --check shell/main.mjs` 语法通过
-- [x] dev 启动冒烟：boot 正常、无 EPIPE、日志转发工作
-- [x] 打包版不受影响：同一份 main.mjs 编译进 bundle，防护对打包形态同样生效
+- [x] dev 启动冒烟（2026-08-17 实测）：boot 正常（dsh web 64864）、`[main-ui]` 日志
+      转发工作、theme-observer installed、关于页 11 插件全加载、无 EPIPE
+- [x] 打包形态同样受防护：electron-builder 将 `main.mjs` 原样打进 asar，无编译差异
 
 ## 决策备查
 
