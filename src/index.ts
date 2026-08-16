@@ -5,6 +5,36 @@
  * or the web runtime's trustedHosts, cross-site browser markers refused.
  */
 import type { Context } from 'cordis'
+import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { join } from 'node:path'
+
+const require = createRequire(import.meta.url)
+
+/** 读一个已挂载插件的版本与简介。
+ * 优先从 profile node_modules 直接路径读（SSID_PROFILE_DIR 由壳注入，
+ * 不依赖各包 exports 是否暴露 ./package.json），回退模块解析。 */
+function pluginMeta(name: string): { version?: string, description?: string } {
+  const candidates: string[] = []
+  const profileDir = process.env.SSID_PROFILE_DIR
+  if (profileDir !== undefined && profileDir !== '') {
+    candidates.push(join(profileDir, 'node_modules', name, 'package.json'))
+  }
+  try {
+    candidates.push(require.resolve(`${name}/package.json`))
+  } catch {
+    // exports 未暴露 ./package.json 的包走上面的直接路径
+  }
+  for (const candidate of candidates) {
+    try {
+      const pkg = JSON.parse(readFileSync(candidate, 'utf8')) as { version?: string, description?: string }
+      return { version: pkg.version, description: pkg.description }
+    } catch {
+      // 尝试下一个候选
+    }
+  }
+  return {}
+}
 
 /** Plugin identity for cordis.yml rows. */
 export const name = '@max-null/dsh-ssid-panels'
@@ -137,7 +167,7 @@ export function apply(ctx: Context): void {
         .filter(entry => !entry.options.group && entry.options.name !== undefined
           && !entry.options.name.startsWith('@deepseek-ai/')
           && !entry.options.name.startsWith('cordis:'))
-        .map(entry => ({ id: entry.id, name: entry.options.name as string }))
+        .map(entry => ({ id: entry.id, name: entry.options.name as string, ...pluginMeta(entry.options.name as string) }))
         .sort((a, b) => a.name.localeCompare(b.name)),
     }),
     'update-check': async () => {

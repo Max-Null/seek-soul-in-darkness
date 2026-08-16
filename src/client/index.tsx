@@ -239,7 +239,7 @@ interface UpdateInfo {
   releases?: Array<{ tag: string, name: string, body: string, publishedAt: string }>
   message?: string
 }
-interface AboutInfo { shellVersion: string, plugins: Array<{ id: string, name: string }> }
+interface AboutInfo { shellVersion: string, plugins: Array<{ id: string, name: string, version?: string, description?: string }> }
 
 function SsidAboutSection(): ReactNode {
   const [about, setAbout] = useState<AboutInfo | null>(null)
@@ -296,7 +296,15 @@ function SsidAboutSection(): ReactNode {
       createElement('div', { style: ssid.title }, createElement('span', null, '预制插件')),
       (about?.plugins ?? []).length === 0
         ? createElement('div', { style: ssid.muted }, '（无）')
-        : (about?.plugins ?? []).map(plugin => createElement('div', { key: plugin.id, style: { ...ssid.text, fontSize: 11.5, padding: '2px 0' } }, plugin.name)),
+        : (about?.plugins ?? []).map(plugin => createElement('div', { key: plugin.id, style: { padding: '5px 0', borderBottom: '1px solid var(--dsw-alias-border-l2, #1e2836)' } },
+          createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 6 } },
+            createElement('span', { style: { ...ssid.text, fontWeight: 600, fontSize: 12 } }, plugin.name),
+            createElement('span', { style: { ...ssid.muted, fontSize: 10.5 } }, plugin.version !== undefined ? `v${plugin.version}` : ''),
+          ),
+          plugin.description !== undefined && plugin.description !== ''
+            ? createElement('div', { style: { ...ssid.muted, fontSize: 10.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 } }, plugin.description)
+            : null,
+        )),
     ),
   )
 }
