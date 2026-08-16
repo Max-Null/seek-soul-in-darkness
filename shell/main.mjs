@@ -108,6 +108,18 @@ async function start() {
   // addBrowserView（不是 setBrowserView）——setBrowserView 会移除上面的 titleBar。
   const mainView = new BrowserView({ webPreferences: { sandbox: true, contextIsolation: true } })
   win.addBrowserView(mainView)
+
+  const TITLEBAR_HEIGHT = 36
+  const layout = () => {
+    const [width, height] = win.getContentSize()
+    titleBar.setBounds({ x: 0, y: 0, width, height: TITLEBAR_HEIGHT })
+    mainView.setBounds({ x: 0, y: TITLEBAR_HEIGHT, width, height: height - TITLEBAR_HEIGHT })
+  }
+  win.on('resize', layout)
+  // 关键：loadURL 之前先布局——页面插件 mount 时视口尺寸必须已正确，
+  // 否则 better-sidebar 的窄屏判定（mount 时读 innerWidth）会定格在错误值。
+  layout()
+
   // 官方 UI 渲染进程的诊断通道：console 转发到主进程 stderr；
   // [theme-sync] 标记触发标题栏主题即时同步。
   mainView.webContents.on('console-message', (_event, ...args) => {
@@ -196,15 +208,6 @@ async function start() {
   injectThemeObserver()
   void syncTitlebarTheme()
   setInterval(() => { void syncTitlebarTheme() }, 5000)
-
-  const TITLEBAR_HEIGHT = 36
-  const layout = () => {
-    const [width, height] = win.getContentSize()
-    titleBar.setBounds({ x: 0, y: 0, width, height: TITLEBAR_HEIGHT })
-    mainView.setBounds({ x: 0, y: TITLEBAR_HEIGHT, width, height: height - TITLEBAR_HEIGHT })
-  }
-  win.on('resize', layout)
-  layout()
 
   // ── tray: close-to-tray, tray menu (show / quit) ────────────────────────
   const tray = new Tray(nativeImage.createFromPath(asset('tray.png')))
