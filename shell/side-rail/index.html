@@ -71,11 +71,39 @@
 
     .empty { padding: 32px 14px; text-align: center; color: var(--muted); font-size: 13px; }
 
+    /* ── 面板切换 ── */
+    .panel-nav { display: flex; gap: 4px; padding: 8px 16px 0; }
+    .panel-nav button {
+      flex: 1; padding: 5px 0; font-size: 12px;
+      background: none; border: 1px solid transparent; border-radius: 7px;
+      color: var(--muted); cursor: pointer;
+      transition: color .15s, border-color .15s, background .15s;
+    }
+    .panel-nav button:hover { color: var(--fg); }
+    .panel-nav button.active { color: var(--accent); border-color: var(--accent); background: rgba(79, 195, 247, .08); }
+    .panel { display: none; flex-direction: column; flex: 1; min-height: 0; }
+    .panel.active { display: flex; }
+
+    /* ── 状态面板 ── */
+    .state-list { display: flex; flex-direction: column; gap: 9px; padding: 12px 16px; overflow-y: auto; flex: 1; }
+    .state-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 11px 13px; }
+    .state-card h2 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--muted); display: flex; justify-content: space-between; align-items: center; }
+    .state-card .big { font-size: 22px; font-weight: 700; }
+    .state-card .sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+    .level-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--border); }
+    .level-0 { color: var(--muted); }
+    .level-1 { color: #f7c94f; border-color: #f7c94f55; }
+    .level-2 { color: #f7a14f; border-color: #f7a14f55; }
+    .level-3 { color: #f76f4f; border-color: #f76f4f55; }
+    .state-card.warn { border-color: #f7a14f66; }
+    .review-item { font-size: 12px; padding: 3px 0; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .review-item span { color: var(--muted); margin-right: 6px; }
+
     /* ── 收起形态：36px 竖窄条 ── */
     body.collapsed header { padding: 12px 0 0; border-bottom: none; }
     body.collapsed .title-row { flex-direction: column; gap: 6px; }
     body.collapsed .title-row h1 { writing-mode: vertical-rl; font-size: 13px; letter-spacing: 4px; }
-    body.collapsed .search-row, body.collapsed .tabs, body.collapsed ul { display: none; }
+    body.collapsed .search-row, body.collapsed .panel-nav, body.collapsed .tabs, body.collapsed ul { display: none; }
   </style>
 </head>
 <body>
@@ -89,13 +117,23 @@
         <input id="query" placeholder="搜索记忆…" />
       </div>
     </header>
-    <div class="tabs">
-      <button data-status="auto" class="active">auto</button>
-      <button data-status="suggested">suggested</button>
-      <button data-status="suggest">suggest</button>
+    <div class="panel-nav">
+      <button data-panel="memory" class="active">记忆</button>
+      <button data-panel="state">状态</button>
     </div>
-    <ul id="list"></ul>
+    <div id="panel-memory" class="panel active">
+      <div class="tabs">
+        <button data-status="auto" class="active">auto</button>
+        <button data-status="suggested">suggested</button>
+        <button data-status="suggest">suggest</button>
+      </div>
+      <ul id="list"></ul>
+    </div>
+    <div id="panel-state" class="panel">
+      <div class="state-list" id="state-list"></div>
+    </div>
   </div>
   <script src="./memory-panel.js"></script>
+  <script src="./state-panel.js"></script>
 </body>
 </html>

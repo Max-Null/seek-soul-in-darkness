@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('ssid', {
   searchMemories: (query) => ipcRenderer.invoke('ssid:memory:search', query),
   confirmMemory: (id) => ipcRenderer.invoke('ssid:memory:confirm', id),
   forgetMemory: (id) => ipcRenderer.invoke('ssid:memory:forget', id),
+  guardianSnapshot: () => ipcRenderer.invoke('ssid:guardian:snapshot'),
   toggleRail: () => ipcRenderer.invoke('ssid:rail:toggle'),
   onRailState: (callback) => {
     ipcRenderer.on('ssid:rail-state', (_event, collapsed) => callback(collapsed))

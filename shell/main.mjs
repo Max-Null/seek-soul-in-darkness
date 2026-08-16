@@ -61,6 +61,10 @@ async function start() {
   ipcMain.handle('ssid:memory:confirm', (_event, id) => memory?.setStatus?.(id, 'auto') ?? null)
   ipcMain.handle('ssid:memory:forget', (_event, id) => memory?.forget?.(id) ?? false)
 
+  // ── IPC: guardian state panel - in-process engine snapshot ──────────────
+  const guardian = kernel.get('guardian')
+  ipcMain.handle('ssid:guardian:snapshot', () => guardian?.snapshot?.() ?? { session: null, reviewQueue: [] })
+
   // ── window + dual BrowserView (official UI + side rail) ────────────────
   const win = new BrowserWindow({
     width: 1280,
