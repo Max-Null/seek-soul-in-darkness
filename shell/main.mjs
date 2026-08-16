@@ -16,7 +16,7 @@
  */
 
 import { register } from 'tsx/esm/api'
-import { app, BrowserView, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserView, BrowserWindow, ipcMain, Menu, nativeImage, Tray } from 'electron'
 import { fileURLToPath } from 'node:url'
 
 // tsx ESM loader: transpiles kernel.ts and resolves @deepseek-ai/dsh-* to the
@@ -31,9 +31,11 @@ const SIDE_RAIL_COLLAPSED_WIDTH = 36
 /** Current side rail state; toggled via ssid:rail:toggle. */
 let railCollapsed = false
 
-/** App name / window title. */
-const PRODUCT_NAME = 'SiLing'
-const WINDOW_TITLE = 'SiLing (SSiD)'
+/** Internal app id (ASCII for userData paths); window title carries the brand. */
+const PRODUCT_NAME = 'SSiD'
+const WINDOW_TITLE = '思灵 (SSiD)'
+
+const asset = (name) => fileURLToPath(new URL(`./assets/${name}`, import.meta.url))
 
 async function start() {
   app.setName(PRODUCT_NAME)
@@ -41,7 +43,20 @@ async function start() {
     app.quit()
     return
   }
+
   await app.whenReady()
+
+  // ── splash window: brand boot screen shown while DSH boots ──────────────
+  const win = new BrowserWindow({
+    width: 1280,
+    height: 840,
+    title: WINDOW_TITLE,
+    icon: asset('icon.png'),
+    show: false,
+    webPreferences: { sandbox: true, contextIsolation: true },
+  })
+  await win.loadFile(fileURLToPath(new URL('./splash.html', import.meta.url)))
+  win.show()
 
   // ── boot DSH kernel (this process) ──────────────────────────────────────
   let kernel
@@ -78,15 +93,43 @@ async function start() {
   })
   ipcMain.handle('ssid:habit:discard', (_event, id) => habit?.discard?.(id) ?? null)
 
-  // ── window + dual BrowserView (official UI + side rail) ────────────────
-  const win = new BrowserWindow({
-    width: 1280,
-    height: 840,
-    title: WINDOW_TITLE,
-    show: false,
+  // ── IPC: balance panel - DS/K3 account balances（分形计费迭代同款）──────
+  // key 由主进程从 DSH credentials 解析（回退进程环境变量），渲染层零接触。
+  const credentials = kernel.get('credentials')
+  const resolveKey = async (name) => {
+    const cred = credentials !== undefined ? await credentials.resolve(name) : undefined
+    if (cred !== undefined && cred.value !== '') return cred.value
+    const fromEnv = process.env[name]
+    return fromEnv !== undefined && fromEnv !== '' ? fromEnv : undefined
+  }
+  const fetchBalance = async (url, apiKey) => {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } })
+    if (!res.ok) return { ok: false, message: `余额查询失败（HTTP ${res.status}）` }
+    return { ok: true, data: await res.json() }
+  }
+  const balanceResult = (ok, isAvailable, balanceInfos, message) =>
+    ({ ok, isAvailable, balanceInfos, ...(message === undefined ? {} : { message }) })
+
+  ipcMain.handle('ssid:balance:deepseek', async () => {
+    const key = await resolveKey('DEEPSEEK_API_KEY')
+    if (key === undefined) return balanceResult(false, false, [], '未配置 DEEPSEEK_API_KEY')
+    const r = await fetchBalance('https://api.deepseek.com/user/balance', key)
+    if (!r.ok) return balanceResult(false, false, [], r.message)
+    const infos = (r.data.balance_infos ?? []).map(b => ({ currency: b.currency ?? 'CNY', totalBalance: b.total_balance ?? '0' }))
+    return balanceResult(true, r.data.is_available === true, infos)
+  })
+  ipcMain.handle('ssid:balance:kimi', async () => {
+    const key = await resolveKey('MOONSHOT_API_KEY')
+    if (key === undefined) return balanceResult(false, false, [], '未配置 MOONSHOT_API_KEY')
+    const r = await fetchBalance('https://api.moonshot.cn/v1/users/me/balance', key)
+    if (!r.ok) return balanceResult(false, false, [], r.message)
+    const available = r.data?.data?.available_balance
+    const value = typeof available === 'number' ? available : 0
+    return balanceResult(true, value > 0, [{ currency: 'CNY', totalBalance: String(value) }])
   })
 
-  // BrowserView A: official DSH loopback UI.
+  // ── window + dual BrowserView (official UI + side rail) ────────────────
+  // BrowserView A: official DSH loopback UI (replaces the splash page).
   const mainView = new BrowserView({ webPreferences: { sandbox: true, contextIsolation: true } })
   win.setBrowserView(mainView)
   await mainView.webContents.loadURL(`http://127.0.0.1:${kernel.port}/`)
@@ -117,6 +160,37 @@ async function start() {
     layout()
     sideRail.webContents.send('ssid:rail-state', railCollapsed)
     return railCollapsed
+  })
+
+  // ── tray: close-to-tray, tray menu (show / quit) ────────────────────────
+  const tray = new Tray(nativeImage.createFromPath(asset('tray.png')))
+  tray.setToolTip(WINDOW_TITLE)
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: '显示思灵', click: () => { win.show(); win.focus() } },
+    { type: 'separator' },
+    { label: '退出', click: () => app.quit() },
+  ]))
+  tray.on('click', () => { win.show(); win.focus() })
+
+  let quitting = false
+  win.on('close', (event) => {
+    if (!quitting) {
+      event.preventDefault()
+      win.hide()
+    }
+  })
+  app.on('before-quit', (event) => {
+    if (quitting) return
+    event.preventDefault()
+    quitting = true
+    // shutdown(0) awaits the cordis fiber dispose, then exits via app.exit.
+    void kernel.shutdown(0).catch(() => app.exit(0))
+  })
+
+  // 第二实例启动：聚焦现有窗口。
+  app.on('second-instance', () => {
+    win.show()
+    win.focus()
   })
 
   win.show()

@@ -2,14 +2,15 @@
 const stateListEl = document.getElementById('state-list')
 const panelNavButtons = document.querySelectorAll('.panel-nav button')
 
-// 面板切换（记忆 / 状态）
+// 面板切换（记忆 / 状态 / 习惯 / 余额）——通用：按钮 data-panel ↔ 面板 id。
 for (const button of panelNavButtons) {
   button.addEventListener('click', () => {
     for (const b of panelNavButtons) b.classList.remove('active')
     button.classList.add('active')
     const target = button.dataset.panel
-    document.getElementById('panel-memory').classList.toggle('active', target === 'memory')
-    document.getElementById('panel-state').classList.toggle('active', target === 'state')
+    for (const panel of document.querySelectorAll('.panel')) {
+      panel.classList.toggle('active', panel.id === `panel-${target}`)
+    }
   })
 }
 

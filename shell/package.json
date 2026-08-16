@@ -7,14 +7,28 @@
   "scripts": {
     "start": "electron .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "smoke": "node --import tsx/esm boot-smoke.ts"
+    "smoke": "node --import tsx/esm boot-smoke.ts",
+    "pack": "electron-builder --win portable"
   },
   "main": "main.mjs",
+  "author": "MaxNull",
+  "build": {
+    "appId": "com.maxnull.ssid",
+    "productName": "思灵",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "win": {
+      "target": "portable",
+      "icon": "assets/icon.png"
+    }
+  },
   "dependencies": {
-    "electron": "43.3.0"
+    "tsx": "^4.0.0"
   },
   "devDependencies": {
-    "tsx": "^4.0.0",
+    "electron": "43.3.0",
+    "electron-builder": "^26.0.0",
     "typescript": "^5.5.0",
     "@types/node": "^26.0.0"
   }
