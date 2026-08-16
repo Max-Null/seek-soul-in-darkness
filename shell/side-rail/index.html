@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>记忆</title>
+  <style>
+    :root { --bg: #1a1a2e; --fg: #e5e7eb; --muted: #9ca3af; --accent: #4fc3f7; --card: #23233a; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+    .rail { display: flex; flex-direction: column; height: 100vh; }
+    header { padding: 12px 14px; border-bottom: 1px solid #2a2a42; }
+    header h1 { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
+    header input { width: 100%; padding: 6px 10px; background: var(--card); border: 1px solid #2a2a42; border-radius: 6px; color: var(--fg); }
+    .tabs { display: flex; gap: 6px; padding: 8px 14px; border-bottom: 1px solid #2a2a42; }
+    .tabs button { flex: 1; padding: 5px; background: none; border: 1px solid #2a2a42; border-radius: 6px; color: var(--muted); cursor: pointer; }
+    .tabs button.active { color: var(--accent); border-color: var(--accent); }
+    ul { list-style: none; margin: 0; padding: 8px 14px; overflow-y: auto; flex: 1; }
+    li { background: var(--card); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+    li .content { font-size: 13px; line-height: 1.5; }
+    li .meta { margin-top: 6px; font-size: 11px; color: var(--muted); display: flex; gap: 8px; }
+    li .actions { margin-top: 8px; display: flex; gap: 6px; }
+    li .actions button { padding: 4px 10px; font-size: 12px; background: none; border: 1px solid #2a2a42; border-radius: 6px; color: var(--fg); cursor: pointer; }
+    li .actions button:hover { border-color: var(--accent); color: var(--accent); }
+    .empty { padding: 24px 14px; text-align: center; color: var(--muted); font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="rail">
+    <header>
+      <h1>🧠 记忆</h1>
+      <input id="query" placeholder="搜索记忆…" />
+    </header>
+    <div class="tabs">
+      <button data-status="auto" class="active">auto</button>
+      <button data-status="suggested">suggested</button>
+      <button data-status="suggest">suggest</button>
+    </div>
+    <ul id="list"></ul>
+  </div>
+  <script src="./memory-panel.js"></script>
+</body>
+</html>
