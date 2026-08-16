@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>思灵</title>
+<style>
+  :root {
+    --bg: #0A0E14;
+    --accent: #4FC3F7;
+    --fg: #d8e0ea;
+    --muted: #67748a;
+    --hover: rgba(79, 195, 247, .08);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    background: var(--bg);
+    font-family: system-ui, 'Segoe UI', sans-serif;
+    user-select: none;
+  }
+  .titlebar {
+    height: 100%;
+    display: flex;
+    align-items: center;
+    -webkit-app-region: drag; /* 整条可拖拽，按钮单独 no-drag */
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 0 10px;
+    height: 100%;
+  }
+  .brand svg { width: 15px; height: 15px; filter: drop-shadow(0 0 4px rgba(79, 195, 247, .4)); }
+  .brand .name {
+    font-size: 12px;
+    color: var(--fg);
+    letter-spacing: .14em;
+  }
+  .spacer { flex: 1; height: 100%; }
+  .controls {
+    display: flex;
+    height: 100%;
+    -webkit-app-region: no-drag;
+  }
+  .controls button {
+    width: 44px;
+    height: 100%;
+    background: none;
+    border: none;
+    color: var(--fg);
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background .12s;
+  }
+  .controls button:hover { background: var(--hover); }
+  .controls button.close:hover { background: #e81123; color: #fff; }
+  .controls svg { width: 10px; height: 10px; }
+</style>
+</head>
+<body>
+  <div class="titlebar">
+    <div class="brand">
+      <svg viewBox="0 0 256 256">
+        <g fill="none" stroke="#4FC3F7">
+          <circle cx="128" cy="128" r="52" stroke-width="2" opacity="0.45" />
+          <circle cx="128" cy="128" r="80" stroke-width="2" opacity="0.35" />
+          <circle cx="128" cy="128" r="106" stroke-width="2" opacity="0.28" />
+        </g>
+        <g>
+          <circle cx="128" cy="128" r="38" fill="#0B5E84" />
+          <circle cx="128" cy="128" r="27" fill="#4FC3F7" />
+          <circle cx="128" cy="128" r="13" fill="#0B1220" />
+          <circle cx="119" cy="118" r="7" fill="#fff" opacity="0.9" />
+        </g>
+      </svg>
+      <span class="name">思灵</span>
+    </div>
+    <div class="spacer"></div>
+    <div class="controls">
+      <button id="btn-min" title="最小化">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg>
+      </button>
+      <button id="btn-max" title="最大化">
+        <svg id="icon-max" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="5" width="14" height="14" rx="1"/></svg>
+        <svg id="icon-restore" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><rect x="7" y="7" width="10" height="10" rx="1"/><path d="M7 7V5a1 1 0 0 1 1-1h11a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1h-2"/></svg>
+      </button>
+      <button id="btn-close" class="close" title="关闭">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+  </div>
+  <script src="./titlebar.js"></script>
+</body>
+</html>

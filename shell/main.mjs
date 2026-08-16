@@ -17,23 +17,15 @@
 
 import { register } from 'tsx/esm/api'
 import { app, BrowserView, BrowserWindow, ipcMain, Menu, nativeImage, Notification, shell, Tray } from 'electron'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-
 // tsx ESM loader: transpiles kernel.ts and resolves @deepseek-ai/dsh-* to the
 // adjacent DSH checkout source. Must run before any TS import.
 register()
 const { bootKernel } = await import('./kernel.ts')
 
-/** Side rail width (px) when expanded / collapsed. */
-const SIDE_RAIL_WIDTH = 320
-const SIDE_RAIL_COLLAPSED_WIDTH = 36
-
-/** Current side rail state; toggled via ssid:rail:toggle. */
-let railCollapsed = false
-
-/** Internal app id (ASCII for userData paths); window title carries the brand. */
+/** App name / window title. */
 const PRODUCT_NAME = 'SSiD'
 const WINDOW_TITLE = '思灵 (SSiD)'
 
@@ -47,13 +39,19 @@ async function start() {
   }
 
   await app.whenReady()
+  // 隐藏 electron 默认菜单栏（File/Edit/...），自绘标题栏接管窗口控制。
+  Menu.setApplicationMenu(null)
 
   // ── splash window: brand boot screen shown while DSH boots ──────────────
+  // frame: false = 无边框窗口，顶部自绘标题栏（titleBar BrowserView）。
   const win = new BrowserWindow({
     width: 1280,
     height: 840,
+    minWidth: 940,
+    minHeight: 600,
     title: WINDOW_TITLE,
     icon: asset('icon.png'),
+    frame: false,
     show: false,
     webPreferences: { sandbox: true, contextIsolation: true },
   })
@@ -213,45 +211,87 @@ async function start() {
     return shell.openPath(filePath)
   })
 
-  // ── window + dual BrowserView (official UI + side rail) ────────────────
-  // BrowserView A: official DSH loopback UI (replaces the splash page).
-  const mainView = new BrowserView({ webPreferences: { sandbox: true, contextIsolation: true } })
-  win.setBrowserView(mainView)
-  await mainView.webContents.loadURL(`http://127.0.0.1:${kernel.port}/`)
+  // ── IPC: file tree panel - DSH workspaces + directory browsing ─────────
+  // 工作区树与 DSH 官方工作区同源（kernel.get('workspace')）。
+  const TREE_ENTRY_CAP = 200
 
-  // BrowserView B: SSiD side rail (memory panel).
-  const sideRail = new BrowserView({
+  ipcMain.handle('ssid:workspaces:list', () => {
+    const service = kernel.get('workspace')
+    const workspaces = service?.list?.() ?? []
+    return workspaces.map(workspace => ({
+      id: String(workspace.id),
+      title: workspace.title ?? '',
+      path: workspace.path ?? '',
+    }))
+  })
+  ipcMain.handle('ssid:files:readdir', (_event, dirPath) => {
+    if (typeof dirPath !== 'string') return { ok: false, message: '路径无效' }
+    try {
+      const entries = readdirSync(dirPath, { withFileTypes: true })
+      const dirs = []
+      const files = []
+      for (const entry of entries) {
+        // 隐藏条目与符号链接不进树（symlink 递归会炸，且工作区内少见）。
+        if (entry.name.startsWith('.')) continue
+        if (entry.isDirectory()) dirs.push(entry.name)
+        else if (entry.isFile()) files.push(entry.name)
+      }
+      dirs.sort((a, b) => a.localeCompare(b))
+      files.sort((a, b) => a.localeCompare(b))
+      const all = [...dirs, ...files]
+      return {
+        ok: true,
+        entries: all.slice(0, TREE_ENTRY_CAP).map(name => ({ name, dir: dirs.includes(name) })),
+        truncated: all.length > TREE_ENTRY_CAP,
+      }
+    } catch (cause) {
+      return { ok: false, message: cause?.message ?? '读取目录失败' }
+    }
+  })
+
+  // ── window + BrowserViews（自绘标题栏 + 官方 UI 全宽）──────────────────
+  // BrowserView T: 自绘标题栏（品牌 logo + 窗口控制按钮）。
+  const titleBar = new BrowserView({
     webPreferences: {
       sandbox: true,
       contextIsolation: true,
-      preload: fileURLToPath(new URL('./preload.cjs', import.meta.url)),
+      preload: fileURLToPath(new URL('./titlebar-preload.cjs', import.meta.url)),
     },
   })
-  win.addBrowserView(sideRail)
-  // 侧栏渲染进程的诊断通道：console 转发到主进程 stderr（electron 32+ 的
-  // console-message 事件参数是 details 对象）。
-  sideRail.webContents.on('console-message', (_event, ...args) => {
-    const details = typeof args[0] === 'object' && args[0] !== null ? args[0] : { level: args[0], message: args[1] }
-    process.stderr.write(`[side-rail:${details.level}] ${details.message ?? ''}\n`)
-  })
-  await sideRail.webContents.loadFile(fileURLToPath(new URL('./side-rail/index.html', import.meta.url)))
+  win.addBrowserView(titleBar)
+  await titleBar.webContents.loadFile(fileURLToPath(new URL('./titlebar.html', import.meta.url)))
 
+  // 标题栏窗口控制 IPC。
+  ipcMain.handle('ssid:title:minimize', () => { win.minimize() })
+  ipcMain.handle('ssid:title:toggle-maximize', () => {
+    if (win.isMaximized()) win.unmaximize()
+    else win.maximize()
+  })
+  ipcMain.handle('ssid:title:close', () => { win.close() })
+  const pushMaximized = () => {
+    titleBar.webContents.send('ssid:title:maximized', win.isMaximized())
+  }
+  win.on('maximize', pushMaximized)
+  win.on('unmaximize', pushMaximized)
+
+  // BrowserView A: official DSH loopback UI (replaces the splash page).
+  const mainView = new BrowserView({ webPreferences: { sandbox: true, contextIsolation: true } })
+  win.setBrowserView(mainView)
+  // 官方 UI 渲染进程的诊断通道：console 转发到主进程 stderr。
+  mainView.webContents.on('console-message', (_event, ...args) => {
+    const details = typeof args[0] === 'object' && args[0] !== null ? args[0] : { level: args[0], message: args[1] }
+    process.stderr.write(`[main-ui:${details.level}] ${details.message ?? ''}\n`)
+  })
+  await mainView.webContents.loadURL(`http://127.0.0.1:${kernel.port}/`)
+
+  const TITLEBAR_HEIGHT = 36
   const layout = () => {
     const [width, height] = win.getContentSize()
-    const railWidth = railCollapsed ? SIDE_RAIL_COLLAPSED_WIDTH : SIDE_RAIL_WIDTH
-    mainView.setBounds({ x: 0, y: 0, width: width - railWidth, height })
-    sideRail.setBounds({ x: width - railWidth, y: 0, width: railWidth, height })
+    titleBar.setBounds({ x: 0, y: 0, width, height: TITLEBAR_HEIGHT })
+    mainView.setBounds({ x: 0, y: TITLEBAR_HEIGHT, width, height: height - TITLEBAR_HEIGHT })
   }
   win.on('resize', layout)
   layout()
-
-  // 侧栏收起/展开：主进程改布局，侧栏页面同步 UI 状态。
-  ipcMain.handle('ssid:rail:toggle', () => {
-    railCollapsed = !railCollapsed
-    layout()
-    sideRail.webContents.send('ssid:rail-state', railCollapsed)
-    return railCollapsed
-  })
 
   // ── tray: close-to-tray, tray menu (show / quit) ────────────────────────
   const tray = new Tray(nativeImage.createFromPath(asset('tray.png')))
