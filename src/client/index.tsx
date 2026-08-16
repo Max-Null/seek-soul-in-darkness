@@ -283,15 +283,15 @@ function SsidAboutSection(): ReactNode {
           : createElement('div', { style: ssid.text }, `已是最新：${latest.name}（${latest.tag}）`),
       createElement('button', { style: { ...ssid.btn, marginTop: 8 }, onClick: () => { void check() }, disabled: checking }, checking ? '检查中…' : '立即检查'),
     ),
-    update !== null && update !== undefined && (update.releases ?? []).length > 0
-      ? createElement('div', { style: ssid.card },
-        createElement('div', { style: ssid.title }, createElement('span', null, '更新日志')),
-        ...(update.releases ?? []).map(release => createElement('div', { key: release.tag, style: { marginBottom: 10 } },
+    createElement('div', { style: ssid.card },
+      createElement('div', { style: ssid.title }, createElement('span', null, '更新日志')),
+      (update?.releases ?? []).length === 0
+        ? createElement('div', { style: ssid.muted }, '暂无发布版本（点上方「立即检查」拉取）')
+        : (update?.releases ?? []).map(release => createElement('div', { key: release.tag, style: { marginBottom: 10 } },
           createElement('div', { style: { ...ssid.text, fontWeight: 600 } }, `${release.name}（${release.tag}）· ${release.publishedAt.slice(0, 10)}`),
           createElement('pre', { style: { ...ssid.muted, whiteSpace: 'pre-wrap', margin: '4px 0 0', fontSize: 11.5 } }, release.body),
         )),
-      )
-      : null,
+    ),
     createElement('div', { style: ssid.card },
       createElement('div', { style: ssid.title }, createElement('span', null, '预制插件')),
       (about?.plugins ?? []).length === 0
