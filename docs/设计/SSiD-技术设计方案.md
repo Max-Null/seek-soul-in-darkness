@@ -99,7 +99,7 @@ flowchart TB
 |---|---|---|
 | S1 | 基座 = DeepSeek Harness，**绝不 fork/patch 源码** | 随 DSH 快速升级；继承 fractal 的 D14 纪律 |
 | S2 | 形态 = 官方 GUI + 自研壳 + 插件（非切引擎） | DSH 官方 GUI 已覆盖富交互，无需自研前端 |
-| S3 | 壳 = **自研**（Electron，参考 anywhere-labs 架构，不换皮） | 品牌独立；anywhere-labs 只作验证 + 架构参考 |
+| S3 | 壳 = **补丁层**（自研 Electron，100% 控制权，做「DSH+插件解决不了的事」） | 方案灵活、不换皮；anywhere-labs 只作架构参考 |
 | S4 | 引擎 = DeepSeek 唯一 Provider | 延续 fractal D13/D16（国产、单 Provider 收窄） |
 | S5 | 迁移 = 渐进式，fractal 兜底 | 护栏 1/2，避免 all-in 风险 |
 | S6 | 记忆 = dsh-memory（已做）+ 补 UI 面板 + Guardian 触发线 | 已实测 DSH 扩展点可承载 |
@@ -109,15 +109,16 @@ flowchart TB
 | S10 | 配置 = DSH settings + file provider（agent 可自改） | 对应 fractal「配置即文件」设计 |
 | S11 | 品牌 = 思灵/SSiD + Si 瞳孔 logo | 见品牌手册 |
 
-### 2.3 壳的定位（自研，不换皮）
+### 2.3 壳的定位（补丁层，100% 控制权）
 
-- **anywhere-labs 只作两件事**：① M0 闭环验证的参考样本；② 架构参考（Electron 起 Host + loopback 加载官方 UI + 托盘）。
-- **SSiD 壳自研**：单实例锁、起 Host、loopback 加载、托盘、自动更新、打包，代码自写，承载思灵品牌。
-- 壳实现细节见 [`2026-08-16-桌面壳最小闭环-搭建步骤.md`](2026-08-16-桌面壳最小闭环-搭建步骤.md)。
+- **核心原则**：SSiD 壳做「DSH + 插件解决不了的事」，方案灵活，**100% 控制权**。壳站在「宿主应用」层（Electron 主进程），不是「插件」层，所以能力边界不是固定清单，而是「Electron 能做什么，壳就能做什么」。
+- **anywhere-labs 只作架构参考**（Electron 起 Host + loopback 加载官方 UI），不换皮。
+- **已知需要的壳能力（实例，非全部）**：外挂侧栏（BrowserView）、Windows 通知、托盘、自动更新、全局快捷键……缺什么补什么。
+- 壳实现细节见 [`2026-08-16-桌面壳最小闭环-搭建步骤.md`](2026-08-16-桌面壳最小闭环-搭建步骤.md)；能力清单见 [`SSiD-壳级能力设计.md`](SSiD-壳级能力设计.md)。
 
 ### 2.4 壳级能力层（DSH × 壳协同）
 
-**关键**：有些能力（系统通知、唤起窗口、托盘角标、新开窗口、自动更新）单靠 DSH 插件做不到，需要壳层。
+**关键**：有些能力（系统通知、唤起窗口、托盘角标、新开窗口、自动更新）单靠 DSH 插件做不到，需要壳层。以下 `ctx.desktop` 服务只是补丁层的**一个实例**（针对「业务插件要触发壳能力」这类需求），非壳能力的全部——壳能做的事远不止这些。
 
 - 自研壳 = Electron main + 一组「壳级 Host 插件」，暴露 `ctx.desktop` 服务（`notify` / `activateWindow` / `setTrayBadge` / `createWindow` / `refreshEngine`）。
 - 业务插件通过 `inject: ['desktop']` + `ctx.desktop.notify(...)` 触发壳能力，无需 import Electron。
