@@ -50,31 +50,6 @@ const ROOT_CONFIG_FILENAME = 'cordis.yml'
 const TELEMETRY_ROW_ID = 'session-telemetry-otel'
 
 /**
- * SSiD 自带的 launcher-owned 插件层：以 file:// 指向相邻仓库的源码。
- *
- * 只有还没有 npm 包形态的插件留在这里；dsh-memory / dsh-chinese-thinking
- * 已走安装版路径（`dsh plugin --profile ssid add <pkg>`，npm bundle 由
- * profile 的 bundles 列表管理）。发布期这层应尽量清空。
- * 相对路径基准是 shell 目录（kernel.ts 所在，`new URL('.', import.meta.url)`），
- * `../../` 即 WorkStation（SSiD 仓库根的父目录）。
- */
-const SSID_PLUGINS: { id: string; path: string }[] = [
-  { id: 'compaction-shield', path: '../../vendor/plugins/dsh-compaction-shield/lib/index.js' },
-]
-
-/** SSiD 插件层转成 loader patch（插在 bundle 层之后、用户 profile patch 之前）。 */
-function ssidPluginPatches(): PatchOptions[] {
-  return [
-    {
-      insert: SSID_PLUGINS.map(plugin => ({
-        id: plugin.id,
-        name: pathToFileURL(resolve(fileURLToPath(new URL('.', import.meta.url)), plugin.path)).href,
-      })),
-    },
-  ]
-}
-
-/**
  * 定位 DSH checkout 根目录：`$DSH_CHECKOUT` 优先，否则默认 shell 目录的
  * `../../deepseek-harness`（两个仓库并列放在同一工作区下）。
  * @returns DSH checkout 根目录的绝对路径。
@@ -131,9 +106,6 @@ export async function bootKernel(
     const homePatches = loadOptionalPatches(BIN_NAME, join(home, PROFILE_PATCH_FILENAME)) ?? []
     const patches: PatchOptions[] = [
       ...profile.layers.flatMap(layer => layer.patches),
-      // SSiD 自带插件层：bundle 之后、用户 profile patch 之前（anywhere-labs
-      // 的 desktop layer 同款位置），用户仍可覆盖或 disable。
-      ...ssidPluginPatches(),
       ...profile.patches,
       ...homePatches,
     ]
