@@ -93,6 +93,7 @@
       输出 3-5 句，精炼。用 web_search 查证时提炼关键词，不搬运原词。
     toolFilter:
       allow: [read, web_search]
+    maxDepth: 1
 
 # 明镜（军师/审查）：独立第三方审查，只读全局。
 - id: tool-subagent-strategist
@@ -110,6 +111,7 @@
       输出 3-5 句。没问题说「审查通过」，有问题指出位置和建议。严重问题说「建议拒绝」。
     toolFilter:
       allow: [read, glob, grep, web_search]
+    maxDepth: 1
 
 # 巧匠（工匠/执行）：纯按方案实施，flash 模型，可续接。
 - id: tool-subagent-artisan
@@ -132,14 +134,17 @@
       铁律：不委派、不规划（双星规划好了）。
     toolFilter:
       allow: [read, write, edit, glob, grep, bash, pwsh, todo_write]
-    maxDepth: 0
+    maxDepth: 1
 
-# 明瞳（制图师/视觉）：看图专家。kimi k3 待 pi-ai provider 配置后启用。
+# 明瞳（制图师/视觉）：看图专家。kimi-k3 经 pi-ai moonshotai-cn（国内端点）手写声明路由。
 - id: tool-subagent-cartographer
   name: '@deepseek-ai/dsh-tool-subagent'
   config:
     provider: spawn
     toolName: subagent_cartographer
+    agentOptions:
+      provider: moonshotai-cn
+      model: kimi-k3
     persona: |-
       你是「明瞳」，视觉专家，只在双星主动调用你时工作。你能真正"看"图片并还原。
 
@@ -152,7 +157,7 @@
       纪律：只描述你看到的，禁止脑补；一次只处理一张图，完成即停；不写实现代码——你的产出是设计定义/验证结论，实现交给巧匠。
     toolFilter:
       allow: [read, read_image]
-    maxDepth: 0
+    maxDepth: 1
 
 - id: tool-ask-user
   name: '@deepseek-ai/dsh-tool-ask-user'
