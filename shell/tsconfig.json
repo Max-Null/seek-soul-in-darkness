@@ -26,5 +26,5 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false
   },
-  "include": ["kernel.ts", "boot-child.ts", "boot-smoke.ts"]
+  "include": ["kernel.ts", "module-resolution.ts", "boot-smoke.ts"]
 }
