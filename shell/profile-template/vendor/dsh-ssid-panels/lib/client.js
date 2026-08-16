@@ -335,7 +335,7 @@ window.__ModuleLoader__.load({
 					check();
 				},
 				disabled: checking
-			}, checking ? "检查中…" : "立即检查")), update !== null && update !== void 0 && (update.releases ?? []).length > 0 ? (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, "更新日志")), ...(update.releases ?? []).map((release) => (0, react.createElement)("div", {
+			}, checking ? "检查中…" : "立即检查")), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, "更新日志")), (update?.releases ?? []).length === 0 ? (0, react.createElement)("div", { style: ssid.muted }, "暂无发布版本（点上方「立即检查」拉取）") : (update?.releases ?? []).map((release) => (0, react.createElement)("div", {
 				key: release.tag,
 				style: { marginBottom: 10 }
 			}, (0, react.createElement)("div", { style: {
@@ -346,7 +346,7 @@ window.__ModuleLoader__.load({
 				whiteSpace: "pre-wrap",
 				margin: "4px 0 0",
 				fontSize: 11.5
-			} }, release.body)))) : null, (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, "预制插件")), (about?.plugins ?? []).length === 0 ? (0, react.createElement)("div", { style: ssid.muted }, "（无）") : (about?.plugins ?? []).map((plugin) => (0, react.createElement)("div", {
+			} }, release.body)))), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, "预制插件")), (about?.plugins ?? []).length === 0 ? (0, react.createElement)("div", { style: ssid.muted }, "（无）") : (about?.plugins ?? []).map((plugin) => (0, react.createElement)("div", {
 				key: plugin.id,
 				style: {
 					padding: "5px 0",
