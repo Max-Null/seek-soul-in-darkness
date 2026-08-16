@@ -16,7 +16,9 @@
  */
 
 import { register } from 'tsx/esm/api'
-import { app, BrowserView, BrowserWindow, ipcMain, Menu, nativeImage, Tray } from 'electron'
+import { app, BrowserView, BrowserWindow, ipcMain, Menu, nativeImage, shell, Tray } from 'electron'
+import { readFileSync } from 'node:fs'
+import { isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 // tsx ESM loader: transpiles kernel.ts and resolves @deepseek-ai/dsh-* to the
@@ -126,6 +128,88 @@ async function start() {
     const available = r.data?.data?.available_balance
     const value = typeof available === 'number' ? available : 0
     return balanceResult(true, value > 0, [{ currency: 'CNY', totalBalance: String(value) }])
+  })
+
+  // ── IPC: file preview panel - produced-file tracking + read/open ───────
+  // 来源：write/edit 工具调用的 file_path（会话日志事件流）。
+  // 运行时事件增量维护 + 首次打开文件 tab 时全量扫描存量会话。
+  const producedFiles = new Map() // absPath -> { path, seq, time }
+  const PRODUCED_CAP = 500
+
+  const safeJson = (text) => {
+    try {
+      return JSON.parse(text)
+    } catch {
+      return undefined
+    }
+  }
+  const noteProduced = (event, cwd) => {
+    const data = event?.data ?? {}
+    if (event?.type !== 'tool/call') return
+    const name = data.name
+    if (name !== 'write' && name !== 'edit') return
+    const args = typeof data.arguments === 'string' ? safeJson(data.arguments) : data.arguments
+    const filePath = args?.file_path
+    if (typeof filePath !== 'string' || filePath === '') return
+    const abs = isAbsolute(filePath) ? filePath : join(cwd ?? '', filePath)
+    const entry = producedFiles.get(abs)
+    if (entry !== undefined) {
+      entry.seq = Math.max(entry.seq, event.seq ?? 0)
+      entry.time = Date.now()
+      return
+    }
+    producedFiles.set(abs, { path: abs, seq: event.seq ?? 0, time: Date.now() })
+    if (producedFiles.size > PRODUCED_CAP) {
+      let oldest = null
+      for (const value of producedFiles.values()) {
+        if (oldest === null || value.time < oldest.time) oldest = value
+      }
+      if (oldest !== null) producedFiles.delete(oldest.path)
+    }
+  }
+
+  // 运行时事件火线（live 会话；存量由 scanProducedFiles 全量补）。
+  kernel.ctx.on('session/event', (session, event) => {
+    noteProduced(event, session?.header?.cwd)
+  })
+
+  let filesScanned = false
+  let filesScanning = null
+  const scanProducedFiles = async () => {
+    if (filesScanned || filesScanning !== null) return filesScanning
+    filesScanning = (async () => {
+      const persistence = kernel.get('sessionPersistence')
+      const headers = persistence !== undefined ? await persistence.list() : []
+      for (const header of headers) {
+        try {
+          const inspection = await persistence.inspect(header.id)
+          for (const event of inspection.events) noteProduced(event, header.cwd)
+        } catch {
+          // 跳过不可读会话（坏尾等），不阻塞其余扫描
+        }
+      }
+      filesScanned = true
+      filesScanning = null
+    })()
+    return filesScanning
+  }
+
+  ipcMain.handle('ssid:files:list', async () => {
+    await scanProducedFiles()
+    return [...producedFiles.values()].sort((a, b) => b.time - a.time).slice(0, 100)
+  })
+  ipcMain.handle('ssid:files:read', (_event, filePath) => {
+    if (typeof filePath !== 'string') return { ok: false, message: '路径无效' }
+    try {
+      const content = readFileSync(filePath)
+      return { ok: true, size: content.length, buffer: content }
+    } catch (cause) {
+      return { ok: false, message: cause?.message ?? '读取失败' }
+    }
+  })
+  ipcMain.handle('ssid:files:open', async (_event, filePath) => {
+    if (typeof filePath !== 'string') return '路径无效'
+    return shell.openPath(filePath)
   })
 
   // ── window + dual BrowserView (official UI + side rail) ────────────────

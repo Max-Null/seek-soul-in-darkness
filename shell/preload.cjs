@@ -13,6 +13,9 @@ contextBridge.exposeInMainWorld('ssid', {
   habitDiscard: (id) => ipcRenderer.invoke('ssid:habit:discard', id),
   balanceDeepseek: () => ipcRenderer.invoke('ssid:balance:deepseek'),
   balanceKimi: () => ipcRenderer.invoke('ssid:balance:kimi'),
+  fileList: () => ipcRenderer.invoke('ssid:files:list'),
+  fileRead: (path) => ipcRenderer.invoke('ssid:files:read', path),
+  fileOpen: (path) => ipcRenderer.invoke('ssid:files:open', path),
   toggleRail: () => ipcRenderer.invoke('ssid:rail:toggle'),
   onRailState: (callback) => {
     ipcRenderer.on('ssid:rail-state', (_event, collapsed) => callback(collapsed))
