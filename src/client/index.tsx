@@ -122,7 +122,7 @@ function MemoryView(): ReactNode {
 
 /** 状态面板：Guardian 触发线快照（1s 轮询，可见时）。 */
 function GuardianView(props: { visible: boolean }): ReactNode {
-  const [snapshot, setSnapshot] = useState<{ session?: { assertionCount?: number, assertionLevel?: number } | null, reviewQueue?: Array<{ path?: string, detail?: string }> }>({})
+  const [snapshot, setSnapshot] = useState<{ session?: { assertionCount?: number, assertionLevel?: number } | null, reviewQueue?: Array<{ filePath?: string, turn?: number }> }>({})
   useEffect(() => {
     if (!props.visible) return
     const tick = (): void => {
@@ -149,7 +149,9 @@ function GuardianView(props: { visible: boolean }): ReactNode {
       createElement('div', { style: ssid.title }, '编辑审查队列'),
       queue.length === 0
         ? createElement('div', { style: ssid.muted }, '无待审查项')
-        : queue.map((item, index) => createElement('div', { key: index, style: { ...ssid.text, fontSize: 11.5 } }, item.path ?? item.detail ?? '(无描述)')),
+        : queue.map((item, index) => createElement('div', { key: index, style: { ...ssid.text, fontSize: 11.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+          `${item.turn !== undefined ? `第 ${item.turn} 轮 · ` : ''}${item.filePath ?? '(无路径)'}`,
+        )),
     ),
   )
 }
