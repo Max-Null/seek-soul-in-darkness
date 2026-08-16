@@ -88,3 +88,16 @@ L0（摘要~100t）/L1（概览~2k）/L2（详情）三层按需加载省 token�
 
 1. 侧栏方向：切换 better-sidebar + SSiD 面板插件化（本仓库最大收益项）
 2. OpenViking：登记观察，不立即集成
+
+## 四、执行结果（2026-08-17，用户拍板后完成）
+
+- better-sidebar@0.12.3 已装进 ssid profile（bundle 层），官方 UI 内
+  右侧栏 + 底部面板工作正常
+- 自研 BrowserView 侧栏已删除（side-rail/、preload.cjs、旧 IPC 全清）
+- `@max-null/dsh-ssid-panels`（新仓库，本地 link）：host 半 `/ssid/api/*`
+  10 方法（fence 同款）+ client 半 4 tab（记忆/状态/习惯/余额），
+  构建链为 better-sidebar 同款 tsdown + ModuleLoader 协议
+- 自研壳保留：无边框自绘标题栏、托盘、启动页、portable 打包
+- 过程中的关键坑：SSiD 自研侧栏吃掉 320px 使官方 UI 视口 <768px，
+  触发 better-sidebar 移动端全屏抽屉（"右侧栏按钮无效"假象）——
+  两个侧栏无法并存，进一步印证切换决策

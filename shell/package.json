@@ -2,7 +2,7 @@
   "name": "ssid-shell",
   "version": "0.1.0",
   "private": true,
-  "description": "SSiD 壳（思灵）：Electron 补丁层，boot 隔壁 DSH 官方 UI 并外挂侧栏",
+  "description": "SSiD 壳（思灵）：Electron 补丁层，boot 隔壁 DSH 官方 UI（无边框自绘标题栏 + 托盘）",
   "type": "module",
   "scripts": {
     "start": "electron .",
@@ -24,11 +24,7 @@
     }
   },
   "dependencies": {
-    "mammoth": "^1.12.1",
-    "marked": "^18.0.9",
-    "pdfjs-dist": "^6.2.108",
-    "tsx": "^4.0.0",
-    "xlsx": "^0.18.5"
+    "tsx": "^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^26.0.0",
