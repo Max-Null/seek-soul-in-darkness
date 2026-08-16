@@ -44,6 +44,8 @@
 
 - id: tool-fs-search
   name: '@deepseek-ai/dsh-tool-fs-search'
+  config:
+    sampleOverCapGlobResults: false
 
 - id: skill-filesystem
   name: '@deepseek-ai/dsh-skill-filesystem'
@@ -70,6 +72,8 @@
 
 - id: tool-todo
   name: '@deepseek-ai/dsh-tool-todo'
+  config:
+    allowParallelInProgress: true
 
 - id: tool-web
   name: '@deepseek-ai/dsh-tool-web'

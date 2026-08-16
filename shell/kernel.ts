@@ -33,6 +33,7 @@ import {
   resolveProfileDir,
 } from '@deepseek-ai/dsh-app-boot'
 import type { PatchOptions } from '@deepseek-ai/cordis-plugin-include'
+import type { Context } from '@deepseek-ai/cordis'
 import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { DSH_LAUNCH_ENVIRONMENT_KEY } from '@deepseek-ai/dsh-launch-environment'
@@ -65,6 +66,8 @@ export function resolveDshCheckout(): string {
 export interface Kernel {
   /** 官方 UI 实际监听端口。 */
   port: number
+  /** settled root context（主进程同进程读 host 服务、驱动 agent 会话）。 */
+  ctx: Context
   /** 供主进程同进程读取 host 服务的根 context。 */
   get: (name: string) => unknown
   /** 优雅退出：dispose 整个 Cordis 树后调用 exit。 */
@@ -153,6 +156,7 @@ export async function bootKernel(
 
     return {
       port: webServer.port,
+      ctx,
       get: name => ctx.get(name),
       shutdown: async (code) => {
         await ctx.fiber.dispose()
