@@ -110,6 +110,30 @@
     .review-item span { color: var(--muted); margin-right: 6px; }
 
     /* ── 文件面板 ── */
+    .files-toolbar { display: flex; align-items: center; gap: 6px; padding: 8px 12px 0; }
+    .files-toolbar + .files-toolbar { padding-top: 6px; }
+    .files-toolbar .files-action { flex: 1; text-align: center; }
+    .files-toolbar .files-action.active { color: var(--accent); border-color: var(--accent); background: rgba(79, 195, 247, .08); }
+    #workspace-select {
+      flex: 1; min-width: 0; padding: 4px 8px; font-size: 12px;
+      background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+      color: var(--fg); outline: none;
+    }
+    .tree-node { user-select: none; }
+    .tree-row {
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 8px; border-radius: 6px; cursor: pointer;
+      font-size: 12.5px; color: var(--fg);
+      white-space: nowrap;
+    }
+    .tree-row:hover { background: var(--panel); }
+    .tree-row .tree-icon { flex: none; width: 14px; height: 14px; color: var(--muted); }
+    .tree-row.dir .tree-icon { color: var(--accent); opacity: .8; }
+    .tree-row .tree-arrow { flex: none; width: 12px; height: 12px; color: var(--muted); transition: transform .12s; }
+    .tree-row.open .tree-arrow { transform: rotate(90deg); }
+    .tree-row .tree-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .tree-children { overflow: hidden; }
+    .tree-note { font-size: 11px; color: var(--muted); padding: 2px 8px 4px; }
     .file-row {
       background: var(--card); border: 1px solid var(--border); border-radius: 10px;
       padding: 9px 12px; margin-bottom: 8px; cursor: pointer;
@@ -238,6 +262,13 @@
           <div class="state-list" id="habit-list"></div>
         </div>
         <div id="panel-files" class="panel">
+          <div class="files-toolbar">
+            <button data-view="tree" class="files-action active">工作区树</button>
+            <button data-view="recent" class="files-action">最近产出</button>
+          </div>
+          <div class="files-toolbar">
+            <select id="workspace-select" title="选择 DSH 工作区"></select>
+          </div>
           <div class="state-list" id="files-list"></div>
           <div id="files-preview" hidden></div>
         </div>

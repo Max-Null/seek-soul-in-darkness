@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld('ssid', {
   fileList: () => ipcRenderer.invoke('ssid:files:list'),
   fileRead: (path) => ipcRenderer.invoke('ssid:files:read', path),
   fileOpen: (path) => ipcRenderer.invoke('ssid:files:open', path),
+  workspaceList: () => ipcRenderer.invoke('ssid:workspaces:list'),
+  fileReaddir: (dirPath) => ipcRenderer.invoke('ssid:files:readdir', dirPath),
   toggleRail: () => ipcRenderer.invoke('ssid:rail:toggle'),
   onRailState: (callback) => {
     ipcRenderer.on('ssid:rail-state', (_event, collapsed) => callback(collapsed))

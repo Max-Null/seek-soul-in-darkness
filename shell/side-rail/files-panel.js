@@ -1,7 +1,9 @@
 (() => {
-// SSiD 侧栏文件面板：会话产出文件列表 + 多格式预览（md/html/图片/docx/xlsx/pdf）。
+// SSiD 侧栏文件面板：DSH 工作区树（懒加载）+ 最近产出平铺 + 多格式预览。
 const filesListEl = document.getElementById('files-list')
 const filesPreviewEl = document.getElementById('files-preview')
+const workspaceSelect = document.getElementById('workspace-select')
+const viewButtons = document.querySelectorAll('.files-toolbar button[data-view]')
 
 const extOf = (path) => {
   const match = path.toLowerCase().match(/\.([a-z0-9]+)$/)
@@ -11,6 +13,7 @@ const basenameOf = (path) => {
   const parts = path.split(/[\\/]/)
   return parts[parts.length - 1] || path
 }
+const joinPath = (base, name) => `${base.replace(/[\\/]+$/, '')}\\${name}`
 
 /** 相对时间：刚刚 / N 分钟前 / N 小时前 / N 天前 / 日期。 */
 function relativeTime(ts) {
@@ -25,6 +28,17 @@ function relativeTime(ts) {
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'])
 const MARKDOWN_EXTS = new Set(['md', 'markdown'])
+const TEXT_EXTS = new Set(['txt', 'json', 'js', 'ts', 'mjs', 'cjs', 'css', 'html', 'htm', 'yaml', 'yml', 'csv', 'log'])
+
+// lucide 图标 path（分形 lucide 包同款数据）。
+const ICON = {
+  chevron: '<svg class="tree-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>',
+  folder: '<svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>',
+  folderOpen: '<svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/></svg>',
+  file: '<svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/></svg>',
+  fileText: '<svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>',
+  fileImage: '<svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><circle cx="10" cy="12" r="2"/><path d="m20 17-1.296-1.296a2.41 2.41 0 0 0-3.408 0L9 22"/></svg>',
+}
 
 function actionButton(label, onClick) {
   const button = document.createElement('button')
@@ -38,7 +52,7 @@ function actionButton(label, onClick) {
 function previewTopbar(path) {
   const bar = document.createElement('div')
   bar.className = 'files-topbar'
-  bar.appendChild(actionButton('← 列表', () => { void renderList() }))
+  bar.appendChild(actionButton('← 列表', () => { void showList() }))
   const name = document.createElement('div')
   name.className = 'file-name'
   name.textContent = basenameOf(path)
@@ -49,7 +63,7 @@ function previewTopbar(path) {
 }
 
 /** 文本类预览：md 走 marked，其余转义后 pre。 */
-function renderText(path, ext, text) {
+function renderText(ext, text) {
   if (MARKDOWN_EXTS.has(ext)) {
     const html = document.createElement('div')
     html.className = 'files-md'
@@ -64,7 +78,7 @@ function renderText(path, ext, text) {
 }
 
 /** HTML 文件：sandbox iframe 原样渲染。 */
-function renderHtml(path, text) {
+function renderHtml(text) {
   const frame = document.createElement('iframe')
   frame.className = 'files-iframe'
   frame.sandbox = ''
@@ -73,7 +87,7 @@ function renderHtml(path, text) {
 }
 
 /** 图片：Blob URL。 */
-function renderImage(path, ext, bytes) {
+function renderImage(ext, bytes) {
   const img = document.createElement('img')
   img.className = 'files-image'
   img.src = URL.createObjectURL(new Blob([bytes], { type: `image/${ext === 'svg' ? 'svg+xml' : ext}` }))
@@ -155,17 +169,30 @@ async function renderPreview(path) {
   }
   const bytes = result.buffer instanceof Uint8Array ? result.buffer : new Uint8Array(result.buffer ?? [])
   const ext = extOf(path)
-  if (IMAGE_EXTS.has(ext)) { renderImage(path, ext, bytes); return }
-  if (ext === 'html' || ext === 'htm') { renderHtml(path, new TextDecoder().decode(bytes)); return }
+  if (IMAGE_EXTS.has(ext)) { renderImage(ext, bytes); return }
+  if (ext === 'html' || ext === 'htm') { renderHtml(new TextDecoder().decode(bytes)); return }
   if (ext === 'docx') { await renderDocx(bytes); return }
   if (ext === 'xlsx' || ext === 'xls') { renderXlsx(bytes); return }
   if (ext === 'pdf') { await renderPdf(bytes); return }
   const printable = !bytes.some((byte, index) => index > 1024 ? false : byte === 0)
-  if (printable) { renderText(path, ext, new TextDecoder().decode(bytes)); return }
+  if (printable) { renderText(ext, new TextDecoder().decode(bytes)); return }
   renderUnknown(result.size)
 }
 
-function fileRow(entry) {
+function showPreview(path) {
+  filesPreviewEl.hidden = false
+  filesListEl.hidden = true
+  void renderPreview(path)
+}
+
+function showList() {
+  filesPreviewEl.hidden = true
+  filesListEl.hidden = false
+}
+
+// ── 最近产出视图 ───────────────────────────────────────────────────────
+
+function recentRow(entry) {
   const row = document.createElement('div')
   row.className = 'file-row'
 
@@ -187,18 +214,12 @@ function fileRow(entry) {
   path.title = entry.path
   row.appendChild(path)
 
-  // 整行点击 = 预览；「打开」按钮独立走系统默认程序。
-  row.addEventListener('click', () => {
-    filesPreviewEl.hidden = false
-    filesListEl.hidden = true
-    void renderPreview(entry.path)
-  })
+  row.addEventListener('click', () => { showPreview(entry.path) })
   return row
 }
 
-async function renderList() {
-  filesPreviewEl.hidden = true
-  filesListEl.hidden = false
+async function renderRecent() {
+  showList()
   let files = []
   try {
     files = await window.ssid.fileList()
@@ -213,11 +234,172 @@ async function renderList() {
     filesListEl.appendChild(empty)
     return
   }
-  for (const entry of files) filesListEl.appendChild(fileRow(entry))
+  for (const entry of files) filesListEl.appendChild(recentRow(entry))
 }
 
-const filesTab = document.querySelector('.nav button[data-panel="files"]')
-filesTab.addEventListener('click', () => { void renderList() })
+// ── 工作区树视图 ───────────────────────────────────────────────────────
 
-void renderList()
+let currentWorkspacePath = null
+
+function treeDirNode(name, absPath, depth) {
+  const wrap = document.createElement('div')
+  wrap.className = 'tree-node'
+
+  const row = document.createElement('div')
+  row.className = 'tree-row dir'
+  row.style.paddingLeft = `${8 + depth * 14}px`
+  row.innerHTML = `${ICON.chevron}${ICON.folder}`
+  const label = document.createElement('span')
+  label.className = 'tree-name'
+  label.textContent = name
+  label.title = absPath
+  row.appendChild(label)
+  wrap.appendChild(row)
+
+  const children = document.createElement('div')
+  children.className = 'tree-children'
+  children.hidden = true
+  wrap.appendChild(children)
+
+  let loaded = false
+  row.addEventListener('click', async () => {
+    if (!loaded) {
+      loaded = true
+      const result = await window.ssid.fileReaddir(absPath)
+      if (result.ok) {
+        for (const entry of result.entries) {
+          const childPath = joinPath(absPath, entry.name)
+          children.appendChild(entry.dir
+            ? treeDirNode(entry.name, childPath, depth + 1)
+            : treeFileNode(entry.name, childPath, depth + 1))
+        }
+        if (result.truncated) {
+          const note = document.createElement('div')
+          note.className = 'tree-note'
+          note.style.paddingLeft = `${26 + (depth + 1) * 14}px`
+          note.textContent = '目录内容过多，仅显示前 200 项'
+          children.appendChild(note)
+        }
+        if (children.childElementCount === 0) {
+          const note = document.createElement('div')
+          note.className = 'tree-note'
+          note.style.paddingLeft = `${26 + (depth + 1) * 14}px`
+          note.textContent = '（空目录）'
+          children.appendChild(note)
+        }
+      } else {
+        const note = document.createElement('div')
+        note.className = 'tree-note'
+        note.style.paddingLeft = `${26 + (depth + 1) * 14}px`
+        note.textContent = result.message
+        children.appendChild(note)
+      }
+    }
+    children.hidden = !children.hidden
+    row.classList.toggle('open', !children.hidden)
+    row.querySelector('.tree-icon').outerHTML = children.hidden ? ICON.folder : ICON.folderOpen
+  })
+  return wrap
+}
+
+function treeFileNode(name, absPath, depth) {
+  const row = document.createElement('div')
+  row.className = 'tree-row'
+  row.style.paddingLeft = `${8 + depth * 14}px`
+  const ext = extOf(name)
+  const icon = IMAGE_EXTS.has(ext) ? ICON.fileImage : TEXT_EXTS.has(ext) || MARKDOWN_EXTS.has(ext) ? ICON.fileText : ICON.file
+  row.innerHTML = `<span style="width:12px;flex:none"></span>${icon}`
+  const label = document.createElement('span')
+  label.className = 'tree-name'
+  label.textContent = name
+  label.title = absPath
+  row.appendChild(label)
+  row.addEventListener('click', () => { showPreview(absPath) })
+  return row
+}
+
+async function renderTree() {
+  showList()
+  filesListEl.replaceChildren()
+  if (currentWorkspacePath === null) {
+    const empty = document.createElement('div')
+    empty.className = 'empty'
+    empty.textContent = 'DSH 还没有注册工作区'
+    filesListEl.appendChild(empty)
+    return
+  }
+  const result = await window.ssid.fileReaddir(currentWorkspacePath)
+  if (!result.ok) {
+    const empty = document.createElement('div')
+    empty.className = 'empty'
+    empty.textContent = result.message
+    filesListEl.appendChild(empty)
+    return
+  }
+  for (const entry of result.entries) {
+    const childPath = joinPath(currentWorkspacePath, entry.name)
+    filesListEl.appendChild(entry.dir
+      ? treeDirNode(entry.name, childPath, 0)
+      : treeFileNode(entry.name, childPath, 0))
+  }
+  if (result.entries.length === 0) {
+    const empty = document.createElement('div')
+    empty.className = 'empty'
+    empty.textContent = '（空目录）'
+    filesListEl.appendChild(empty)
+  }
+}
+
+// ── 工作区选择 ─────────────────────────────────────────────────────────
+
+async function loadWorkspaces() {
+  let workspaces = []
+  try {
+    workspaces = await window.ssid.workspaceList()
+  } catch {
+    workspaces = []
+  }
+  workspaceSelect.replaceChildren()
+  for (const workspace of workspaces) {
+    const option = document.createElement('option')
+    option.value = workspace.path
+    option.textContent = workspace.title || basenameOf(workspace.path)
+    option.title = workspace.path
+    workspaceSelect.appendChild(option)
+  }
+  if (workspaces.length === 0) {
+    currentWorkspacePath = null
+    workspaceSelect.hidden = true
+  } else {
+    currentWorkspacePath = workspaces[0].path
+    workspaceSelect.value = currentWorkspacePath
+    workspaceSelect.hidden = false
+  }
+}
+
+// ── 视图切换 ───────────────────────────────────────────────────────────
+
+let currentView = 'tree'
+function switchView(view) {
+  currentView = view
+  for (const button of viewButtons) button.classList.toggle('active', button.dataset.view === view)
+  workspaceSelect.hidden = view !== 'tree' || currentWorkspacePath === null
+  if (view === 'tree') void renderTree()
+  else void renderRecent()
+}
+
+for (const button of viewButtons) {
+  button.addEventListener('click', () => { switchView(button.dataset.view) })
+}
+workspaceSelect.addEventListener('change', () => {
+  currentWorkspacePath = workspaceSelect.value
+  void renderTree()
+})
+
+const filesTab = document.querySelector('.nav button[data-panel="files"]')
+filesTab.addEventListener('click', () => {
+  void loadWorkspaces().then(() => { switchView(currentView) })
+})
+
+void loadWorkspaces().then(() => { switchView(currentView) })
 })()
