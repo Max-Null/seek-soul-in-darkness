@@ -84,6 +84,8 @@ export async function bootKernel(
 ): Promise<Kernel> {
   const home = resolveDshHome()
   const profileDir = resolveProfileDir(PROFILE_NAME, home)
+  // 供宿主插件定位 profile 物理目录（如 ssid-panels 读预制插件元数据）。
+  process.env.SSID_PROFILE_DIR = profileDir
   // 首次运行初始化（官方 loadProfile 只认 web/headless 模板，ssid 要自己建）。
   if (!existsSync(join(profileDir, 'package.json'))) {
     initProfile(profileDir, PROFILE_BUNDLES)
