@@ -15,7 +15,7 @@ async function main(): Promise<void> {
   const text = await res.text()
   console.log(`SSiD boot OK: ${url} -> HTTP ${res.status} (${text.length} bytes)`)
   console.log(text.slice(0, 160))
-  shutdown.shutdown(0)
+  await shutdown(0)
 }
 
 main().catch((cause: unknown) => {

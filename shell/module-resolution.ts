@@ -19,13 +19,15 @@
  */
 
 import { registerHooks } from 'node:module'
-import { dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
 
-/** loader 包源码目录（tsx paths 把 @deepseek-ai/cordis-plugin-loader 解析到这里）。 */
-const LOADER_SRC_DIR = dirname(
-  fileURLToPath(import.meta.resolve('@deepseek-ai/cordis-plugin-loader')),
-)
+/**
+ * loader 包源码目录的 URL 前缀（带尾部斜杠）。tsx paths 把
+ * `@deepseek-ai/cordis-plugin-loader` 解析到 DSH checkout 的
+ * `vendor/loader/src`，loader 的 import 请求 parentURL 形如
+ * `file:///.../vendor/loader/src/config/tree.ts`。保持 URL 形式比较——
+ * parentURL 是 file:// URL，不能和 fileURLToPath 后的磁盘路径比较。
+ */
+const LOADER_SRC_PREFIX = new URL('.', import.meta.resolve('@deepseek-ai/cordis-plugin-loader')).href
 
 /** 是否是需要 Node 包解析的 bare specifier。 */
 function isBareSpecifier(specifier: string): boolean {
@@ -41,7 +43,7 @@ export function installProfilePackageResolver(profileBaseUrl: string): () => voi
   const hooks = registerHooks({
     resolve(specifier, context, nextResolve) {
       const parent = context.parentURL ?? ''
-      const fromLoader = parent.startsWith(LOADER_SRC_DIR)
+      const fromLoader = parent.startsWith(LOADER_SRC_PREFIX)
       if (!fromLoader || !isBareSpecifier(specifier)) {
         return nextResolve(specifier, context)
       }
