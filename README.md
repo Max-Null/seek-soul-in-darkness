@@ -49,11 +49,11 @@ SSiD 是 fractal 的 **DSH 基座版**——基于 [DeepSeek Harness](https://gi
 
 ## 现状
 
-**v0.1.0 已发布**（2026-08-16）：自研壳 + 侧栏生态 + SSiD 面板 + 预制插件 + NSIS 安装器，详见 [Release Notes](docs/release-notes-v0.1.0.md)。
+**v0.1.1 已发布**（2026-08-17）：EPIPE 崩溃修复；v0.1.0（2026-08-16）起自研壳 + 侧栏生态 + SSiD 面板 + 预制插件 + NSIS 安装器齐备，详见 [v0.1.1 Release Notes](docs/release-notes-v0.1.1.md) / [v0.1.0 Release Notes](docs/release-notes-v0.1.0.md)。
 
 ## 下载安装
 
-- 安装包：[`Setup.0.1.0.exe`](https://github.com/Max-Null/seek-soul-in-darkness/releases/download/v0.1.0/Setup.0.1.0.exe)（约 99 MB，Windows x64）
+- 安装包：[`思灵 Setup 0.1.1.exe`](https://github.com/Max-Null/seek-soul-in-darkness/releases/download/v0.1.1/Setup.0.1.1.exe)（约 99 MB，Windows x64）
 - 全部版本：[Releases](https://github.com/Max-Null/seek-soul-in-darkness/releases)
 - NSIS 向导安装：安装目录选择、桌面/开始菜单快捷方式
 - 首次启动自动铺设 profile 并安装预制插件（约 430MB，需系统 pnpm）
