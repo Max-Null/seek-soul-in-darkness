@@ -11,6 +11,21 @@ import { join } from 'node:path'
 
 const require = createRequire(import.meta.url)
 
+/** 预制插件中文简介（未知插件回退包内 description）。 */
+const PLUGIN_ZH: Record<string, string> = {
+  '@huanlin/dsh-plugin-better-sidebar-plugin-office': 'Office 三件套内联预览（docx/xlsx/pptx）',
+  '@max-null/dsh-chinese-thinking': '中文思考——系统提示注入，首轮即中文',
+  '@max-null/dsh-guardian': 'Guardian 状态引擎——断言计数、编辑审查队列、无反馈环监控',
+  '@max-null/dsh-habit': '自学习习惯引擎——纠错信号检测、阈值判断、两级人工闸门',
+  '@max-null/dsh-memory': '跨会话明文记忆——BM25 检索、无向量、人工可管',
+  '@max-null/dsh-ssid-panels': 'SSiD 面板——记忆/状态/习惯/余额 tab 与关于页',
+  'dsh-better-sidebar': 'VSCode 式右侧栏——文件/终端/Git/浏览器，按会话隔离',
+  'dsh-excel-panel': 'Excel 编辑面板——多工作表、公式、批量格式、保存回写',
+  'dsh-sidebar-qa': '划选提问——选文本到侧栏追问，不打断主对话',
+  'dsh-skin': '皮肤切换——预设调色板、壁纸、透明度/模糊、字号',
+  'dsh-video-preview': '视频内联预览——mp4/webm 等，支持拖进度',
+}
+
 /** 读一个已挂载插件的版本与简介。
  * 优先从 profile node_modules 直接路径读（SSID_PROFILE_DIR 由壳注入，
  * 不依赖各包 exports 是否暴露 ./package.json），回退模块解析。 */
@@ -28,7 +43,7 @@ function pluginMeta(name: string): { version?: string, description?: string } {
   for (const candidate of candidates) {
     try {
       const pkg = JSON.parse(readFileSync(candidate, 'utf8')) as { version?: string, description?: string }
-      return { version: pkg.version, description: pkg.description }
+      return { version: pkg.version, description: PLUGIN_ZH[name] ?? pkg.description }
     } catch {
       // 尝试下一个候选
     }
