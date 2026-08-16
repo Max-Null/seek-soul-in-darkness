@@ -96,8 +96,9 @@ async function start() {
   win.on('unmaximize', pushMaximized)
 
   // BrowserView A: official DSH loopback UI (replaces the splash page).
+  // addBrowserView（不是 setBrowserView）——setBrowserView 会移除上面的 titleBar。
   const mainView = new BrowserView({ webPreferences: { sandbox: true, contextIsolation: true } })
-  win.setBrowserView(mainView)
+  win.addBrowserView(mainView)
   // 官方 UI 渲染进程的诊断通道：console 转发到主进程 stderr。
   mainView.webContents.on('console-message', (_event, ...args) => {
     const details = typeof args[0] === 'object' && args[0] !== null ? args[0] : { level: args[0], message: args[1] }
