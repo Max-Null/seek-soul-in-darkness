@@ -1,17 +1,17 @@
+(() => {
 // SSiD 侧栏记忆面板：通过 window.ssid（preload 暴露）读写 host 的 memory。
 const listEl = document.getElementById('list')
 const queryEl = document.getElementById('query')
 const tabs = document.querySelectorAll('.tabs button')
-const toggleEl = document.getElementById('toggle')
+const headerEl = document.getElementById('rail-header')
 
 let activeStatus = 'auto'
 
-// 收起/展开：主进程改布局，这里同步 UI 形态。
-// 侧栏在窗口右缘：展开态按钮指向右（收起方向），收起态指向左（展开方向）。
-toggleEl.addEventListener('click', () => { window.ssid.toggleRail() })
+// 收起/展开：点击 header（展开态为「思灵」标题，收起态为瞳孔 logo）。
+headerEl.addEventListener('click', () => { window.ssid.toggleRail() })
 window.ssid.onRailState((collapsed) => {
   document.body.classList.toggle('collapsed', collapsed)
-  toggleEl.textContent = collapsed ? '«' : '»'
+  headerEl.title = collapsed ? '展开侧栏' : '收起侧栏'
   if (!collapsed) render()
 })
 
@@ -74,8 +74,9 @@ for (const tab of tabs) {
     for (const t of tabs) t.classList.remove('active')
     tab.classList.add('active')
     activeStatus = tab.dataset.status
-    render()
+    void render()
   })
 }
 queryEl.addEventListener('input', render)
 render()
+})()

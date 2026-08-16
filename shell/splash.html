@@ -23,44 +23,21 @@
     overflow: hidden;
   }
   .splash { text-align: center; }
-  /* 微光剪影：瞳孔环 + 呼吸光晕 */
+  /* 分形同款 logo（Si 原子轨道 + 瞳孔）：外轨道缓转，瞳孔呼吸 */
   .glow {
-    width: 96px;
-    height: 96px;
+    width: 104px;
+    height: 104px;
     margin: 0 auto 28px;
     position: relative;
-    animation: breathe 3.2s ease-in-out infinite;
+    filter: drop-shadow(0 0 18px rgba(79, 195, 247, .5));
   }
-  .glow .ring {
-    position: absolute;
-    inset: 0;
-    border: 6px solid var(--ssid-accent);
-    border-radius: 50%;
-    box-shadow: 0 0 24px rgba(79, 195, 247, 0.55), inset 0 0 24px rgba(79, 195, 247, 0.25);
-  }
-  .glow .pupil {
-    position: absolute;
-    inset: 22px;
-    background: #07131F;
-    border-radius: 50%;
-  }
-  .glow .spark {
-    position: absolute;
-    top: 30px;
-    left: 34px;
-    width: 12px;
-    height: 12px;
-    background: var(--ssid-text);
-    border-radius: 50%;
-    animation: spark 3.2s ease-in-out infinite;
-  }
+  .glow svg { width: 100%; height: 100%; display: block; }
+  .glow .orbit { animation: orbit 14s linear infinite; transform-box: fill-box; transform-origin: center; }
+  .glow .pupil-g { animation: breathe 3.2s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+  @keyframes orbit { to { transform: rotate(360deg); } }
   @keyframes breathe {
     0%, 100% { transform: scale(1); opacity: 1; }
-    50% { transform: scale(1.06); opacity: 0.85; }
-  }
-  @keyframes spark {
-    0%, 100% { opacity: 0.9; }
-    50% { opacity: 0.35; }
+    50% { transform: scale(.93); opacity: .85; }
   }
   h1 {
     font-size: 40px;
@@ -96,9 +73,34 @@
 <body>
   <div class="splash">
     <div class="glow">
-      <div class="ring"></div>
-      <div class="pupil"></div>
-      <div class="spark"></div>
+      <svg viewBox="0 0 256 256">
+        <g class="orbit" fill="none" stroke="#4FC3F7">
+          <circle cx="128" cy="128" r="52" stroke-width="2" opacity="0.45" />
+          <circle cx="128" cy="128" r="80" stroke-width="2" opacity="0.35" />
+          <circle cx="128" cy="128" r="106" stroke-width="2" opacity="0.28" />
+          <circle cx="128" cy="180" r="3.5" fill="#4FC3F7" stroke="none" opacity="0.9" />
+          <circle cx="128" cy="76" r="3.5" fill="#4FC3F7" stroke="none" opacity="0.9" />
+          <circle cx="208" cy="128" r="3.5" fill="#4FC3F7" stroke="none" opacity="0.8" />
+          <circle cx="184.6" cy="184.6" r="3.5" fill="#4FC3F7" stroke="none" opacity="0.8" />
+          <circle cx="128" cy="208" r="3.5" fill="#4FC3F7" stroke="none" opacity="0.8" />
+          <circle cx="71.4" cy="184.6" r="3.5" fill="#4FC3F7" stroke="none" opacity="0.8" />
+          <circle cx="48" cy="128" r="3.5" fill="#4FC3F7" stroke="none" opacity="0.8" />
+          <circle cx="71.4" cy="71.4" r="3.5" fill="#4FC3F7" stroke="none" opacity="0.8" />
+          <circle cx="128" cy="48" r="3.5" fill="#4FC3F7" stroke="none" opacity="0.8" />
+          <circle cx="184.6" cy="71.4" r="3.5" fill="#4FC3F7" stroke="none" opacity="0.8" />
+          <circle cx="203" cy="203" r="4" fill="#4FC3F7" stroke="none" opacity="0.9" />
+          <circle cx="53" cy="203" r="4" fill="#4FC3F7" stroke="none" opacity="0.9" />
+          <circle cx="53" cy="53" r="4" fill="#4FC3F7" stroke="none" opacity="0.9" />
+          <circle cx="203" cy="53" r="4" fill="#4FC3F7" stroke="none" opacity="0.9" />
+        </g>
+        <g class="pupil-g">
+          <circle cx="128" cy="128" r="38" fill="#0B5E84" />
+          <circle cx="128" cy="128" r="27" fill="#4FC3F7" />
+          <circle cx="128" cy="128" r="13" fill="#0B1220" />
+          <circle cx="119" cy="118" r="7" fill="#fff" opacity="0.9" />
+          <circle cx="139" cy="135" r="3" fill="#fff" opacity="0.5" />
+        </g>
+      </svg>
     </div>
     <h1>思 灵</h1>
     <div class="en">Seek Soul in Darkness</div>

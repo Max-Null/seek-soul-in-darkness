@@ -16,7 +16,7 @@
  */
 
 import { register } from 'tsx/esm/api'
-import { app, BrowserView, BrowserWindow, ipcMain, Menu, nativeImage, shell, Tray } from 'electron'
+import { app, BrowserView, BrowserWindow, ipcMain, Menu, nativeImage, Notification, shell, Tray } from 'electron'
 import { readFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -152,13 +152,14 @@ async function start() {
     const filePath = args?.file_path
     if (typeof filePath !== 'string' || filePath === '') return
     const abs = isAbsolute(filePath) ? filePath : join(cwd ?? '', filePath)
+    const at = typeof event.time === 'number' ? event.time : Date.now()
     const entry = producedFiles.get(abs)
     if (entry !== undefined) {
       entry.seq = Math.max(entry.seq, event.seq ?? 0)
-      entry.time = Date.now()
+      entry.time = Math.max(entry.time, at)
       return
     }
-    producedFiles.set(abs, { path: abs, seq: event.seq ?? 0, time: Date.now() })
+    producedFiles.set(abs, { path: abs, seq: event.seq ?? 0, time: at })
     if (producedFiles.size > PRODUCED_CAP) {
       let oldest = null
       for (const value of producedFiles.values()) {
@@ -227,6 +228,12 @@ async function start() {
     },
   })
   win.addBrowserView(sideRail)
+  // 侧栏渲染进程的诊断通道：console 转发到主进程 stderr（electron 32+ 的
+  // console-message 事件参数是 details 对象）。
+  sideRail.webContents.on('console-message', (_event, ...args) => {
+    const details = typeof args[0] === 'object' && args[0] !== null ? args[0] : { level: args[0], message: args[1] }
+    process.stderr.write(`[side-rail:${details.level}] ${details.message ?? ''}\n`)
+  })
   await sideRail.webContents.loadFile(fileURLToPath(new URL('./side-rail/index.html', import.meta.url)))
 
   const layout = () => {
@@ -257,10 +264,19 @@ async function start() {
   tray.on('click', () => { win.show(); win.focus() })
 
   let quitting = false
+  let trayNoticeShown = false
   win.on('close', (event) => {
     if (!quitting) {
       event.preventDefault()
       win.hide()
+      // 首次隐藏时提示去处，之后不再打扰。
+      if (!trayNoticeShown && Notification.isSupported()) {
+        trayNoticeShown = true
+        new Notification({
+          title: '思灵仍在运行',
+          body: '已最小化到系统托盘，点击托盘图标可恢复窗口',
+        }).show()
+      }
     }
   })
   app.on('before-quit', (event) => {

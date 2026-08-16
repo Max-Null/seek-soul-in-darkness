@@ -1,3 +1,4 @@
+(() => {
 // SSiD 侧栏习惯面板：dsh-habit 候选（第一级人工闸门，1s 轮询刷新）。
 const habitListEl = document.getElementById('habit-list')
 
@@ -62,3 +63,4 @@ async function render() {
 
 setInterval(() => { void render() }, 1000)
 void render()
+})()

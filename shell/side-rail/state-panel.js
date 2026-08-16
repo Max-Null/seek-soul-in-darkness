@@ -1,10 +1,15 @@
+(() => {
 // SSiD 侧栏状态面板：Guardian 三个触发线的可视化（1s 轮询刷新）。
 const stateListEl = document.getElementById('state-list')
-const panelNavButtons = document.querySelectorAll('.panel-nav button')
+const panelNavButtons = document.querySelectorAll('.nav button')
 
-// 面板切换（记忆 / 状态 / 习惯 / 余额）——通用：按钮 data-panel ↔ 面板 id。
+// 面板切换（记忆 / 状态 / 习惯 / 文件 / 余额）——通用：按钮 data-panel ↔ 面板 id。
+// 收起态下点导航图标 = 展开侧栏并定位到该面板。
 for (const button of panelNavButtons) {
   button.addEventListener('click', () => {
+    if (document.body.classList.contains('collapsed')) {
+      void window.ssid.toggleRail()
+    }
     for (const b of panelNavButtons) b.classList.remove('active')
     button.classList.add('active')
     const target = button.dataset.panel
@@ -92,3 +97,4 @@ async function render() {
 
 setInterval(() => { void render() }, 1000)
 void render()
+})()

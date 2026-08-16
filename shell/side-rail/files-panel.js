@@ -1,3 +1,4 @@
+(() => {
 // SSiD 侧栏文件面板：会话产出文件列表 + 多格式预览（md/html/图片/docx/xlsx/pdf）。
 const filesListEl = document.getElementById('files-list')
 const filesPreviewEl = document.getElementById('files-preview')
@@ -10,21 +11,22 @@ const basenameOf = (path) => {
   const parts = path.split(/[\\/]/)
   return parts[parts.length - 1] || path
 }
-const escapeHtml = (text) => text
-  .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
-  .replaceAll('"', '&quot;').replaceAll("'", '&#39;')
+
+/** 相对时间：刚刚 / N 分钟前 / N 小时前 / N 天前 / 日期。 */
+function relativeTime(ts) {
+  if (typeof ts !== 'number' || ts <= 0) return ''
+  const diff = Date.now() - ts
+  if (diff < 60_000) return '刚刚'
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`
+  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)} 天前`
+  return new Date(ts).toLocaleDateString('zh-CN')
+}
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'])
 const MARKDOWN_EXTS = new Set(['md', 'markdown'])
 
-function previewTitle(text) {
-  const title = document.createElement('div')
-  title.className = 'files-title'
-  title.textContent = text
-  return title
-}
-
-function previewButton(label, onClick) {
+function actionButton(label, onClick) {
   const button = document.createElement('button')
   button.className = 'files-action'
   button.textContent = label
@@ -32,9 +34,22 @@ function previewButton(label, onClick) {
   return button
 }
 
+/** 预览顶栏（sticky）：返回 + 文件名 + 系统打开。 */
+function previewTopbar(path) {
+  const bar = document.createElement('div')
+  bar.className = 'files-topbar'
+  bar.appendChild(actionButton('← 列表', () => { void renderList() }))
+  const name = document.createElement('div')
+  name.className = 'file-name'
+  name.textContent = basenameOf(path)
+  name.title = path
+  bar.appendChild(name)
+  bar.appendChild(actionButton('打开', () => { void window.ssid.fileOpen(path) }))
+  return bar
+}
+
 /** 文本类预览：md 走 marked，其余转义后 pre。 */
 function renderText(path, ext, text) {
-  filesPreviewEl.append(previewTitle(basenameOf(path)))
   if (MARKDOWN_EXTS.has(ext)) {
     const html = document.createElement('div')
     html.className = 'files-md'
@@ -50,7 +65,6 @@ function renderText(path, ext, text) {
 
 /** HTML 文件：sandbox iframe 原样渲染。 */
 function renderHtml(path, text) {
-  filesPreviewEl.append(previewTitle(basenameOf(path)))
   const frame = document.createElement('iframe')
   frame.className = 'files-iframe'
   frame.sandbox = ''
@@ -58,9 +72,8 @@ function renderHtml(path, text) {
   filesPreviewEl.appendChild(frame)
 }
 
-/** 图片：data URL。 */
+/** 图片：Blob URL。 */
 function renderImage(path, ext, bytes) {
-  filesPreviewEl.append(previewTitle(basenameOf(path)))
   const img = document.createElement('img')
   img.className = 'files-image'
   img.src = URL.createObjectURL(new Blob([bytes], { type: `image/${ext === 'svg' ? 'svg+xml' : ext}` }))
@@ -68,8 +81,7 @@ function renderImage(path, ext, bytes) {
 }
 
 /** docx → mammoth 转 HTML。 */
-async function renderDocx(path, bytes) {
-  filesPreviewEl.append(previewTitle(basenameOf(path)))
+async function renderDocx(bytes) {
   const result = await window.mammoth.convertToHtml({ arrayBuffer: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) })
   const html = document.createElement('div')
   html.className = 'files-md'
@@ -78,8 +90,7 @@ async function renderDocx(path, bytes) {
 }
 
 /** xlsx → 第一个工作表转表格。 */
-function renderXlsx(path, bytes) {
-  filesPreviewEl.append(previewTitle(basenameOf(path)))
+function renderXlsx(bytes) {
   const workbook = window.XLSX.read(bytes, { type: 'array' })
   const sheetName = workbook.SheetNames[0]
   if (sheetName === undefined) {
@@ -89,8 +100,7 @@ function renderXlsx(path, bytes) {
     filesPreviewEl.appendChild(empty)
     return
   }
-  const sheet = workbook.Sheets[sheetName]
-  const htmlText = window.XLSX.utils.sheet_to_html(sheet, { header: '', footer: '' })
+  const htmlText = window.XLSX.utils.sheet_to_html(workbook.Sheets[sheetName], { header: '', footer: '' })
   const table = document.createElement('div')
   table.className = 'files-md files-table'
   table.innerHTML = htmlText
@@ -98,8 +108,7 @@ function renderXlsx(path, bytes) {
 }
 
 /** pdf → pdf.js 首屏渲染。 */
-async function renderPdf(path, bytes) {
-  filesPreviewEl.append(previewTitle(basenameOf(path)))
+async function renderPdf(bytes) {
   const pdfjs = await import('./vendor/pdf.min.mjs')
   pdfjs.GlobalWorkerOptions.workerSrc = './vendor/pdf.worker.min.mjs'
   try {
@@ -126,21 +135,18 @@ async function renderPdf(path, bytes) {
   }
 }
 
-/** 未知格式：元信息 + 系统打开。 */
-function renderUnknown(path, size) {
-  filesPreviewEl.append(previewTitle(basenameOf(path)))
+/** 未知格式：元信息提示（顶栏已有系统打开按钮）。 */
+function renderUnknown(size) {
   const note = document.createElement('div')
   note.className = 'files-note'
-  note.textContent = `不支持内嵌预览（${size} 字节），用系统默认程序打开：`
+  note.textContent = `不支持内嵌预览（${size} 字节），点右上角「打开」用系统默认程序查看。`
   filesPreviewEl.appendChild(note)
-  filesPreviewEl.appendChild(previewButton('系统打开', () => { void window.ssid.fileOpen(path) }))
 }
 
 async function renderPreview(path) {
+  filesPreviewEl.replaceChildren(previewTopbar(path))
   const result = await window.ssid.fileRead(path)
-  filesPreviewEl.replaceChildren(backButton)
   if (!result.ok) {
-    filesPreviewEl.append(previewTitle(basenameOf(path)))
     const error = document.createElement('div')
     error.className = 'files-note'
     error.textContent = result.message
@@ -151,36 +157,42 @@ async function renderPreview(path) {
   const ext = extOf(path)
   if (IMAGE_EXTS.has(ext)) { renderImage(path, ext, bytes); return }
   if (ext === 'html' || ext === 'htm') { renderHtml(path, new TextDecoder().decode(bytes)); return }
-  if (ext === 'docx') { await renderDocx(path, bytes); return }
-  if (ext === 'xlsx' || ext === 'xls') { renderXlsx(path, bytes); return }
-  if (ext === 'pdf') { await renderPdf(path, bytes); return }
-  const text = new TextDecoder().decode(bytes)
+  if (ext === 'docx') { await renderDocx(bytes); return }
+  if (ext === 'xlsx' || ext === 'xls') { renderXlsx(bytes); return }
+  if (ext === 'pdf') { await renderPdf(bytes); return }
   const printable = !bytes.some((byte, index) => index > 1024 ? false : byte === 0)
-  if (printable) { renderText(path, ext, text); return }
-  renderUnknown(path, result.size)
+  if (printable) { renderText(path, ext, new TextDecoder().decode(bytes)); return }
+  renderUnknown(result.size)
 }
 
 function fileRow(entry) {
   const row = document.createElement('div')
   row.className = 'file-row'
+
+  const top = document.createElement('div')
+  top.className = 'file-row-top'
   const name = document.createElement('div')
   name.className = 'file-name'
   name.textContent = basenameOf(entry.path)
   name.title = entry.path
+  const time = document.createElement('div')
+  time.className = 'file-time'
+  time.textContent = relativeTime(entry.time)
+  top.append(name, time)
+  row.appendChild(top)
+
   const path = document.createElement('div')
   path.className = 'file-path'
   path.textContent = entry.path
   path.title = entry.path
-  const actions = document.createElement('div')
-  actions.className = 'file-actions'
-  const preview = previewButton('预览', () => {
+  row.appendChild(path)
+
+  // 整行点击 = 预览；「打开」按钮独立走系统默认程序。
+  row.addEventListener('click', () => {
     filesPreviewEl.hidden = false
     filesListEl.hidden = true
     void renderPreview(entry.path)
   })
-  const open = previewButton('打开', () => { void window.ssid.fileOpen(entry.path) })
-  actions.append(preview, open)
-  row.append(name, path, actions)
   return row
 }
 
@@ -204,10 +216,8 @@ async function renderList() {
   for (const entry of files) filesListEl.appendChild(fileRow(entry))
 }
 
-const backButton = previewButton('← 返回列表', () => { void renderList() })
-backButton.className = 'files-action files-back'
-
-const filesTab = document.querySelector('.panel-nav button[data-panel="files"]')
+const filesTab = document.querySelector('.nav button[data-panel="files"]')
 filesTab.addEventListener('click', () => { void renderList() })
 
 void renderList()
+})()
