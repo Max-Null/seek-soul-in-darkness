@@ -65,6 +65,19 @@ async function start() {
   const guardian = kernel.get('guardian')
   ipcMain.handle('ssid:guardian:snapshot', () => guardian?.snapshot?.() ?? { session: null, reviewQueue: [] })
 
+  // ── IPC: habit candidates - first-level human gate ──────────────────────
+  // 确认候选 → 写入 dsh-memory（suggested 状态，第二级闸门在记忆面板）。
+  const habit = kernel.get('habit')
+  ipcMain.handle('ssid:habit:snapshot', () => habit?.snapshot?.() ?? [])
+  ipcMain.handle('ssid:habit:confirm', async (_event, id) => {
+    const candidate = habit?.confirm?.(id)
+    if (candidate !== undefined && candidate !== null && memory !== undefined) {
+      await memory.remember?.({ content: `[习惯] ${candidate.habit}` })
+    }
+    return candidate ?? null
+  })
+  ipcMain.handle('ssid:habit:discard', (_event, id) => habit?.discard?.(id) ?? null)
+
   // ── window + dual BrowserView (official UI + side rail) ────────────────
   const win = new BrowserWindow({
     width: 1280,

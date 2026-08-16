@@ -8,6 +8,9 @@ contextBridge.exposeInMainWorld('ssid', {
   confirmMemory: (id) => ipcRenderer.invoke('ssid:memory:confirm', id),
   forgetMemory: (id) => ipcRenderer.invoke('ssid:memory:forget', id),
   guardianSnapshot: () => ipcRenderer.invoke('ssid:guardian:snapshot'),
+  habitSnapshot: () => ipcRenderer.invoke('ssid:habit:snapshot'),
+  habitConfirm: (id) => ipcRenderer.invoke('ssid:habit:confirm', id),
+  habitDiscard: (id) => ipcRenderer.invoke('ssid:habit:discard', id),
   toggleRail: () => ipcRenderer.invoke('ssid:rail:toggle'),
   onRailState: (callback) => {
     ipcRenderer.on('ssid:rail-state', (_event, collapsed) => callback(collapsed))
