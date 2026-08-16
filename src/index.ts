@@ -12,6 +12,12 @@ export const name = '@max-null/dsh-ssid-panels'
 /** Services required before mounting: the webserver routes and the web runtime's trusted hosts. */
 export const inject = ['webServer', 'webRuntime']
 
+/** SSiD 壳版本（main.mjs 启动时从 shell/package.json 注入环境变量）。 */
+const SHELL_VERSION = process.env.SSID_SHELL_VERSION ?? '0.0.0'
+
+/** SSiD 仓库（更新检查与更新日志来源）。 */
+const SSID_REPO = 'Max-Null/seek-soul-in-darkness'
+
 /** Body size bound of one JSON request. */
 const MAX_BODY_BYTES = 1 << 20
 
@@ -122,6 +128,36 @@ function required<T>(service: T | undefined, label: string): T {
  */
 export function apply(ctx: Context): void {
   const api: Record<string, ApiMethod> = {
+    'about': () => ({
+      shellVersion: SHELL_VERSION,
+      // 预制插件清单：非官方（非 @deepseek-ai/）loader 条目，按名排序。
+      plugins: [...(ctx as unknown as {
+        loader: { entries(): Array<{ id: string, options: { name?: string, group?: boolean } }> }
+      }).loader.entries()]
+        .filter(entry => !entry.options.group && entry.options.name !== undefined
+          && !entry.options.name.startsWith('@deepseek-ai/')
+          && !entry.options.name.startsWith('cordis:'))
+        .map(entry => ({ id: entry.id, name: entry.options.name as string }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    }),
+    'update-check': async () => {
+      try {
+        const res = await fetch(`https://api.github.com/repos/${SSID_REPO}/releases?per_page=20`, {
+          headers: { accept: 'application/vnd.github+json' },
+        })
+        if (!res.ok) return { currentVersion: SHELL_VERSION, latest: null, releases: [], message: `GitHub API 返回 ${res.status}` }
+        const releases = await res.json() as Array<{ tag_name?: string, name?: string, body?: string, published_at?: string }>
+        const list = releases.map(release => ({
+          tag: release.tag_name ?? '',
+          name: release.name ?? release.tag_name ?? '',
+          body: release.body ?? '',
+          publishedAt: release.published_at ?? '',
+        }))
+        return { currentVersion: SHELL_VERSION, latest: list[0] ?? null, releases: list }
+      } catch (error) {
+        return { currentVersion: SHELL_VERSION, latest: null, releases: [], message: error instanceof Error ? error.message : String(error) }
+      }
+    },
     'memory.list': () => {
       const memory = required(ctx.get('memory'), 'memory')
       return memory.list?.() ?? []

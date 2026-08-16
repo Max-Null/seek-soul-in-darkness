@@ -8,7 +8,7 @@ import { createElement, useEffect, useState, type ReactNode } from 'react'
 import type {} from 'dsh-better-sidebar'
 import type { Context } from 'cordis'
 
-export const inject = ['betterSidebar']
+export const inject = ['slots']
 
 /** POST one /ssid/api method and unwrap the {ok, value|error} envelope. */
 async function api(method: string, payload?: Record<string, unknown>): Promise<unknown> {
@@ -232,39 +232,121 @@ function BalanceView(): ReactNode {
   )
 }
 
-/** Plugin body: register the four tabs (optional peer degrades to no-op). */
+/** 关于 SSiD 设置页：版本 / 检查更新 / 更新日志 / 预制插件。 */
+interface UpdateInfo {
+  currentVersion: string
+  latest?: { tag: string, name: string, body: string, publishedAt: string } | null
+  releases?: Array<{ tag: string, name: string, body: string, publishedAt: string }>
+  message?: string
+}
+interface AboutInfo { shellVersion: string, plugins: Array<{ id: string, name: string }> }
+
+function SsidAboutSection(): ReactNode {
+  const [about, setAbout] = useState<AboutInfo | null>(null)
+  const [update, setUpdate] = useState<UpdateInfo | null>(null)
+  const [checking, setChecking] = useState(false)
+  const check = async (): Promise<void> => {
+    setChecking(true)
+    try {
+      setUpdate(await api('update-check') as UpdateInfo)
+    } catch {
+      setUpdate({ currentVersion: about?.shellVersion ?? '0.0.0', message: '更新检查失败' })
+    } finally {
+      setChecking(false)
+    }
+  }
+  useEffect(() => {
+    void api('about').then((value) => {
+      console.log('[ssid-about] about loaded:', JSON.stringify(value))
+      setAbout(value as AboutInfo)
+    }).catch((error: unknown) => {
+      console.error('[ssid-about] about failed:', error instanceof Error ? error.message : String(error))
+    })
+  }, [])
+  const latest = update?.latest ?? null
+  const newer = latest !== null && latest.tag !== '' && latest.tag !== `v${update?.currentVersion ?? ''}`
+  return createElement('div', { style: { ...ssid.wrap, maxWidth: 640, margin: '0 auto', width: '100%' } },
+    createElement('div', { style: ssid.card },
+      createElement('div', { style: ssid.title }, createElement('span', null, '思灵 (SSiD)')),
+      createElement('div', { style: { fontSize: 22, fontWeight: 700, color: 'var(--dsw-alias-label-primary, #d8e0ea)' } },
+        `v${about?.shellVersion ?? '…'}`),
+      createElement('div', { style: ssid.muted }, '于黑暗中，探寻灵魂。'),
+    ),
+    createElement('div', { style: ssid.card },
+      createElement('div', { style: ssid.title }, createElement('span', null, '检查更新')),
+      latest === null
+        ? update?.message !== undefined
+          ? createElement('div', { style: ssid.muted }, update.message)
+          : createElement('div', { style: ssid.muted }, '暂无发布版本')
+        : newer
+          ? createElement('div', { style: { ...ssid.text, color: ssid.accent } }, `新版本可用：${latest.name}（${latest.tag}，${latest.publishedAt.slice(0, 10)}）`)
+          : createElement('div', { style: ssid.text }, `已是最新：${latest.name}（${latest.tag}）`),
+      createElement('button', { style: { ...ssid.btn, marginTop: 8 }, onClick: () => { void check() }, disabled: checking }, checking ? '检查中…' : '立即检查'),
+    ),
+    update !== null && update !== undefined && (update.releases ?? []).length > 0
+      ? createElement('div', { style: ssid.card },
+        createElement('div', { style: ssid.title }, createElement('span', null, '更新日志')),
+        ...(update.releases ?? []).map(release => createElement('div', { key: release.tag, style: { marginBottom: 10 } },
+          createElement('div', { style: { ...ssid.text, fontWeight: 600 } }, `${release.name}（${release.tag}）· ${release.publishedAt.slice(0, 10)}`),
+          createElement('pre', { style: { ...ssid.muted, whiteSpace: 'pre-wrap', margin: '4px 0 0', fontSize: 11.5 } }, release.body),
+        )),
+      )
+      : null,
+    createElement('div', { style: ssid.card },
+      createElement('div', { style: ssid.title }, createElement('span', null, '预制插件')),
+      (about?.plugins ?? []).length === 0
+        ? createElement('div', { style: ssid.muted }, '（无）')
+        : (about?.plugins ?? []).map(plugin => createElement('div', { key: plugin.id, style: { ...ssid.text, fontSize: 11.5, padding: '2px 0' } }, plugin.name)),
+    ),
+  )
+}
+
+/** Plugin body: settings about section (unconditional) + sidebar tabs (optional peer). */
 export function apply(ctx: Context): void {
-  if (ctx.betterSidebar === undefined) return
-  ctx.effect(() => ctx.betterSidebar.registerTab({
-    id: '@max-null/dsh-ssid-panels:memory',
-    title: () => '记忆',
-    icon: tabIcon('M12 7v14M16 12h2M16 8h2M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3zM6 12h2M6 8h2'),
-    order: 60,
-    single: true,
-    component: () => createElement(MemoryView),
-  }))
-  ctx.effect(() => ctx.betterSidebar.registerTab({
-    id: '@max-null/dsh-ssid-panels:guardian',
-    title: () => '状态',
-    icon: tabIcon('M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2'),
-    order: 61,
-    single: true,
-    component: ({ visible }) => createElement(GuardianView, { visible }),
-  }))
-  ctx.effect(() => ctx.betterSidebar.registerTab({
-    id: '@max-null/dsh-ssid-panels:habit',
-    title: () => '习惯',
-    icon: tabIcon('m17 2 4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14m-14 18-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3'),
-    order: 62,
-    single: true,
-    component: ({ visible }) => createElement(HabitView, { visible }),
-  }))
-  ctx.effect(() => ctx.betterSidebar.registerTab({
-    id: '@max-null/dsh-ssid-panels:balance',
-    title: () => '余额',
-    icon: tabIcon('M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4'),
-    order: 63,
-    single: true,
-    component: () => createElement(BalanceView),
-  }))
+  // 设置页「关于 SSiD」：settings.section 顶级条目。
+  ctx.slots.inject('settings.section', () => ctx.slots.register({
+    name: 'settings.section',
+    id: 'ssid-about',
+    order: 100,
+    label: () => '关于 SSiD',
+    inject: () => ({}),
+  }, () => createElement(SsidAboutSection)))
+
+  // 侧栏 4 tab：betterSidebar 是可选软依赖（未安装时设置页仍可用）。
+  ctx.inject(['betterSidebar'], (sidebarCtx: Context) => {
+    const service = sidebarCtx.betterSidebar
+    if (service === undefined) return
+    sidebarCtx.effect(() => service.registerTab({
+      id: '@max-null/dsh-ssid-panels:memory',
+      title: () => '记忆',
+      icon: tabIcon('M12 7v14M16 12h2M16 8h2M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3zM6 12h2M6 8h2'),
+      order: 60,
+      single: true,
+      component: () => createElement(MemoryView),
+    }))
+    sidebarCtx.effect(() => service.registerTab({
+      id: '@max-null/dsh-ssid-panels:guardian',
+      title: () => '状态',
+      icon: tabIcon('M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2'),
+      order: 61,
+      single: true,
+      component: ({ visible }) => createElement(GuardianView, { visible }),
+    }))
+    sidebarCtx.effect(() => service.registerTab({
+      id: '@max-null/dsh-ssid-panels:habit',
+      title: () => '习惯',
+      icon: tabIcon('m17 2 4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14m-14 18-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3'),
+      order: 62,
+      single: true,
+      component: ({ visible }) => createElement(HabitView, { visible }),
+    }))
+    sidebarCtx.effect(() => service.registerTab({
+      id: '@max-null/dsh-ssid-panels:balance',
+      title: () => '余额',
+      icon: tabIcon('M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4'),
+      order: 63,
+      single: true,
+      component: () => createElement(BalanceView),
+    }))
+  })
 }
