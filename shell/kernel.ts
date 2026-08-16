@@ -90,6 +90,14 @@ export async function bootKernel(
   if (!existsSync(join(profileDir, 'package.json'))) {
     initProfile(profileDir, PROFILE_BUNDLES)
   }
+  // 官方 INSTALL_ANCHOR：DSH checkout 的 apps/cli/package.json ——
+  // healProfilesModuleFallback 和 loadProfile 从这里解析 bundle 的物理目录
+  // （pnpm workspace 的 symlink 布局）。
+  const installAnchor = join(resolveDshCheckout(), 'apps/cli/package.json')
+  // 必须先 heal：installProfilePackageResolver 的 loader 前缀从
+  // ~/.dsh/profiles/node_modules 平面 symlink 解析，新机（空 profile）下
+  // 没 heal 会解析失败。
+  healProfilesModuleFallback(installAnchor, home)
   // loader 的 bare specifier 从这个锚点向上找 node_modules：profile 自己的
   // node_modules（第三方插件）→ ~/.dsh/profiles/node_modules（heal 建立的
   // 平面 symlink，覆盖所有 @deepseek-ai/dsh-*）。必须在 boot 之前装好。
@@ -98,11 +106,6 @@ export async function bootKernel(
   )
 
   try {
-    // 官方 INSTALL_ANCHOR：DSH checkout 的 apps/cli/package.json ——
-    // healProfilesModuleFallback 和 loadProfile 从这里解析 bundle 的物理目录
-    // （pnpm workspace 的 symlink 布局）。
-    const installAnchor = join(resolveDshCheckout(), 'apps/cli/package.json')
-    healProfilesModuleFallback(installAnchor, home)
     const profile = loadProfile(BIN_NAME, PROFILE_NAME, installAnchor, home)
 
     const rootConfig = join(profile.dir, ROOT_CONFIG_FILENAME)

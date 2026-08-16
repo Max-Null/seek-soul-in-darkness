@@ -20,7 +20,10 @@
 
 import { register } from 'tsx/esm/api'
 import { app, BrowserView, BrowserWindow, ipcMain, Menu, nativeImage, Notification, Tray } from 'electron'
-import { readFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 // tsx ESM loader: transpiles kernel.ts and resolves @deepseek-ai/dsh-* to the
@@ -73,6 +76,82 @@ async function start() {
   })
   await win.loadFile(fileURLToPath(new URL('./splash.html', import.meta.url)))
   win.show()
+
+  // ── 首次初始化：铺 profile 模板 + 自动安装预制插件（换机开箱即用）───
+  // 已初始化（本机 profile 有插件）则直接跳过；否则从安装包模板铺设并
+  // 跑系统 pnpm install（约 430MB 依赖，几分钟）。缺失 pnpm 时提示引导。
+  const dshHome = process.env.DSH_HOME ?? join(homedir(), '.dsh')
+  const profileDir = join(dshHome, 'profiles', 'ssid')
+  const profileReady = () => existsSync(join(profileDir, 'node_modules', '@max-null', 'dsh-memory'))
+  const splashStatus = (text) => {
+    void win.webContents.executeJavaScript(
+      `(() => { const el = document.querySelector('.status'); if (el) el.textContent = ${JSON.stringify(text)} })()`,
+    ).catch(() => {})
+  }
+  const runInstall = (command) => new Promise((resolve, reject) => {
+    // shell: true —— Windows 下 .cmd shim 必须经 shell 才能 spawn。
+    const child = spawn(command, ['install'], {
+      cwd: profileDir,
+      stdio: 'ignore',
+      windowsHide: true,
+      shell: true,
+    })
+    child.on('error', reject)
+    child.on('exit', (code) => {
+      code === 0 ? resolve() : reject(new Error(`pnpm install exited with code ${code}`))
+    })
+  })
+  /** pnpm 候选命令：GUI 进程 PATH 常缺用户级 npm 全局目录，补常见安装位。 */
+  const pnpmCandidates = () => {
+    const commands = ['pnpm', 'pnpm.cmd']
+    const userNpm = join(homedir(), 'AppData', 'Roaming', 'npm')
+    for (const name of ['pnpm.cmd', 'pnpm.exe', 'pnpm']) {
+      const candidate = join(userNpm, name)
+      if (existsSync(candidate)) commands.push(candidate)
+    }
+    return commands
+  }
+  const ensureProfile = async () => {
+    if (profileReady()) return false
+    const template = app.isPackaged
+      ? join(process.resourcesPath, 'profile-template')
+      : fileURLToPath(new URL('./profile-template', import.meta.url))
+    try {
+      mkdirSync(profileDir, { recursive: true })
+      for (const file of ['package.json', 'pnpm-workspace.yaml', 'cordis.patch.yml']) {
+        copyFileSync(join(template, file), join(profileDir, file))
+      }
+      cpSync(join(template, 'vendor'), join(profileDir, 'vendor'), { recursive: true, force: true })
+      splashStatus('首次初始化：正在安装预制插件（约 430MB，需要几分钟）…')
+      let installed = false
+      for (const command of pnpmCandidates()) {
+        try {
+          await runInstall(command)
+          installed = true
+          break
+        } catch {
+          // 尝试下一个候选
+        }
+      }
+      if (!installed) {
+        splashStatus('未找到 pnpm：请先安装 pnpm（https://pnpm.io），然后重启思灵')
+        await new Promise(() => {})
+        return false
+      }
+      return true
+    } catch (cause) {
+      process.stderr.write(`ssid: profile init failed: ${cause instanceof Error ? cause.message : String(cause)}\n`)
+      return false
+    }
+  }
+  const freshInstall = await ensureProfile()
+  if (freshInstall) {
+    // 安装子进程完成后的进程状态不适合继续 boot（实测 boot 卡住），
+    // 提示用户重启：第二次启动直接进 boot，全链路已验证。
+    splashStatus('插件安装完成，请关闭本窗口后重新打开思灵')
+    await new Promise(() => {})
+    return
+  }
 
   // ── boot DSH kernel (this process) ──────────────────────────────────────
   let kernel

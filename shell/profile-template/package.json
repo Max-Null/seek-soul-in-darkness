@@ -1,0 +1,36 @@
+{
+  "name": "dsh-profile-ssid",
+  "private": true,
+  "dependencies": {
+    "@huanlin/dsh-plugin-better-sidebar-plugin-office": "^0.1.0",
+    "@max-null/dsh-chinese-thinking": "^0.2.0",
+    "@max-null/dsh-guardian": "^0.1.0",
+    "@max-null/dsh-habit": "^0.1.0",
+    "@max-null/dsh-memory": "^0.2.0",
+    "@max-null/dsh-ssid-panels": "file:./vendor/dsh-ssid-panels",
+    "dsh-better-sidebar": "^0.12.3",
+    "dsh-excel-panel": "^0.3.2",
+    "dsh-sidebar-qa": "^0.1.0",
+    "dsh-skin": "file:./vendor/dsh-skin",
+    "dsh-video-preview": "^0.1.1"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "@max-null/dsh-memory",
+        "@max-null/dsh-chinese-thinking",
+        "@max-null/dsh-guardian",
+        "@max-null/dsh-habit",
+        "@max-null/dsh-ssid-panels",
+        "dsh-better-sidebar",
+        "dsh-skin",
+        "@huanlin/dsh-plugin-better-sidebar-plugin-office",
+        "dsh-video-preview",
+        "dsh-excel-panel",
+        "dsh-sidebar-qa"
+      ]
+    }
+  }
+}

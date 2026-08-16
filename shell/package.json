@@ -8,7 +8,7 @@
     "start": "electron .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "smoke": "node --import tsx/esm boot-smoke.ts",
-    "pack": "npm run bundle-kernel && electron-builder --win portable",
+    "pack": "npm run bundle-kernel && electron-builder --win nsis",
     "bundle-kernel": "esbuild kernel.ts --bundle --platform=node --format=esm --outfile=kernel.bundle.mjs --external:node:* --external:*.node"
   },
   "main": "main.mjs",
@@ -23,8 +23,21 @@
       "node_modules/tsx/**",
       "node_modules/@esbuild/**"
     ],
+    "extraResources": [
+      {
+        "from": "profile-template",
+        "to": "profile-template"
+      }
+    ],
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "思灵"
+    },
     "win": {
-      "target": "portable",
+      "target": "nsis",
       "icon": "assets/icon.png"
     }
   },

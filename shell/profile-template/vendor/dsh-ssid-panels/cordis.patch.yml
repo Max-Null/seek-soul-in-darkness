@@ -1,0 +1,7 @@
+# @max-null/dsh-ssid-panels bundle patch: one insert over the profile root.
+# Host half opens /ssid/api/* (memory/guardian/habit/balance data);
+# client half registers four tabs on ctx.betterSidebar (optional peer —
+# without dsh-better-sidebar the client half registers nothing).
+- insert:
+    - id: ssid-panels
+      name: '@max-null/dsh-ssid-panels'
