@@ -1,49 +1,78 @@
 # SSiD 壳（思灵）—— Electron 补丁层
 
-> 状态：骨架代码（第一个字节），**待跑通验证**
-> 定位：boot DSH 官方 web UI + 外挂侧栏（第四列）+ IPC 读 host memory
+> 状态：**已跑通**（2026-08-16 实测：electron 窗口 + DSH 官方 UI + 侧栏）
+> 定位：spawn 纯 node 子进程 boot DSH 官方 web profile，electron 外挂侧栏（第四列）
 
-## ⚠️ 关键结论（2026-08-16 实测）
-
-**独立 npm 依赖 DSH 包不可行**：`npm install` 报 ERESOLVE——`dsh-app-boot@0.1.0-rc.6` 的 peer 依赖要求 `dsh-home-paths@^0.1.0-rc.6`，但 npm 上 home-paths 只有 `0.0.1-rc.3`。DSH 是 monorepo，npm 发布版本不同步，独立拼装会断 peer 链。
-
-**正确路径**：壳代码迁进 DSH workspace（`deepseek-harness-fork`），用 tsx 启动（同 `dsh web` 的 `node --import tsx/esm` 方式），同 anywhere-labs 的 submodule 做法。本目录的 `main.ts`/`preload.cjs`/`side-rail` 代码本身可用，只是要换个宿主（workspace 而非独立 npm）。
-
-## 这是什么
+## 架构
 
 ```
-Electron 窗口
-├── BrowserView A：DSH 官方 loopback UI（内核，零改动）
-└── BrowserView B：SSiD 侧栏（记忆面板，读 host ctx.memory）
+electron 主进程（main.mjs，纯 ESM JS，不经转译）
+├── spawn 纯 node 子进程（boot-child.ts，tsx 跑）
+│   └── 复用官方 runProfile → boot DSH web profile（ssid profile）
+│       └── 打印 SSID_READY port=<n>，保持运行
+├── BrowserView A：DSH 官方 loopback UI（http://127.0.0.1:<port>/）
+└── BrowserView B：SSiD 侧栏（记忆面板，preload.cjs + side-rail/）
 ```
+
+## 两个关键实测结论（重要）
+
+### 1. 内核必须在纯 node 子进程里 boot，不能进 electron 主进程
+
+DSH 的 loader 依赖 native addon `node-addon-require-builtin` 探测**标准 Node 的
+V8 embedder**，从而 `requireBuiltin('internal/modules/esm/loader')` 拿内部 loader，
+用 profile 目录的 baseUrl 解析 bare-specifier 插件（如 out-of-tree bundle）。
+
+electron 是**另一个 V8 embedder**（嵌了 Chromium），该探测必然失败：
+
+```
+node-addon-require-builtin unsupported: Unsupported/no-realm
+(no compatible GetAlignedPointerFromEmbedderData symbol found)
+```
+
+所以 electron 主进程只 spawn 子进程，内核跑在标准 node 下（native addon 正常）。
+
+### 2. Electron 版本必须 ≥ 40（内置 Node ≥ 22.19）
+
+DSH 硬性要求 `node ^22.19 || >=24`（用了 Node 22 的 `node:zlib` zstd 和
+`node:module` stripTypeScriptTypes API）。Electron 33 内置 Node 20.18，直接报
+`node:zlib does not provide createZstdDecompress`。本壳锁定 Electron **43.3.0**
+（内置 Node 24.18）。
 
 ## 文件
 
 | 文件 | 作用 |
 |---|---|
-| `main.ts` | Electron bootstrap + boot DSH web profile + 双 BrowserView + IPC |
+| `main.mjs` | Electron 入口：spawn 内核子进程 + 双 BrowserView + IPC |
+| `kernel.ts` | 复用官方 `runProfile` boot DSH（ssid profile） |
+| `boot-child.ts` | 内核子进程入口：boot 后打印 `SSID_READY port=<n>` 并保持运行 |
+| `boot-smoke.ts` | 冒烟验证：boot 后 fetch `/` 应得 200（不依赖 electron） |
 | `preload.cjs` | IPC 桥（侧栏 → main） |
-| `side-rail/index.html` + `memory-panel.js` | 侧栏记忆面板（列表/搜索/确认/删除） |
-| `package.json` | Electron + DSH boot 依赖 |
+| `side-rail/index.html` + `memory-panel.js` | 侧栏记忆面板 |
+| `tsconfig.json` | extends DSH base 的 paths（tsx 运行时解析），typecheck 边界对齐 vendor 宽松配置 |
 
-## 怎么跑（待验证）
+## 怎么跑
 
 ```sh
 cd shell
-npm install        # 装 Electron + DSH 包（Electron 下载二进制，可能较慢）
-npm start          # electron .  → boot DSH → 窗口出现官方 UI + 侧栏
+npm install        # 只装 Electron（43.3.0）+ tsx/typescript
+npm run smoke      # 先验证内核链路：boot DSH → fetch 200
+npm start          # electron . → 窗口出现官方 UI + 侧栏
 ```
 
-## 待验证 / 待确认点（诚实清单）
+> Electron 二进制下载慢时，可手动解压缓存：`$LOCALAPPDATA/electron/Cache/*/electron-v43.3.0-win32-x64.zip`
+> → `node_modules/electron/dist/`，并写 `node_modules/electron/path.txt`（内容 `electron.exe`）。
 
-1. **`main.ts` 是 TS，Electron 直接跑不了 TS**——需 `tsc` 编译成 `dist/main.js`，或加 tsx/esbuild 启动钩子。当前 `package.json` 的 `start` 是 `electron .`，`main` 指向 `main.ts`，需对齐。
-2. **`loadProfile('web', ...)` 的 `installAnchor`**：当前用本包目录，bundle 解析需本包 `node_modules` 里有 `@deepseek-ai/dsh-web-app`/`dsh-base`。
-3. **`webServer.port`**：boot 后从 `ctx.webServer.port` 取 loopback 端口，需确认类型（`ctx` 的类型里 webServer 是否可见）。
-4. **memory 服务**：`ctx.get('memory')` 依赖 dsh-memory 装在 web profile 的 patch 里（已装），需确认侧栏能读到。
-5. **preload 的 sandbox**：`sandbox: true` 下 preload 只能 `require('electron')` 的有限子集，`contextBridge`/`ipcRenderer` 可用，但需实测。
+## 待办 / 诚实清单
 
-## 下一步（跑通后）
+1. **memory 数据通道未接通**：侧栏的 `ssid:memory:*` IPC 现在返回空。设计上是 shell
+   直接读子进程 host 的 `ctx.memory`（绕开 Typert remote），但子进程和 electron 是两个
+   进程，需要跨进程桥（IPC/HTTP 端点）把 `ctx.memory` 数据喂给侧栏——这是 M1 的核心工作。
+2. **侧栏从"纯记忆列表"扩展**为「记忆/状态/计划」三 tab（对应 fractal 的增强面板）。
+3. **`ctx.desktop` 服务**：notify/activateWindow 等壳级能力（见 `../docs/设计/SSiD-壳级能力设计.md`）。
+4. **品牌**：窗口图标换成思灵（Si 瞳孔 logo）。
+5. **打包分发**：现在靠源码 + 系统 node 跑，未做 electron-builder 打包。
 
-- 侧栏从"纯记忆列表"扩展为「记忆/状态/计划」三个 tab（对应 fractal 的增强面板）。
-- 加 `ctx.desktop` 服务（notify/activateWindow 等，见 `../docs/设计/SSiD-壳级能力设计.md`）。
-- 品牌：窗口标题/图标换成思灵（Si 瞳孔 logo）。
+## 历史记录
+
+早期结论（已过时，保留存档）：独立 npm 依赖 DSH 包会断 peer 链（npm 版本未同步）。
+最终方案改为「tsconfig paths 引用相邻 DSH checkout 源码 + tsx 运行」，不改 DSH 一行代码。

@@ -1,13 +1,30 @@
 {
+  // SSiD 壳的 tsconfig：extends 隔壁 DSH 的 base（拿 paths 把
+  // @deepseek-ai/dsh-* 映射到 deepseek-harness 的 src），用于 tsx 运行时解析。
+  //
+  // typecheck 边界：DSH 的 vendor 包（cordis 等）在自己的 tsconfig 里关闭了
+  // 部分严格选项，靠 project references 隔离。shell 直接 import DSH 源码，
+  // tsc 会顺着 import 检查它们，所以这里对齐 vendor 的宽松边界，避免把
+  // DSH 源码在自己的边界里已经通过的代码报成假阳性。SSiD 自己的代码很简单，
+  // 宽松检查足够；真正的严格检查由 DSH 仓库自己的 CI 负责。
+  "extends": "../../deepseek-harness/tsconfig.base.json",
   "compilerOptions": {
-    "target": "es2022",
-    "module": "esnext",
-    "moduleResolution": "bundler",
-    "strict": true,
-    "skipLibCheck": true,
-    "esModuleInterop": true,
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "composite": false,
+    "incremental": false,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
     "types": ["node"],
-    "noEmit": true
+    "noImplicitAny": false,
+    "noImplicitThis": false,
+    "strictFunctionTypes": false,
+    "noUncheckedIndexedAccess": false,
+    "exactOptionalPropertyTypes": false,
+    "noImplicitOverride": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
   },
-  "include": ["main.ts"]
+  "include": ["kernel.ts", "boot-child.ts", "boot-smoke.ts"]
 }

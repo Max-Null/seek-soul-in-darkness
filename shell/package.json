@@ -2,22 +2,19 @@
   "name": "ssid-shell",
   "version": "0.1.0",
   "private": true,
-  "description": "SSiD 壳（思灵）：Electron 补丁层，boot DSH 官方 UI 并外挂侧栏",
+  "description": "SSiD 壳（思灵）：Electron 补丁层，boot 隔壁 DSH 官方 UI 并外挂侧栏",
   "type": "module",
-  "main": "main.ts",
   "scripts": {
     "start": "electron .",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "smoke": "node --import tsx/esm boot-smoke.ts"
   },
+  "main": "main.mjs",
   "dependencies": {
-    "@deepseek-ai/dsh-app-boot": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-cmdline": "0.0.1-rc.1",
-    "@deepseek-ai/dsh-home-paths": "0.0.1-rc.3",
-    "@deepseek-ai/dsh-base": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-web-app": "0.1.0-rc.6"
+    "electron": "43.3.0"
   },
   "devDependencies": {
-    "electron": "^33.0.0",
+    "tsx": "^4.0.0",
     "typescript": "^5.5.0",
     "@types/node": "^26.0.0"
   }
