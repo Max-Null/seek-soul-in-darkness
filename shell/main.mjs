@@ -26,6 +26,23 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+// ── stderr/stdout 管道防护 ───────────────────────────────────────────────
+// GUI 启动时 stderr 可能挂在一个已关闭的管道上（启动终端关闭 / 双击 exe）：
+// 继续写入抛 EPIPE，无人监听 error 事件会升级为未捕获异常，Electron 弹
+// 「A JavaScript error occurred」错误框。全局吞掉 error + safeLog 一次失败
+// 即静默，杜绝 EPIPE 崩溃。所有日志写入一律走 safeLog（见下方调用点）。
+let stdioDead = false
+process.stderr.on('error', () => { stdioDead = true })
+process.stdout.on('error', () => { stdioDead = true })
+const safeLog = (text) => {
+  if (stdioDead) return
+  try {
+    process.stderr.write(text)
+  } catch {
+    stdioDead = true
+  }
+}
+
 // tsx ESM loader: transpiles kernel.ts and resolves @deepseek-ai/dsh-* to the
 // adjacent DSH checkout source. Must run before any TS import.
 // 打包版（app.isPackaged）改用预编译的 kernel.bundle.mjs，不加载 tsx。
@@ -140,7 +157,7 @@ async function start() {
       }
       return true
     } catch (cause) {
-      process.stderr.write(`ssid: profile init failed: ${cause instanceof Error ? cause.message : String(cause)}\n`)
+      safeLog(`ssid: profile init failed: ${cause instanceof Error ? cause.message : String(cause)}\n`)
       return false
     }
   }
@@ -158,7 +175,7 @@ async function start() {
   try {
     kernel = await bootKernel()
   } catch (cause) {
-    process.stderr.write(`ssid: ${cause instanceof Error ? cause.stack ?? cause.message : String(cause)}\n`)
+    safeLog(`ssid: ${cause instanceof Error ? cause.stack ?? cause.message : String(cause)}\n`)
     app.exit(1)
     return
   }
@@ -213,7 +230,7 @@ async function start() {
       requestThemeSync()
       return
     }
-    process.stderr.write(`[main-ui:${details.level}] ${message}\n`)
+    safeLog(`[main-ui:${details.level}] ${message}\n`)
   })
   await mainView.webContents.loadURL(`http://127.0.0.1:${kernel.port}/`)
 
@@ -261,7 +278,7 @@ async function start() {
       }
     } catch (error) {
       // UI 未就绪或切换中：下一轮同步再试
-      process.stderr.write(`[titlebar-theme] sync failed: ${error instanceof Error ? error.message : String(error)}\n`)
+      safeLog(`[titlebar-theme] sync failed: ${error instanceof Error ? error.message : String(error)}\n`)
     }
   }
   const injectThemeObserver = () => {
@@ -278,9 +295,9 @@ async function start() {
       window.__ssidThemeObserver = observer
       return 'installed'
     })()`).then((result) => {
-      process.stderr.write(`[theme-observer] ${String(result)}\n`)
+      safeLog(`[theme-observer] ${String(result)}\n`)
     }).catch((error) => {
-      process.stderr.write(`[theme-observer] failed: ${error instanceof Error ? error.message : String(error)}\n`)
+      safeLog(`[theme-observer] failed: ${error instanceof Error ? error.message : String(error)}\n`)
     })
   }
   // console 转发通道里识别 [theme-sync] 标记 → 防抖同步。
