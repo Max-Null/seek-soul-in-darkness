@@ -45,14 +45,19 @@ SSiD 是 fractal 的 **DSH 基座版**——基于 [DeepSeek Harness](https://gi
 
 - **基座**：DeepSeek Harness（`dsh web` 官方 GUI）
 - **壳**：自研（Electron，参考 anywhere-labs 架构）
-- **插件**：`@max-null/dsh-memory`（跨会话记忆）、`@max-null/dsh-chinese-thinking`（中文思考）
+- **插件**：预制插件全家桶（中文思考、跨会话记忆、Guardian 状态引擎、自学习习惯引擎、皮肤）+ 侧栏生态（dsh-better-sidebar 及扩展）
 
 ## 现状
 
-起步阶段，已就绪：
+**v0.1.0 已发布**（2026-08-16）：自研壳 + 侧栏生态 + SSiD 面板 + 预制插件 + NSIS 安装器，详见 [Release Notes](docs/release-notes-v0.1.0.md)。
 
-- 两个起步插件：`dsh-memory`、`dsh-chinese-thinking`
-- 迁移决策与壳选型结论：见 [`docs/决策/`](docs/决策/)
+## 下载安装
+
+- 安装包：[`Setup.0.1.0.exe`](https://github.com/Max-Null/seek-soul-in-darkness/releases/download/v0.1.0/Setup.0.1.0.exe)（约 99 MB，Windows x64）
+- 全部版本：[Releases](https://github.com/Max-Null/seek-soul-in-darkness/releases)
+- NSIS 向导安装：安装目录选择、桌面/开始菜单快捷方式
+- 首次启动自动铺设 profile 并安装预制插件（约 430MB，需系统 pnpm）
+- 运行前置：环境变量 `DSH_CHECKOUT` 指向 DeepSeek Harness 仓库 checkout（v0.1.0 已知约束）
 
 ## 路线图
 
