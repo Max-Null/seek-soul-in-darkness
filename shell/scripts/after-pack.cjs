@@ -1,16 +1,18 @@
-// afterPack 钩子：把 shell/dsh-runtime/node_modules 复制进打包产物
-// 背景：electron-builder 26 不复制名为 node_modules 的目录内容（issue #3104），
-// 内置 runtime 闭包（dsh-runtime）必须在此补全，否则打包版无法定位 DSH 运行时。
-// 硬链接解引用：pnpm hoisted 布局下 @aiden0z 等文件是硬链接，安装到用户机器后链接失效，必须 dereference 拷贝实体。
-const { cpSync, existsSync } = require('node:fs')
+// afterPack 钩子：内置纯 Node 运行时 + 归档完整性校验
+// 背景（v0.1.3）：dsh-runtime 已由 prepare-runtime.mjs 打成单文件
+// dsh-runtime.tar.gz（extraResources 直拷），首启由 main.mjs 解压；
+// 本钩子不再复制 node_modules 目录。node.exe 保留（目录选择器 worker 用）。
+const { cpSync, existsSync, statSync } = require('node:fs')
 const { join, resolve } = require('node:path')
 
 /** @param {import('electron-builder').AfterPackContext} context */
 module.exports = async function afterPack(context) {
-  const src = resolve(context.packager.projectDir, 'dsh-runtime/node_modules')
-  const dest = join(context.appOutDir, 'resources/dsh-runtime/node_modules')
-  cpSync(src, dest, { recursive: true, force: true, dereference: true })
-  console.log(`[after-pack] dsh-runtime/node_modules -> ${dest}`)
+  // 归档完整性校验：extraResources 复制失败时立刻失败，避免交付残缺安装包
+  const archive = join(context.appOutDir, 'resources/dsh-runtime.tar.gz')
+  if (!existsSync(archive)) {
+    throw new Error(`[after-pack] 缺少 resources/dsh-runtime.tar.gz（请先运行 node scripts/prepare-runtime.mjs）`)
+  }
+  console.log(`[after-pack] dsh-runtime.tar.gz OK (${(statSync(archive).size / 1024 / 1024).toFixed(1)} MB)`)
 
   // 内置纯 Node 运行时：DSH 目录选择器 worker 用 koffi.view 读 COM 内存，
   // Electron 进程（V8 memory cage 启用）禁止 external buffers，任何 koffi

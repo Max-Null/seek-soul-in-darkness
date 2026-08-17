@@ -20,8 +20,8 @@
 
 import { register } from 'tsx/esm/api'
 import { app, BrowserView, BrowserWindow, ipcMain, Menu, nativeImage, Notification, Tray } from 'electron'
-import { spawn } from 'node:child_process'
-import { appendFileSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import { appendFileSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -68,7 +68,7 @@ try {
 } catch {
   // 版本缺失不影响启动
 }
-const { bootKernel, bundledRuntimeDir } = app.isPackaged
+const { bootKernel } = app.isPackaged
   ? await import('./kernel.bundle.mjs')
   : await import('./kernel.ts')
 
@@ -86,15 +86,22 @@ async function start() {
   // 进程执行 worker.cjs 弹 Win32 文件夹对话框。打包版下 execPath = 思灵.exe，
   // 而 worker 的 koffi.view() 读 COM 内存时，Electron 进程（V8 memory cage）
   // 禁止 external buffers 会 FATAL 崩溃（koffi.dev 文档明确注明），所以
-  // worker 必须交给纯 node.exe 执行（afterPack 已内置 resources/node/node.exe）。
+  // worker 必须交给纯 node.exe 执行。worker 内的 koffi 是 Node ABI 的 prebuild，
+  // 与系统 Node 22 / 内置 v22.22.2 匹配；用 electron.exe（Node 24 ABI）跑会
+  // 直接崩 → 「worker exited before reporting a result」。
   // 孙进程的 IPC 消息原样转发给父进程（DSH host），退出码透传。
   const workerScript = process.argv.find((arg) => arg.endsWith('worker.cjs'))
   if (workerScript !== undefined) {
     safeLog(`[worker] script=${workerScript}\n`)
-    const bundledNode = process.resourcesPath
-      ? join(process.resourcesPath, 'node', 'node.exe')
-      : ''
-    const nodeExe = bundledNode && existsSync(bundledNode) ? bundledNode : process.execPath
+    // node 候选链：打包版内置 node.exe（afterPack 注入）→ NVM v22.22.2
+    // （开发机）→ PATH 上的 node.exe（交给 spawn 解析，开发裸跑兜底）。
+    // 刻意不放 process.execPath：electron 跑 worker 必崩（ABI 不匹配）。
+    const candidates = [
+      process.resourcesPath ? join(process.resourcesPath, 'node', 'node.exe') : '',
+      process.env.NVM_HOME ? join(process.env.NVM_HOME, 'v22.22.2', 'node.exe') : '',
+      'node.exe',
+    ]
+    const nodeExe = candidates.find((c) => c !== '' && existsSync(c)) ?? 'node.exe'
     safeLog(`[worker] node=${nodeExe}\n`)
     const worker = spawn(nodeExe, [workerScript], {
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
@@ -225,81 +232,200 @@ async function start() {
     }
     return commands
   }
+  // ── v0.1.3 归档部署：dsh-runtime.tar.gz 单文件，首启/升级原子解压 ──────
+  /** 部署取消信号（splash「取消更新」按钮 → window.__cancelRequested）。 */
+  class DeployCanceled extends Error {}
+
+  /** dsh-runtime 归档路径：打包版在 resources/，开发版在 shell/ 下。 */
+  const runtimeArchivePath = () => {
+    const candidates = app.isPackaged
+      ? [join(process.resourcesPath, 'dsh-runtime.tar.gz')]
+      : [fileURLToPath(new URL('./dsh-runtime.tar.gz', import.meta.url))]
+    return candidates.find((p) => existsSync(p)) ?? null
+  }
+  /** 读归档内的 .runtime-version（tar -xzOf 单文件输出，无需整体解压）。 */
+  const readArchiveVersion = (archive) => {
+    try {
+      const r = spawnSync('tar', ['-xzOf', archive, '.runtime-version'], { timeout: 30_000 })
+      if (r.error !== undefined || r.status !== 0) return null
+      const v = String(r.stdout).trim()
+      return v === '' ? null : v
+    } catch {
+      return null
+    }
+  }
+  /** 读 profile 当前部署版本（无 .runtime-version = 旧版安装产物）。 */
+  const readProfileVersion = () => {
+    try {
+      const v = readFileSync(join(profileDir, '.runtime-version'), 'utf8').trim()
+      return v === '' ? null : v
+    } catch {
+      return null
+    }
+  }
   /**
-   * 递归复制目录并回调进度（字节数）。同步复制：主进程阻塞期间渲染进程
-   * 仍可处理 executeJavaScript 的进度更新消息。
+   * 解压归档到 dst。bsdtar（Win10+ 自带）：-t 预统计条目总数做进度分母，
+   * -x 流式读 stderr 逐行计数（每行一个条目）。返回 { done, total }。
+   * onCancel 注册取消回调（kill 子进程，供取消轮询使用）。
    */
-  const copyDirWithProgress = (src, dst, onProgress) => {
-    // 先统计总字节（进度分母）
-    let total = 0
-    const count = (dir) => {
-      for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        const p = join(dir, entry.name)
-        if (entry.isDirectory()) count(p)
-        else total += statSync(p).size
-      }
-    }
-    count(src)
-    // 逐文件复制，每 ~4MB 回调一次进度
-    let copied = 0
-    let lastReport = 0
-    const copy = (dir, to) => {
-      mkdirSync(to, { recursive: true })
-      for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        const sp = join(dir, entry.name)
-        const dp = join(to, entry.name)
-        if (entry.isDirectory()) {
-          copy(sp, dp)
-          continue
+  const extractArchive = (archive, dst, onProgress, onCancel) =>
+    new Promise((resolve, reject) => {
+      const list = spawnSync('tar', ['-tzf', archive], { timeout: 120_000 })
+      const total =
+        list.error === undefined && list.status === 0
+          ? String(list.stdout).split('\n').filter((l) => l.trim() !== '').length
+          : -1
+      const child = spawn('tar', ['-xzvf', archive, '-C', dst], { windowsHide: true })
+      let done = 0
+      let buf = ''
+      child.stderr.on('data', (d) => {
+        buf += d.toString()
+        const lines = buf.split('\n')
+        buf = lines.pop() ?? ''
+        done += lines.length
+        onProgress?.(done, total)
+      })
+      child.on('error', reject)
+      child.on('exit', (code) => {
+        // 取消（kill）导致的非 0 退出由 deployRuntime 按 cancelRequested 区分
+        code === 0 ? resolve({ done, total }) : reject(new Error(`tar 解压失败（exit ${code}）`))
+      })
+      onCancel?.(() => {
+        try {
+          child.kill()
+        } catch {
+          // 已退出
         }
-        copyFileSync(sp, dp)
-        copied += statSync(sp).size
-        if (copied - lastReport > 4 * 1024 * 1024) {
-          lastReport = copied
-          onProgress?.(copied, total)
-        }
-      }
+      })
+    })
+  /** splash「取消更新」按钮轮询：部署期间每 400ms 检查一次，命中即回调。 */
+  const pollCancel = (onCancelRequested) => {
+    const timer = setInterval(() => {
+      void win.webContents
+        .executeJavaScript('window.__cancelRequested === true')
+        .then((v) => {
+          if (v === true) onCancelRequested()
+        })
+        .catch(() => {})
+    }, 400)
+    return () => clearInterval(timer)
+  }
+  /**
+   * 从归档部署/更新 profile 闭包（v0.1.3）。
+   * - 解压到 profile/.deploy.new：取消/失败只删临时目录，旧版无损（原子替换）
+   * - 校验 @max-null/dsh-memory 在 → 删旧 node_modules + 改名（毫秒级）→ 其余
+   *   条目（package.json/.runtime-version 等）逐个落位
+   * - isUpgrade（有旧版可回退）时显示「取消更新」按钮；首启无旧版不可取消
+   */
+  const deployRuntime = async (archive, { isUpgrade }) => {
+    // 归档顶层 = profile 根内容（node_modules/、package.json、.runtime-version、
+    // vendor/…），所以解压到 profile 内的隐藏临时目录，交换时把各条目落位到
+    // profileDir——直接解压到 node_modules.new 会嵌套错位（node_modules/node_modules）。
+    const tmpDir = join(profileDir, '.deploy.new')
+    rmSync(tmpDir, { recursive: true, force: true })
+    mkdirSync(tmpDir, { recursive: true })
+    let cancelRequested = false
+    let cancelTar = () => {}
+    const stopPolling = pollCancel(() => {
+      cancelRequested = true
+      cancelTar()
+    })
+    if (isUpgrade) {
+      void win.webContents.executeJavaScript('window.__setCancelVisible(true)').catch(() => {})
     }
-    copy(src, dst)
-    onProgress?.(total, total)
+    splashStatus(
+      isUpgrade ? '检测到新版运行环境，正在更新（约 30 秒）…' : '首次初始化：正在部署内置运行环境（约 600MB）…',
+    )
+    try {
+      await extractArchive(
+        archive,
+        tmpDir,
+        (done, total) => {
+          if (cancelRequested) return
+          if (total > 0) {
+            splashProgress(
+              Math.min(100, Math.round((done / total) * 100)),
+              `正在部署内置运行环境（${done}/${total} 文件）…`,
+            )
+          } else {
+            splashStatus(`正在部署内置运行环境（${done} 文件）…`)
+          }
+        },
+        (kill) => {
+          cancelTar = kill
+        },
+      )
+      if (cancelRequested) throw new DeployCanceled()
+      // 校验闭包完整性（解压半截/损坏立即失败，不碰旧版）
+      if (!existsSync(join(tmpDir, 'node_modules', '@max-null', 'dsh-memory'))) {
+        throw new Error('解压结果缺少 @max-null/dsh-memory，部署中止')
+      }
+      // 原子落位：node_modules 先删旧再改名（毫秒级窗口，无并发）；
+      // 其余条目（package.json/.runtime-version/vendor 等）逐个覆盖。
+      rmSync(join(profileDir, 'node_modules'), { recursive: true, force: true })
+      renameSync(join(tmpDir, 'node_modules'), join(profileDir, 'node_modules'))
+      for (const entry of readdirSync(tmpDir)) {
+        if (entry === 'node_modules') continue
+        rmSync(join(profileDir, entry), { recursive: true, force: true })
+        renameSync(join(tmpDir, entry), join(profileDir, entry))
+      }
+      safeLog(`ssid: runtime deployed (${readProfileVersion() ?? '?'}) to ${profileDir}\n`)
+      return 'bundled'
+    } catch (cause) {
+      if (cancelRequested || cause instanceof DeployCanceled) {
+        // 用户取消：升级回退旧版；首启（无旧版）只能挂起提示
+        safeLog('ssid: runtime deploy canceled by user\n')
+        if (isUpgrade) {
+          splashStatus('已取消更新，继续使用当前版本启动…')
+          return 'skipped'
+        }
+        splashError('内置运行环境首次部署已被取消，思灵无法启动。\n\n请重新打开思灵以继续部署。')
+        await new Promise(() => {})
+        return 'failed'
+      }
+      safeLog(`ssid: runtime deploy failed: ${cause instanceof Error ? cause.message : String(cause)}\n`)
+      if (isUpgrade) {
+        splashStatus('更新失败，继续使用当前版本启动…')
+        return 'skipped'
+      }
+      splashError(`内置运行环境部署失败\n\n${cause instanceof Error ? cause.message : String(cause)}\n\n请重新安装思灵后再试。`)
+      await new Promise(() => {})
+      return 'failed'
+    } finally {
+      stopPolling()
+      void win.webContents.executeJavaScript('window.__setCancelVisible(false)').catch(() => {})
+      // 取消/失败后的残留清理（成功时 tmpDir 已被 rename，force 无害）
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
   }
   /**
    * 首次初始化 profile。返回：
-   * - 'skipped'：已就绪（老用户），无需初始化
+   * - 'skipped'：已就绪（老用户，版本一致），无需初始化
    * - 'bundled'：内置闭包部署完成，可继续 boot
-   * - 'installed'：pnpm 安装完成（兜底路径），需重启后 boot
+   * - 'installed'：pnpm 安装完成（兜底路径，仅无归档时），需重启后 boot
    * - 'failed'：初始化失败（继续 boot 会在 splash 显示错误）
    */
   const ensureProfile = async () => {
-    if (profileReady()) return 'skipped'
-    // 内置 runtime（安装包自带）优先：直接复制闭包，无需 pnpm/网络。
-    const bundledRoot = bundledRuntimeDir()
+    // 上次部署残留（取消/崩溃）先清理
+    rmSync(join(profileDir, '.deploy.new'), { recursive: true, force: true })
+    mkdirSync(profileDir, { recursive: true })
+    // 归档部署优先：首启（无 node_modules）或版本不一致（新安装包升级）
+    const archive = runtimeArchivePath()
+    if (archive !== null) {
+      const archiveVer = readArchiveVersion(archive)
+      const profileVer = readProfileVersion()
+      const hasModules = profileReady()
+      // 版本对得上且模块在 → 跳过；否则（首启/老版本/模块丢失）重新部署。
+      // archiveVer 为 null（异常归档）也部署：部署后版本文件落位，下次可对比。
+      const deployNeeded = !hasModules || (archiveVer !== null && profileVer !== archiveVer)
+      if (!deployNeeded) return 'skipped'
+      safeLog(
+        `ssid: runtime deploy needed (archive=${archiveVer ?? '?'} profile=${profileVer ?? '?'} hasModules=${hasModules})\n`,
+      )
+      return deployRuntime(archive, { isUpgrade: hasModules })
+    }
+    // 无归档（旧安装包 / 开发裸跑）：兜底走系统 pnpm 安装。
     try {
-      mkdirSync(profileDir, { recursive: true })
-      if (bundledRoot !== null) {
-        splashStatus('首次初始化：正在部署内置运行环境（约 600MB）…')
-        for (const file of ['package.json', 'pnpm-workspace.yaml', 'cordis.patch.yml']) {
-          copyFileSync(join(bundledRoot, file), join(profileDir, file))
-        }
-        cpSync(join(bundledRoot, 'vendor'), join(profileDir, 'vendor'), { recursive: true, force: true })
-        await new Promise((resolve) => {
-          copyDirWithProgress(
-            join(bundledRoot, 'node_modules'),
-            join(profileDir, 'node_modules'),
-            (done, all) => {
-              const pct = all > 0 ? (done / all) * 100 : 100
-              splashProgress(
-                Math.min(100, Math.round(pct)),
-                `首次初始化：正在部署内置运行环境（${(done / 1024 / 1024).toFixed(0)}/${(all / 1024 / 1024).toFixed(0)} MB）…`,
-              )
-              if (done >= all) resolve()
-            },
-          )
-        })
-        safeLog(`ssid: bundled runtime deployed to ${profileDir}\n`)
-        return 'bundled'
-      }
-      // 无内置 runtime（旧安装包 / 开发裸跑）：兜底走系统 pnpm 安装。
       const template = app.isPackaged
         ? join(process.resourcesPath, 'profile-template')
         : fileURLToPath(new URL('./profile-template', import.meta.url))
@@ -374,6 +500,19 @@ async function start() {
     // 不直接 app.exit(1)（窗口一闪而逝、错误不可见）：把错误详情显示在
     // splash 上，用户点右上角 ✕ 关闭后自行处理（如配置 DSH_CHECKOUT）。
     const message = cause instanceof Error ? (cause.stack ?? cause.message) : String(cause)
+    // 临时诊断：递归展开嵌套 cause（DSH loader 的 AggregateError 常被 Error 包一层）
+    const expandCause = (c, depth) => {
+      if (depth > 4 || c === undefined || c === null) return
+      if (c instanceof AggregateError && Array.isArray(c.errors)) {
+        for (const e of c.errors) {
+          safeLog(`ssid: BOOT-AGG[${depth}]: ${e instanceof Error ? (e.message ?? String(e)) : String(e)}\n`)
+          expandCause(e, depth + 1)
+        }
+      } else if (c instanceof Error && c.cause !== undefined && c.cause !== null) {
+        expandCause(c.cause, depth + 1)
+      }
+    }
+    expandCause(cause, 0)
     safeLog(`ssid: ${message}\n`)
     splashStatus('启动失败：见下方错误详情')
     splashError(`思灵启动失败\n\n${message}\n\n可尝试：设置环境变量 DSH_CHECKOUT 指向 DeepSeek Harness 仓库，然后重新打开思灵。`)

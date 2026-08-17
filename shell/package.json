@@ -1,6 +1,6 @@
 {
   "name": "ssid-shell",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "SSiD 壳（思灵）：Electron 补丁层，boot 隔壁 DSH 官方 UI（无边框自绘标题栏 + 托盘）",
   "type": "module",
@@ -35,8 +35,8 @@
     "afterPack": "scripts/after-pack.cjs",
     "extraResources": [
       {
-        "from": "dsh-runtime",
-        "to": "dsh-runtime"
+        "from": "dsh-runtime.tar.gz",
+        "to": "dsh-runtime.tar.gz"
       }
     ],
     "electronLanguages": [
@@ -54,7 +54,7 @@
     "win": {
       "target": "nsis",
       "icon": "assets/icon.ico",
-      "signAndEditExecutable": false
+      "signAndEditExecutable": true
     }
   },
   "dependencies": {

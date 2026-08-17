@@ -1,10 +1,11 @@
 /**
- * 生成 shell/dsh-runtime/（打包内置的 DSH 运行时闭包）
+ * 生成 dsh-runtime.tar.gz（打包内置的 DSH 运行时闭包归档）
  *
- * 做法：复制 profile-template → 注入 @deepseek-ai/dsh 聚合包 → pnpm install
+ * 做法：复制 profile-template → 注入 @deepseek-ai/dsh 聚合包（精确 pin）→ pnpm install
  *       （node-linker=hoisted 扁平布局，electron-builder 26 不复制 pnpm symlink）
  *       → 显式补充缺失 peer（pnpm 11 不自动装 peer，实测 auto-install-peers 配置不生效）
- * 产物：dsh-runtime/ 内含 node_modules（官方闭包 + 12 自定义插件 + vendor）+ profile 文件
+ *       → 写 .runtime-version（SSiD 版本-DSH 版本）→ tar 单归档 → 删源目录
+ * 产物：shell/dsh-runtime.tar.gz（NSIS 只写 1 个文件，首启解压部署；归档带版本，启动对比驱动升级）
  *
  * 跑法：node scripts/prepare-runtime.mjs
  * 前置：构建机 Node ≥22.13（DSH engines，可用 DSH_NODE 指定），pnpm 11.x（可用 PNPM_CMD 指定）
@@ -80,11 +81,12 @@ function main() {
   console.log('[2/5] 已复制 profile-template')
 
   // 3. 注入 @deepseek-ai/dsh 聚合包（boot 的 installAnchor + 官方闭包来源）
+  //    精确 pin（无 ^）：rc 阶段 ^ 会悄悄升级到未回归验证的版本，DSH 跟进必须是显式决策
   const pkgPath = join(runtimeDir, 'package.json')
   const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
-  pkg.dependencies['@deepseek-ai/dsh'] = '^0.1.0-rc.6'
+  pkg.dependencies['@deepseek-ai/dsh'] = '0.1.0-rc.6'
   writeFileSync(pkgPath, JSON.stringify(pkg, null, 2))
-  console.log('[3/5] 已注入 @deepseek-ai/dsh ^0.1.0-rc.6')
+  console.log('[3/5] 已注入 @deepseek-ai/dsh 0.1.0-rc.6（精确 pin）')
 
   // 3.5 扁平布局（electron-builder 26 不复制 pnpm symlink 节点，必须 hoisted）
   writeFileSync(join(runtimeDir, '.npmrc'), 'node-linker=hoisted\n')
@@ -146,6 +148,34 @@ function main() {
   console.log(`\n=== dsh-runtime 体积 ===`)
   console.log(`node_modules: ${nmSize.toFixed(1)} MB`)
   console.log(`合计:         ${total.toFixed(1)} MB`)
+
+  // 6. 版本标记 + tar 单归档（NSIS 阶段 6 万次写入 → 1 次顺序写入；归档带版本驱动首启升级）
+  const ssidVer = JSON.parse(readFileSync(join(shellDir, 'package.json'), 'utf8')).version
+  const dshPkgPath = join(runtimeDir, 'node_modules', '@deepseek-ai', 'dsh', 'package.json')
+  if (!existsSync(dshPkgPath)) {
+    console.error('缺少 @deepseek-ai/dsh，无法生成版本标记')
+    process.exit(1)
+  }
+  const dshVer = JSON.parse(readFileSync(dshPkgPath, 'utf8')).version
+  const runtimeVer = `${ssidVer}-${dshVer}`
+  writeFileSync(join(runtimeDir, '.runtime-version'), runtimeVer + '\n')
+  console.log(`[6/7] .runtime-version = ${runtimeVer}`)
+
+  const archivePath = join(shellDir, 'dsh-runtime.tar.gz')
+  console.log(`      tar -czf（${total.toFixed(0)} MB 压缩，约 1-3 分钟）…`)
+  const tarR = spawnSync('tar', ['-czf', archivePath, '-C', runtimeDir, '.'], {
+    stdio: 'inherit',
+    timeout: 15 * 60 * 1000,
+  })
+  if (tarR.error || tarR.status !== 0) {
+    console.error('tar 归档失败：', tarR.error?.message ?? `status=${tarR.status}`)
+    process.exit(1)
+  }
+  console.log(`      归档: ${archivePath}（${(statSync(archivePath).size / 1024 / 1024).toFixed(1)} MB）`)
+
+  // 7. 删除源目录（释放 ~600MB 磁盘；归档是唯一产物，随时可重跑本脚本重建）
+  rmSync(runtimeDir, { recursive: true, force: true })
+  console.log('[7/7] 已删除 dsh-runtime/ 源目录（产物仅剩 dsh-runtime.tar.gz）')
 }
 
 main()

@@ -46,12 +46,15 @@ function loaderSrcPrefix(profileBaseUrl: string): string {
 export function installProfilePackageResolver(profileBaseUrl: string): () => void {
   const prefix = loaderSrcPrefix(profileBaseUrl)
   // bundle 形态下 loader 代码内联进 kernel.bundle.mjs，其 import 的
-  // parentURL 是 bundle 自身；源码形态下是 checkout 的 vendor/loader/src。
+  // parentURL 是 bundle 自身；源码形态下是 checkout 的 vendor/loader/src
+  // （tsx paths 会把静态 import 的 cordis-plugin-loader 指到 checkout，
+  // 此时闭包 prefix 匹配不上，需按 vendor/loader 目录兜底判定）。
   const selfUrl = import.meta.url
   const hooks = registerHooks({
     resolve(specifier, context, nextResolve) {
       const parent = context.parentURL ?? ''
-      const fromLoader = parent.startsWith(prefix) || parent === selfUrl
+      const fromLoader =
+        parent.startsWith(prefix) || parent === selfUrl || parent.includes('/vendor/loader/')
       if (!fromLoader || !isBareSpecifier(specifier)) {
         return nextResolve(specifier, context)
       }

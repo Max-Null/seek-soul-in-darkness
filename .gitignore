@@ -14,3 +14,4 @@ shell/dsh-runtime/
 kernel.bundle.mjs
 exe-stderr.log
 exe-stdout.log
+shell/dsh-runtime.tar.gz

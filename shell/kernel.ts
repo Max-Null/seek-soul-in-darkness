@@ -66,26 +66,8 @@ export interface DshRuntime {
 }
 
 /**
- * 定位内置 dsh-runtime 目录（安装版 resources/dsh-runtime；开发版
- * shell/dsh-runtime），校验 @deepseek-ai/dsh 闭包在，否则返回 null。
+ * 源码 checkout 模式的 runtime（DSH_CHECKOUT 或默认并列目录）。
  */
-export function bundledRuntimeDir(): string | null {
-  // 打包后 kernel.bundle.mjs 在 resources/app.asar/ 下 → ../dsh-runtime
-  // = resources/dsh-runtime；开发时 kernel.ts 在 shell/ 下 → 同级 dsh-runtime。
-  const here = fileURLToPath(new URL('.', import.meta.url))
-  const candidates = [
-    resolve(here, '../dsh-runtime'),
-    resolve(here, 'dsh-runtime'),
-  ]
-  for (const root of candidates) {
-    if (existsSync(join(root, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'))) {
-      return root
-    }
-  }
-  return null
-}
-
-/** 源码 checkout 模式的 runtime（DSH_CHECKOUT 或默认并列目录）。 */
 function sourceRuntime(root: string): DshRuntime {
   return {
     kind: 'source',
@@ -104,12 +86,13 @@ function bundledRuntime(root: string): DshRuntime {
 }
 
 /**
- * 定位 DSH 运行时，三级回退：
- * 1. `$DSH_CHECKOUT`（显式指定：源码仓库根，或直接指向 dsh-runtime）
+ * 定位 DSH 运行时，回退链（v0.1.3 归档方案）：
+ * 1. `$DSH_CHECKOUT`（显式指定：源码仓库根，或直接指向 dsh-runtime 目录）
  * 2. 默认并列源码目录 `../../deepseek-harness`（开发布局：SSiD 与 DSH
  *    源码并列放在同一工作区下，与 tsconfig 的 paths 解析一致）
- * 3. 内置 dsh-runtime（安装包自带，无需任何环境配置）
  * 全部缺失时抛带引导信息的错误——boot 前发现，比 boot 中途报解析错误可读得多。
+ * 注意：安装版的「部署后闭包」（~/.dsh/profiles/ssid/node_modules）不在此
+ * 函数内——由 bootKernel 在 profileDir 解析后优先探测（见 bootKernel）。
  */
 export function resolveDshRuntime(): DshRuntime {
   const fromEnv = process.env.DSH_CHECKOUT?.trim()
@@ -127,11 +110,8 @@ export function resolveDshRuntime(): DshRuntime {
   // 开发布局：与 shell 并列的 deepseek-harness 源码（tsx paths 同源解析）。
   const defaultRoot = resolve(fileURLToPath(new URL('.', import.meta.url)), '../../deepseek-harness')
   if (existsSync(join(defaultRoot, 'apps', 'cli', 'package.json'))) return sourceRuntime(defaultRoot)
-  // 安装版：内置闭包（resources/dsh-runtime 或 shell/dsh-runtime）。
-  const bundled = bundledRuntimeDir()
-  if (bundled !== null) return bundledRuntime(bundled)
   throw new Error(
-    `无法定位 DeepSeek Harness 运行时：默认路径 ${defaultRoot} 没有源码，也没有内置 dsh-runtime。\n` +
+    `无法定位 DeepSeek Harness 运行时：默认路径 ${defaultRoot} 没有源码。\n` +
     '请重新安装思灵（新版安装包自带运行环境），或执行：\n' +
     '  git clone --depth 1 https://github.com/deepseek-ai/deepseek-harness <路径>\n' +
     '然后设置环境变量 DSH_CHECKOUT=<路径>，再重新打开思灵。',
@@ -170,7 +150,17 @@ export async function bootKernel(
   // 或内置闭包的 @deepseek-ai/dsh/package.json）——healProfilesModuleFallback
   // 和 loadProfile 从这里解析 bundle 的物理目录（pnpm workspace symlink
   // 或 npm 扁平布局）。
-  const runtime = resolveDshRuntime()
+  // v0.1.3：安装版闭包由 main.mjs 从 dsh-runtime.tar.gz 解压部署到
+  // profileDir/node_modules（resources/ 不再有解压目录）。因此部署产物
+  // 优先于默认源码路径（无 DSH_CHECKOUT 时）；$DSH_CHECKOUT 显式指向
+  // 源码时仍以源码为准（开发/贡献者意图）。
+  let runtime: DshRuntime
+  const deployedAnchor = join(profileDir, 'node_modules', '@deepseek-ai', 'dsh', 'package.json')
+  if (process.env.DSH_CHECKOUT === undefined && existsSync(deployedAnchor)) {
+    runtime = bundledRuntime(profileDir)
+  } else {
+    runtime = resolveDshRuntime()
+  }
   const installAnchor = runtime.installAnchor
   // 必须先 heal：installProfilePackageResolver 的 loader 前缀从
   // ~/.dsh/profiles/node_modules 平面 symlink 解析，新机（空 profile）下

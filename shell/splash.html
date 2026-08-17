@@ -38,6 +38,21 @@
     z-index: 10;
   }
   .close-btn:hover { background: #e81123; color: #fff; }
+  /* ── 「取消更新」按钮：版本升级部署期间显示（主进程 __setCancelVisible） ── */
+  .cancel-btn {
+    display: inline-block;
+    margin: 0 auto 14px;
+    padding: 5px 18px;
+    font-size: 12px;
+    color: var(--ssid-dim);
+    background: transparent;
+    border: 1px solid rgba(79, 195, 247, .35);
+    border-radius: 14px;
+    cursor: pointer;
+    letter-spacing: .08em;
+    transition: all .2s ease;
+  }
+  .cancel-btn:hover { color: #ffb4ab; border-color: rgba(232, 17, 35, .6); }
   .splash { text-align: center; }
   /* 分形同款 logo（Si 原子轨道 + 瞳孔）：外轨道缓转，瞳孔呼吸凝视，
      光晕呼吸让「硅基生命」活起来 */
@@ -155,6 +170,7 @@
     <div class="en">Seek Soul in Darkness</div>
     <div class="slogan">于黑暗中，探寻灵魂。</div>
     <div class="status">正在唤醒硅基生命…</div>
+    <button id="cancel-update" class="cancel-btn" hidden onclick="window.__cancelRequested = true">取消更新</button>
     <div class="error" id="boot-error"></div>
     <div class="pct" id="pct"></div>
     <div class="bar indeterminate"><div class="fill"></div></div>
@@ -178,6 +194,13 @@
     window.__showError = (text) => {
       const el = document.getElementById('boot-error')
       if (el) { el.textContent = text; el.classList.add('show') }
+    }
+    // 「取消更新」：版本升级部署期间由主进程显示；点击后主进程 pollCancel
+    // 轮询到 __cancelRequested 即中止部署（旧版无损，下次启动再检测）。
+    window.__cancelRequested = false
+    window.__setCancelVisible = (visible) => {
+      const btn = document.getElementById('cancel-update')
+      if (btn) btn.hidden = !visible
     }
   </script>
 </body>
