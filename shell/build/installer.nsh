@@ -79,6 +79,10 @@
 !macroend
 
 !macro customInstall
-  ; 文件复制与注册之后：更新最后一项与状态标签为 [4/5] 进行中。
+  ; 文件复制与注册之后：分步推进 4/5、5/5，各停留 1.2s 保证肉眼可见
+  ; （此前单次更新在 Section 尾部秒切 finish 页，实测一闪而过看不到）。
   !insertmacro SSID_STEP_UPDATE ">>> [2/5][3/5] 完成；正在执行 [4/5] 注册安装信息与快捷方式 ..."
+  Sleep 1200
+  !insertmacro SSID_STEP_UPDATE ">>> [4/5] 完成；[5/5] 全部完成，即将结束 ..."
+  Sleep 1200
 !macroend
