@@ -166,7 +166,26 @@ function main() {
   const deps = JSON.parse(readFileSync(join(runtimeDir, 'package.json'), 'utf8')).dependencies ?? {}
   const lockPath = join(runtimeDir, 'pnpm-lock.yaml')
   const lockText = existsSync(lockPath) ? readFileSync(lockPath, 'utf8') : ''
-  const depFingerprint = createHash('md5').update(JSON.stringify(deps)).update(lockText).digest('hex').slice(0, 8)
+  // vendor 目录清单指纹（相对路径+文件大小）：vendor 插件更新（如
+  // dsh-ssid-panels 0.1.0→0.1.1）不改 package.json/lock，此前是盲区——
+  // 老 profile 指纹一致跳过重部署，vendor 更新永远到不了用户
+  // （2026-08-18 用户实测「关于 SSiD 无中英切换」定案）。
+  const vendorLines = []
+  const walkVendor = (dir, rel) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, entry.name)
+      const r = rel === '' ? entry.name : `${rel}/${entry.name}`
+      if (entry.isDirectory()) { walkVendor(p, r); continue }
+      vendorLines.push(`${r}:${statSync(p).size}`)
+    }
+  }
+  const vendorDir = join(runtimeDir, 'vendor')
+  if (existsSync(vendorDir)) walkVendor(vendorDir, '')
+  const depFingerprint = createHash('md5')
+    .update(JSON.stringify(deps))
+    .update(lockText)
+    .update(vendorLines.sort().join('\n'))
+    .digest('hex').slice(0, 8)
   const runtimeVer = `${ssidVer}-${dshVer}-${depFingerprint}`
   writeFileSync(join(runtimeDir, '.runtime-version'), runtimeVer + '\n')
   console.log(`[6/7] .runtime-version = ${runtimeVer}`)
