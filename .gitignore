@@ -2,6 +2,9 @@ node_modules/
 dist/
 out/
 build/
+# 例外：shell/build/ 是 NSIS 定制脚本（installer.nsh），必须入库随包构建
+!shell/build/
+!shell/build/**
 .DS_Store
 *.log
 .dsh/
