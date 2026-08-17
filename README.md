@@ -49,11 +49,11 @@ SSiD 是 fractal 的 **DSH 基座版**——基于 [DeepSeek Harness](https://gi
 
 ## 现状
 
-**v0.1.3 已发布**（2026-08-17）：内置运行环境归档（安装器从 6 万文件写入变为 1 个文件）+ 升级感知（版本不一致自动重部署、可取消）+ exe 图标注入 + 目录选择器修复；v0.1.2 为一键安装（内置运行环境，免 DSH_CHECKOUT）+ 首次安装进度条 + 闪退可见化；v0.1.1 为 EPIPE 崩溃修复；v0.1.0（2026-08-16）起自研壳 + 侧栏生态 + SSiD 面板 + 预制插件 + NSIS 安装器齐备，详见 [v0.1.3 Release Notes](docs/release-notes-v0.1.3.md) / [v0.1.2 Release Notes](docs/release-notes-v0.1.2.md) / [v0.1.1 Release Notes](docs/release-notes-v0.1.1.md) / [v0.1.0 Release Notes](docs/release-notes-v0.1.0.md)。
+**v0.1.4 已发布**（2026-08-17）：安装卡死修复（安装前自动关闭运行中的思灵）+ 安装/首启步骤清单可视化；v0.1.3 为内置运行环境归档与升级感知；v0.1.2 为一键安装（免 DSH_CHECKOUT）+ 首装进度条；v0.1.1 为 EPIPE 崩溃修复；v0.1.0（2026-08-16）起自研壳 + 侧栏生态 + SSiD 面板 + 预制插件 + NSIS 安装器齐备，详见 [v0.1.4 Release Notes](docs/release-notes-v0.1.4.md) / [v0.1.3 Release Notes](docs/release-notes-v0.1.3.md) / [v0.1.2 Release Notes](docs/release-notes-v0.1.2.md) / [v0.1.1 Release Notes](docs/release-notes-v0.1.1.md) / [v0.1.0 Release Notes](docs/release-notes-v0.1.0.md)。
 
 ## 下载安装
 
-- 安装包：[`思灵 Setup 0.1.3.exe`](https://github.com/Max-Null/seek-soul-in-darkness/releases/download/v0.1.3/Setup.0.1.3.exe)（约 235 MB，Windows x64）
+- 安装包：[`思灵 Setup 0.1.4.exe`](https://github.com/Max-Null/seek-soul-in-darkness/releases/download/v0.1.4/Setup.0.1.4.exe)（约 214 MB，Windows x64）
 - 全部版本：[Releases](https://github.com/Max-Null/seek-soul-in-darkness/releases)
 - NSIS 向导安装：安装目录选择、桌面/开始菜单快捷方式
 - **一键安装**：首次启动自动部署内置运行环境（DSH 内核 + 预制插件，约 600MB），无需安装 Node/pnpm、无需设置任何环境变量；安装完成后关闭窗口重新打开即用
