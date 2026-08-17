@@ -145,6 +145,33 @@ async function start() {
 
   // ── splash window: brand boot screen shown while DSH boots ──────────────
   // frame: false = 无边框窗口，顶部自绘标题栏（titleBar BrowserView）。
+  // 步骤清单（v0.1.4）：splash 展示待办，卡住时高亮行即卡点。主清单贯穿
+  // 整个启动；部署阶段切换为部署子清单（解压/校验/替换/收尾），完成后
+  // 切回主清单。全部完成时 current 传 items.length（全项打勾）。
+  const STARTUP_STEPS = [
+    '初始化运行环境检查',
+    '部署内置运行环境',
+    '启动 DSH 内核',
+    '加载思灵界面',
+    '就绪',
+  ]
+  const DEPLOY_STEPS = [
+    '解压内置运行环境',
+    '校验完整性',
+    '替换旧版本',
+    '收尾落位',
+  ]
+  let stepList = STARTUP_STEPS
+  const splashSteps = (current) => {
+    void win.webContents.executeJavaScript(
+      `window.__setStepList(${JSON.stringify(stepList)}, ${Number(current)})`,
+    ).catch(() => {})
+  }
+  const setStepList = (items, current) => {
+    stepList = items
+    splashSteps(current)
+  }
+  const splashStep = (current) => splashSteps(current)
   const win = new BrowserWindow({
     width: 1280,
     height: 840,
@@ -182,33 +209,6 @@ async function start() {
       `window.__showError(${JSON.stringify(text)})`,
     ).catch(() => {})
   }
-  // ── 步骤清单（v0.1.4）：splash 展示待办，卡住时高亮行即卡点 ──────────────
-  // 主清单贯穿整个启动；部署阶段切换为部署子清单（解压/校验/替换/收尾），
-  // 完成后切回主清单。全部完成时 current 传 items.length（全项打勾）。
-  const STARTUP_STEPS = [
-    '初始化运行环境检查',
-    '部署内置运行环境',
-    '启动 DSH 内核',
-    '加载思灵界面',
-    '就绪',
-  ]
-  const DEPLOY_STEPS = [
-    '解压内置运行环境',
-    '校验完整性',
-    '替换旧版本',
-    '收尾落位',
-  ]
-  let stepList = STARTUP_STEPS
-  const splashSteps = (current) => {
-    void win.webContents.executeJavaScript(
-      `window.__setStepList(${JSON.stringify(stepList)}, ${Number(current)})`,
-    ).catch(() => {})
-  }
-  const setStepList = (items, current) => {
-    stepList = items
-    splashSteps(current)
-  }
-  const splashStep = (current) => splashSteps(current)
   /**
    * 安装插件并回传进度。pnpm 的 --reporter=ndjson 把每个事件打成一行
    * JSON（写到 stderr），事件种类（@pnpm/core-loggers 契约，已查证）：
