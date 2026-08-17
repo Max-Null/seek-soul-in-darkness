@@ -21,7 +21,7 @@
 import { register } from 'tsx/esm/api'
 import { app, BrowserView, BrowserWindow, ipcMain, Menu, nativeImage, Notification, Tray } from 'electron'
 import { spawn, spawnSync } from 'node:child_process'
-import { appendFileSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs'
+import { appendFileSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -339,6 +339,34 @@ async function start() {
     return () => clearInterval(timer)
   }
   /**
+   * 部署后校正 node_modules/.modules.yaml（pnpm 元数据）。归档在构建机生成，
+   * 记录的是构建机绝对路径：storeDir = 构建 cwd 盘符的 .pnpm-store\v<major>，
+   * virtualStoreDir = 构建目录（dsh-runtime）的 node_modules\.pnpm。部署到本机
+   * profile 后两者都不成立，pnpm 任何操作（含插件中心应用内更新）都会
+   * ERR_PNPM_UNEXPECTED_STORE / _VIRTUAL_STORE。改写为部署机路径后 pnpm 直接
+   * 可用（2026-08-18 跨盘部署实验验证：改写后 pnpm add 成功）。
+   * @param {string} dir - profile 目录（部署落位后）。
+   */
+  const rewritePnpmMeta = (dir) => {
+    const metaPath = join(dir, 'node_modules', '.modules.yaml')
+    let text
+    try {
+      text = readFileSync(metaPath, 'utf8')
+    } catch {
+      return // 非常规 node_modules（无元数据）：不处理，避免误伤
+    }
+    // store 的 pnpm major 版本后缀（v11）取自原 storeDir 尾段，随 pnpm 升级自适应
+    const oldStore = /"storeDir":\s*"([^"]+)"/.exec(text)?.[1] ?? ''
+    const storeVersion = oldStore.split(/[\\/]/).filter(Boolean).pop() ?? 'v11'
+    const localAppData = process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local')
+    const storeDir = join(localAppData, 'pnpm', 'store', storeVersion)
+    const virtualStoreDir = join(dir, 'node_modules', '.pnpm')
+    text = text.replace(/"storeDir":\s*"[^"]+"/, `"storeDir": ${JSON.stringify(storeDir)}`)
+    text = text.replace(/"virtualStoreDir":\s*"[^"]+"/, `"virtualStoreDir": ${JSON.stringify(virtualStoreDir)}`)
+    writeFileSync(metaPath, text, 'utf8')
+    safeLog(`ssid: pnpm meta rewired (store=${storeDir})\n`)
+  }
+  /**
    * 从归档部署/更新 profile 闭包（v0.1.3）。
    * - 解压到 profile/.deploy.new：取消/失败只删临时目录，旧版无损（原子替换）
    * - 校验 @max-null/dsh-memory 在 → 删旧 node_modules + 改名（毫秒级）→ 其余
@@ -401,6 +429,11 @@ async function start() {
         renameSync(join(tmpDir, entry), join(profileDir, entry))
       }
       splashStep(3)
+      // 校正 pnpm 元数据：归档在构建机生成，.modules.yaml 里是构建机绝对路径
+      // （storeDir=构建 cwd 盘符的 .pnpm-store，virtualStoreDir=dsh-runtime 目录）。
+      // 部署到本机后不改写，pnpm 任何操作（含插件中心应用内更新）都报
+      // ERR_PNPM_UNEXPECTED_STORE / _VIRTUAL_STORE——2026-08-18 跨盘部署实验确认。
+      rewritePnpmMeta(profileDir)
       safeLog(`ssid: runtime deployed (${readProfileVersion() ?? '?'}) to ${profileDir}\n`)
       return 'bundled'
     } catch (cause) {
