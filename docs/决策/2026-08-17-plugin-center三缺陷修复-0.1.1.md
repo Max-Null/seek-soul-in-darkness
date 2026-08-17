@@ -1,7 +1,7 @@
-# dsh-plugin-center 三缺陷修复（0.1.1）：并发更新闪退 + 弹窗缺按钮 + 中文化
+# dsh-plugin-center 缺陷修复（0.1.1）：并发更新闪退 + 弹窗缺按钮 + 中文化 + 市场计数
 
 日期：2026-08-17
-状态：进行中
+状态：进行中（代码已提交 fdc1177，待用户 npm publish 后重建归档）
 仓库：H:\MaxNull\WorkStation\dsh-plugin-center（发布 @max-null/dsh-plugin-center@0.1.1）
 
 ## 用户实测缺陷（v0.1.4 预发布验收）
@@ -9,6 +9,7 @@
 1. 点击「Update All」页面闪一下就没下文。
 2. 启动 DSH 的「插件更新」弹窗缺少「立即更新」按钮。
 3. 「Update All」按钮未中文化（应「更新全部」）。
+4. 市场 tab 未打开过时徽标恒 0（预加载机制漏洞）。
 
 ## 根因（代码级确认）
 
@@ -30,7 +31,10 @@
 3. **弹窗加「立即更新」**：WhatsNewDialog 内串行更新 + busy 态 + toast，
    全部成功自动关闭弹窗；保留「稍后」「全部标记已读」。
 4. **中文化**：Update All（N）→ 更新全部（N）；弹窗新按钮「立即更新」。
-5. **指纹覆盖 lock**（SSiD 侧 prepare-runtime）：指纹 = md5(package.json
+5. **市场计数预载**（缺陷 4 修复，fdc1177）：marketCount 原本只由 MarketView
+   挂载时的 onCount 回调驱动——tab 未打开过就恒 0（服务端缓存有数据也看不到）。
+   CenterPanel 挂载即拉 listMarket('all')，done=false 时每 5s 轮询直到完成。
+6. **指纹覆盖 lock**（SSiD 侧 prepare-runtime）：指纹 = md5(package.json
    dependencies + pnpm-lock.yaml)——插件版本漂移（0.1.0→0.1.1）也能触发
    重部署（此前指纹只 hash package.json，版本漂移是盲区，同批修复）。
 
