@@ -120,6 +120,29 @@ does not provide an export named 'stripTypeScriptTypes'      # 需 Node ≥22.18
 
 ---
 
+## 8. 应用内插件中心更新报 store/virtual store 不匹配
+
+**日期**：2026-08-18（0.1.4 发布前）
+
+**现象**：安装版里插件中心点「更新」失败，报 `ERR_PNPM_UNEXPECTED_STORE` /
+`ERR_PNPM_UNEXPECTED_VIRTUAL_STORE`。
+
+**根因**：pnpm 在**项目 cwd** 创建临时文件做硬链接探测，跨盘（构建目录在 H 盘、
+home 在 C 盘）时把 store 落到 cwd 盘符的 `.pnpm-store`；归档打包的
+`node_modules/.modules.yaml` 携带构建机绝对路径（`storeDir=H:\.pnpm-store\v11`、
+`virtualStoreDir=…\shell\dsh-runtime\node_modules\.pnpm`）。部署到本机 profile 后
+两者都不成立，pnpm 校验失败。跨盘部署实验确认：只改 `.modules.yaml` 无效，
+必须把 `storeDir` 改成本机默认 store（**保留 pnpm major 版本后缀 v11**）且
+`virtualStoreDir` 改成部署目录的 `node_modules\.pnpm`，pnpm add 即恢复。
+
+**修复**：`main.mjs` `deployRuntime` 落位后调用 `rewritePnpmMeta(profileDir)`，
+按部署机路径重写上述两字段（store 后缀取自原值，随 pnpm 升级自适应）。
+
+**验证**：解压新归档到临时目录 → 执行同一改写逻辑 → `pnpm add` exit 0；
+跨盘（H 构建 → C 部署）最小实验复现通过。
+
+---
+
 ## 附：验证工具清单
 
 | 用途 | 脚本 |
