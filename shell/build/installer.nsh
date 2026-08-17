@@ -17,22 +17,24 @@
 ; - 卸载器构建同样 include 本文件：宏不展开即无影响（$mui.InstFilesPage.Log
 ;   只在宏体内引用）。
 
-; 常量直接用字面量（LVIF_TEXT=0x0001、LVM_INSERTITEMW=0x104D）：WinMessages.nsh
-; 的 !define 无 ifndef 保护，任何重复定义都会编译报错（卸载器构建实测）。
+; 常量直接用字面量（LVIF_TEXT=0x0001、LVM_INSERTITEMW=0x104D、
+; LVM_GETITEMCOUNT=0x1004）：WinMessages.nsh 的 !define 无 ifndef 保护，
+; 任何重复定义都会编译报错（卸载器构建实测）。
 
-; 向详情列表追加一行（$R9 为行号计数器，由调用方归零）。
+; 向详情列表追加一行。行号用 LVM_GETITEMCOUNT 动态查询——不能用寄存器
+; 计数器：模板宏（卸载/复制/注册）复用 $R 寄存器且不恢复，跨宏存活的
+; $R9 到 customInstall 时已是垃圾值（实测清单静止不追加）。
 !macro SSID_LIST_ADD text
-  System::Call '*(i 1, i $R9, i 0, i 0, i 0, w "${text}", i 0, i 0, i 0, i 0, i 0, i 0, i 0) p.r1'
+  SendMessage $mui.InstFilesPage.Log 0x1004 0 0 $0
+  System::Call '*(i 1, i $0, i 0, i 0, i 0, w "${text}", i 0, i 0, i 0, i 0, i 0, i 0, i 0) p.r1'
   SendMessage $mui.InstFilesPage.Log 0x104D 0 $1 $1
   System::Free $1
-  IntOp $R9 $R9 + 1
 !macroend
 
 !macro customCheckAppRunning
   ; Section 内、卸载旧版之前：杀进程（双保险）+ 展开详情列表 + 插入清单。
   nsExec::Exec 'taskkill /F /IM "思灵.exe" /T'
   SetDetailsView show
-  StrCpy $R9 0
   !insertmacro SSID_LIST_ADD "========================================"
   !insertmacro SSID_LIST_ADD "思灵安装步骤清单："
   !insertmacro SSID_LIST_ADD "[1/5] 关闭正在运行的思灵 —— 已完成"
