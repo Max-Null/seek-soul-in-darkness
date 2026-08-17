@@ -4,7 +4,7 @@
  * 做法：复制 profile-template → 注入 @deepseek-ai/dsh 聚合包（精确 pin）→ pnpm install
  *       （node-linker=hoisted 扁平布局，electron-builder 26 不复制 pnpm symlink）
  *       → 显式补充缺失 peer（pnpm 11 不自动装 peer，实测 auto-install-peers 配置不生效）
- *       → 写 .runtime-version（SSiD 版本-DSH 版本）→ tar 单归档 → 删源目录
+ *       → 写 .runtime-version（SSiD 版本-DSH 版本-依赖指纹）→ tar 单归档 → 删源目录
  * 产物：shell/dsh-runtime.tar.gz（NSIS 只写 1 个文件，首启解压部署；归档带版本，启动对比驱动升级）
  *
  * 跑法：node scripts/prepare-runtime.mjs
@@ -12,6 +12,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -157,7 +158,12 @@ function main() {
     process.exit(1)
   }
   const dshVer = JSON.parse(readFileSync(dshPkgPath, 'utf8')).version
-  const runtimeVer = `${ssidVer}-${dshVer}`
+  // 依赖清单指纹（md5 前 8 位）：同版本号下插件增删（如 v0.1.4 追加
+  // plugin-center）也能让首启版本对比不一致 → 触发重部署。实测教训：
+  // 只靠 ssid/dsh 版本号，同版本归档内容变化对老 profile 不生效。
+  const deps = JSON.parse(readFileSync(join(runtimeDir, 'package.json'), 'utf8')).dependencies ?? {}
+  const depFingerprint = createHash('md5').update(JSON.stringify(deps)).digest('hex').slice(0, 8)
+  const runtimeVer = `${ssidVer}-${dshVer}-${depFingerprint}`
   writeFileSync(join(runtimeDir, '.runtime-version'), runtimeVer + '\n')
   console.log(`[6/7] .runtime-version = ${runtimeVer}`)
 
