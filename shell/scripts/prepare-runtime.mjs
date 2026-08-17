@@ -161,8 +161,12 @@ function main() {
   // 依赖清单指纹（md5 前 8 位）：同版本号下插件增删（如 v0.1.4 追加
   // plugin-center）也能让首启版本对比不一致 → 触发重部署。实测教训：
   // 只靠 ssid/dsh 版本号，同版本归档内容变化对老 profile 不生效。
+  // 指纹覆盖 pnpm-lock.yaml：插件版本漂移（0.1.0→0.1.1）同样触发
+  // 重部署——只 hash package.json 时版本漂移是盲区（2026-08-17 同批修复）。
   const deps = JSON.parse(readFileSync(join(runtimeDir, 'package.json'), 'utf8')).dependencies ?? {}
-  const depFingerprint = createHash('md5').update(JSON.stringify(deps)).digest('hex').slice(0, 8)
+  const lockPath = join(runtimeDir, 'pnpm-lock.yaml')
+  const lockText = existsSync(lockPath) ? readFileSync(lockPath, 'utf8') : ''
+  const depFingerprint = createHash('md5').update(JSON.stringify(deps)).update(lockText).digest('hex').slice(0, 8)
   const runtimeVer = `${ssidVer}-${dshVer}-${depFingerprint}`
   writeFileSync(join(runtimeDir, '.runtime-version'), runtimeVer + '\n')
   console.log(`[6/7] .runtime-version = ${runtimeVer}`)
