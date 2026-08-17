@@ -568,6 +568,10 @@ async function start() {
   })
   win.addBrowserView(titleBar)
   await titleBar.webContents.loadFile(fileURLToPath(new URL('./titlebar.html', import.meta.url)))
+  // DSH 版本副标题（官方 host.describe 通道是占位符 '0.0.1'，壳层自读真实值）。
+  void titleBar.webContents.executeJavaScript(
+    `window.__setDshVersion(${JSON.stringify(kernel.dshVersion)})`,
+  ).catch(() => {})
 
   // 标题栏窗口控制 IPC。
   ipcMain.handle('ssid:title:minimize', () => { win.minimize() })

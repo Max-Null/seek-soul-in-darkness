@@ -40,6 +40,18 @@
     color: var(--titlebar-fg);
     letter-spacing: .14em;
   }
+  /* DSH 版本副标题胶囊（主进程 __setDshVersion 注入；跟随主题变量） */
+  .brand .dsh-ver {
+    font-size: 10px;
+    line-height: 16px;
+    padding: 0 6px;
+    margin-left: 2px;
+    color: var(--titlebar-muted);
+    border: 1px solid var(--titlebar-border);
+    border-radius: 999px;
+    background: rgba(128, 148, 168, .08);
+    letter-spacing: .03em;
+  }
   .spacer { flex: 1; height: 100%; }
   .controls {
     display: flex;
@@ -80,6 +92,7 @@
         </g>
       </svg>
       <span class="name">思灵</span>
+      <span class="dsh-ver" id="dsh-ver" hidden></span>
     </div>
     <div class="spacer"></div>
     <div class="controls">

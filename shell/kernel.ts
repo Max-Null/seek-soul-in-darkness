@@ -18,7 +18,7 @@
  * 服务，M1 的 memory 数据通道不需要跨进程桥。
  */
 
-import { existsSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
@@ -122,6 +122,9 @@ export function resolveDshRuntime(): DshRuntime {
 export interface Kernel {
   /** 官方 UI 实际监听端口。 */
   port: number
+  /** DSH 运行时版本（读 installAnchor 的 package.json version；官方
+   *  host.describe 通道目前是占位符 '0.0.1'，壳层自读真实值）。 */
+  dshVersion: string
   /** settled root context（主进程同进程读 host 服务、驱动 agent 会话）。 */
   ctx: Context
   /** 供主进程同进程读取 host 服务的根 context。 */
@@ -162,6 +165,16 @@ export async function bootKernel(
     runtime = resolveDshRuntime()
   }
   const installAnchor = runtime.installAnchor
+  // DSH 版本：installAnchor 指向运行时自身的 package.json（source 模式 =
+  // apps/cli/package.json；bundled 模式 = @deepseek-ai/dsh/package.json）。
+  const dshVersion = (() => {
+    try {
+      const pkg = JSON.parse(readFileSync(installAnchor, 'utf8')) as { version?: string }
+      return pkg.version ?? 'unknown'
+    } catch {
+      return 'unknown'
+    }
+  })()
   // 必须先 heal：installProfilePackageResolver 的 loader 前缀从
   // ~/.dsh/profiles/node_modules 平面 symlink 解析，新机（空 profile）下
   // 没 heal 会解析失败。
@@ -230,6 +243,7 @@ export async function bootKernel(
 
     return {
       port: webServer.port,
+      dshVersion,
       ctx,
       get: name => ctx.get(name),
       shutdown: async (code) => {

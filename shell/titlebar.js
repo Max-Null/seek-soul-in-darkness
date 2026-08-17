@@ -9,3 +9,12 @@ window.ssidTitle.onMaximized((maximized) => {
   iconMax.style.display = maximized ? 'none' : ''
   iconRestore.style.display = maximized ? '' : 'none'
 })
+
+// DSH 版本副标题（主进程 boot 后注入；官方 host.describe 是占位符 0.0.1）。
+window.__setDshVersion = (version) => {
+  const el = document.getElementById('dsh-ver')
+  if (el !== null && typeof version === 'string' && version !== '' && version !== 'unknown') {
+    el.textContent = `DSH ${version}`
+    el.hidden = false
+  }
+}
