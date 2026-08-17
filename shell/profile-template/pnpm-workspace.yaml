@@ -8,6 +8,7 @@ minimumReleaseAgeExclude:
   - '@max-null/dsh-chinese-thinking@0.2.0'
   - '@max-null/dsh-guardian@0.1.0'
   - '@max-null/dsh-habit@0.1.0'
+  - '@max-null/dsh-plugin-center@0.1.1'
   - dsh-better-sidebar@0.12.3
   - dsh-excel-panel@0.3.2
   - dsh-sidebar-qa@0.1.0
