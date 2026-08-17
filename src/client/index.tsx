@@ -3,12 +3,131 @@
  * ctx.betterSidebar (memory / guardian state / habit candidates / balances).
  * dsh-better-sidebar is an optional type-only peer: without it this half
  * registers nothing and the host routes stay unused.
+ *
+ * i18n: follows the DSH locale service when present (optional ctx.get('locale')
+ * + 'locale/change'), silently falling back to Chinese otherwise — the same
+ * pattern dsh-plugin-center uses.
  */
 import { createElement, useEffect, useState, type ReactNode } from 'react'
 import type {} from 'dsh-better-sidebar'
 import type { Context } from 'cordis'
 
 export const inject = ['slots']
+
+// ---- i18n (DSH zh/en bilingual, plugin-center pattern) ----
+type LocaleId = 'zh' | 'en'
+const STRINGS = {
+  zh: {
+    about: '关于 SSiD',
+    tabMemory: '记忆',
+    tabGuardian: '状态',
+    tabHabit: '习惯',
+    tabBalance: '余额',
+    memorySearch: '搜索记忆…',
+    empty: '黑暗中未见灵光',
+    confirm: '确认',
+    forget: '删除',
+    assertions: '断言计数',
+    quiet: '安静',
+    level: '{n} 级',
+    reviewQueue: '编辑审查队列',
+    noPending: '无待审查项',
+    turn: '第 {n} 轮 · ',
+    noPath: '(无路径)',
+    habitCandidates: '候选习惯',
+    evidence: '证据 {n} 条',
+    confirmToMemory: '确认（写入记忆）',
+    discard: '丢弃',
+    available: '可用',
+    insufficient: '余额不足',
+    querying: '查询中…',
+    queryFailed: '查询失败',
+    refresh: '刷新',
+    notQueried: '尚未查询',
+    lastUpdated: '上次更新 {t}',
+    missingKey: '未配置 API Key',
+    httpFailed: '查询失败（HTTP {status}）',
+    title: '思灵 (SSiD)',
+    slogan: '于黑暗中，探寻灵魂。',
+    checkUpdates: '检查更新',
+    noRelease: '暂无发布版本',
+    newVersion: '新版本可用：{name}（{tag}，{date}）',
+    latestVersion: '已是最新：{name}（{tag}）',
+    checking: '检查中…',
+    checkNow: '立即检查',
+    checkFailed: '更新检查失败',
+    apiFailed: '检查失败（HTTP {status}）',
+    changelog: '更新日志',
+    none: '（无）',
+    presetPlugins: '预制插件',
+  },
+  en: {
+    about: 'About SSiD',
+    tabMemory: 'Memory',
+    tabGuardian: 'Status',
+    tabHabit: 'Habits',
+    tabBalance: 'Balance',
+    memorySearch: 'Search memory…',
+    empty: 'No spark in the dark',
+    confirm: 'Confirm',
+    forget: 'Forget',
+    assertions: 'Assertions',
+    quiet: 'Quiet',
+    level: 'Level {n}',
+    reviewQueue: 'Edit review queue',
+    noPending: 'No pending reviews',
+    turn: 'Turn {n} · ',
+    noPath: '(no path)',
+    habitCandidates: 'Habit candidates',
+    evidence: '{n} evidence',
+    confirmToMemory: 'Confirm (save to memory)',
+    discard: 'Discard',
+    available: 'Available',
+    insufficient: 'Insufficient',
+    querying: 'Querying…',
+    queryFailed: 'Query failed',
+    refresh: 'Refresh',
+    notQueried: 'Not queried yet',
+    lastUpdated: 'Last updated {t}',
+    missingKey: 'API key not configured',
+    httpFailed: 'Query failed (HTTP {status})',
+    title: 'SSiD',
+    slogan: 'Seek the soul in the dark.',
+    checkUpdates: 'Check for updates',
+    noRelease: 'No published release',
+    newVersion: 'New version: {name} ({tag}, {date})',
+    latestVersion: 'Up to date: {name} ({tag})',
+    checking: 'Checking…',
+    checkNow: 'Check now',
+    checkFailed: 'Update check failed',
+    apiFailed: 'Check failed (HTTP {status})',
+    changelog: 'Changelog',
+    none: '(none)',
+    presetPlugins: 'Bundled plugins',
+  },
+} as const
+type StringKey = keyof typeof STRINGS.zh
+let localeId: LocaleId = 'zh'
+const localeListeners = new Set<() => void>()
+function adoptLocale(id: string | undefined): void {
+  const next: LocaleId = id === 'en' ? 'en' : 'zh'
+  if (next === localeId) return
+  localeId = next
+  localeListeners.forEach(l => l())
+}
+function fmt(tpl: string, vars: Record<string, unknown> = {}): string {
+  return tpl.replace(/\{(\w+)\}/g, (_, k: string) => String(vars[k] ?? ''))
+}
+/** Copy function + locale subscription: mounted components re-render on DSH language switch. */
+function useT(): (key: StringKey, vars?: Record<string, unknown>) => string {
+  const [id, setId] = useState(localeId)
+  useEffect(() => {
+    const l = (): void => { setId(localeId) }
+    localeListeners.add(l)
+    return () => { localeListeners.delete(l) }
+  }, [])
+  return (key, vars) => fmt(STRINGS[id][key] ?? STRINGS.zh[key], vars)
+}
 
 /** POST one /ssid/api method and unwrap the {ok, value|error} envelope. */
 async function api(method: string, payload?: Record<string, unknown>): Promise<unknown> {
@@ -66,6 +185,7 @@ function tabIcon(path: string): ReactNode {
 interface MemoryRecord { id: string, content: string, status: string, namespace: string, keywords: string[] }
 
 function MemoryView(): ReactNode {
+  const t = useT()
   const [records, setRecords] = useState<MemoryRecord[]>([])
   const [status, setStatus] = useState('auto')
   const [query, setQuery] = useState('')
@@ -84,7 +204,7 @@ function MemoryView(): ReactNode {
     createElement('input', {
       value: query,
       onChange: (event: { target: { value: string } }) => { setQuery(event.target.value) },
-      placeholder: '搜索记忆…',
+      placeholder: t('memorySearch'),
       style: {
         width: '100%', padding: '6px 10px', fontSize: 12.5, boxSizing: 'border-box',
         background: 'var(--dsw-alias-bg-layer-1, #0f141d)',
@@ -100,7 +220,7 @@ function MemoryView(): ReactNode {
       }, label)),
     ),
     filtered.length === 0
-      ? createElement('div', { style: ssid.empty }, '黑暗中未见灵光')
+      ? createElement('div', { style: ssid.empty }, t('empty'))
       : filtered.map(record => createElement('div', { key: record.id, style: ssid.card },
         createElement('div', { style: ssid.text }, record.content),
         createElement('div', { style: { ...ssid.muted, marginTop: 6 } }, `${record.namespace} · ${record.status}`),
@@ -109,12 +229,12 @@ function MemoryView(): ReactNode {
             ? createElement('button', {
               style: ssid.btn,
               onClick: () => { void api('memory.confirm', { id: record.id }).then(() => reload()) },
-            }, '确认')
+            }, t('confirm'))
             : null,
           createElement('button', {
             style: ssid.btn,
             onClick: () => { void api('memory.forget', { id: record.id }).then(() => reload()) },
-          }, '删除'),
+          }, t('forget')),
         ),
       )),
   )
@@ -122,6 +242,7 @@ function MemoryView(): ReactNode {
 
 /** 状态面板：Guardian 触发线快照（1s 轮询，可见时）。 */
 function GuardianView(props: { visible: boolean }): ReactNode {
+  const t = useT()
   const [snapshot, setSnapshot] = useState<{ session?: { assertionCount?: number, assertionLevel?: number } | null, reviewQueue?: Array<{ filePath?: string, turn?: number }> }>({})
   useEffect(() => {
     if (!props.visible) return
@@ -136,21 +257,21 @@ function GuardianView(props: { visible: boolean }): ReactNode {
   const count = session?.assertionCount ?? 0
   const level = session?.assertionLevel ?? 0
   const queue = snapshot.reviewQueue ?? []
-  const label = level === 0 ? '安静' : `${level} 级`
+  const label = level === 0 ? t('quiet') : t('level', { n: level })
   return createElement('div', { style: ssid.wrap },
     createElement('div', { style: ssid.card },
       createElement('div', { style: ssid.title },
-        createElement('span', null, '断言计数'),
+        createElement('span', null, t('assertions')),
         createElement('span', { style: ssid.badge(level) }, label),
       ),
       createElement('div', { style: { fontSize: 22, fontWeight: 700, color: 'var(--dsw-alias-label-primary, #d8e0ea)' } }, String(count)),
     ),
     createElement('div', { style: ssid.card },
-      createElement('div', { style: ssid.title }, '编辑审查队列'),
+      createElement('div', { style: ssid.title }, t('reviewQueue')),
       queue.length === 0
-        ? createElement('div', { style: ssid.muted }, '无待审查项')
+        ? createElement('div', { style: ssid.muted }, t('noPending'))
         : queue.map((item, index) => createElement('div', { key: index, style: { ...ssid.text, fontSize: 11.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
-          `${item.turn !== undefined ? `第 ${item.turn} 轮 · ` : ''}${item.filePath ?? '(无路径)'}`,
+          `${item.turn !== undefined ? t('turn', { n: item.turn }) : ''}${item.filePath ?? t('noPath')}`,
         )),
     ),
   )
@@ -160,6 +281,7 @@ function GuardianView(props: { visible: boolean }): ReactNode {
 interface HabitCandidate { id: string, habit: string, confidence: string, evidenceCount: number, status: string }
 
 function HabitView(props: { visible: boolean }): ReactNode {
+  const t = useT()
   const [candidates, setCandidates] = useState<HabitCandidate[]>([])
   const reload = async (): Promise<void> => {
     try {
@@ -177,48 +299,54 @@ function HabitView(props: { visible: boolean }): ReactNode {
   const pending = candidates.filter(candidate => candidate.status === 'pending')
   return createElement('div', { style: ssid.wrap },
     pending.length === 0
-      ? createElement('div', { style: ssid.empty }, '黑暗中未见灵光')
+      ? createElement('div', { style: ssid.empty }, t('empty'))
       : pending.map(candidate => createElement('div', { key: candidate.id, style: ssid.card },
         createElement('div', { style: ssid.title },
-          createElement('span', null, '候选习惯'),
+          createElement('span', null, t('habitCandidates')),
           createElement('span', { style: ssid.badge(candidate.confidence === 'high' ? 1 : candidate.confidence === 'medium' ? 2 : 3) }, candidate.confidence),
         ),
         createElement('div', { style: ssid.text }, candidate.habit),
-        createElement('div', { style: { ...ssid.muted, marginTop: 4 } }, `证据 ${candidate.evidenceCount} 条`),
+        createElement('div', { style: { ...ssid.muted, marginTop: 4 } }, t('evidence', { n: candidate.evidenceCount })),
         createElement('div', { style: { display: 'flex', gap: 6, marginTop: 8 } },
-          createElement('button', { style: ssid.btn, onClick: () => { void api('habit.confirm', { id: candidate.id }).then(() => reload()) } }, '确认（写入记忆）'),
-          createElement('button', { style: ssid.btn, onClick: () => { void api('habit.discard', { id: candidate.id }).then(() => reload()) } }, '丢弃'),
+          createElement('button', { style: ssid.btn, onClick: () => { void api('habit.confirm', { id: candidate.id }).then(() => reload()) } }, t('confirmToMemory')),
+          createElement('button', { style: ssid.btn, onClick: () => { void api('habit.discard', { id: candidate.id }).then(() => reload()) } }, t('discard')),
         ),
       )),
   )
 }
 
 /** 余额面板：DS/K3 两条余额 + 手动刷新。 */
-interface BalanceInfo { ok: boolean, isAvailable?: boolean, balanceInfos?: Array<{ currency: string, totalBalance: string }>, message?: string }
+interface BalanceInfo { ok: boolean, code?: 'missing-key' | 'http-failed', status?: number, isAvailable?: boolean, balanceInfos?: Array<{ currency: string, totalBalance: string }>, message?: string }
 
 function BalanceView(): ReactNode {
+  const t = useT()
   const [result, setResult] = useState<{ ds?: BalanceInfo, kimi?: BalanceInfo }>({})
   const [updated, setUpdated] = useState<string | null>(null)
   const refresh = async (): Promise<void> => {
     const [ds, kimi] = await Promise.all([
-      api('balance.deepseek').then(value => value as BalanceInfo).catch(() => ({ ok: false, message: '查询异常' }) as BalanceInfo),
-      api('balance.kimi').then(value => value as BalanceInfo).catch(() => ({ ok: false, message: '查询异常' }) as BalanceInfo),
+      api('balance.deepseek').then(value => value as BalanceInfo).catch(() => ({ ok: false, code: 'http-failed' as const }) as BalanceInfo),
+      api('balance.kimi').then(value => value as BalanceInfo).catch(() => ({ ok: false, code: 'http-failed' as const }) as BalanceInfo),
     ])
     setResult({ ds, kimi })
-    setUpdated(new Date().toLocaleTimeString('zh-CN', { hour12: false }))
+    setUpdated(new Date().toLocaleTimeString(localeId === 'en' ? 'en-US' : 'zh-CN', { hour12: false }))
   }
   useEffect(() => { void refresh() }, [])
+  const errorText = (info: BalanceInfo): string => {
+    if (info.code === 'missing-key') return t('missingKey')
+    if (info.code === 'http-failed') return `${t('httpFailed', { status: info.status ?? '?' })}${info.message !== undefined && info.message !== '' ? ` (${info.message})` : ''}`
+    return info.message ?? t('queryFailed')
+  }
   const card = (name: string, info: BalanceInfo | undefined): ReactNode => createElement('div', { style: ssid.card },
     createElement('div', { style: ssid.title },
       createElement('span', null, name),
       info?.ok === true
-        ? createElement('span', { style: ssid.badge(info.isAvailable === true ? 0 : 3) }, info.isAvailable === true ? '可用' : '余额不足')
+        ? createElement('span', { style: ssid.badge(info.isAvailable === true ? 0 : 3) }, info.isAvailable === true ? t('available') : t('insufficient'))
         : null,
     ),
     info === undefined
-      ? createElement('div', { style: ssid.muted }, '查询中…')
+      ? createElement('div', { style: ssid.muted }, t('querying'))
       : !info.ok
-        ? createElement('div', { style: ssid.muted }, info.message ?? '查询失败')
+        ? createElement('div', { style: ssid.muted }, errorText(info))
         : createElement('div', { style: { fontSize: 22, fontWeight: 700, color: 'var(--dsw-alias-label-primary, #d8e0ea)' } },
           `¥ ${Number(info.balanceInfos?.[0]?.totalBalance ?? '0').toFixed(2)}`),
   )
@@ -226,8 +354,8 @@ function BalanceView(): ReactNode {
     card('DeepSeek', result.ds),
     card('Kimi K3', result.kimi),
     createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'stretch' } },
-      createElement('button', { style: ssid.btn, onClick: () => { void refresh() } }, '刷新'),
-      createElement('div', { style: { ...ssid.muted, textAlign: 'center' } }, updated === null ? '尚未查询' : `上次更新 ${updated}`),
+      createElement('button', { style: ssid.btn, onClick: () => { void refresh() } }, t('refresh')),
+      createElement('div', { style: { ...ssid.muted, textAlign: 'center' } }, updated === null ? t('notQueried') : t('lastUpdated', { t: updated })),
     ),
   )
 }
@@ -235,13 +363,16 @@ function BalanceView(): ReactNode {
 /** 关于 SSiD 设置页：版本 / 检查更新 / 更新日志 / 预制插件。 */
 interface UpdateInfo {
   currentVersion: string
+  code?: 'api-failed' | 'check-failed'
+  status?: number
   latest?: { tag: string, name: string, body: string, publishedAt: string } | null
   releases?: Array<{ tag: string, name: string, body: string, publishedAt: string }>
   message?: string
 }
-interface AboutInfo { shellVersion: string, plugins: Array<{ id: string, name: string, version?: string, description?: string }> }
+interface AboutInfo { shellVersion: string, plugins: Array<{ id: string, name: string, version?: string, descriptionZh?: string, descriptionEn?: string }> }
 
 function SsidAboutSection(): ReactNode {
+  const t = useT()
   const [about, setAbout] = useState<AboutInfo | null>(null)
   const [update, setUpdate] = useState<UpdateInfo | null>(null)
   const [checking, setChecking] = useState(false)
@@ -250,7 +381,7 @@ function SsidAboutSection(): ReactNode {
     try {
       setUpdate(await api('update-check') as UpdateInfo)
     } catch {
-      setUpdate({ currentVersion: about?.shellVersion ?? '0.0.0', message: '更新检查失败' })
+      setUpdate({ currentVersion: about?.shellVersion ?? '0.0.0', code: 'check-failed' })
     } finally {
       setChecking(false)
     }
@@ -265,58 +396,82 @@ function SsidAboutSection(): ReactNode {
   }, [])
   const latest = update?.latest ?? null
   const newer = latest !== null && latest.tag !== '' && latest.tag !== `v${update?.currentVersion ?? ''}`
+  const descOf = (plugin: { descriptionZh?: string, descriptionEn?: string }): string =>
+    localeId === 'en'
+      ? (plugin.descriptionEn ?? plugin.descriptionZh ?? '')
+      : (plugin.descriptionZh ?? plugin.descriptionEn ?? '')
   return createElement('div', { style: { ...ssid.wrap, maxWidth: 640, margin: '0 auto', width: '100%' } },
     createElement('div', { style: ssid.card },
-      createElement('div', { style: ssid.title }, createElement('span', null, '思灵 (SSiD)')),
+      createElement('div', { style: ssid.title }, createElement('span', null, t('title'))),
       createElement('div', { style: { fontSize: 22, fontWeight: 700, color: 'var(--dsw-alias-label-primary, #d8e0ea)' } },
         `v${about?.shellVersion ?? '…'}`),
-      createElement('div', { style: ssid.muted }, '于黑暗中，探寻灵魂。'),
+      createElement('div', { style: ssid.muted }, t('slogan')),
     ),
     createElement('div', { style: ssid.card },
-      createElement('div', { style: ssid.title }, createElement('span', null, '检查更新')),
+      createElement('div', { style: ssid.title }, createElement('span', null, t('checkUpdates'))),
       latest === null
-        ? update?.message !== undefined
-          ? createElement('div', { style: ssid.muted }, update.message)
-          : createElement('div', { style: ssid.muted }, '暂无发布版本')
+        ? update?.code === 'api-failed'
+          ? createElement('div', { style: ssid.muted }, t('apiFailed', { status: update.status ?? '?' }))
+          : update?.code === 'check-failed'
+            ? createElement('div', { style: ssid.muted }, t('checkFailed'))
+            : createElement('div', { style: ssid.muted }, t('noRelease'))
         : newer
-          ? createElement('div', { style: { ...ssid.text, color: ssid.accent } }, `新版本可用：${latest.name}（${latest.tag}，${latest.publishedAt.slice(0, 10)}）`)
-          : createElement('div', { style: ssid.text }, `已是最新：${latest.name}（${latest.tag}）`),
-      createElement('button', { style: { ...ssid.btn, marginTop: 8 }, onClick: () => { void check() }, disabled: checking }, checking ? '检查中…' : '立即检查'),
+          ? createElement('div', { style: { ...ssid.text, color: ssid.accent } }, t('newVersion', { name: latest.name, tag: latest.tag, date: latest.publishedAt.slice(0, 10) }))
+          : createElement('div', { style: ssid.text }, t('latestVersion', { name: latest.name, tag: latest.tag })),
+      createElement('button', { style: { ...ssid.btn, marginTop: 8 }, onClick: () => { void check() }, disabled: checking }, checking ? t('checking') : t('checkNow')),
     ),
     createElement('div', { style: ssid.card },
-      createElement('div', { style: ssid.title }, createElement('span', null, '更新日志')),
+      createElement('div', { style: ssid.title }, createElement('span', null, t('changelog'))),
       (update?.releases ?? []).length === 0
-        ? createElement('div', { style: ssid.muted }, '暂无发布版本（点上方「立即检查」拉取）')
+        ? createElement('div', { style: ssid.muted }, t('none'))
         : (update?.releases ?? []).map(release => createElement('div', { key: release.tag, style: { marginBottom: 10 } },
           createElement('div', { style: { ...ssid.text, fontWeight: 600 } }, `${release.name}（${release.tag}）· ${release.publishedAt.slice(0, 10)}`),
           createElement('pre', { style: { ...ssid.muted, whiteSpace: 'pre-wrap', margin: '4px 0 0', fontSize: 11.5 } }, release.body),
         )),
     ),
     createElement('div', { style: ssid.card },
-      createElement('div', { style: ssid.title }, createElement('span', null, '预制插件')),
+      createElement('div', { style: ssid.title }, createElement('span', null, t('presetPlugins'))),
       (about?.plugins ?? []).length === 0
-        ? createElement('div', { style: ssid.muted }, '（无）')
+        ? createElement('div', { style: ssid.muted }, t('none'))
         : (about?.plugins ?? []).map(plugin => createElement('div', { key: plugin.id, style: { padding: '5px 0', borderBottom: '1px solid var(--dsw-alias-border-l2, #1e2836)' } },
           createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 6 } },
             createElement('span', { style: { ...ssid.text, fontWeight: 600, fontSize: 12 } }, plugin.name),
             createElement('span', { style: { ...ssid.muted, fontSize: 10.5 } }, plugin.version !== undefined ? `v${plugin.version}` : ''),
           ),
-          plugin.description !== undefined && plugin.description !== ''
-            ? createElement('div', { style: { ...ssid.muted, fontSize: 10.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 } }, plugin.description)
+          descOf(plugin) !== ''
+            ? createElement('div', { style: { ...ssid.muted, fontSize: 10.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 } }, descOf(plugin))
             : null,
         )),
     ),
   )
 }
 
+/** The locale service's minimal surface (optional read + change event). */
+interface LocaleFace {
+  getLocale?: () => { active?: string }
+}
+/** Context verbs the i18n wiring needs beyond declared services. */
+interface LocaleAwareContext {
+  get?: (name: string) => unknown
+  on?: (event: string, handler: (payload: unknown) => void) => void
+}
+
 /** Plugin body: settings about section (unconditional) + sidebar tabs (optional peer). */
 export function apply(ctx: Context): void {
+  // 双语：初始快照 + locale/change 事件（DSH 语言切换时组件经 useT 重渲染）。
+  // locale 服务缺失时静默降级为中文（dsh-plugin-center 同款接线）。
+  const face = ctx as unknown as LocaleAwareContext
+  const locale = face.get?.('locale') as LocaleFace | undefined
+  const initial = locale?.getLocale?.()?.active
+  if (typeof initial === 'string') adoptLocale(initial)
+  face.on?.('locale/change', (snap) => { adoptLocale((snap as { active?: string } | undefined)?.active) })
+
   // 设置页「关于 SSiD」：settings.section 顶级条目。
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'ssid-about',
     order: 100,
-    label: () => '关于 SSiD',
+    label: () => STRINGS[localeId].about,
     inject: () => ({}),
   }, () => createElement(SsidAboutSection)))
 
@@ -326,7 +481,7 @@ export function apply(ctx: Context): void {
     if (service === undefined) return
     sidebarCtx.effect(() => service.registerTab({
       id: '@max-null/dsh-ssid-panels:memory',
-      title: () => '记忆',
+      title: () => STRINGS[localeId].tabMemory,
       icon: tabIcon('M12 7v14M16 12h2M16 8h2M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3zM6 12h2M6 8h2'),
       order: 60,
       single: true,
@@ -334,7 +489,7 @@ export function apply(ctx: Context): void {
     }))
     sidebarCtx.effect(() => service.registerTab({
       id: '@max-null/dsh-ssid-panels:guardian',
-      title: () => '状态',
+      title: () => STRINGS[localeId].tabGuardian,
       icon: tabIcon('M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2'),
       order: 61,
       single: true,
@@ -342,7 +497,7 @@ export function apply(ctx: Context): void {
     }))
     sidebarCtx.effect(() => service.registerTab({
       id: '@max-null/dsh-ssid-panels:habit',
-      title: () => '习惯',
+      title: () => STRINGS[localeId].tabHabit,
       icon: tabIcon('m17 2 4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14m-14 18-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3'),
       order: 62,
       single: true,
@@ -350,7 +505,7 @@ export function apply(ctx: Context): void {
     }))
     sidebarCtx.effect(() => service.registerTab({
       id: '@max-null/dsh-ssid-panels:balance',
-      title: () => '余额',
+      title: () => STRINGS[localeId].tabBalance,
       icon: tabIcon('M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4'),
       order: 63,
       single: true,

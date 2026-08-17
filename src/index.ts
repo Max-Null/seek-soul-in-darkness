@@ -26,10 +26,25 @@ const PLUGIN_ZH: Record<string, string> = {
   'dsh-video-preview': '视频内联预览——mp4/webm 等，支持拖进度',
 }
 
+/** 预制插件英文简介（与 PLUGIN_ZH 键一一对应，客户端按 UI 语言选择）。 */
+const PLUGIN_EN: Record<string, string> = {
+  '@huanlin/dsh-plugin-better-sidebar-plugin-office': 'Inline preview for Office files (docx/xlsx/pptx)',
+  '@max-null/dsh-chinese-thinking': 'Chinese thinking — system prompt injection, Chinese from the first turn',
+  '@max-null/dsh-guardian': 'Guardian state engine — assertion counts, edit review queue, feedback-loop watch',
+  '@max-null/dsh-habit': 'Self-learning habit engine — correction signals, thresholds, two human gates',
+  '@max-null/dsh-memory': 'Cross-session plaintext memory — BM25 retrieval, no vectors, human-manageable',
+  '@max-null/dsh-ssid-panels': 'SSiD panels — memory/status/habits/balance tabs and the about page',
+  'dsh-better-sidebar': 'VSCode-style right sidebar — files/terminal/git/browser, per-session',
+  'dsh-excel-panel': 'Excel editing panel — multi-sheet, formulas, batch formatting, save back',
+  'dsh-sidebar-qa': 'Selection Q&A — ask about selected text in the sidebar without interrupting the main chat',
+  'dsh-skin': 'Skin switcher — preset palettes, wallpaper, opacity/blur, font size',
+  'dsh-video-preview': 'Inline video preview — mp4/webm etc., scrubbing',
+}
+
 /** 读一个已挂载插件的版本与简介。
  * 优先从 profile node_modules 直接路径读（SSID_PROFILE_DIR 由壳注入，
  * 不依赖各包 exports 是否暴露 ./package.json），回退模块解析。 */
-function pluginMeta(name: string): { version?: string, description?: string } {
+function pluginMeta(name: string): { version?: string, descriptionZh?: string, descriptionEn?: string } {
   const candidates: string[] = []
   const profileDir = process.env.SSID_PROFILE_DIR
   if (profileDir !== undefined && profileDir !== '') {
@@ -43,7 +58,11 @@ function pluginMeta(name: string): { version?: string, description?: string } {
   for (const candidate of candidates) {
     try {
       const pkg = JSON.parse(readFileSync(candidate, 'utf8')) as { version?: string, description?: string }
-      return { version: pkg.version, description: PLUGIN_ZH[name] ?? pkg.description }
+      return {
+        version: pkg.version,
+        descriptionZh: PLUGIN_ZH[name] ?? pkg.description,
+        descriptionEn: PLUGIN_EN[name] ?? pkg.description,
+      }
     } catch {
       // 尝试下一个候选
     }
@@ -190,7 +209,7 @@ export function apply(ctx: Context): void {
         const res = await fetch(`https://api.github.com/repos/${SSID_REPO}/releases?per_page=20`, {
           headers: { accept: 'application/vnd.github+json' },
         })
-        if (!res.ok) return { currentVersion: SHELL_VERSION, latest: null, releases: [], message: `GitHub API 返回 ${res.status}` }
+        if (!res.ok) return { currentVersion: SHELL_VERSION, latest: null, releases: [], code: 'api-failed', status: res.status, message: `GitHub API returned ${res.status}` }
         const releases = await res.json() as Array<{ tag_name?: string, name?: string, body?: string, published_at?: string }>
         const list = releases.map(release => ({
           tag: release.tag_name ?? '',
@@ -200,7 +219,7 @@ export function apply(ctx: Context): void {
         }))
         return { currentVersion: SHELL_VERSION, latest: list[0] ?? null, releases: list }
       } catch (error) {
-        return { currentVersion: SHELL_VERSION, latest: null, releases: [], message: error instanceof Error ? error.message : String(error) }
+        return { currentVersion: SHELL_VERSION, latest: null, releases: [], code: 'api-failed', message: error instanceof Error ? error.message : String(error) }
       }
     },
     'memory.list': () => {
@@ -253,11 +272,11 @@ export function apply(ctx: Context): void {
     'balance.deepseek': async () => {
       const credentials = required(ctx.get('credentials'), 'credentials')
       const cred = await credentials.resolve('DEEPSEEK_API_KEY')
-      if (cred === undefined) return { ok: false, message: '未配置 DEEPSEEK_API_KEY' }
+      if (cred === undefined) return { ok: false, code: 'missing-key', message: 'DEEPSEEK_API_KEY is not configured' }
       const res = await fetch('https://api.deepseek.com/user/balance', {
         headers: { Authorization: `Bearer ${cred.value}` },
       })
-      if (!res.ok) return { ok: false, message: `余额查询失败（HTTP ${res.status}）` }
+      if (!res.ok) return { ok: false, code: 'http-failed', status: res.status, message: 'upstream balance query failed' }
       const data = await res.json() as { is_available?: boolean, balance_infos?: Array<{ currency?: string, total_balance?: string }> }
       return {
         ok: true,
@@ -268,11 +287,11 @@ export function apply(ctx: Context): void {
     'balance.kimi': async () => {
       const credentials = required(ctx.get('credentials'), 'credentials')
       const cred = await credentials.resolve('MOONSHOT_API_KEY')
-      if (cred === undefined) return { ok: false, message: '未配置 MOONSHOT_API_KEY' }
+      if (cred === undefined) return { ok: false, code: 'missing-key', message: 'MOONSHOT_API_KEY is not configured' }
       const res = await fetch('https://api.moonshot.cn/v1/users/me/balance', {
         headers: { Authorization: `Bearer ${cred.value}` },
       })
-      if (!res.ok) return { ok: false, message: `余额查询失败（HTTP ${res.status}）` }
+      if (!res.ok) return { ok: false, code: 'http-failed', status: res.status, message: 'upstream balance query failed' }
       const data = await res.json() as { data?: { available_balance?: number } }
       const available = data.data?.available_balance
       const value = typeof available === 'number' ? available : 0
