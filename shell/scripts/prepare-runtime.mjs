@@ -48,24 +48,24 @@ function readdirSafe(d) {
 /** 缺失 peer 清单（pnpm peers check 实测：官方包的 peer 依赖，pnpm 不自动装） */
 const MISSING_PEERS = [
   // 官方运行时 peer（版本与闭包一致，DSH 源码 tsconfig 同源）
-  '@deepseek-ai/dsh-fs@0.1.0-rc.6',
-  '@deepseek-ai/dsh-invariants@0.1.0-rc.6',
-  '@deepseek-ai/dsh-scope@0.1.0-rc.6',
-  '@deepseek-ai/dsh-timeout@0.1.0-rc.6',
-  '@deepseek-ai/dsh-code-runtime@0.1.0-rc.6',
-  '@deepseek-ai/dsh-atomic-write@0.1.0-rc.6',
-  '@deepseek-ai/dsh-bash-local@0.1.0-rc.6',
-  '@deepseek-ai/dsh-sandbox@0.1.0-rc.6',
-  '@deepseek-ai/dsh-shell@0.1.0-rc.6',
-  '@deepseek-ai/dsh-anonymous-user-id@0.1.0-rc.6',
-  '@deepseek-ai/dsh-session-telemetry@0.1.0-rc.6',
-  '@deepseek-ai/dsh-session-title-llm@0.1.0-rc.6',
-  '@deepseek-ai/dsh-spill@0.1.0-rc.6',
-  '@deepseek-ai/dsh-output-retention@0.1.0-rc.6',
-  '@deepseek-ai/dsh-subagent-in-process-driver@0.1.0-rc.6',
-  '@deepseek-ai/dsh-subprocess@0.1.0-rc.6',
-  '@deepseek-ai/dsh-compaction@0.1.0-rc.6',
-  '@deepseek-ai/dsh-workflow@0.1.0-rc.6',
+  '@deepseek-ai/dsh-fs@0.1.0-rc.7',
+  '@deepseek-ai/dsh-invariants@0.1.0-rc.7',
+  '@deepseek-ai/dsh-scope@0.1.0-rc.7',
+  '@deepseek-ai/dsh-timeout@0.1.0-rc.7',
+  '@deepseek-ai/dsh-code-runtime@0.1.0-rc.7',
+  '@deepseek-ai/dsh-atomic-write@0.1.0-rc.7',
+  '@deepseek-ai/dsh-bash-local@0.1.0-rc.7',
+  '@deepseek-ai/dsh-sandbox@0.1.0-rc.7',
+  '@deepseek-ai/dsh-shell@0.1.0-rc.7',
+  '@deepseek-ai/dsh-anonymous-user-id@0.1.0-rc.7',
+  '@deepseek-ai/dsh-session-telemetry@0.1.0-rc.7',
+  '@deepseek-ai/dsh-session-title-llm@0.1.0-rc.7',
+  '@deepseek-ai/dsh-spill@0.1.0-rc.7',
+  '@deepseek-ai/dsh-output-retention@0.1.0-rc.7',
+  '@deepseek-ai/dsh-subagent-in-process-driver@0.1.0-rc.7',
+  '@deepseek-ai/dsh-subprocess@0.1.0-rc.7',
+  '@deepseek-ai/dsh-compaction@0.1.0-rc.7',
+  '@deepseek-ai/dsh-workflow@0.1.0-rc.7',
   // @huanlin / dsh-ssid-panels 声明 cordis 本体（官方闭包用 @deepseek-ai/cordis fork，双实例共存）
   '@deepseek-ai/cordis-plugin-group@1.0.1',
   'cordis@4.0.0-rc.8',
@@ -85,9 +85,9 @@ function main() {
   //    精确 pin（无 ^）：rc 阶段 ^ 会悄悄升级到未回归验证的版本，DSH 跟进必须是显式决策
   const pkgPath = join(runtimeDir, 'package.json')
   const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
-  pkg.dependencies['@deepseek-ai/dsh'] = '0.1.0-rc.6'
+  pkg.dependencies['@deepseek-ai/dsh'] = '0.1.0-rc.7'
   writeFileSync(pkgPath, JSON.stringify(pkg, null, 2))
-  console.log('[3/5] 已注入 @deepseek-ai/dsh 0.1.0-rc.6（精确 pin）')
+  console.log('[3/5] 已注入 @deepseek-ai/dsh 0.1.0-rc.7（精确 pin）')
 
   // 3.5 扁平布局（electron-builder 26 不复制 pnpm symlink 节点，必须 hoisted）
   writeFileSync(join(runtimeDir, '.npmrc'), 'node-linker=hoisted\n')
