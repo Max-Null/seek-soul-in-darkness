@@ -16,19 +16,34 @@
   "build": {
     "appId": "com.maxnull.ssid",
     "productName": "思灵",
+    "electronDist": "node_modules/electron/dist",
     "directories": {
       "output": "dist-electron"
     },
+    "files": [
+      "**/*",
+      "!dsh-runtime/**",
+      "!scripts/**",
+      "!dist-electron/**",
+      "!boot-smoke.ts",
+      "!tsconfig.json"
+    ],
     "asarUnpack": [
       "node_modules/tsx/**",
       "node_modules/@esbuild/**"
     ],
+    "afterPack": "scripts/after-pack.cjs",
     "extraResources": [
       {
-        "from": "profile-template",
-        "to": "profile-template"
+        "from": "dsh-runtime",
+        "to": "dsh-runtime"
       }
     ],
+    "electronLanguages": [
+      "en-US",
+      "zh-CN"
+    ],
+    "npmRebuild": false,
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
@@ -38,7 +53,8 @@
     },
     "win": {
       "target": "nsis",
-      "icon": "assets/icon.png"
+      "icon": "assets/icon.ico",
+      "signAndEditExecutable": false
     }
   },
   "dependencies": {
@@ -48,6 +64,6 @@
     "@types/node": "^26.0.0",
     "electron": "43.3.0",
     "electron-builder": "^26.0.0",
-    "typescript": "^5.5.0"
+    "typescript": "^6.0.3"
   }
 }

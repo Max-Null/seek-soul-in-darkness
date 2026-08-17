@@ -8,6 +8,9 @@ build/
 
 dist-electron/
 
+# 内置运行环境（构建时由 scripts/prepare-runtime.mjs 生成，打包时进安装包）
+shell/dsh-runtime/
+
 kernel.bundle.mjs
 exe-stderr.log
 exe-stdout.log

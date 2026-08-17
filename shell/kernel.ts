@@ -51,15 +51,91 @@ const ROOT_CONFIG_FILENAME = 'cordis.yml'
 const TELEMETRY_ROW_ID = 'session-telemetry-otel'
 
 /**
- * 定位 DSH checkout 根目录：`$DSH_CHECKOUT` 优先，否则默认 shell 目录的
- * `../../deepseek-harness`（两个仓库并列放在同一工作区下）。
- * @returns DSH checkout 根目录的绝对路径。
+ * DSH 运行时来源解析结果：installAnchor（heal/loadProfile 的锚点）和
+ * agent-presets root 随来源不同而不同。
+ * - source（源码 checkout）：apps/cli/package.json + apps/cli/config/agent-presets
+ * - bundled（内置 npm 闭包）：node_modules/@deepseek-ai/dsh/package.json + 同包 config/
  */
-export function resolveDshCheckout(): string {
-  const fromEnv = process.env.DSH_CHECKOUT
-  if (fromEnv !== undefined && fromEnv.trim() !== '') return resolve(fromEnv)
-  const shellDir = fileURLToPath(new URL('.', import.meta.url))
-  return resolve(shellDir, '../../deepseek-harness')
+export interface DshRuntime {
+  /** healProfilesModuleFallback / loadProfile 的锚点 package.json 绝对路径。 */
+  installAnchor: string
+  /** agent-presets shipped root（standard preset 所在）。 */
+  agentPresetsRoot: string
+  /** 来源：'source' = 用户 DSH 源码 checkout；'bundled' = 安装包内置闭包。 */
+  kind: 'source' | 'bundled'
+}
+
+/**
+ * 定位内置 dsh-runtime 目录（安装版 resources/dsh-runtime；开发版
+ * shell/dsh-runtime），校验 @deepseek-ai/dsh 闭包在，否则返回 null。
+ */
+export function bundledRuntimeDir(): string | null {
+  // 打包后 kernel.bundle.mjs 在 resources/app.asar/ 下 → ../dsh-runtime
+  // = resources/dsh-runtime；开发时 kernel.ts 在 shell/ 下 → 同级 dsh-runtime。
+  const here = fileURLToPath(new URL('.', import.meta.url))
+  const candidates = [
+    resolve(here, '../dsh-runtime'),
+    resolve(here, 'dsh-runtime'),
+  ]
+  for (const root of candidates) {
+    if (existsSync(join(root, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'))) {
+      return root
+    }
+  }
+  return null
+}
+
+/** 源码 checkout 模式的 runtime（DSH_CHECKOUT 或默认并列目录）。 */
+function sourceRuntime(root: string): DshRuntime {
+  return {
+    kind: 'source',
+    installAnchor: join(root, 'apps', 'cli', 'package.json'),
+    agentPresetsRoot: join(root, 'apps', 'cli', 'config', 'agent-presets'),
+  }
+}
+
+/** 内置 npm 闭包模式的 runtime。 */
+function bundledRuntime(root: string): DshRuntime {
+  return {
+    kind: 'bundled',
+    installAnchor: join(root, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'),
+    agentPresetsRoot: join(root, 'node_modules', '@deepseek-ai', 'dsh', 'config', 'agent-presets'),
+  }
+}
+
+/**
+ * 定位 DSH 运行时，三级回退：
+ * 1. `$DSH_CHECKOUT`（显式指定：源码仓库根，或直接指向 dsh-runtime）
+ * 2. 默认并列源码目录 `../../deepseek-harness`（开发布局：SSiD 与 DSH
+ *    源码并列放在同一工作区下，与 tsconfig 的 paths 解析一致）
+ * 3. 内置 dsh-runtime（安装包自带，无需任何环境配置）
+ * 全部缺失时抛带引导信息的错误——boot 前发现，比 boot 中途报解析错误可读得多。
+ */
+export function resolveDshRuntime(): DshRuntime {
+  const fromEnv = process.env.DSH_CHECKOUT?.trim()
+  if (fromEnv !== undefined && fromEnv !== '') {
+    const envRoot = resolve(fromEnv)
+    if (existsSync(join(envRoot, 'apps', 'cli', 'package.json'))) return sourceRuntime(envRoot)
+    if (existsSync(join(envRoot, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'))) {
+      return bundledRuntime(envRoot)
+    }
+    throw new Error(
+      `DSH_CHECKOUT 指向了无效路径：${envRoot}\n` +
+      '需要 DeepSeek Harness 源码仓库根（含 apps/cli/package.json），或内置 dsh-runtime 目录。',
+    )
+  }
+  // 开发布局：与 shell 并列的 deepseek-harness 源码（tsx paths 同源解析）。
+  const defaultRoot = resolve(fileURLToPath(new URL('.', import.meta.url)), '../../deepseek-harness')
+  if (existsSync(join(defaultRoot, 'apps', 'cli', 'package.json'))) return sourceRuntime(defaultRoot)
+  // 安装版：内置闭包（resources/dsh-runtime 或 shell/dsh-runtime）。
+  const bundled = bundledRuntimeDir()
+  if (bundled !== null) return bundledRuntime(bundled)
+  throw new Error(
+    `无法定位 DeepSeek Harness 运行时：默认路径 ${defaultRoot} 没有源码，也没有内置 dsh-runtime。\n` +
+    '请重新安装思灵（新版安装包自带运行环境），或执行：\n' +
+    '  git clone --depth 1 https://github.com/deepseek-ai/deepseek-harness <路径>\n' +
+    '然后设置环境变量 DSH_CHECKOUT=<路径>，再重新打开思灵。',
+  )
 }
 
 /** 内核启动结果。 */
@@ -90,10 +166,12 @@ export async function bootKernel(
   if (!existsSync(join(profileDir, 'package.json'))) {
     initProfile(profileDir, PROFILE_BUNDLES)
   }
-  // 官方 INSTALL_ANCHOR：DSH checkout 的 apps/cli/package.json ——
-  // healProfilesModuleFallback 和 loadProfile 从这里解析 bundle 的物理目录
-  // （pnpm workspace 的 symlink 布局）。
-  const installAnchor = join(resolveDshCheckout(), 'apps/cli/package.json')
+  // 官方 INSTALL_ANCHOR：DSH 运行时（源码 checkout 的 apps/cli/package.json，
+  // 或内置闭包的 @deepseek-ai/dsh/package.json）——healProfilesModuleFallback
+  // 和 loadProfile 从这里解析 bundle 的物理目录（pnpm workspace symlink
+  // 或 npm 扁平布局）。
+  const runtime = resolveDshRuntime()
+  const installAnchor = runtime.installAnchor
   // 必须先 heal：installProfilePackageResolver 的 loader 前缀从
   // ~/.dsh/profiles/node_modules 平面 symlink 解析，新机（空 profile）下
   // 没 heal 会解析失败。
@@ -118,8 +196,9 @@ export async function bootKernel(
       ...homePatches,
     ]
 
-    // SHIPPED agent-presets root（apps/cli/config/agent-presets，含 standard
-    // preset）—— 官方 profile-boot 的 composeProfile 注入它，web bundle 的
+    // SHIPPED agent-presets root（源码版 apps/cli/config/agent-presets，
+    // 内置版 @deepseek-ai/dsh/config/agent-presets，含 standard preset）——
+    // 官方 profile-boot 的 composeProfile 注入它，web bundle 的
     // agent-presets row 默认 default: standard，缺了这个 root 会报
     // agent-preset-not-found。
     const rows = new Map<string, { config?: unknown }>()
@@ -128,7 +207,7 @@ export async function bootKernel(
     }
     const presets = rows.get('agent-presets')
     if (presets !== undefined) {
-      const shippedRoot = join(resolveDshCheckout(), 'apps/cli/config/agent-presets')
+      const shippedRoot = runtime.agentPresetsRoot
       patches.push({
         id: 'agent-presets',
         config: {

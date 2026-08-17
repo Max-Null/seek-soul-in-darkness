@@ -15,3 +15,7 @@ minimumReleaseAgeExclude:
   - '@huanlin/dsh-plugin-better-sidebar-plugin-office@0.1.0'
 allowBuilds:
   node-pty: false
+  koffi: true
+  '@deepseek-ai/dsh-subprocess-local': true
+  '@google/genai': true
+  protobufjs: true

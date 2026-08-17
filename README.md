@@ -49,15 +49,14 @@ SSiD 是 fractal 的 **DSH 基座版**——基于 [DeepSeek Harness](https://gi
 
 ## 现状
 
-**v0.1.1 已发布**（2026-08-17）：EPIPE 崩溃修复；v0.1.0（2026-08-16）起自研壳 + 侧栏生态 + SSiD 面板 + 预制插件 + NSIS 安装器齐备，详见 [v0.1.1 Release Notes](docs/release-notes-v0.1.1.md) / [v0.1.0 Release Notes](docs/release-notes-v0.1.0.md)。
+**v0.1.2 已发布**（2026-08-17）：一键安装（内置运行环境，免 DSH_CHECKOUT）+ 首次安装进度条 + 闪退可见化；v0.1.1 为 EPIPE 崩溃修复；v0.1.0（2026-08-16）起自研壳 + 侧栏生态 + SSiD 面板 + 预制插件 + NSIS 安装器齐备，详见 [v0.1.2 Release Notes](docs/release-notes-v0.1.2.md) / [v0.1.1 Release Notes](docs/release-notes-v0.1.1.md) / [v0.1.0 Release Notes](docs/release-notes-v0.1.0.md)。
 
 ## 下载安装
 
-- 安装包：[`思灵 Setup 0.1.1.exe`](https://github.com/Max-Null/seek-soul-in-darkness/releases/download/v0.1.1/Setup.0.1.1.exe)（约 99 MB，Windows x64）
+- 安装包：[`思灵 Setup 0.1.2.exe`](https://github.com/Max-Null/seek-soul-in-darkness/releases/download/v0.1.2/Setup.0.1.2.exe)（约 215 MB，Windows x64）
 - 全部版本：[Releases](https://github.com/Max-Null/seek-soul-in-darkness/releases)
 - NSIS 向导安装：安装目录选择、桌面/开始菜单快捷方式
-- 首次启动自动铺设 profile 并安装预制插件（约 430MB，需系统 pnpm）
-- 运行前置：环境变量 `DSH_CHECKOUT` 指向 DeepSeek Harness 仓库 checkout（v0.1.0 已知约束）
+- **一键安装**：首次启动自动部署内置运行环境（DSH 内核 + 预制插件，约 600MB），无需安装 Node/pnpm、无需设置任何环境变量；安装完成后关闭窗口重新打开即用
 
 ## 路线图
 
