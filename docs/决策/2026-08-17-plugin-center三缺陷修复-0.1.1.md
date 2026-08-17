@@ -1,7 +1,7 @@
 # dsh-plugin-center 缺陷修复（0.1.1）：并发更新闪退 + 弹窗缺按钮 + 中文化 + 市场计数
 
 日期：2026-08-17
-状态：进行中（代码已提交 fdc1177，待用户 npm publish 后重建归档）
+状态：✅ 代码/发布/归档全链路完成（npm 0.1.1 已发布、归档含 0.1.1、安装包 0:07 出炉）
 仓库：H:\MaxNull\WorkStation\dsh-plugin-center（发布 @max-null/dsh-plugin-center@0.1.1）
 
 ## 用户实测缺陷（v0.1.4 预发布验收）
@@ -43,9 +43,22 @@
 plugin-center：改 client/index.tsx + engine.ts → build-client → bump 0.1.1 →
 npm publish → SSiD 侧 prepare-runtime（lock 解析 0.1.1）→ pack → 用户验收。
 
+## 发布链踩坑（归档解析 0.1.0 两轮排查）
+
+1. **pnpm metadata 缓存**：发布后立即 install 解析到旧版本（缓存 TTL 数分钟），
+   等待或清缓存可解。
+2. **pnpm 11 供应链策略 minimumReleaseAge**：内置默认 24 小时，新版本在龄内
+   不被 ^range 采用（精确版本不受限）。本地四变体实验结论：
+   A 精确 0.1.1 无豁免 → 0.1.1；B ^0.1.0 无豁免 → 0.1.0；
+   C ^0.1.0 + 豁免条目 `pkg@0.1.1` → 0.1.1；D minimumReleaseAge: 0 → 0.1.1。
+   采用 C：profile-template/pnpm-workspace.yaml 的 minimumReleaseAgeExclude
+   加 `@max-null/dsh-plugin-center@0.1.1`（603c538）。
+3. 归档指纹随 lock 变化（07de2fab），首启对比触发重部署 ✓。
+
 ## 验证
 
-- [ ] build-client 成功、client.js 更新
-- [ ] npm publish 0.1.1
-- [ ] SSiD 归档含 plugin-center@0.1.1、指纹变化
-- [ ] 用户实测：更新全部串行逐个更新 + 弹窗立即更新 + 中文按钮
+- [x] build-client 成功、client.js 更新（39.3kb）
+- [x] npm publish 0.1.1（用户终端 OTP 完成）
+- [x] SSiD 归档含 plugin-center@0.1.1（tar 验证）、指纹变化
+- [x] pack 成功（0:07，215.3MB）
+- [ ] 用户实测：更新全部串行、弹窗立即更新、中文按钮、市场计数、检查更新反馈
