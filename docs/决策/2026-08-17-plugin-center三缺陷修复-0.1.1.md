@@ -1,4 +1,4 @@
-# dsh-plugin-center 缺陷修复（0.1.1）：并发更新闪退 + 弹窗缺按钮 + 中文化 + 市场计数
+# dsh-plugin-center 缺陷修复（0.1.2 含双语）：并发更新闪退 + 弹窗缺按钮 + 中文化 + 市场计数 + 检查反馈 + pnpm 假成功 + 双语
 
 日期：2026-08-17
 状态：✅ 代码/发布/归档全链路完成（npm 0.1.1 已发布、归档含 0.1.1、安装包 0:07 出炉）
@@ -42,6 +42,17 @@
 
 plugin-center：改 client/index.tsx + engine.ts → build-client → bump 0.1.1 →
 npm publish → SSiD 侧 prepare-runtime（lock 解析 0.1.1）→ pack → 用户验收。
+
+## 追加缺陷（0.1.2 同批）
+
+5. **pnpm 假成功**（用户实测单/全更新均「闪一下没下文」）：机器无 pnpm.exe
+   （仅 .cmd/.ps1），`spawn('pnpm', shell:false)` 实测 ENOENT——更新从未执行；
+   客户端不检查返回值 → 假成功 toast。修复：候选链 + shell:true + 失败 detail
+   透传 rpc error + 客户端返回值检查（fa08204）。
+6. **未适配 DSH 双语切换**（用户反馈）：DSH 的 locale 机制 = ctx.locale 服务 +
+   `locale/change` 事件（快照 active: 'zh'|'en'）。plugin-center 文案全部硬编码
+   中文。修复：内置 zh/en 字典 + useT hook + apply 监听 locale/change 与初始快照，
+   市场描述按语言选择 description.zh/en。
 
 ## 发布链踩坑（归档解析 0.1.0 两轮排查）
 
