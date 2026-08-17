@@ -102,7 +102,7 @@ DSH 更新后 web UI 支持中英切换（`@deepseek-ai/dsh-client-locale` 语�
 
 ### 5.4 分发与验收
 
-**分发决策（2026-08-18）**：不发布 npm——dsh-ssid-panels 跟随 SSiD 壳使用，单独安装无意义。分发走 SSiD 壳侧（壳把包打入 profile 依赖 / 预制插件清单），version 仅作本地标记，无需对外发布。
+**分发决策（2026-08-18）**：不发布 npm——dsh-ssid-panels 跟随 SSiD 壳使用，单独安装无意义。分发走 SSiD 壳侧（壳把包打入 profile 依赖 / 预制插件清单），version 仅作本地标记，无需对外发布。仓库保持本地（无 git remote，不建 GitHub 仓库），随 SSiD 壳走。
 
 1. `pnpm typecheck` && `pnpm build`（tsdown：host ESM + client bundle，purityGate 不得报错）
 2. SSiD 壳侧安装（壳把包打入 profile 依赖）后重启，切换中英验证：侧栏 4 tab 标题、设置页、各面板文案跟随切换，无残留中文（en 界面）。
