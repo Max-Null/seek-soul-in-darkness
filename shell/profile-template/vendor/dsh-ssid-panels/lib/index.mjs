@@ -17,6 +17,20 @@ const PLUGIN_ZH = {
 	"dsh-skin": "皮肤切换——预设调色板、壁纸、透明度/模糊、字号",
 	"dsh-video-preview": "视频内联预览——mp4/webm 等，支持拖进度"
 };
+/** 预制插件英文简介（与 PLUGIN_ZH 键一一对应，客户端按 UI 语言选择）。 */
+const PLUGIN_EN = {
+	"@huanlin/dsh-plugin-better-sidebar-plugin-office": "Inline preview for Office files (docx/xlsx/pptx)",
+	"@max-null/dsh-chinese-thinking": "Chinese thinking — system prompt injection, Chinese from the first turn",
+	"@max-null/dsh-guardian": "Guardian state engine — assertion counts, edit review queue, feedback-loop watch",
+	"@max-null/dsh-habit": "Self-learning habit engine — correction signals, thresholds, two human gates",
+	"@max-null/dsh-memory": "Cross-session plaintext memory — BM25 retrieval, no vectors, human-manageable",
+	"@max-null/dsh-ssid-panels": "SSiD panels — memory/status/habits/balance tabs and the about page",
+	"dsh-better-sidebar": "VSCode-style right sidebar — files/terminal/git/browser, per-session",
+	"dsh-excel-panel": "Excel editing panel — multi-sheet, formulas, batch formatting, save back",
+	"dsh-sidebar-qa": "Selection Q&A — ask about selected text in the sidebar without interrupting the main chat",
+	"dsh-skin": "Skin switcher — preset palettes, wallpaper, opacity/blur, font size",
+	"dsh-video-preview": "Inline video preview — mp4/webm etc., scrubbing"
+};
 /** 读一个已挂载插件的版本与简介。
 * 优先从 profile node_modules 直接路径读（SSID_PROFILE_DIR 由壳注入，
 * 不依赖各包 exports 是否暴露 ./package.json），回退模块解析。 */
@@ -31,7 +45,8 @@ function pluginMeta(name) {
 		const pkg = JSON.parse(readFileSync(candidate, "utf8"));
 		return {
 			version: pkg.version,
-			description: PLUGIN_ZH[name] ?? pkg.description
+			descriptionZh: PLUGIN_ZH[name] ?? pkg.description,
+			descriptionEn: PLUGIN_EN[name] ?? pkg.description
 		};
 	} catch {}
 	return {};
@@ -162,7 +177,9 @@ function apply(ctx) {
 					currentVersion: SHELL_VERSION,
 					latest: null,
 					releases: [],
-					message: `GitHub API 返回 ${res.status}`
+					code: "api-failed",
+					status: res.status,
+					message: `GitHub API returned ${res.status}`
 				};
 				const list = (await res.json()).map((release) => ({
 					tag: release.tag_name ?? "",
@@ -180,6 +197,7 @@ function apply(ctx) {
 					currentVersion: SHELL_VERSION,
 					latest: null,
 					releases: [],
+					code: "api-failed",
 					message: error instanceof Error ? error.message : String(error)
 				};
 			}
@@ -233,12 +251,15 @@ function apply(ctx) {
 			const cred = await required(ctx.get("credentials"), "credentials").resolve("DEEPSEEK_API_KEY");
 			if (cred === void 0) return {
 				ok: false,
-				message: "未配置 DEEPSEEK_API_KEY"
+				code: "missing-key",
+				message: "DEEPSEEK_API_KEY is not configured"
 			};
 			const res = await fetch("https://api.deepseek.com/user/balance", { headers: { Authorization: `Bearer ${cred.value}` } });
 			if (!res.ok) return {
 				ok: false,
-				message: `余额查询失败（HTTP ${res.status}）`
+				code: "http-failed",
+				status: res.status,
+				message: "upstream balance query failed"
 			};
 			const data = await res.json();
 			return {
@@ -254,12 +275,15 @@ function apply(ctx) {
 			const cred = await required(ctx.get("credentials"), "credentials").resolve("MOONSHOT_API_KEY");
 			if (cred === void 0) return {
 				ok: false,
-				message: "未配置 MOONSHOT_API_KEY"
+				code: "missing-key",
+				message: "MOONSHOT_API_KEY is not configured"
 			};
 			const res = await fetch("https://api.moonshot.cn/v1/users/me/balance", { headers: { Authorization: `Bearer ${cred.value}` } });
 			if (!res.ok) return {
 				ok: false,
-				message: `余额查询失败（HTTP ${res.status}）`
+				code: "http-failed",
+				status: res.status,
+				message: "upstream balance query failed"
 			};
 			const available = (await res.json()).data?.available_balance;
 			const value = typeof available === "number" ? available : 0;

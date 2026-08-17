@@ -11,8 +11,127 @@ window.__ModuleLoader__.load({
 		* ctx.betterSidebar (memory / guardian state / habit candidates / balances).
 		* dsh-better-sidebar is an optional type-only peer: without it this half
 		* registers nothing and the host routes stay unused.
+		*
+		* i18n: follows the DSH locale service when present (optional ctx.get('locale')
+		* + 'locale/change'), silently falling back to Chinese otherwise — the same
+		* pattern dsh-plugin-center uses.
 		*/
 		const inject = ["slots"];
+		const STRINGS = {
+			zh: {
+				about: "关于 SSiD",
+				tabMemory: "记忆",
+				tabGuardian: "状态",
+				tabHabit: "习惯",
+				tabBalance: "余额",
+				memorySearch: "搜索记忆…",
+				empty: "黑暗中未见灵光",
+				confirm: "确认",
+				forget: "删除",
+				assertions: "断言计数",
+				quiet: "安静",
+				level: "{n} 级",
+				reviewQueue: "编辑审查队列",
+				noPending: "无待审查项",
+				turn: "第 {n} 轮 · ",
+				noPath: "(无路径)",
+				habitCandidates: "候选习惯",
+				evidence: "证据 {n} 条",
+				confirmToMemory: "确认（写入记忆）",
+				discard: "丢弃",
+				available: "可用",
+				insufficient: "余额不足",
+				querying: "查询中…",
+				queryFailed: "查询失败",
+				refresh: "刷新",
+				notQueried: "尚未查询",
+				lastUpdated: "上次更新 {t}",
+				missingKey: "未配置 API Key",
+				httpFailed: "查询失败（HTTP {status}）",
+				title: "思灵 (SSiD)",
+				slogan: "于黑暗中，探寻灵魂。",
+				checkUpdates: "检查更新",
+				noRelease: "暂无发布版本",
+				newVersion: "新版本可用：{name}（{tag}，{date}）",
+				latestVersion: "已是最新：{name}（{tag}）",
+				checking: "检查中…",
+				checkNow: "立即检查",
+				checkFailed: "更新检查失败",
+				apiFailed: "检查失败（HTTP {status}）",
+				changelog: "更新日志",
+				none: "（无）",
+				presetPlugins: "预制插件"
+			},
+			en: {
+				about: "About SSiD",
+				tabMemory: "Memory",
+				tabGuardian: "Status",
+				tabHabit: "Habits",
+				tabBalance: "Balance",
+				memorySearch: "Search memory…",
+				empty: "No spark in the dark",
+				confirm: "Confirm",
+				forget: "Forget",
+				assertions: "Assertions",
+				quiet: "Quiet",
+				level: "Level {n}",
+				reviewQueue: "Edit review queue",
+				noPending: "No pending reviews",
+				turn: "Turn {n} · ",
+				noPath: "(no path)",
+				habitCandidates: "Habit candidates",
+				evidence: "{n} evidence",
+				confirmToMemory: "Confirm (save to memory)",
+				discard: "Discard",
+				available: "Available",
+				insufficient: "Insufficient",
+				querying: "Querying…",
+				queryFailed: "Query failed",
+				refresh: "Refresh",
+				notQueried: "Not queried yet",
+				lastUpdated: "Last updated {t}",
+				missingKey: "API key not configured",
+				httpFailed: "Query failed (HTTP {status})",
+				title: "SSiD",
+				slogan: "Seek the soul in the dark.",
+				checkUpdates: "Check for updates",
+				noRelease: "No published release",
+				newVersion: "New version: {name} ({tag}, {date})",
+				latestVersion: "Up to date: {name} ({tag})",
+				checking: "Checking…",
+				checkNow: "Check now",
+				checkFailed: "Update check failed",
+				apiFailed: "Check failed (HTTP {status})",
+				changelog: "Changelog",
+				none: "(none)",
+				presetPlugins: "Bundled plugins"
+			}
+		};
+		let localeId = "zh";
+		const localeListeners = /* @__PURE__ */ new Set();
+		function adoptLocale(id) {
+			const next = id === "en" ? "en" : "zh";
+			if (next === localeId) return;
+			localeId = next;
+			localeListeners.forEach((l) => l());
+		}
+		function fmt(tpl, vars = {}) {
+			return tpl.replace(/\{(\w+)\}/g, (_, k) => String(vars[k] ?? ""));
+		}
+		/** Copy function + locale subscription: mounted components re-render on DSH language switch. */
+		function useT() {
+			const [id, setId] = (0, react.useState)(localeId);
+			(0, react.useEffect)(() => {
+				const l = () => {
+					setId(localeId);
+				};
+				localeListeners.add(l);
+				return () => {
+					localeListeners.delete(l);
+				};
+			}, []);
+			return (key, vars) => fmt(STRINGS[id][key] ?? STRINGS.zh[key], vars);
+		}
 		/** POST one /ssid/api method and unwrap the {ok, value|error} envelope. */
 		async function api(method, payload) {
 			const body = await (await fetch(`/ssid/api/${method}`, {
@@ -96,6 +215,7 @@ window.__ModuleLoader__.load({
 			}, (0, react.createElement)("path", { d: path }));
 		}
 		function MemoryView() {
+			const t = useT();
 			const [records, setRecords] = (0, react.useState)([]);
 			const [status, setStatus] = (0, react.useState)("auto");
 			const [query, setQuery] = (0, react.useState)("");
@@ -115,7 +235,7 @@ window.__ModuleLoader__.load({
 				onChange: (event) => {
 					setQuery(event.target.value);
 				},
-				placeholder: "搜索记忆…",
+				placeholder: t("memorySearch"),
 				style: {
 					width: "100%",
 					padding: "6px 10px",
@@ -147,7 +267,7 @@ window.__ModuleLoader__.load({
 						borderColor: ssid.accent
 					} : {}
 				}
-			}, label))), filtered.length === 0 ? (0, react.createElement)("div", { style: ssid.empty }, "黑暗中未见灵光") : filtered.map((record) => (0, react.createElement)("div", {
+			}, label))), filtered.length === 0 ? (0, react.createElement)("div", { style: ssid.empty }, t("empty")) : filtered.map((record) => (0, react.createElement)("div", {
 				key: record.id,
 				style: ssid.card
 			}, (0, react.createElement)("div", { style: ssid.text }, record.content), (0, react.createElement)("div", { style: {
@@ -162,15 +282,16 @@ window.__ModuleLoader__.load({
 				onClick: () => {
 					api("memory.confirm", { id: record.id }).then(() => reload());
 				}
-			}, "确认") : null, (0, react.createElement)("button", {
+			}, t("confirm")) : null, (0, react.createElement)("button", {
 				style: ssid.btn,
 				onClick: () => {
 					api("memory.forget", { id: record.id }).then(() => reload());
 				}
-			}, "删除")))));
+			}, t("forget"))))));
 		}
 		/** 状态面板：Guardian 触发线快照（1s 轮询，可见时）。 */
 		function GuardianView(props) {
+			const t = useT();
 			const [snapshot, setSnapshot] = (0, react.useState)({});
 			(0, react.useEffect)(() => {
 				if (!props.visible) return;
@@ -189,12 +310,12 @@ window.__ModuleLoader__.load({
 			const count = session?.assertionCount ?? 0;
 			const level = session?.assertionLevel ?? 0;
 			const queue = snapshot.reviewQueue ?? [];
-			const label = level === 0 ? "安静" : `${level} 级`;
-			return (0, react.createElement)("div", { style: ssid.wrap }, (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, "断言计数"), (0, react.createElement)("span", { style: ssid.badge(level) }, label)), (0, react.createElement)("div", { style: {
+			const label = level === 0 ? t("quiet") : t("level", { n: level });
+			return (0, react.createElement)("div", { style: ssid.wrap }, (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("assertions")), (0, react.createElement)("span", { style: ssid.badge(level) }, label)), (0, react.createElement)("div", { style: {
 				fontSize: 22,
 				fontWeight: 700,
 				color: "var(--dsw-alias-label-primary, #d8e0ea)"
-			} }, String(count))), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, "编辑审查队列"), queue.length === 0 ? (0, react.createElement)("div", { style: ssid.muted }, "无待审查项") : queue.map((item, index) => (0, react.createElement)("div", {
+			} }, String(count))), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, t("reviewQueue")), queue.length === 0 ? (0, react.createElement)("div", { style: ssid.muted }, t("noPending")) : queue.map((item, index) => (0, react.createElement)("div", {
 				key: index,
 				style: {
 					...ssid.text,
@@ -203,9 +324,10 @@ window.__ModuleLoader__.load({
 					textOverflow: "ellipsis",
 					whiteSpace: "nowrap"
 				}
-			}, `${item.turn !== void 0 ? `第 ${item.turn} 轮 · ` : ""}${item.filePath ?? "(无路径)"}`))));
+			}, `${item.turn !== void 0 ? t("turn", { n: item.turn }) : ""}${item.filePath ?? t("noPath")}`))));
 		}
 		function HabitView(props) {
+			const t = useT();
 			const [candidates, setCandidates] = (0, react.useState)([]);
 			const reload = async () => {
 				try {
@@ -225,13 +347,13 @@ window.__ModuleLoader__.load({
 				};
 			}, [props.visible]);
 			const pending = candidates.filter((candidate) => candidate.status === "pending");
-			return (0, react.createElement)("div", { style: ssid.wrap }, pending.length === 0 ? (0, react.createElement)("div", { style: ssid.empty }, "黑暗中未见灵光") : pending.map((candidate) => (0, react.createElement)("div", {
+			return (0, react.createElement)("div", { style: ssid.wrap }, pending.length === 0 ? (0, react.createElement)("div", { style: ssid.empty }, t("empty")) : pending.map((candidate) => (0, react.createElement)("div", {
 				key: candidate.id,
 				style: ssid.card
-			}, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, "候选习惯"), (0, react.createElement)("span", { style: ssid.badge(candidate.confidence === "high" ? 1 : candidate.confidence === "medium" ? 2 : 3) }, candidate.confidence)), (0, react.createElement)("div", { style: ssid.text }, candidate.habit), (0, react.createElement)("div", { style: {
+			}, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("habitCandidates")), (0, react.createElement)("span", { style: ssid.badge(candidate.confidence === "high" ? 1 : candidate.confidence === "medium" ? 2 : 3) }, candidate.confidence)), (0, react.createElement)("div", { style: ssid.text }, candidate.habit), (0, react.createElement)("div", { style: {
 				...ssid.muted,
 				marginTop: 4
-			} }, `证据 ${candidate.evidenceCount} 条`), (0, react.createElement)("div", { style: {
+			} }, t("evidence", { n: candidate.evidenceCount })), (0, react.createElement)("div", { style: {
 				display: "flex",
 				gap: 6,
 				marginTop: 8
@@ -240,34 +362,40 @@ window.__ModuleLoader__.load({
 				onClick: () => {
 					api("habit.confirm", { id: candidate.id }).then(() => reload());
 				}
-			}, "确认（写入记忆）"), (0, react.createElement)("button", {
+			}, t("confirmToMemory")), (0, react.createElement)("button", {
 				style: ssid.btn,
 				onClick: () => {
 					api("habit.discard", { id: candidate.id }).then(() => reload());
 				}
-			}, "丢弃")))));
+			}, t("discard"))))));
 		}
 		function BalanceView() {
+			const t = useT();
 			const [result, setResult] = (0, react.useState)({});
 			const [updated, setUpdated] = (0, react.useState)(null);
 			const refresh = async () => {
 				const [ds, kimi] = await Promise.all([api("balance.deepseek").then((value) => value).catch(() => ({
 					ok: false,
-					message: "查询异常"
+					code: "http-failed"
 				})), api("balance.kimi").then((value) => value).catch(() => ({
 					ok: false,
-					message: "查询异常"
+					code: "http-failed"
 				}))]);
 				setResult({
 					ds,
 					kimi
 				});
-				setUpdated((/* @__PURE__ */ new Date()).toLocaleTimeString("zh-CN", { hour12: false }));
+				setUpdated((/* @__PURE__ */ new Date()).toLocaleTimeString(localeId === "en" ? "en-US" : "zh-CN", { hour12: false }));
 			};
 			(0, react.useEffect)(() => {
 				refresh();
 			}, []);
-			const card = (name, info) => (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, name), info?.ok === true ? (0, react.createElement)("span", { style: ssid.badge(info.isAvailable === true ? 0 : 3) }, info.isAvailable === true ? "可用" : "余额不足") : null), info === void 0 ? (0, react.createElement)("div", { style: ssid.muted }, "查询中…") : !info.ok ? (0, react.createElement)("div", { style: ssid.muted }, info.message ?? "查询失败") : (0, react.createElement)("div", { style: {
+			const errorText = (info) => {
+				if (info.code === "missing-key") return t("missingKey");
+				if (info.code === "http-failed") return `${t("httpFailed", { status: info.status ?? "?" })}${info.message !== void 0 && info.message !== "" ? ` (${info.message})` : ""}`;
+				return info.message ?? t("queryFailed");
+			};
+			const card = (name, info) => (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, name), info?.ok === true ? (0, react.createElement)("span", { style: ssid.badge(info.isAvailable === true ? 0 : 3) }, info.isAvailable === true ? t("available") : t("insufficient")) : null), info === void 0 ? (0, react.createElement)("div", { style: ssid.muted }, t("querying")) : !info.ok ? (0, react.createElement)("div", { style: ssid.muted }, errorText(info)) : (0, react.createElement)("div", { style: {
 				fontSize: 22,
 				fontWeight: 700,
 				color: "var(--dsw-alias-label-primary, #d8e0ea)"
@@ -282,12 +410,13 @@ window.__ModuleLoader__.load({
 				onClick: () => {
 					refresh();
 				}
-			}, "刷新"), (0, react.createElement)("div", { style: {
+			}, t("refresh")), (0, react.createElement)("div", { style: {
 				...ssid.muted,
 				textAlign: "center"
-			} }, updated === null ? "尚未查询" : `上次更新 ${updated}`)));
+			} }, updated === null ? t("notQueried") : t("lastUpdated", { t: updated }))));
 		}
 		function SsidAboutSection() {
+			const t = useT();
 			const [about, setAbout] = (0, react.useState)(null);
 			const [update, setUpdate] = (0, react.useState)(null);
 			const [checking, setChecking] = (0, react.useState)(false);
@@ -298,7 +427,7 @@ window.__ModuleLoader__.load({
 				} catch {
 					setUpdate({
 						currentVersion: about?.shellVersion ?? "0.0.0",
-						message: "更新检查失败"
+						code: "check-failed"
 					});
 				} finally {
 					setChecking(false);
@@ -314,19 +443,27 @@ window.__ModuleLoader__.load({
 			}, []);
 			const latest = update?.latest ?? null;
 			const newer = latest !== null && latest.tag !== "" && latest.tag !== `v${update?.currentVersion ?? ""}`;
+			const descOf = (plugin) => localeId === "en" ? plugin.descriptionEn ?? plugin.descriptionZh ?? "" : plugin.descriptionZh ?? plugin.descriptionEn ?? "";
 			return (0, react.createElement)("div", { style: {
 				...ssid.wrap,
 				maxWidth: 640,
 				margin: "0 auto",
 				width: "100%"
-			} }, (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, "思灵 (SSiD)")), (0, react.createElement)("div", { style: {
+			} }, (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("title"))), (0, react.createElement)("div", { style: {
 				fontSize: 22,
 				fontWeight: 700,
 				color: "var(--dsw-alias-label-primary, #d8e0ea)"
-			} }, `v${about?.shellVersion ?? "…"}`), (0, react.createElement)("div", { style: ssid.muted }, "于黑暗中，探寻灵魂。")), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, "检查更新")), latest === null ? update?.message !== void 0 ? (0, react.createElement)("div", { style: ssid.muted }, update.message) : (0, react.createElement)("div", { style: ssid.muted }, "暂无发布版本") : newer ? (0, react.createElement)("div", { style: {
+			} }, `v${about?.shellVersion ?? "…"}`), (0, react.createElement)("div", { style: ssid.muted }, t("slogan"))), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("checkUpdates"))), latest === null ? update?.code === "api-failed" ? (0, react.createElement)("div", { style: ssid.muted }, t("apiFailed", { status: update.status ?? "?" })) : update?.code === "check-failed" ? (0, react.createElement)("div", { style: ssid.muted }, t("checkFailed")) : (0, react.createElement)("div", { style: ssid.muted }, t("noRelease")) : newer ? (0, react.createElement)("div", { style: {
 				...ssid.text,
 				color: ssid.accent
-			} }, `新版本可用：${latest.name}（${latest.tag}，${latest.publishedAt.slice(0, 10)}）`) : (0, react.createElement)("div", { style: ssid.text }, `已是最新：${latest.name}（${latest.tag}）`), (0, react.createElement)("button", {
+			} }, t("newVersion", {
+				name: latest.name,
+				tag: latest.tag,
+				date: latest.publishedAt.slice(0, 10)
+			})) : (0, react.createElement)("div", { style: ssid.text }, t("latestVersion", {
+				name: latest.name,
+				tag: latest.tag
+			})), (0, react.createElement)("button", {
 				style: {
 					...ssid.btn,
 					marginTop: 8
@@ -335,7 +472,7 @@ window.__ModuleLoader__.load({
 					check();
 				},
 				disabled: checking
-			}, checking ? "检查中…" : "立即检查")), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, "更新日志")), (update?.releases ?? []).length === 0 ? (0, react.createElement)("div", { style: ssid.muted }, "暂无发布版本（点上方「立即检查」拉取）") : (update?.releases ?? []).map((release) => (0, react.createElement)("div", {
+			}, checking ? t("checking") : t("checkNow"))), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("changelog"))), (update?.releases ?? []).length === 0 ? (0, react.createElement)("div", { style: ssid.muted }, t("none")) : (update?.releases ?? []).map((release) => (0, react.createElement)("div", {
 				key: release.tag,
 				style: { marginBottom: 10 }
 			}, (0, react.createElement)("div", { style: {
@@ -346,7 +483,7 @@ window.__ModuleLoader__.load({
 				whiteSpace: "pre-wrap",
 				margin: "4px 0 0",
 				fontSize: 11.5
-			} }, release.body)))), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, "预制插件")), (about?.plugins ?? []).length === 0 ? (0, react.createElement)("div", { style: ssid.muted }, "（无）") : (about?.plugins ?? []).map((plugin) => (0, react.createElement)("div", {
+			} }, release.body)))), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("presetPlugins"))), (about?.plugins ?? []).length === 0 ? (0, react.createElement)("div", { style: ssid.muted }, t("none")) : (about?.plugins ?? []).map((plugin) => (0, react.createElement)("div", {
 				key: plugin.id,
 				style: {
 					padding: "5px 0",
@@ -363,22 +500,28 @@ window.__ModuleLoader__.load({
 			} }, plugin.name), (0, react.createElement)("span", { style: {
 				...ssid.muted,
 				fontSize: 10.5
-			} }, plugin.version !== void 0 ? `v${plugin.version}` : "")), plugin.description !== void 0 && plugin.description !== "" ? (0, react.createElement)("div", { style: {
+			} }, plugin.version !== void 0 ? `v${plugin.version}` : "")), descOf(plugin) !== "" ? (0, react.createElement)("div", { style: {
 				...ssid.muted,
 				fontSize: 10.5,
 				overflow: "hidden",
 				textOverflow: "ellipsis",
 				whiteSpace: "nowrap",
 				marginTop: 2
-			} }, plugin.description) : null))));
+			} }, descOf(plugin)) : null))));
 		}
 		/** Plugin body: settings about section (unconditional) + sidebar tabs (optional peer). */
 		function apply(ctx) {
+			const face = ctx;
+			const initial = (face.get?.("locale"))?.getLocale?.()?.active;
+			if (typeof initial === "string") adoptLocale(initial);
+			face.on?.("locale/change", (snap) => {
+				adoptLocale(snap?.active);
+			});
 			ctx.slots.inject("settings.section", () => ctx.slots.register({
 				name: "settings.section",
 				id: "ssid-about",
 				order: 100,
-				label: () => "关于 SSiD",
+				label: () => STRINGS[localeId].about,
 				inject: () => ({})
 			}, () => (0, react.createElement)(SsidAboutSection)));
 			ctx.inject(["betterSidebar"], (sidebarCtx) => {
@@ -386,7 +529,7 @@ window.__ModuleLoader__.load({
 				if (service === void 0) return;
 				sidebarCtx.effect(() => service.registerTab({
 					id: "@max-null/dsh-ssid-panels:memory",
-					title: () => "记忆",
+					title: () => STRINGS[localeId].tabMemory,
 					icon: tabIcon("M12 7v14M16 12h2M16 8h2M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3zM6 12h2M6 8h2"),
 					order: 60,
 					single: true,
@@ -394,7 +537,7 @@ window.__ModuleLoader__.load({
 				}));
 				sidebarCtx.effect(() => service.registerTab({
 					id: "@max-null/dsh-ssid-panels:guardian",
-					title: () => "状态",
+					title: () => STRINGS[localeId].tabGuardian,
 					icon: tabIcon("M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"),
 					order: 61,
 					single: true,
@@ -402,7 +545,7 @@ window.__ModuleLoader__.load({
 				}));
 				sidebarCtx.effect(() => service.registerTab({
 					id: "@max-null/dsh-ssid-panels:habit",
-					title: () => "习惯",
+					title: () => STRINGS[localeId].tabHabit,
 					icon: tabIcon("m17 2 4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14m-14 18-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3"),
 					order: 62,
 					single: true,
@@ -410,7 +553,7 @@ window.__ModuleLoader__.load({
 				}));
 				sidebarCtx.effect(() => service.registerTab({
 					id: "@max-null/dsh-ssid-panels:balance",
-					title: () => "余额",
+					title: () => STRINGS[localeId].tabBalance,
 					icon: tabIcon("M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"),
 					order: 63,
 					single: true,
