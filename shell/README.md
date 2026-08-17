@@ -55,6 +55,7 @@ DSH 硬性要求 `node ^22.19 || >=24`（用了 Node 22 的 `node:zlib` zstd 和
 | `preload.cjs` | IPC 桥（侧栏 → main） |
 | `side-rail/index.html` + `memory-panel.js` | 侧栏记忆面板 |
 | `tsconfig.json` | 289 条内联精确 paths（映射相邻 DSH 源码；**tsx 不支持通配符 paths 键**，故不 extends） |
+| `docs/pitfalls.md` | 踩坑记录（electron-builder / koffi / pnpm 等，按「现象→根因→修复→验证」组织） |
 
 ## 一键安装机制
 

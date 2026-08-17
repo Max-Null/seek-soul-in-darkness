@@ -84,16 +84,45 @@ async function start() {
   // ── DSH 目录选择器 worker 模式 ──────────────────────────────────────────
   // DSH host 层（dsh-host-directory-picker-native）用 process.execPath spawn 子
   // 进程执行 worker.cjs 弹 Win32 文件夹对话框。打包版下 execPath = 思灵.exe，
-  // 新实例会加载本文件而非 worker.cjs，且 requestSingleInstanceLock 因主实例
-  // 存在而返回 false → 秒退 → 主进程收到「worker exited before reporting a
-  // result」，对话框永远打不开。此分支绕过单例锁与全部 UI 初始化，直接把
-  // worker.cjs 当脚本执行（其 IPC 结果发给父进程后进程自然退出）。
+  // 而 worker 的 koffi.view() 读 COM 内存时，Electron 进程（V8 memory cage）
+  // 禁止 external buffers 会 FATAL 崩溃（koffi.dev 文档明确注明），所以
+  // worker 必须交给纯 node.exe 执行（afterPack 已内置 resources/node/node.exe）。
+  // 孙进程的 IPC 消息原样转发给父进程（DSH host），退出码透传。
   const workerScript = process.argv.find((arg) => arg.endsWith('worker.cjs'))
   if (workerScript !== undefined) {
-    await import(pathToFileURL(workerScript).href)
+    safeLog(`[worker] script=${workerScript}\n`)
+    const bundledNode = process.resourcesPath
+      ? join(process.resourcesPath, 'node', 'node.exe')
+      : ''
+    const nodeExe = bundledNode && existsSync(bundledNode) ? bundledNode : process.execPath
+    safeLog(`[worker] node=${nodeExe}\n`)
+    const worker = spawn(nodeExe, [workerScript], {
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+      windowsHide: true,
+    })
+    worker.stdout.on('data', (d) => safeLog(`[worker:out] ${d}\n`))
+    worker.stderr.on('data', (d) => safeLog(`[worker:err] ${d}\n`))
+    worker.on('message', (message) => {
+      if (typeof process.send === 'function') process.send(message)
+    })
+    worker.on('error', (e) => {
+      safeLog(`[worker] spawn error: ${e.message}\n`)
+      process.exit(1)
+    })
+    worker.on('exit', (code, signal) => {
+      safeLog(`[worker] exit code=${code} signal=${signal}\n`)
+      process.exit(code ?? (signal !== null ? 1 : 0))
+    })
     return
   }
 
+  // ── 启动阶段埋点（保留勿删）──
+  // 所有 `ssid: phase <name>` 日志标记主流程关键节点：single-instance /
+  // whenReady / initResult / bootKernel / loadURL / tray / start completed。
+  // 排查启动卡死、闪退、boot 失败时，对照 phase 序列即可定位卡在哪一步。
+  // 全局未捕获异常监听（文件末尾）会记录 UNCAUGHT / UNHANDLED_REJECTION，
+  // 与 phase 日志配合还原崩溃现场。日志文件 ~/.ssid/ssid.log（SSID_LOG_FILE
+  // 可覆盖）；5 秒心跳在 ~/.ssid/heartbeat.log，作外部存活证据。
   safeLog('ssid: phase single-instance check\n')
   if (!app.requestSingleInstanceLock()) {
     safeLog('ssid: single-instance lock FAILED -> quit\n')
@@ -404,8 +433,42 @@ async function start() {
     }
     safeLog(`[main-ui:${details.level}] ${message}\n`)
   })
+  // F12 打开官方 UI 的 devtools（打包版默认禁用，排查问题时需要）。
+  mainView.webContents.on('before-input-event', (_event, input) => {
+    if (input.type === 'keyDown' && input.key === 'F12') {
+      mainView.webContents.toggleDevTools()
+    }
+  })
   await mainView.webContents.loadURL(`http://127.0.0.1:${kernel.port}/`)
   safeLog('ssid: phase loadURL ok\n')
+  // ── 侧边栏自动诊断：探测 toggle 按钮 + 模拟点击 + 对比面板 class 变化 ──
+  // better-sidebar 的 toggleCluster 固定在视口右上角；面板 hidden 态有
+  // nArs4W_panelHidden class。点击前后 class 变化 = store 正常响应。
+  setTimeout(async () => {
+    try {
+      const diag = await mainView.webContents.executeJavaScript(`(async () => {
+        const out = { toggle: null, buttons: 0, disabled: [], before: null, after: null, changed: null, titleBarCompat: null }
+        const cluster = document.querySelector('.nArs4W_toggleCluster')
+        const panel = document.querySelector('.nArs4W_panel')
+        out.toggle = cluster !== null
+        out.titleBarCompat = document.body?.dataset?.dshTitleBarCompat ?? null
+        if (cluster) {
+          const btns = cluster.querySelectorAll('button')
+          out.buttons = btns.length
+          btns.forEach((b, i) => { if (b.disabled) out.disabled.push(i) })
+          out.before = panel?.className ?? 'no-panel'
+          if (btns[0]) btns[0].click()
+          await new Promise((r) => setTimeout(r, 700))
+          out.after = panel?.className ?? 'no-panel'
+          out.changed = out.before !== out.after
+        }
+        return out
+      })()`)
+      safeLog(`[sidebar-diag] ${JSON.stringify(diag)}\n`)
+    } catch (error) {
+      safeLog(`[sidebar-diag] failed: ${error instanceof Error ? error.message : String(error)}\n`)
+    }
+  }, 8000)
 
   // ── 主题跟随：titleBar 是独立 BrowserView，拿不到官方 UI 的 --dsw-* 变量。
   // 实时路径：mainView 注入 MutationObserver，body 样式/主题属性变化时打
