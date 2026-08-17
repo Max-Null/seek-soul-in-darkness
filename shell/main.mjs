@@ -158,6 +158,7 @@ async function start() {
     webPreferences: { sandbox: true, contextIsolation: true },
   })
   await win.loadFile(fileURLToPath(new URL('./splash.html', import.meta.url)))
+  setStepList(STARTUP_STEPS, 0)
   win.show()
 
   // ── 首次初始化：铺 profile 模板 + 自动安装预制插件（换机开箱即用）───
@@ -181,6 +182,33 @@ async function start() {
       `window.__showError(${JSON.stringify(text)})`,
     ).catch(() => {})
   }
+  // ── 步骤清单（v0.1.4）：splash 展示待办，卡住时高亮行即卡点 ──────────────
+  // 主清单贯穿整个启动；部署阶段切换为部署子清单（解压/校验/替换/收尾），
+  // 完成后切回主清单。全部完成时 current 传 items.length（全项打勾）。
+  const STARTUP_STEPS = [
+    '初始化运行环境检查',
+    '部署内置运行环境',
+    '启动 DSH 内核',
+    '加载思灵界面',
+    '就绪',
+  ]
+  const DEPLOY_STEPS = [
+    '解压内置运行环境',
+    '校验完整性',
+    '替换旧版本',
+    '收尾落位',
+  ]
+  let stepList = STARTUP_STEPS
+  const splashSteps = (current) => {
+    void win.webContents.executeJavaScript(
+      `window.__setStepList(${JSON.stringify(stepList)}, ${Number(current)})`,
+    ).catch(() => {})
+  }
+  const setStepList = (items, current) => {
+    stepList = items
+    splashSteps(current)
+  }
+  const splashStep = (current) => splashSteps(current)
   /**
    * 安装插件并回传进度。pnpm 的 --reporter=ndjson 把每个事件打成一行
    * JSON（写到 stderr），事件种类（@pnpm/core-loggers 契约，已查证）：
@@ -336,6 +364,7 @@ async function start() {
     splashStatus(
       isUpgrade ? '检测到新版运行环境，正在更新（约 30 秒）…' : '首次初始化：正在部署内置运行环境（约 600MB）…',
     )
+    setStepList(DEPLOY_STEPS, 0)
     try {
       await extractArchive(
         archive,
@@ -357,11 +386,13 @@ async function start() {
       )
       if (cancelRequested) throw new DeployCanceled()
       // 校验闭包完整性（解压半截/损坏立即失败，不碰旧版）
+      splashStep(1)
       if (!existsSync(join(tmpDir, 'node_modules', '@max-null', 'dsh-memory'))) {
         throw new Error('解压结果缺少 @max-null/dsh-memory，部署中止')
       }
       // 原子落位：node_modules 先删旧再改名（毫秒级窗口，无并发）；
       // 其余条目（package.json/.runtime-version/vendor 等）逐个覆盖。
+      splashStep(2)
       rmSync(join(profileDir, 'node_modules'), { recursive: true, force: true })
       renameSync(join(tmpDir, 'node_modules'), join(profileDir, 'node_modules'))
       for (const entry of readdirSync(tmpDir)) {
@@ -369,6 +400,7 @@ async function start() {
         rmSync(join(profileDir, entry), { recursive: true, force: true })
         renameSync(join(tmpDir, entry), join(profileDir, entry))
       }
+      splashStep(3)
       safeLog(`ssid: runtime deployed (${readProfileVersion() ?? '?'}) to ${profileDir}\n`)
       return 'bundled'
     } catch (cause) {
@@ -480,6 +512,7 @@ async function start() {
       return 'failed'
     }
   }
+  splashStep(1)
   const initResult = await ensureProfile()
   safeLog(`ssid: phase initResult=${initResult}\n`)
   if (initResult === 'installed') {
@@ -489,13 +522,17 @@ async function start() {
     await new Promise(() => {})
     return
   }
+  // 部署/检查阶段完成（skipped / bundled；failed 已在内部挂起）
+  setStepList(STARTUP_STEPS, 2)
 
   // ── boot DSH kernel (this process) ──────────────────────────────────────
   let kernel
   try {
     safeLog('ssid: phase bootKernel start\n')
+    splashStep(2)
     kernel = await bootKernel()
     safeLog(`ssid: phase bootKernel ok port=${kernel.port}\n`)
+    splashStep(3)
   } catch (cause) {
     // 不直接 app.exit(1)（窗口一闪而逝、错误不可见）：把错误详情显示在
     // splash 上，用户点右上角 ✕ 关闭后自行处理（如配置 DSH_CHECKOUT）。
@@ -580,6 +617,7 @@ async function start() {
   })
   await mainView.webContents.loadURL(`http://127.0.0.1:${kernel.port}/`)
   safeLog('ssid: phase loadURL ok\n')
+  splashStep(4)
   // ── 侧边栏自动诊断：探测 toggle 按钮 + 模拟点击 + 对比面板 class 变化 ──
   // better-sidebar 的 toggleCluster 固定在视口右上角；面板 hidden 态有
   // nArs4W_panelHidden class。点击前后 class 变化 = store 正常响应。
@@ -727,6 +765,7 @@ async function start() {
     win.focus()
   })
 
+  splashStep(STARTUP_STEPS.length)
   win.show()
   safeLog('ssid: phase start() completed\n')
 }

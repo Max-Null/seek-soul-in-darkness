@@ -53,6 +53,21 @@
     transition: all .2s ease;
   }
   .cancel-btn:hover { color: #ffb4ab; border-color: rgba(232, 17, 35, .6); }
+  /* ── 启动/部署步骤清单（主进程 __setStepList 驱动；卡住时高亮行即卡点） ── */
+  .steps {
+    width: 320px;
+    margin: 0 auto 18px;
+    text-align: left;
+    font-size: 12px;
+    line-height: 2;
+    letter-spacing: .03em;
+  }
+  .steps .step { color: var(--ssid-dim); }
+  .steps .step::before { content: '· '; }
+  .steps .step.done { color: var(--ssid-accent); }
+  .steps .step.done::before { content: '✓ '; }
+  .steps .step.current { color: var(--ssid-text); font-weight: 600; }
+  .steps .step.current::before { content: '▸ '; }
   .splash { text-align: center; }
   /* 分形同款 logo（Si 原子轨道 + 瞳孔）：外轨道缓转，瞳孔呼吸凝视，
      光晕呼吸让「硅基生命」活起来 */
@@ -169,6 +184,7 @@
     <h1>思 灵</h1>
     <div class="en">Seek Soul in Darkness</div>
     <div class="slogan">于黑暗中，探寻灵魂。</div>
+    <div class="steps" id="steps"></div>
     <div class="status">正在唤醒硅基生命…</div>
     <button id="cancel-update" class="cancel-btn" hidden onclick="window.__cancelRequested = true">取消更新</button>
     <div class="error" id="boot-error"></div>
@@ -194,6 +210,20 @@
     window.__showError = (text) => {
       const el = document.getElementById('boot-error')
       if (el) { el.textContent = text; el.classList.add('show') }
+    }
+    // 步骤清单：items 为文案数组，current 为当前执行下标（完成项打勾、
+    // 当前项高亮、未到项变暗）。主进程在启动/部署各节点更新，卡住时
+    // 高亮行即卡点，便于反馈定位。
+    window.__setStepList = (items, current) => {
+      const el = document.getElementById('steps')
+      if (!el) return
+      el.innerHTML = ''
+      items.forEach((text, i) => {
+        const div = document.createElement('div')
+        div.className = 'step ' + (i < current ? 'done' : i === current ? 'current' : 'pending')
+        div.textContent = text
+        el.appendChild(div)
+      })
     }
     // 「取消更新」：版本升级部署期间由主进程显示；点击后主进程 pollCancel
     // 轮询到 __cancelRequested 即中止部署（旧版无损，下次启动再检测）。
