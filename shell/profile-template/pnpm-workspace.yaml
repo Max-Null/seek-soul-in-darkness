@@ -4,7 +4,7 @@ packages:
 nodeLinker: hoisted
 autoInstallPeers: false
 minimumReleaseAgeExclude:
-  - '@max-null/dsh-memory@0.2.0'
+  - '@max-null/dsh-memory@0.2.1'
   - '@max-null/dsh-chinese-thinking@0.2.0'
   - '@max-null/dsh-guardian@0.1.0'
   - '@max-null/dsh-habit@0.1.0'
@@ -20,3 +20,5 @@ allowBuilds:
   '@deepseek-ai/dsh-subprocess-local': true
   '@google/genai': true
   protobufjs: true
+
+

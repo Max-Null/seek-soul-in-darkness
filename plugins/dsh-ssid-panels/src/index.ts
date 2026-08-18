@@ -253,6 +253,12 @@ export function apply(ctx: Context): void {
       const memory = required(ctx.get('memory'), 'memory')
       return memory.list?.() ?? []
     },
+    'memory.reload': async () => {
+      const memory = required(ctx.get('memory'), 'memory')
+      // 强制重读存储文件（外部编辑后刷新；旧版 dsh-memory 无此方法时降级为普通 list）
+      await memory.reload?.()
+      return memory.list?.() ?? []
+    },
     'memory.search': (payload) => {
       const memory = required(ctx.get('memory'), 'memory')
       const record = payload as { query?: unknown } | null

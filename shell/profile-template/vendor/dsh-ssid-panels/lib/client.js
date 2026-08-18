@@ -232,11 +232,12 @@ window.__ModuleLoader__.load({
 				strokeLinejoin: "round"
 			}, (0, react.createElement)("path", { d: path }));
 		}
-		function MemoryView() {
+		function MemoryView(props) {
 			const t = useT();
 			const [records, setRecords] = (0, react.useState)([]);
 			const [status, setStatus] = (0, react.useState)("auto");
 			const [query, setQuery] = (0, react.useState)("");
+			const [refreshing, setRefreshing] = (0, react.useState)(false);
 			const reload = async () => {
 				try {
 					setRecords(await api("memory.list"));
@@ -244,18 +245,31 @@ window.__ModuleLoader__.load({
 					setRecords([]);
 				}
 			};
+			const refreshFromDisk = async () => {
+				setRefreshing(true);
+				try {
+					setRecords(await api("memory.reload"));
+				} catch {
+					await reload();
+				} finally {
+					setRefreshing(false);
+				}
+			};
 			(0, react.useEffect)(() => {
-				reload();
-			}, []);
+				if (props.visible) reload();
+			}, [props.visible]);
 			const filtered = records.filter((record) => record.status === status).filter((record) => query === "" || record.content.toLowerCase().includes(query.toLowerCase()));
-			return (0, react.createElement)("div", { style: ssid.wrap }, (0, react.createElement)("input", {
+			return (0, react.createElement)("div", { style: ssid.wrap }, (0, react.createElement)("div", { style: {
+				display: "flex",
+				gap: 6
+			} }, (0, react.createElement)("input", {
 				value: query,
 				onChange: (event) => {
 					setQuery(event.target.value);
 				},
 				placeholder: t("memorySearch"),
 				style: {
-					width: "100%",
+					flex: 1,
 					padding: "6px 10px",
 					fontSize: 12.5,
 					boxSizing: "border-box",
@@ -265,7 +279,15 @@ window.__ModuleLoader__.load({
 					color: "var(--dsw-alias-label-primary, #d8e0ea)",
 					outline: "none"
 				}
-			}), (0, react.createElement)("div", { style: {
+			}), (0, react.createElement)("button", {
+				type: "button",
+				title: t("refresh"),
+				onClick: () => {
+					refreshFromDisk();
+				},
+				disabled: refreshing,
+				style: ssid.btn
+			}, refreshing ? "…" : "↻")), (0, react.createElement)("div", { style: {
 				display: "flex",
 				gap: 4
 			} }, [
@@ -618,7 +640,7 @@ window.__ModuleLoader__.load({
 					icon: tabIcon("M12 7v14M16 12h2M16 8h2M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3zM6 12h2M6 8h2"),
 					order: 60,
 					single: true,
-					component: () => (0, react.createElement)(MemoryView)
+					component: ({ visible }) => (0, react.createElement)(MemoryView, { visible })
 				}));
 				sidebarCtx.effect(() => service.registerTab({
 					id: "@max-null/dsh-ssid-panels:guardian",

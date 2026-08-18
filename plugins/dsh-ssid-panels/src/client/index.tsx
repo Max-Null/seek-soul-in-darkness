@@ -199,14 +199,15 @@ function tabIcon(path: string): ReactNode {
   }, createElement('path', { d: path }))
 }
 
-/** 记忆面板：三态过滤 + 搜索 + 确认/删除。 */
+/** 记忆面板：三态过滤 + 搜索 + 确认/删除 + 刷新（外部编辑文件后重读）。 */
 interface MemoryRecord { id: string, content: string, status: string, namespace: string, keywords: string[] }
 
-function MemoryView(): ReactNode {
+function MemoryView(props: { visible: boolean }): ReactNode {
   const t = useT()
   const [records, setRecords] = useState<MemoryRecord[]>([])
   const [status, setStatus] = useState('auto')
   const [query, setQuery] = useState('')
+  const [refreshing, setRefreshing] = useState(false)
   const reload = async (): Promise<void> => {
     try {
       setRecords(await api('memory.list') as MemoryRecord[])
@@ -214,22 +215,43 @@ function MemoryView(): ReactNode {
       setRecords([])
     }
   }
-  useEffect(() => { void reload() }, [])
+  // 强制重读存储文件（JsonStorageBackend 无 watch——外部编辑后必须 reload，
+  // 2026-08-19 用户实测面板显示旧数据）。
+  const refreshFromDisk = async (): Promise<void> => {
+    setRefreshing(true)
+    try {
+      setRecords(await api('memory.reload') as MemoryRecord[])
+    } catch {
+      await reload()
+    } finally {
+      setRefreshing(false)
+    }
+  }
+  useEffect(() => { if (props.visible) void reload() }, [props.visible])
   const filtered = records
     .filter(record => record.status === status)
     .filter(record => query === '' || record.content.toLowerCase().includes(query.toLowerCase()))
   return createElement('div', { style: ssid.wrap },
-    createElement('input', {
-      value: query,
-      onChange: (event: { target: { value: string } }) => { setQuery(event.target.value) },
-      placeholder: t('memorySearch'),
-      style: {
-        width: '100%', padding: '6px 10px', fontSize: 12.5, boxSizing: 'border-box',
-        background: 'var(--dsw-alias-bg-layer-1, #0f141d)',
-        border: '1px solid var(--dsw-alias-border-l2, #1e2836)', borderRadius: 8,
-        color: 'var(--dsw-alias-label-primary, #d8e0ea)', outline: 'none',
-      },
-    }),
+    createElement('div', { style: { display: 'flex', gap: 6 } },
+      createElement('input', {
+        value: query,
+        onChange: (event: { target: { value: string } }) => { setQuery(event.target.value) },
+        placeholder: t('memorySearch'),
+        style: {
+          flex: 1, padding: '6px 10px', fontSize: 12.5, boxSizing: 'border-box',
+          background: 'var(--dsw-alias-bg-layer-1, #0f141d)',
+          border: '1px solid var(--dsw-alias-border-l2, #1e2836)', borderRadius: 8,
+          color: 'var(--dsw-alias-label-primary, #d8e0ea)', outline: 'none',
+        },
+      }),
+      createElement('button', {
+        type: 'button',
+        title: t('refresh'),
+        onClick: () => { void refreshFromDisk() },
+        disabled: refreshing,
+        style: ssid.btn,
+      }, refreshing ? '…' : '↻'),
+    ),
     createElement('div', { style: { display: 'flex', gap: 4 } },
       ['auto', 'suggested', 'suggest'].map(label => createElement('button', {
         key: label,
@@ -548,7 +570,7 @@ export function apply(ctx: Context): void {
       icon: tabIcon('M12 7v14M16 12h2M16 8h2M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3zM6 12h2M6 8h2'),
       order: 60,
       single: true,
-      component: () => createElement(MemoryView),
+      component: ({ visible }) => createElement(MemoryView, { visible }),
     }))
     sidebarCtx.effect(() => service.registerTab({
       id: '@max-null/dsh-ssid-panels:guardian',

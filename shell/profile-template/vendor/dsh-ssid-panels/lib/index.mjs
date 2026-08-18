@@ -241,6 +241,11 @@ function apply(ctx) {
 		"memory.list": () => {
 			return required(ctx.get("memory"), "memory").list?.() ?? [];
 		},
+		"memory.reload": async () => {
+			const memory = required(ctx.get("memory"), "memory");
+			await memory.reload?.();
+			return memory.list?.() ?? [];
+		},
 		"memory.search": (payload) => {
 			const memory = required(ctx.get("memory"), "memory");
 			const record = payload;
