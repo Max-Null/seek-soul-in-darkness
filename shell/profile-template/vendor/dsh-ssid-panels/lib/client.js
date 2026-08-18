@@ -61,7 +61,7 @@ window.__ModuleLoader__.load({
 				changelog: "更新日志",
 				none: "（无）",
 				presetPlugins: "预制插件",
-				tabNotify: "通知",
+				notifyTitle: "通知设置",
 				notifyEnabled: "启用通知",
 				notifyEnabledDesc: "窗口失焦（最小化/被遮挡）时以 Windows 通知提醒；聚焦时不打扰",
 				notifyReplyDone: "会话完成",
@@ -114,7 +114,7 @@ window.__ModuleLoader__.load({
 				changelog: "Changelog",
 				none: "(none)",
 				presetPlugins: "Bundled plugins",
-				tabNotify: "Notify",
+				notifyTitle: "Notifications",
 				notifyEnabled: "Enable notifications",
 				notifyEnabledDesc: "Windows notifications when the window is unfocused (minimized/covered); silent while focused",
 				notifyReplyDone: "Reply done",
@@ -433,7 +433,7 @@ window.__ModuleLoader__.load({
 				textAlign: "center"
 			} }, updated === null ? t("notQueried") : t("lastUpdated", { t: updated }))));
 		}
-		function NotifyView() {
+		function NotifySettings() {
 			const t = useT();
 			const [config, setConfig] = (0, react.useState)(null);
 			(0, react.useEffect)(() => {
@@ -494,10 +494,11 @@ window.__ModuleLoader__.load({
 				marginLeft: config !== null && config[key] ? 22 : 2,
 				transition: "margin-left .15s"
 			} }))));
-			return (0, react.createElement)("div", { style: ssid.wrap }, (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: {
-				...ssid.muted,
-				fontSize: 12
-			} }, t("notifyEnabledDesc"))), row("enabled", "notifyEnabled", "notifyEnabledDesc"), row("replyDone", "notifyReplyDone", "notifyReplyDoneDesc"), row("question", "notifyQuestion", "notifyQuestionDesc"), row("approval", "notifyApproval", "notifyApprovalDesc"));
+			return (0, react.createElement)("div", { style: {
+				display: "flex",
+				flexDirection: "column",
+				gap: 8
+			} }, row("enabled", "notifyEnabled", "notifyEnabledDesc"), row("replyDone", "notifyReplyDone", "notifyReplyDoneDesc"), row("question", "notifyQuestion", "notifyQuestionDesc"), row("approval", "notifyApproval", "notifyApprovalDesc"));
 		}
 		function SsidAboutSection() {
 			const t = useT();
@@ -537,7 +538,7 @@ window.__ModuleLoader__.load({
 				fontSize: 22,
 				fontWeight: 700,
 				color: "var(--dsw-alias-label-primary, #d8e0ea)"
-			} }, `v${about?.shellVersion ?? "…"}`), (0, react.createElement)("div", { style: ssid.muted }, t("slogan"))), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("checkUpdates"))), latest === null ? update?.code === "api-failed" ? (0, react.createElement)("div", { style: ssid.muted }, t("apiFailed", { status: update.status ?? "?" })) : update?.code === "check-failed" ? (0, react.createElement)("div", { style: ssid.muted }, t("checkFailed")) : (0, react.createElement)("div", { style: ssid.muted }, t("noRelease")) : newer ? (0, react.createElement)("div", { style: {
+			} }, `v${about?.shellVersion ?? "…"}`), (0, react.createElement)("div", { style: ssid.muted }, t("slogan"))), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("notifyTitle"))), (0, react.createElement)(NotifySettings)), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("checkUpdates"))), latest === null ? update?.code === "api-failed" ? (0, react.createElement)("div", { style: ssid.muted }, t("apiFailed", { status: update.status ?? "?" })) : update?.code === "check-failed" ? (0, react.createElement)("div", { style: ssid.muted }, t("checkFailed")) : (0, react.createElement)("div", { style: ssid.muted }, t("noRelease")) : newer ? (0, react.createElement)("div", { style: {
 				...ssid.text,
 				color: ssid.accent
 			} }, t("newVersion", {
@@ -642,14 +643,6 @@ window.__ModuleLoader__.load({
 					order: 63,
 					single: true,
 					component: () => (0, react.createElement)(BalanceView)
-				}));
-				sidebarCtx.effect(() => service.registerTab({
-					id: "@max-null/dsh-ssid-panels:notify",
-					title: () => STRINGS[localeId].tabNotify,
-					icon: tabIcon("M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0"),
-					order: 64,
-					single: true,
-					component: () => (0, react.createElement)(NotifyView)
 				}));
 			});
 		}
