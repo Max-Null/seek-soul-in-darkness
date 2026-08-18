@@ -760,9 +760,22 @@ async function start() {
   void syncTitlebarTheme()
   setInterval(() => { void syncTitlebarTheme() }, 5000)
 
-  // ── 会话完成通知（2026-08-18）：窗口失焦时 Windows 通知 + 音效 ──────────
-  // DSH 事件面：session/event 的 turn/end（reason completed = 一轮正常完成）。
-  // 计时用事件自带 time（epoch ms），turn/start 记 Map、turn/end 取差值。
+  // ── 通知体系（2026-08-18）：窗口失焦时 Windows 通知 + 音效，配置驱动 ────
+  // 配置 ~/.ssid/notify.json：{ enabled, replyDone, question, approval }；
+  // 文件不存在 = 默认全开。场景：
+  //   replyDone：session/event 的 turn/end（completed，事件自带 time 计时）
+  //   approval：session/event 的 approval/asked（授权审计事件）
+  //   question：userQuestions.ask 包装（同进程服务，无 session 事件可监听）
+  const NOTIFY_CONFIG_PATH = join(homedir(), '.ssid', 'notify.json')
+  const DEFAULT_NOTIFY = { enabled: true, replyDone: true, question: true, approval: true }
+  const readNotifyConfig = () => {
+    try {
+      const parsed = JSON.parse(readFileSync(NOTIFY_CONFIG_PATH, 'utf8'))
+      return { ...DEFAULT_NOTIFY, ...(typeof parsed === 'object' && parsed !== null ? parsed : {}) }
+    } catch {
+      return { ...DEFAULT_NOTIFY }
+    }
+  }
   const playNotificationSound = () => {
     try {
       spawn('powershell', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', '[System.Media.SystemSounds]::Asterisk.Play()'], {
@@ -773,6 +786,17 @@ async function start() {
       // 音效失败不影响通知
     }
   }
+  const maybeNotify = (scene, title, body) => {
+    const config = readNotifyConfig()
+    if (!config.enabled || !config[scene]) return
+    if (win.isFocused()) return // 用户正看着窗口：不打扰
+    if (Notification.isSupported()) {
+      // silent: 音效由 playNotificationSound 显式播放，避免与系统音效双响。
+      new Notification({ title, body, silent: true }).show()
+    }
+    playNotificationSound()
+    safeLog(`ssid: notify ${scene} (${body})\n`)
+  }
   const turnStartTimes = new Map()
   kernel.ctx.on('session/event', (_session, event) => {
     const type = event?.type
@@ -781,23 +805,29 @@ async function start() {
       turnStartTimes.set(String(data?.turn ?? ''), event.time)
       return
     }
-    if (type !== 'turn/end') return
-    if (data?.reason?.kind !== 'completed') return
-    if (win.isFocused()) return // 用户正看着窗口：不打扰
-    const start = turnStartTimes.get(String(data?.turn ?? ''))
-    turnStartTimes.delete(String(data?.turn ?? ''))
-    if (start === undefined) return
-    const seconds = Math.max(0, Math.round((event.time - start) / 1000))
-    const mm = String(Math.floor(seconds / 60)).padStart(2, '0')
-    const ss = String(seconds % 60).padStart(2, '0')
-    const body = `会话已完成，用时 ${mm}:${ss}`
-    if (Notification.isSupported()) {
-      // silent: 音效由 playNotificationSound 显式播放，避免与系统音效双响。
-      new Notification({ title: WINDOW_TITLE, body, silent: true }).show()
+    if (type === 'turn/end' && data?.reason?.kind === 'completed') {
+      const start = turnStartTimes.get(String(data?.turn ?? ''))
+      turnStartTimes.delete(String(data?.turn ?? ''))
+      if (start === undefined) return
+      const seconds = Math.max(0, Math.round((event.time - start) / 1000))
+      const mm = String(Math.floor(seconds / 60)).padStart(2, '0')
+      const ss = String(seconds % 60).padStart(2, '0')
+      maybeNotify('replyDone', WINDOW_TITLE, `会话已完成，用时 ${mm}:${ss}`)
+      return
     }
-    playNotificationSound()
-    safeLog(`ssid: turn completed notification (${body})\n`)
+    if (type === 'approval/asked') {
+      maybeNotify('approval', WINDOW_TITLE, `工具「${String(data?.toolName ?? '?')}」请求授权，请回到思灵处理`)
+    }
   })
+  // 提问：包装 userQuestions 服务实例（纯服务调用，无 session 事件可监听）。
+  const userQuestions = kernel.get('userQuestions')
+  if (userQuestions !== null && userQuestions !== undefined && typeof userQuestions.ask === 'function') {
+    const originalAsk = userQuestions.ask.bind(userQuestions)
+    userQuestions.ask = async (request) => {
+      maybeNotify('question', WINDOW_TITLE, 'AI 向你提出了一个问题，请回到思灵回答')
+      return originalAsk(request)
+    }
+  }
 
   // ── tray: close-to-tray, tray menu (show / quit) ────────────────────────
   safeLog('ssid: phase tray create start\n')

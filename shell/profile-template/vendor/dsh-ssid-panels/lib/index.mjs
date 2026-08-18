@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 //#region src/index.ts
 const require = createRequire(import.meta.url);
 /** 预制插件中文简介（未知插件回退包内 description）。 */
@@ -151,6 +152,24 @@ function isTrusted(request, trustedHosts) {
 		return false;
 	}
 }
+const NOTIFY_CONFIG_PATH = join(homedir(), ".ssid", "notify.json");
+const NOTIFY_DEFAULTS = {
+	enabled: true,
+	replyDone: true,
+	question: true,
+	approval: true
+};
+function readNotifyConfig() {
+	try {
+		const parsed = JSON.parse(readFileSync(NOTIFY_CONFIG_PATH, "utf8"));
+		return {
+			...NOTIFY_DEFAULTS,
+			...typeof parsed === "object" && parsed !== null ? parsed : {}
+		};
+	} catch {
+		return { ...NOTIFY_DEFAULTS };
+	}
+}
 /** Read one optional service or throw 503 so the client can degrade. */
 function required(service, label) {
 	if (service === void 0) throw new PanelsError("service-unavailable", `the ${label} service is not mounted in this deployment`, 503);
@@ -162,6 +181,23 @@ function required(service, label) {
 */
 function apply(ctx) {
 	const api = {
+		"notify.get": () => readNotifyConfig(),
+		"notify.set": (payload) => {
+			const record = payload;
+			const next = readNotifyConfig();
+			for (const key of [
+				"enabled",
+				"replyDone",
+				"question",
+				"approval"
+			]) {
+				const value = record?.[key];
+				if (typeof value === "boolean") next[key] = value;
+			}
+			mkdirSync(dirname(NOTIFY_CONFIG_PATH), { recursive: true });
+			writeFileSync(NOTIFY_CONFIG_PATH, JSON.stringify(next, null, 2) + "\n");
+			return next;
+		},
 		"about": () => ({
 			shellVersion: SHELL_VERSION,
 			plugins: [...ctx.loader.entries()].filter((entry) => !entry.options.group && entry.options.name !== void 0 && !entry.options.name.startsWith("@deepseek-ai/") && !entry.options.name.startsWith("cordis:")).map((entry) => ({

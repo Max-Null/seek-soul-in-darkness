@@ -5,9 +5,10 @@
  * or the web runtime's trustedHosts, cross-site browser markers refused.
  */
 import type { Context } from 'cordis'
-import { readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { createRequire } from 'node:module'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 const require = createRequire(import.meta.url)
 
@@ -178,6 +179,20 @@ function isTrusted(request: { headers: Record<string, string | string[] | undefi
 /** One API method. */
 type ApiMethod = (payload: unknown) => Promise<unknown> | unknown
 
+// ── 通知配置（2026-08-18）：壳层主进程读同一文件驱动失焦通知 ─────────────
+const NOTIFY_CONFIG_PATH = join(homedir(), '.ssid', 'notify.json')
+const NOTIFY_DEFAULTS = { enabled: true, replyDone: true, question: true, approval: true }
+type NotifyConfig = typeof NOTIFY_DEFAULTS
+
+function readNotifyConfig(): NotifyConfig {
+  try {
+    const parsed = JSON.parse(readFileSync(NOTIFY_CONFIG_PATH, 'utf8')) as unknown
+    return { ...NOTIFY_DEFAULTS, ...(typeof parsed === 'object' && parsed !== null ? parsed : {}) }
+  } catch {
+    return { ...NOTIFY_DEFAULTS }
+  }
+}
+
 /** Read one optional service or throw 503 so the client can degrade. */
 function required<T>(service: T | undefined, label: string): T {
   if (service === undefined) {
@@ -192,6 +207,18 @@ function required<T>(service: T | undefined, label: string): T {
  */
 export function apply(ctx: Context): void {
   const api: Record<string, ApiMethod> = {
+    'notify.get': () => readNotifyConfig(),
+    'notify.set': (payload) => {
+      const record = payload as Record<string, unknown> | null
+      const next = readNotifyConfig()
+      for (const key of ['enabled', 'replyDone', 'question', 'approval'] as const) {
+        const value = record?.[key]
+        if (typeof value === 'boolean') next[key] = value
+      }
+      mkdirSync(dirname(NOTIFY_CONFIG_PATH), { recursive: true })
+      writeFileSync(NOTIFY_CONFIG_PATH, JSON.stringify(next, null, 2) + '\n')
+      return next
+    },
     'about': () => ({
       shellVersion: SHELL_VERSION,
       // 预制插件清单：非官方（非 @deepseek-ai/）loader 条目，按名排序。

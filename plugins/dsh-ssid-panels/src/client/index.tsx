@@ -60,6 +60,15 @@ const STRINGS = {
     changelog: '更新日志',
     none: '（无）',
     presetPlugins: '预制插件',
+    tabNotify: '通知',
+    notifyEnabled: '启用通知',
+    notifyEnabledDesc: '窗口失焦（最小化/被遮挡）时以 Windows 通知提醒；聚焦时不打扰',
+    notifyReplyDone: '会话完成',
+    notifyReplyDoneDesc: '每轮会话完成时通知（含用时）',
+    notifyQuestion: '提问',
+    notifyQuestionDesc: 'AI 向你提问、需要回复时通知',
+    notifyApproval: '授权申请',
+    notifyApprovalDesc: '工具请求授权、需要处理时通知',
   },
   en: {
     about: 'About SSiD',
@@ -104,6 +113,15 @@ const STRINGS = {
     changelog: 'Changelog',
     none: '(none)',
     presetPlugins: 'Bundled plugins',
+    tabNotify: 'Notify',
+    notifyEnabled: 'Enable notifications',
+    notifyEnabledDesc: 'Windows notifications when the window is unfocused (minimized/covered); silent while focused',
+    notifyReplyDone: 'Reply done',
+    notifyReplyDoneDesc: 'Notify when each turn completes (with duration)',
+    notifyQuestion: 'Questions',
+    notifyQuestionDesc: 'Notify when the AI asks you a question',
+    notifyApproval: 'Approvals',
+    notifyApprovalDesc: 'Notify when a tool requests approval',
   },
 } as const
 type StringKey = keyof typeof STRINGS.zh
@@ -360,9 +378,53 @@ function BalanceView(): ReactNode {
   )
 }
 
+/** 通知设置：总开关 + 三场景（配置存 ~/.ssid/notify.json，壳层读同一文件）。 */
+interface NotifyConfig { enabled: boolean, replyDone: boolean, question: boolean, approval: boolean }
+
+function NotifyView(): ReactNode {
+  const t = useT()
+  const [config, setConfig] = useState<NotifyConfig | null>(null)
+  useEffect(() => {
+    void api('notify.get').then(value => { setConfig(value as NotifyConfig) }, () => { /* keep null */ })
+  }, [])
+  const toggle = async (key: keyof NotifyConfig): Promise<void> => {
+    if (config === null) return
+    const next = { ...config, [key]: !config[key] }
+    setConfig(next)
+    void api('notify.set', next).then(value => { setConfig(value as NotifyConfig) }, () => { setConfig(config) })
+  }
+  const row = (key: keyof NotifyConfig, labelKey: StringKey, descKey: StringKey): ReactNode => createElement('div', { style: ssid.card },
+    createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
+      createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', gap: 4 } },
+        createElement('span', { style: { fontSize: 14, fontWeight: 600, color: 'var(--dsw-alias-label-primary, #d8e0ea)' } }, t(labelKey)),
+        createElement('span', { style: { ...ssid.muted, fontSize: 12 } }, t(descKey)),
+      ),
+      createElement('button', {
+        type: 'button',
+        style: {
+          width: 40, height: 22, borderRadius: 11, border: 'none', cursor: 'pointer', padding: 0,
+          background: config !== null && config[key] ? 'var(--dsw-alias-state-business-primary, #4FC3F7)' : 'var(--dsw-alias-bg-module-platform, rgba(128,148,168,.2))',
+          transition: 'background .15s',
+        },
+        onClick: () => { void toggle(key) },
+      },
+        createElement('span', { style: { display: 'block', width: 16, height: 16, borderRadius: 8, background: '#fff', marginLeft: config !== null && config[key] ? 22 : 2, transition: 'margin-left .15s' } }),
+      ),
+    ),
+  )
+  return createElement('div', { style: ssid.wrap },
+    createElement('div', { style: ssid.card },
+      createElement('div', { style: { ...ssid.muted, fontSize: 12 } }, t('notifyEnabledDesc')),
+    ),
+    row('enabled', 'notifyEnabled', 'notifyEnabledDesc'),
+    row('replyDone', 'notifyReplyDone', 'notifyReplyDoneDesc'),
+    row('question', 'notifyQuestion', 'notifyQuestionDesc'),
+    row('approval', 'notifyApproval', 'notifyApprovalDesc'),
+  )
+}
+
 /** 关于 SSiD 设置页：版本 / 检查更新 / 更新日志 / 预制插件。 */
-interface UpdateInfo {
-  currentVersion: string
+interface UpdateInfo {  currentVersion: string
   code?: 'api-failed' | 'check-failed'
   status?: number
   latest?: { tag: string, name: string, body: string, publishedAt: string } | null
@@ -510,6 +572,14 @@ export function apply(ctx: Context): void {
       order: 63,
       single: true,
       component: () => createElement(BalanceView),
+    }))
+    sidebarCtx.effect(() => service.registerTab({
+      id: '@max-null/dsh-ssid-panels:notify',
+      title: () => STRINGS[localeId].tabNotify,
+      icon: tabIcon('M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0'),
+      order: 64,
+      single: true,
+      component: () => createElement(NotifyView),
     }))
   })
 }
