@@ -760,6 +760,45 @@ async function start() {
   void syncTitlebarTheme()
   setInterval(() => { void syncTitlebarTheme() }, 5000)
 
+  // ── 会话完成通知（2026-08-18）：窗口失焦时 Windows 通知 + 音效 ──────────
+  // DSH 事件面：session/event 的 turn/end（reason completed = 一轮正常完成）。
+  // 计时用事件自带 time（epoch ms），turn/start 记 Map、turn/end 取差值。
+  const playNotificationSound = () => {
+    try {
+      spawn('powershell', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', '[System.Media.SystemSounds]::Asterisk.Play()'], {
+        windowsHide: true,
+        stdio: 'ignore',
+      })
+    } catch {
+      // 音效失败不影响通知
+    }
+  }
+  const turnStartTimes = new Map()
+  kernel.ctx.on('session/event', (_session, event) => {
+    const type = event?.type
+    const data = event?.data
+    if (type === 'turn/start') {
+      turnStartTimes.set(String(data?.turn ?? ''), event.time)
+      return
+    }
+    if (type !== 'turn/end') return
+    if (data?.reason?.kind !== 'completed') return
+    if (win.isFocused()) return // 用户正看着窗口：不打扰
+    const start = turnStartTimes.get(String(data?.turn ?? ''))
+    turnStartTimes.delete(String(data?.turn ?? ''))
+    if (start === undefined) return
+    const seconds = Math.max(0, Math.round((event.time - start) / 1000))
+    const mm = String(Math.floor(seconds / 60)).padStart(2, '0')
+    const ss = String(seconds % 60).padStart(2, '0')
+    const body = `会话已完成，用时 ${mm}:${ss}`
+    if (Notification.isSupported()) {
+      // silent: 音效由 playNotificationSound 显式播放，避免与系统音效双响。
+      new Notification({ title: WINDOW_TITLE, body, silent: true }).show()
+    }
+    playNotificationSound()
+    safeLog(`ssid: turn completed notification (${body})\n`)
+  })
+
   // ── tray: close-to-tray, tray menu (show / quit) ────────────────────────
   safeLog('ssid: phase tray create start\n')
   const tray = new Tray(nativeImage.createFromPath(asset('tray.png')))
@@ -767,6 +806,19 @@ async function start() {
   tray.setToolTip(WINDOW_TITLE)
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '显示思灵', click: () => { win.show(); win.focus() } },
+    { type: 'separator' },
+    {
+      label: '重启',
+      click: () => {
+        // 先标记 relaunch 再优雅退出：shutdown 内部 await fiber.dispose 后
+        // app.exit(0)，Electron 检测到 relaunch 标志自动以新进程重启。
+        // 过滤 worker.cjs：worker 模式（argv 含 worker.cjs）relaunch 不能
+        // 沿用原始 argv，否则会再次走 worker 分支而不是启动壳。
+        app.relaunch({ args: process.argv.slice(1).filter((arg) => !arg.endsWith('worker.cjs')) })
+        quitting = true
+        void kernel.shutdown(0).catch(() => app.exit(0))
+      },
+    },
     { type: 'separator' },
     { label: '退出', click: () => app.quit() },
   ]))
