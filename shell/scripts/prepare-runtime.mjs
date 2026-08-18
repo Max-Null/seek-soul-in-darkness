@@ -181,6 +181,11 @@ function main() {
   }
   const vendorDir = join(runtimeDir, 'vendor')
   if (existsSync(vendorDir)) walkVendor(vendorDir, '')
+  // 出厂技能目录同样纳入指纹（v0.2.0）：技能内容/增减变化（不改版本号）
+  // 也必须触发重部署，否则新技能到不了老用户（skills 由 kernel 启动时
+  // 非覆盖合并到 $DSH_HOME/skills，源在 profileDir 内）。
+  const skillsDir = join(runtimeDir, 'skills')
+  if (existsSync(skillsDir)) walkVendor(skillsDir, 'skills')
   const depFingerprint = createHash('md5')
     .update(JSON.stringify(deps))
     .update(lockText)

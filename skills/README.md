@@ -34,3 +34,13 @@
 - **8 mxy + 1 omo-verification-planning = 9 个可直接用** ✅
 - **4 个 omo 已做路径适配，基本可用** 🔧
 - **1 个 omo-reflect 需重写** 🔄（依赖 OC 数据库 schema，DSH 无对应）
+
+## 部署副本（v0.2.0）
+
+- **安装包出厂副本**：`shell/profile-template/skills/`（14 个技能目录，随
+  dsh-runtime 归档部署）。思灵启动时由 `kernel.ts` 的 `syncPresetSkills`
+  非覆盖合并到用户 `$DSH_HOME/skills`（用户已有同名技能则跳过，不覆盖）。
+- **同步约定**：新增/修改技能后，把对应技能目录整目录同步到
+  `shell/profile-template/skills/`（`prepare-runtime.mjs` 会把 skills 纳入
+  归档指纹，技能内容变化会触发老用户自动升级部署）。
+- 详见 [决策记录](../docs/决策/2026-08-19-SSiD预设技能包-落地方案.md)。

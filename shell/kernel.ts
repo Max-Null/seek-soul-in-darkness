@@ -18,7 +18,7 @@
  * 服务，M1 的 memory 数据通道不需要跨进程桥。
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
@@ -138,6 +138,49 @@ export interface Kernel {
  * 和退出函数。进程保持运行（webServer listen），退出走 shutdown。
  * @param exit - 最终进程退出，默认 `process.exit`；electron 传 `app.exit`。
  */
+/**
+ * Preset skills sync (v0.2.0): merge factory skills shipped inside the profile
+ * (profileDir/skills, deployed with the dsh-runtime archive) into the user
+ * skill root ($DSH_HOME/skills) without overwriting existing entries.
+ *
+ * Rules (see docs/决策/2026-08-19-SSiD预设技能包-落地方案.md):
+ * - Copy directory entries only (skill bundles `<name>/SKILL.md`); root-level
+ *   .md files (e.g. README) are skipped so the flat-skill parser never scans them
+ * - A target entry that already exists is skipped (user edits/deletes win;
+ *   upgrades add new skills without overwriting user changes)
+ * - Idempotent: runs on every launch; absent source (dev run / legacy deploy)
+ *   is a silent no-op; failures never block boot
+ */
+export function syncPresetSkills(sourceDir: string, targetDir: string): number {
+  let entries
+  try {
+    entries = readdirSync(sourceDir, { withFileTypes: true })
+  } catch {
+    return 0 // source absent (legacy deploy / dev run): nothing to sync
+  }
+  try {
+    mkdirSync(targetDir, { recursive: true })
+  } catch (error) {
+    console.warn(`ssid: preset skills sync failed to create ${targetDir}: ${String(error)}`)
+    return 0
+  }
+  let copied = 0
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue // skill bundles only
+    if (entry.name === '.system') continue
+    const target = join(targetDir, entry.name)
+    if (existsSync(target)) continue // user already has this entry: keep theirs
+    try {
+      cpSync(join(sourceDir, entry.name), target, { recursive: true })
+      copied++
+    } catch (error) {
+      console.warn(`ssid: preset skill "${entry.name}" sync failed: ${String(error)}`)
+    }
+  }
+  if (copied > 0) console.log(`ssid: preset skills synced ${copied} new -> ${targetDir}`)
+  return copied
+}
+
 export async function bootKernel(
   exit: (code: number) => void = code => process.exit(code),
 ): Promise<Kernel> {
@@ -149,6 +192,9 @@ export async function bootKernel(
   if (!existsSync(join(profileDir, 'package.json'))) {
     initProfile(profileDir, PROFILE_BUNDLES)
   }
+  // 预设技能同步：出厂技能（profileDir/skills，随归档部署）非覆盖合并到
+  // $DSH_HOME/skills。旧版/开发裸跑 profile 无 skills 目录时静默跳过。
+  syncPresetSkills(join(profileDir, 'skills'), join(home, 'skills'))
   // 官方 INSTALL_ANCHOR：DSH 运行时（源码 checkout 的 apps/cli/package.json，
   // 或内置闭包的 @deepseek-ai/dsh/package.json）——healProfilesModuleFallback
   // 和 loadProfile 从这里解析 bundle 的物理目录（pnpm workspace symlink

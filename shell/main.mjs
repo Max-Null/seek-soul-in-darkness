@@ -498,6 +498,11 @@ async function start() {
         copyFileSync(join(template, file), join(profileDir, file))
       }
       cpSync(join(template, 'vendor'), join(profileDir, 'vendor'), { recursive: true, force: true })
+      // 出厂技能副本（v0.2.0）：无归档兜底路径也带预设技能；kernel 启动时
+      // 会非覆盖合并到 $DSH_HOME/skills（见 kernel.ts syncPresetSkills）。
+      if (existsSync(join(template, 'skills'))) {
+        cpSync(join(template, 'skills'), join(profileDir, 'skills'), { recursive: true, force: true })
+      }
       splashStatus('首次初始化：正在安装预制插件（约 430MB，需要几分钟）…')
       // 进度近似：见 runInstall 注释（阶段权重 + 包计数）。
       let pct = 4
