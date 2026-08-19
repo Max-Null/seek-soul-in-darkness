@@ -17,8 +17,7 @@
     "dsh-excel-panel": "^0.6.1",
     "dsh-sidebar-qa": "^0.2.0",
     "dsh-skin": "^0.4.1",
-    "dsh-video-preview": "^0.1.1",
-    "dsh-memory": "^0.3.7"
+    "dsh-video-preview": "^0.1.1"
   },
   "dsh": {
     "profile": {
