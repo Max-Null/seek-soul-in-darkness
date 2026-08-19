@@ -85,6 +85,13 @@ window.__ModuleLoader__.load({
     exports.inject = []
 
     exports.apply = function (ctx) {
+      // 防重守卫：DSH 插件热重载/重复加载时避免重复注册 ssid:titlebar
+      // 监听器与重复注入 CSS——否则一次标题栏点击会触发多次处理
+      // （toggle 被抵消、互斥按钮被点多次），2026-08-19 用户提示
+      // 「事件传递导致的问题」的排查项之一。
+      if (window.__dshHeaderUnifyInstalled === true) return
+      window.__dshHeaderUnifyInstalled = true
+
       var style = document.createElement('style')
       style.setAttribute('data-dsh-header-unify', '')
       style.textContent = HIDE_CSS

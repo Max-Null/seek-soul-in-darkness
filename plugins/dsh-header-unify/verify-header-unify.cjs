@@ -24,6 +24,7 @@ const fakeCluster = {
 }
 let injectedStyle = null
 let titlebarHandler = null
+let titlebarListenerCount = 0
 let pcOpen = 0, pcToggle = 0, pcClose = 0
 // 面板 mock（反向互斥用）：默认不可见；测试中可设为可见对象
 let fakeSidebar = null
@@ -45,7 +46,9 @@ global.window = {
       global.__handoff = { id: handoff.id, exports: exportsObj }
     },
   },
-  addEventListener(name, fn) { if (name === 'ssid:titlebar') titlebarHandler = fn },
+  addEventListener(name, fn) {
+    if (name === 'ssid:titlebar') { titlebarHandler = fn; titlebarListenerCount++ }
+  },
 }
 global.document = {
   createElement(tag) {
@@ -78,6 +81,11 @@ eval(source)
 check('handoff.id 为 @max-null/dsh-header-unify', global.__handoff.id === '@max-null/dsh-header-unify', global.__handoff?.id)
 check('exports.inject 为空数组', Array.isArray(global.__handoff.exports.inject) && global.__handoff.exports.inject.length === 0)
 check('已注册 ssid:titlebar 监听', typeof titlebarHandler === 'function')
+
+// 防重守卫：重复 apply（DSH 插件热重载）不重复注册监听器——否则一次
+// 标题栏点击触发多次处理（toggle 抵消/互斥点多次按钮）
+global.__handoff.exports.apply({ inject() {} })
+check('重复 apply 不重复注册 ssid:titlebar 监听器', titlebarListenerCount === 1, `count=${titlebarListenerCount}`)
 
 // 隐藏 CSS 断言
 check('隐藏 CSS 含 pc-headerbtn', injectedStyle !== null && injectedStyle.includes('pc-headerbtn'), injectedStyle)
