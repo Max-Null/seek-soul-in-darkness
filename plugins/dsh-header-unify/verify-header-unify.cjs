@@ -119,6 +119,14 @@ check('底栏开着时 plugin-center 事件先收起底栏（点底栏按钮）'
 check('底栏开着时未点侧栏按钮', fakeCluster.buttons[1].clicked === 0)
 check('底栏开着时仍 toggle 插件中心', pcToggle === pcToggleBefore2 + 1)
 
+// 右栏+底栏同时开着 → 两个都收起（不能用 if/else if 短路漏掉一个）
+resetClicked()
+setLabels('折叠侧边栏', '折叠底部面板')
+const pcToggleBefore5 = pcToggle
+titlebarHandler({ detail: 'plugin-center' })
+check('双开时 plugin-center 事件同时收起侧栏和底栏', fakeCluster.buttons[0].clicked === 1 && fakeCluster.buttons[1].clicked === 1, clickedOf())
+check('双开时仍 toggle 插件中心', pcToggle === pcToggleBefore5 + 1)
+
 // 都关着 → 不点任何按钮，仅 toggle
 resetClicked()
 setLabels('展开侧边栏', '展开底部面板')

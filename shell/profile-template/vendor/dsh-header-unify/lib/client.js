@@ -66,14 +66,13 @@ window.__ModuleLoader__.load({
     /**
      * 反向互斥（2026-08-19 用户补充）：打开插件中心前，若侧栏/底栏
      * 开着则先收起（点其 toggleCluster 按钮），避免弹窗被面板遮挡。
+     * 两个独立判断：右栏+底栏同时开着时都要收起（不能用 if/else if，
+     * 否则短路漏掉一个——用户实测「双开时底栏保持打开」）。
      */
     function closeSidePanelsBeforePluginCenter() {
       var btns = clusterSideButtons()
-      if (isPanelOpen(btns.sidebar)) {
-        clickButton(btns.sidebar) // 侧栏开着 → 收起
-      } else if (isPanelOpen(btns.bottom)) {
-        clickButton(btns.bottom) // 底栏开着 → 收起
-      }
+      if (isPanelOpen(btns.sidebar)) clickButton(btns.sidebar)
+      if (isPanelOpen(btns.bottom)) clickButton(btns.bottom)
     }
 
     exports.inject = []
