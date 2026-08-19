@@ -249,57 +249,6 @@ export function apply(ctx: Context): void {
         return { currentVersion: SHELL_VERSION, latest: null, releases: [], code: 'api-failed', message: error instanceof Error ? error.message : String(error) }
       }
     },
-    'memory.list': () => {
-      const memory = required(ctx.get('memory'), 'memory')
-      return memory.list?.() ?? []
-    },
-    'memory.reload': async () => {
-      const memory = required(ctx.get('memory'), 'memory')
-      // 强制重读存储文件（外部编辑后刷新；旧版 dsh-memory 无此方法时降级为普通 list）
-      await memory.reload?.()
-      return memory.list?.() ?? []
-    },
-    'memory.search': (payload) => {
-      const memory = required(ctx.get('memory'), 'memory')
-      const record = payload as { query?: unknown } | null
-      const query = typeof record?.query === 'string' ? record.query : ''
-      return memory.search?.(query) ?? []
-    },
-    'memory.confirm': (payload) => {
-      const memory = required(ctx.get('memory'), 'memory')
-      const record = payload as { id?: unknown } | null
-      if (typeof record?.id !== 'string') throw new PanelsError('bad-request', 'missing or invalid "id"')
-      // 0.3.0 审核语义：suggested → approved（不再直接 auto）
-      return memory.setStatus?.(record.id, 'approved') ?? null
-    },
-    'memory.setInjected': (payload) => {
-      const memory = required(ctx.get('memory'), 'memory')
-      const record = payload as { id?: unknown, injected?: unknown } | null
-      if (typeof record?.id !== 'string') throw new PanelsError('bad-request', 'missing or invalid "id"')
-      if (typeof record?.injected !== 'boolean') throw new PanelsError('bad-request', 'missing or invalid "injected"')
-      // 注入维度开关（dsh-memory 0.3.0；旧版无此方法时降级返回 null）
-      return memory.setInjected?.(record.id, record.injected) ?? null
-    },
-    'memory.update': (payload) => {
-      const memory = required(ctx.get('memory'), 'memory')
-      const record = payload as { id?: unknown, content?: unknown, keywords?: unknown } | null
-      if (typeof record?.id !== 'string') throw new PanelsError('bad-request', 'missing or invalid "id"')
-      if (record.content !== undefined && typeof record.content !== 'string') throw new PanelsError('bad-request', 'invalid "content"')
-      if (record.keywords !== undefined && !(Array.isArray(record.keywords) && record.keywords.every(k => typeof k === 'string'))) {
-        throw new PanelsError('bad-request', 'invalid "keywords"')
-      }
-      // 修改记忆内容/关键词（dsh-memory 0.3.1；重置待审核，注入开关保留）
-      return memory.update?.(record.id, {
-        ...record.content === undefined ? {} : { content: record.content },
-        ...record.keywords === undefined ? {} : { keywords: record.keywords },
-      }) ?? null
-    },
-    'memory.forget': (payload) => {
-      const memory = required(ctx.get('memory'), 'memory')
-      const record = payload as { id?: unknown } | null
-      if (typeof record?.id !== 'string') throw new PanelsError('bad-request', 'missing or invalid "id"')
-      return memory.forget?.(record.id) ?? false
-    },
     'guardian.snapshot': () => {
       const guardian = required(ctx.get('guardian'), 'guardian')
       return guardian.snapshot?.() ?? { session: null, reviewQueue: [] }

@@ -238,50 +238,6 @@ function apply(ctx) {
 				};
 			}
 		},
-		"memory.list": () => {
-			return required(ctx.get("memory"), "memory").list?.() ?? [];
-		},
-		"memory.reload": async () => {
-			const memory = required(ctx.get("memory"), "memory");
-			await memory.reload?.();
-			return memory.list?.() ?? [];
-		},
-		"memory.search": (payload) => {
-			const memory = required(ctx.get("memory"), "memory");
-			const record = payload;
-			const query = typeof record?.query === "string" ? record.query : "";
-			return memory.search?.(query) ?? [];
-		},
-		"memory.confirm": (payload) => {
-			const memory = required(ctx.get("memory"), "memory");
-			const record = payload;
-			if (typeof record?.id !== "string") throw new PanelsError("bad-request", "missing or invalid \"id\"");
-			return memory.setStatus?.(record.id, "approved") ?? null;
-		},
-		"memory.setInjected": (payload) => {
-			const memory = required(ctx.get("memory"), "memory");
-			const record = payload;
-			if (typeof record?.id !== "string") throw new PanelsError("bad-request", "missing or invalid \"id\"");
-			if (typeof record?.injected !== "boolean") throw new PanelsError("bad-request", "missing or invalid \"injected\"");
-			return memory.setInjected?.(record.id, record.injected) ?? null;
-		},
-		"memory.update": (payload) => {
-			const memory = required(ctx.get("memory"), "memory");
-			const record = payload;
-			if (typeof record?.id !== "string") throw new PanelsError("bad-request", "missing or invalid \"id\"");
-			if (record.content !== void 0 && typeof record.content !== "string") throw new PanelsError("bad-request", "invalid \"content\"");
-			if (record.keywords !== void 0 && !(Array.isArray(record.keywords) && record.keywords.every((k) => typeof k === "string"))) throw new PanelsError("bad-request", "invalid \"keywords\"");
-			return memory.update?.(record.id, {
-				...record.content === void 0 ? {} : { content: record.content },
-				...record.keywords === void 0 ? {} : { keywords: record.keywords }
-			}) ?? null;
-		},
-		"memory.forget": (payload) => {
-			const memory = required(ctx.get("memory"), "memory");
-			const record = payload;
-			if (typeof record?.id !== "string") throw new PanelsError("bad-request", "missing or invalid \"id\"");
-			return memory.forget?.(record.id) ?? false;
-		},
 		"guardian.snapshot": () => {
 			return required(ctx.get("guardian"), "guardian").snapshot?.() ?? {
 				session: null,
