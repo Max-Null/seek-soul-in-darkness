@@ -1,6 +1,6 @@
 # v0.1.6 标题栏统一按钮组 + 稳定修复
 
-> 草稿（2026-08-19 预写，发布前核对体积/更新说明）
+> 正式版（2026-08-20）：安装包 `思灵 Setup 0.1.6.exe`（约 253 MB）
 
 ## 新增
 
@@ -14,10 +14,14 @@
   开侧栏/底栏时插件中心自动关闭（单向互斥）；点遮罩关闭面板。
 - **部署失败可操作提示**：内置运行环境部署遇文件占用（EPERM）时，自动检测
   占用进程（node/electron/思灵）并提示关闭后重开即可自动继续，无需重装。
+- **Skill & MCP 管理中心（dsh-skill-mcp-center 0.2.0）**：设置页 Skill 卡片
+  重设计（独立展开头部 + 搜索工具栏固定）；侧边栏 Skill tab 富化（全部/全局/
+  工作区分组、固定搜索、查看 SKILL.md 原文）；MCP 侧边栏状态修复。
 
 ## 更新
 
 - dsh-plugin-center 0.1.7（全局 `__pluginCenterOpen/Toggle/Close` API）
+- dsh-skill-mcp-center 0.2.0（Skill 管理 UI 重构 + readSkill + mcpStatus 修复）
 - profile-template 预制 dsh-header-unify 0.1.0
 
 ## 修复
