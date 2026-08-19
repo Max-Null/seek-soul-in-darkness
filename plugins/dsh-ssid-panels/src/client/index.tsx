@@ -37,6 +37,7 @@ const STRINGS = {
     nsGlobal: '全局',
     nsProject: '项目',
     organizeMemory: '整理记忆',
+    confirmAll: '全部确认',
     suggested: '待审核',
     approved: '已审核',
     assertions: '断言计数',
@@ -102,6 +103,7 @@ const STRINGS = {
     nsGlobal: 'Global',
     nsProject: 'Project',
     organizeMemory: 'Organize memory',
+    confirmAll: 'Approve all',
     suggested: 'Suggested',
     approved: 'Approved',
     assertions: 'Assertions',
@@ -231,9 +233,10 @@ function tabIcon(path: string): ReactNode {
  */
 interface MemoryRecord { id: string, content: string, status: 'suggested' | 'approved', injected: boolean, namespace: string, keywords: string[] }
 
-// 预填指令（0.3.1 更新：过时内容用 memory_update 修正——改动重置为
-// 待审核；需要删除的用 memory_forget；全部改动不调 memory_confirm）
-const ORGANIZE_PROMPT = '请整理我的记忆库：用 memory_list 查看全部记忆，合并重复或可归并的条目，精简冗长内容，为每条补充或修正 keywords；对过时、错误或已变化的内容用 memory_update 修正（会重置为待审核），需要删除的用 memory_forget（仅用 memory_save 新增、memory_forget 删除、memory_update 修改，改动全部落在 suggested 等待审核，不要调用 memory_confirm）。完成后用一句话汇报整理结果。'
+// 预填指令（0.3.1）：过时内容用 memory_update 修正（重置待审核）；
+// 判断过时的方法 = 记忆里的工具名/数量与当前实际可用工具对照。
+// 注意：模型对版本号等外部事实没有参照，只能自查工具面——指令明示清单。
+const ORGANIZE_PROMPT = '请整理我的记忆库：用 memory_list 查看全部记忆，合并重复或可归并的条目，精简冗长内容，为每条补充或修正 keywords；对过时、错误或已变化的内容用 memory_update 修正（会重置为待审核），需要删除的用 memory_forget，需要新增的用 memory_save。判断内容是否过时的方法：把记忆里提到的工具名/数量与你当前实际可用的记忆工具对照——你当前可用：memory_save / memory_list / memory_search / memory_confirm / memory_forget / memory_update（共 6 个）；若记忆中的工具列表、数量、流程与此不符即为过时，用 memory_update 修正。改动全部落在 suggested 等待审核（不要调用 memory_confirm），完成后用一句话汇报整理结果。'
 
 /** 面板需要的 client 侧服务面（软获取，与 better-sidebar 同模式——
  * 属性访问会被 cordis 的 inject 守卫拒绝，必须走 ctx.get）。 */
@@ -282,6 +285,16 @@ function MemoryView(props: MemoryViewProps): ReactNode {
     } catch {
       /* 失败保持原状态 */
     }
+    await reload()
+  }
+
+  // 一键审核全部待审核记忆（整理/更新产生多条 suggested 时免逐个确认——
+  // 2026-08-19 用户反馈"记忆很多也要挨个确认吗"）
+  const confirmAll = async (): Promise<void> => {
+    const pending = records.filter(record => record.status === 'suggested')
+    if (pending.length === 0) return
+    await Promise.all(pending.map(record =>
+      api('memory.confirm', { id: record.id }).catch(() => null)))
     await reload()
   }
 
@@ -383,7 +396,17 @@ function MemoryView(props: MemoryViewProps): ReactNode {
       : groups.map(group => createElement('div', { key: group.key, style: { display: 'flex', flexDirection: 'column', gap: 6 } },
         createElement('div', { style: ssid.title },
           createElement('span', null, group.label),
-          createElement('span', null, `${group.items.length}`),
+          createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+            group.key === 'pending' && group.items.length > 0
+              ? createElement('button', {
+                type: 'button',
+                title: t('confirmAll'),
+                onClick: () => { void confirmAll() },
+                style: { ...ssid.btn, padding: '1px 8px', fontSize: 10.5 },
+              }, t('confirmAll'))
+              : null,
+            createElement('span', null, `${group.items.length}`),
+          ),
         ),
         group.items.map(record => createElement('div', { key: record.id, style: ssid.card },
           createElement('div', { style: ssid.text }, record.content),

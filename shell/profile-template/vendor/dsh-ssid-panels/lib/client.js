@@ -37,6 +37,7 @@ window.__ModuleLoader__.load({
 				nsGlobal: "全局",
 				nsProject: "项目",
 				organizeMemory: "整理记忆",
+				confirmAll: "全部确认",
 				suggested: "待审核",
 				approved: "已审核",
 				assertions: "断言计数",
@@ -101,6 +102,7 @@ window.__ModuleLoader__.load({
 				nsGlobal: "Global",
 				nsProject: "Project",
 				organizeMemory: "Organize memory",
+				confirmAll: "Approve all",
 				suggested: "Suggested",
 				approved: "Approved",
 				assertions: "Assertions",
@@ -254,7 +256,7 @@ window.__ModuleLoader__.load({
 				strokeLinejoin: "round"
 			}, (0, react.createElement)("path", { d: path }));
 		}
-		const ORGANIZE_PROMPT = "请整理我的记忆库：用 memory_list 查看全部记忆，合并重复或可归并的条目，精简冗长内容，为每条补充或修正 keywords；对过时、错误或已变化的内容用 memory_update 修正（会重置为待审核），需要删除的用 memory_forget（仅用 memory_save 新增、memory_forget 删除、memory_update 修改，改动全部落在 suggested 等待审核，不要调用 memory_confirm）。完成后用一句话汇报整理结果。";
+		const ORGANIZE_PROMPT = "请整理我的记忆库：用 memory_list 查看全部记忆，合并重复或可归并的条目，精简冗长内容，为每条补充或修正 keywords；对过时、错误或已变化的内容用 memory_update 修正（会重置为待审核），需要删除的用 memory_forget，需要新增的用 memory_save。判断内容是否过时的方法：把记忆里提到的工具名/数量与你当前实际可用的记忆工具对照——你当前可用：memory_save / memory_list / memory_search / memory_confirm / memory_forget / memory_update（共 6 个）；若记忆中的工具列表、数量、流程与此不符即为过时，用 memory_update 修正。改动全部落在 suggested 等待审核（不要调用 memory_confirm），完成后用一句话汇报整理结果。";
 		function MemoryView(props) {
 			const t = useT();
 			const [records, setRecords] = (0, react.useState)([]);
@@ -290,6 +292,12 @@ window.__ModuleLoader__.load({
 						injected: !record.injected
 					});
 				} catch {}
+				await reload();
+			};
+			const confirmAll = async () => {
+				const pending = records.filter((record) => record.status === "suggested");
+				if (pending.length === 0) return;
+				await Promise.all(pending.map((record) => api("memory.confirm", { id: record.id }).catch(() => null)));
 				await reload();
 			};
 			const organize = async () => {
@@ -407,7 +415,22 @@ window.__ModuleLoader__.load({
 					flexDirection: "column",
 					gap: 6
 				}
-			}, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, group.label), (0, react.createElement)("span", null, `${group.items.length}`)), group.items.map((record) => (0, react.createElement)("div", {
+			}, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, group.label), (0, react.createElement)("div", { style: {
+				display: "flex",
+				alignItems: "center",
+				gap: 6
+			} }, group.key === "pending" && group.items.length > 0 ? (0, react.createElement)("button", {
+				type: "button",
+				title: t("confirmAll"),
+				onClick: () => {
+					confirmAll();
+				},
+				style: {
+					...ssid.btn,
+					padding: "1px 8px",
+					fontSize: 10.5
+				}
+			}, t("confirmAll")) : null, (0, react.createElement)("span", null, `${group.items.length}`))), group.items.map((record) => (0, react.createElement)("div", {
 				key: record.id,
 				style: ssid.card
 			}, (0, react.createElement)("div", { style: ssid.text }, record.content), (0, react.createElement)("div", { style: {
