@@ -280,6 +280,20 @@ export function apply(ctx: Context): void {
       // 注入维度开关（dsh-memory 0.3.0；旧版无此方法时降级返回 null）
       return memory.setInjected?.(record.id, record.injected) ?? null
     },
+    'memory.update': (payload) => {
+      const memory = required(ctx.get('memory'), 'memory')
+      const record = payload as { id?: unknown, content?: unknown, keywords?: unknown } | null
+      if (typeof record?.id !== 'string') throw new PanelsError('bad-request', 'missing or invalid "id"')
+      if (record.content !== undefined && typeof record.content !== 'string') throw new PanelsError('bad-request', 'invalid "content"')
+      if (record.keywords !== undefined && !(Array.isArray(record.keywords) && record.keywords.every(k => typeof k === 'string'))) {
+        throw new PanelsError('bad-request', 'invalid "keywords"')
+      }
+      // 修改记忆内容/关键词（dsh-memory 0.3.1；重置待审核，注入开关保留）
+      return memory.update?.(record.id, {
+        ...record.content === undefined ? {} : { content: record.content },
+        ...record.keywords === undefined ? {} : { keywords: record.keywords },
+      }) ?? null
+    },
     'memory.forget': (payload) => {
       const memory = required(ctx.get('memory'), 'memory')
       const record = payload as { id?: unknown } | null

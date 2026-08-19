@@ -265,6 +265,17 @@ function apply(ctx) {
 			if (typeof record?.injected !== "boolean") throw new PanelsError("bad-request", "missing or invalid \"injected\"");
 			return memory.setInjected?.(record.id, record.injected) ?? null;
 		},
+		"memory.update": (payload) => {
+			const memory = required(ctx.get("memory"), "memory");
+			const record = payload;
+			if (typeof record?.id !== "string") throw new PanelsError("bad-request", "missing or invalid \"id\"");
+			if (record.content !== void 0 && typeof record.content !== "string") throw new PanelsError("bad-request", "invalid \"content\"");
+			if (record.keywords !== void 0 && !(Array.isArray(record.keywords) && record.keywords.every((k) => typeof k === "string"))) throw new PanelsError("bad-request", "invalid \"keywords\"");
+			return memory.update?.(record.id, {
+				...record.content === void 0 ? {} : { content: record.content },
+				...record.keywords === void 0 ? {} : { keywords: record.keywords }
+			}) ?? null;
+		},
 		"memory.forget": (payload) => {
 			const memory = required(ctx.get("memory"), "memory");
 			const record = payload;
