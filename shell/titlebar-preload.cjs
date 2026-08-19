@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('ssidTitle', {
   minimize: () => ipcRenderer.invoke('ssid:title:minimize'),
   toggleMaximize: () => ipcRenderer.invoke('ssid:title:toggle-maximize'),
   close: () => ipcRenderer.invoke('ssid:title:close'),
+  action: (id) => ipcRenderer.invoke('ssid:title:action', id),
   onMaximized: (callback) => {
     ipcRenderer.on('ssid:title:maximized', (_event, maximized) => callback(maximized))
   },

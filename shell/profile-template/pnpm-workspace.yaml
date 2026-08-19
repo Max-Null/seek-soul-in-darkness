@@ -11,6 +11,8 @@ minimumReleaseAgeExclude:
   - '@max-null/dsh-guardian@0.1.0'
   - '@max-null/dsh-habit@0.1.0'
   - '@max-null/dsh-plugin-center@0.1.4'
+  - '@max-null/dsh-plugin-center@0.1.6'
+  - '@max-null/dsh-plugin-center@0.1.7'
   - dsh-better-sidebar@0.13.1
   - dsh-better-sidebar@0.12.3
   - dsh-excel-panel@0.3.2

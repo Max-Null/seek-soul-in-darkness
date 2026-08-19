@@ -53,6 +53,27 @@
     letter-spacing: .03em;
   }
   .spacer { flex: 1; height: 100%; }
+  /* SSiD 标题栏统一按钮组：插件中心 / 侧栏 / 底栏（放在窗口控制左侧）。
+     按钮样式与 .controls 一致，宽度 40px 比窗口控制（52px）紧凑。 */
+  .actions {
+    display: flex;
+    height: 100%;
+    -webkit-app-region: no-drag;
+  }
+  .actions button {
+    width: 40px;
+    height: 100%;
+    background: none;
+    border: none;
+    color: var(--titlebar-fg);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background .12s;
+  }
+  .actions button:hover { background: rgba(128, 148, 168, .14); }
+  .actions svg { width: 15px; height: 15px; }
   .controls {
     display: flex;
     height: 100%;
@@ -95,6 +116,17 @@
       <span class="dsh-ver" id="dsh-ver" hidden></span>
     </div>
     <div class="spacer"></div>
+    <div class="actions">
+      <button id="btn-plugins" title="插件中心">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>
+      </button>
+      <button id="btn-sidebar" title="侧栏">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="12" height="12" rx="1"/><path d="M10 2v12"/></svg>
+      </button>
+      <button id="btn-bottom" title="底栏">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="12" height="12" rx="1"/><path d="M2 10h12"/></svg>
+      </button>
+    </div>
     <div class="controls">
       <button id="btn-min" title="最小化">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg>

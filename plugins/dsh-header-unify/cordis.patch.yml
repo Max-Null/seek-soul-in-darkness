@@ -1,0 +1,6 @@
+# @max-null/dsh-header-unify bundle patch: one insert over the profile root.
+# Host half is a no-op; the client half injects CSS aligning the
+# dsh-better-sidebar toggle cluster with the DSH session header utilities row.
+- insert:
+    - id: dsh-header-unify
+      name: '@max-null/dsh-header-unify'

@@ -759,6 +759,18 @@ async function start() {
   const mainView = new BrowserView({ webPreferences: { sandbox: true, contextIsolation: true } })
   win.addBrowserView(mainView)
 
+  // ── SSiD 标题栏统一按钮组：动作转发 ────────────────────────────────────
+  // 标题栏按钮（插件中心/侧栏/底栏）→ IPC → 在 DSH UI（mainView）内派发
+  // `ssid:titlebar` CustomEvent，由内置插件 @max-null/dsh-header-unify 监听
+  // 执行（hero 页无 session header，标题栏按钮是唯一常驻入口）。
+  ipcMain.handle('ssid:title:action', (_event, action) => {
+    if (typeof action !== 'string' || action === '') return
+    const js = `window.dispatchEvent(new CustomEvent('ssid:titlebar', { detail: ${JSON.stringify(action)} }))`
+    void mainView.webContents.executeJavaScript(js).catch((error) => {
+      safeLog(`[title-action] dispatch ${action} failed: ${error instanceof Error ? error.message : String(error)}\n`)
+    })
+  })
+
   const TITLEBAR_HEIGHT = 36
   const layout = () => {
     const [width, height] = win.getContentSize()
