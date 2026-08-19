@@ -231,16 +231,13 @@ function tabIcon(path: string): ReactNode {
  */
 interface MemoryRecord { id: string, content: string, status: 'suggested' | 'approved', injected: boolean, namespace: string, keywords: string[] }
 
-// 预填指令（设计文档 4.2 草案）：改动全部落 suggested 待审核，不调 confirm
-const ORGANIZE_PROMPT = '请整理我的记忆库：用 memory_list 查看全部记忆，合并重复或可归并的条目，精简冗长内容，为每条补充或修正 keywords（仅用 memory_save 新增、memory_forget 删除，改动全部落在 suggested 等待审核，不要调用 memory_confirm）。完成后用一句话汇报整理结果。'
+// 预填指令（0.3.1 更新：过时内容用 memory_update 修正——改动重置为
+// 待审核；需要删除的用 memory_forget；全部改动不调 memory_confirm）
+const ORGANIZE_PROMPT = '请整理我的记忆库：用 memory_list 查看全部记忆，合并重复或可归并的条目，精简冗长内容，为每条补充或修正 keywords；对过时、错误或已变化的内容用 memory_update 修正（会重置为待审核），需要删除的用 memory_forget（仅用 memory_save 新增、memory_forget 删除、memory_update 修改，改动全部落在 suggested 等待审核，不要调用 memory_confirm）。完成后用一句话汇报整理结果。'
 
-/** 面板需要的 client 侧服务面（懒获取，与 better-sidebar 同模式）。 */
+/** 面板需要的 client 侧服务面（软获取，与 better-sidebar 同模式——
+ * 属性访问会被 cordis 的 inject 守卫拒绝，必须走 ctx.get）。 */
 interface MemoryViewCtx {
-  sessions?: {
-    create(opts?: { workspaceId?: string, cwd?: string }): Promise<string>
-    open(id: string): void
-    scope(id: string): unknown
-  }
   get?: (name: string) => unknown
 }
 
@@ -295,7 +292,14 @@ function MemoryView(props: MemoryViewProps): ReactNode {
     if (organizing) return
     setOrganizing(true)
     try {
-      const sessions = props.ctx.sessions
+      // 软获取（cordis inject 守卫：sidebar 闭包 ctx 未声明 sessions，
+      // 属性访问报 "cannot get property sessions without inject"——
+      // 2026-08-19 用户实测；与 locale/conversation 同款 ctx.get 模式）。
+      const sessions = props.ctx.get?.('sessions') as {
+        create(opts?: { workspaceId?: string, cwd?: string }): Promise<string>
+        open(id: string): void
+        scope(id: string): unknown
+      } | undefined
       const conversation = props.ctx.get?.('conversation') as {
         input?: { for?(actx: unknown): { setDraft(text: string): void, submit(): void } | undefined }
       } | undefined
