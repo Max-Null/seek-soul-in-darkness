@@ -698,7 +698,9 @@ async function start() {
   try {
     safeLog('ssid: phase bootKernel start\n')
     splashStep(2)
-    kernel = await bootKernel()
+    // preferBundled: 打包版强制用内置闭包（忽略用户环境的 DSH_CHECKOUT，
+    // 避免标题栏版本与归档不一致——pitfalls #5 幽灵依赖的根治）。
+    kernel = await bootKernel(undefined, { preferBundled: app.isPackaged })
     safeLog(`ssid: phase bootKernel ok port=${kernel.port}\n`)
     splashStep(3)
   } catch (cause) {

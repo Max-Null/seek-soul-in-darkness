@@ -262,6 +262,30 @@ showing/done 全量转发成功。
 已列出占用进程，关闭后重开即可自动继续；是否需要"等待重试更久/自动跳过占用文件"
 取决于后续用户反馈。
 
+### 9.6 DSH_CHECKOUT 幽灵依赖根治：打包版强制内置闭包（2026-08-19 用户实测）
+
+**现象**：安装版标题栏显示 DSH 版本 rc.5，但归档内置内核是 rc.7；实际运行的内核
+也是 rc.5（与标题一致，标题不是写死、是真实读取）。
+
+**根因**：User 级环境变量 `DSH_CHECKOUT` 残留指向旧源码 checkout（rc.5），而
+`bootKernel` 的运行时选择逻辑是"`DSH_CHECKOUT` 存在 → 以源码为准"（开发/贡献者
+意图）。安装版被用户环境变量劫持，永远不用内置 rc.7 闭包——pitfalls #5 记录的
+"幽灵依赖"的第二次现身（首次是 boot 失败，这次是静默用错版本）。
+
+**修复**（kernel.ts `bootKernel` + main.mjs）：
+- `bootKernel` 新增 `opts.preferBundled`；main.mjs 打包版传 `app.isPackaged`；
+- 打包版强制优先内置闭包（profileDir/node_modules 的 @deepseek-ai/dsh），
+  忽略 `$DSH_CHECKOUT`；仅当闭包缺失（归档未部署/损坏）才回退
+  `resolveDshRuntime()`（含 DSH_CHECKOUT / 并列源码）保证可 boot；
+- dev 模式（未打包）行为不变：DSH_CHECKOUT / 并列源码优先。
+
+**验证**：`tsc --noEmit` 通过；`kernel.bundle.mjs` 重新生成并确认分支逻辑；
+dev 调用点（boot-smoke.ts / _eval-*.ts）不传 opts 走原逻辑，无影响。
+
+**教训**：桌面应用的运行时来源决策不能把用户环境变量放在内置资源之前；
+源码优先只应属于开发模式（未打包）。排查"版本对不上"类问题先看
+`$env:DSH_CHECKOUT`（User/Machine 级注册表）。
+
 ---
 
 ## 附：验证工具清单

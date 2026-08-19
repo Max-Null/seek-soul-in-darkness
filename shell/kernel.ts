@@ -181,8 +181,19 @@ export function syncPresetSkills(sourceDir: string, targetDir: string): number {
   return copied
 }
 
+/**
+ * 内核启动。
+ * @param exit - 最终进程退出，默认 `process.exit`；electron 传 `app.exit`。
+ * @param opts - `preferBundled`：打包版（app.isPackaged）传 true，强制优先
+ *   内置闭包（profileDir/node_modules 的 @deepseek-ai/dsh），忽略
+ *   $DSH_CHECKOUT 环境变量——桌面应用不该让用户环境变量劫持内置运行时
+ *   （pitfalls #5「DSH_CHECKOUT 幽灵依赖」：残留的 User 级变量会把运行时
+ *   指向旧源码，标题栏版本与归档不一致）。开发裸跑（未打包）仍以
+ *   $DSH_CHECKOUT / 并列源码为准。
+ */
 export async function bootKernel(
   exit: (code: number) => void = code => process.exit(code),
+  opts: { preferBundled?: boolean } = {},
 ): Promise<Kernel> {
   const home = resolveDshHome()
   const profileDir = resolveProfileDir(PROFILE_NAME, home)
@@ -201,11 +212,20 @@ export async function bootKernel(
   // 或 npm 扁平布局）。
   // v0.1.3：安装版闭包由 main.mjs 从 dsh-runtime.tar.gz 解压部署到
   // profileDir/node_modules（resources/ 不再有解压目录）。因此部署产物
-  // 优先于默认源码路径（无 DSH_CHECKOUT 时）；$DSH_CHECKOUT 显式指向
-  // 源码时仍以源码为准（开发/贡献者意图）。
+  // 优先于默认源码路径；v0.1.6 起打包版（preferBundled）强制以闭包为准，
+  // $DSH_CHECKOUT 仅影响开发裸跑（未打包）的运行时选择。
   let runtime: DshRuntime
   const deployedAnchor = join(profileDir, 'node_modules', '@deepseek-ai', 'dsh', 'package.json')
-  if (process.env.DSH_CHECKOUT === undefined && existsSync(deployedAnchor)) {
+  // 打包版（preferBundled）：强制优先内置闭包，忽略 $DSH_CHECKOUT——桌面应用
+  // 不被用户环境变量劫持运行时（pitfalls #5）。仅当闭包缺失（归档未部署/损坏）
+  // 才回退 resolveDshRuntime()（含 DSH_CHECKOUT / 并列源码），保证可 boot。
+  if (opts.preferBundled === true) {
+    if (existsSync(deployedAnchor)) {
+      runtime = bundledRuntime(profileDir)
+    } else {
+      runtime = resolveDshRuntime()
+    }
+  } else if (process.env.DSH_CHECKOUT === undefined && existsSync(deployedAnchor)) {
     runtime = bundledRuntime(profileDir)
   } else {
     runtime = resolveDshRuntime()
