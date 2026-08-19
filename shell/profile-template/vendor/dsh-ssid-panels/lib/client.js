@@ -28,6 +28,17 @@ window.__ModuleLoader__.load({
 				empty: "黑暗中未见灵光",
 				confirm: "确认",
 				forget: "删除",
+				groupPending: "待审核",
+				groupOnDemand: "已审核 · 按需",
+				groupInjected: "常驻注入",
+				injectSwitch: "常驻注入",
+				approveFirst: "审核通过后可常驻注入",
+				allNamespaces: "全部",
+				nsGlobal: "全局",
+				nsProject: "项目",
+				organizeMemory: "整理记忆",
+				suggested: "待审核",
+				approved: "已审核",
 				assertions: "断言计数",
 				quiet: "安静",
 				level: "{n} 级",
@@ -81,6 +92,17 @@ window.__ModuleLoader__.load({
 				empty: "No spark in the dark",
 				confirm: "Confirm",
 				forget: "Forget",
+				groupPending: "Pending review",
+				groupOnDemand: "Approved · on demand",
+				groupInjected: "Always injected",
+				injectSwitch: "Inject every turn",
+				approveFirst: "Approve to enable injection",
+				allNamespaces: "All",
+				nsGlobal: "Global",
+				nsProject: "Project",
+				organizeMemory: "Organize memory",
+				suggested: "Suggested",
+				approved: "Approved",
 				assertions: "Assertions",
 				quiet: "Quiet",
 				level: "Level {n}",
@@ -232,12 +254,14 @@ window.__ModuleLoader__.load({
 				strokeLinejoin: "round"
 			}, (0, react.createElement)("path", { d: path }));
 		}
+		const ORGANIZE_PROMPT = "请整理我的记忆库：用 memory_list 查看全部记忆，合并重复或可归并的条目，精简冗长内容，为每条补充或修正 keywords（仅用 memory_save 新增、memory_forget 删除，改动全部落在 suggested 等待审核，不要调用 memory_confirm）。完成后用一句话汇报整理结果。";
 		function MemoryView(props) {
 			const t = useT();
 			const [records, setRecords] = (0, react.useState)([]);
-			const [status, setStatus] = (0, react.useState)("auto");
 			const [query, setQuery] = (0, react.useState)("");
+			const [namespace, setNamespace] = (0, react.useState)(null);
 			const [refreshing, setRefreshing] = (0, react.useState)(false);
+			const [organizing, setOrganizing] = (0, react.useState)(false);
 			const reload = async () => {
 				try {
 					setRecords(await api("memory.list"));
@@ -258,11 +282,80 @@ window.__ModuleLoader__.load({
 			(0, react.useEffect)(() => {
 				if (props.visible) reload();
 			}, [props.visible]);
-			const filtered = records.filter((record) => record.status === status).filter((record) => query === "" || record.content.toLowerCase().includes(query.toLowerCase()));
+			const toggleInjected = async (record) => {
+				if (record.status !== "approved") return;
+				try {
+					await api("memory.setInjected", {
+						id: record.id,
+						injected: !record.injected
+					});
+				} catch {}
+				await reload();
+			};
+			const organize = async () => {
+				if (organizing) return;
+				setOrganizing(true);
+				try {
+					const sessions = props.ctx.sessions;
+					const conversation = props.ctx.get?.("conversation");
+					if (sessions === void 0 || conversation?.input?.for === void 0) throw new Error("sessions/conversation unavailable");
+					const sessionId = await sessions.create({});
+					sessions.open(sessionId);
+					let input;
+					for (let i = 0; i < 50; i++) {
+						try {
+							const actx = sessions.scope(sessionId);
+							if (actx !== void 0) {
+								input = conversation.input.for(actx);
+								if (input !== void 0) break;
+							}
+						} catch {}
+						await new Promise((resolve) => setTimeout(resolve, 100));
+					}
+					if (input === void 0) throw new Error("composer input not ready");
+					input.setDraft(ORGANIZE_PROMPT);
+					input.submit();
+				} catch (error) {
+					console.warn("[dsh-ssid-panels] organize memory failed:", error);
+				} finally {
+					setOrganizing(false);
+				}
+			};
+			const q = query.trim().toLowerCase();
+			const filtered = (namespace === null ? records : records.filter((record) => record.namespace === namespace)).filter((record) => q === "" || record.content.toLowerCase().includes(q));
+			const groups = [
+				{
+					key: "pending",
+					label: t("groupPending"),
+					items: filtered.filter((record) => record.status === "suggested")
+				},
+				{
+					key: "ondemand",
+					label: t("groupOnDemand"),
+					items: filtered.filter((record) => record.status === "approved" && !record.injected)
+				},
+				{
+					key: "injected",
+					label: t("groupInjected"),
+					items: filtered.filter((record) => record.status === "approved" && record.injected)
+				}
+			].filter((group) => group.items.length > 0);
 			return (0, react.createElement)("div", { style: ssid.wrap }, (0, react.createElement)("div", { style: {
 				display: "flex",
 				gap: 6
-			} }, (0, react.createElement)("input", {
+			} }, (0, react.createElement)("button", {
+				type: "button",
+				title: t("organizeMemory"),
+				onClick: () => {
+					organize();
+				},
+				disabled: organizing,
+				style: {
+					...ssid.btn,
+					color: ssid.accent,
+					borderColor: ssid.accent
+				}
+			}, organizing ? "…" : t("organizeMemory")), (0, react.createElement)("input", {
 				value: query,
 				onChange: (event) => {
 					setQuery(event.target.value);
@@ -291,33 +384,57 @@ window.__ModuleLoader__.load({
 				display: "flex",
 				gap: 4
 			} }, [
-				"auto",
-				"suggested",
-				"suggest"
-			].map((label) => (0, react.createElement)("button", {
-				key: label,
+				null,
+				"global",
+				"project"
+			].map((ns) => (0, react.createElement)("button", {
+				key: ns ?? "all",
 				onClick: () => {
-					setStatus(label);
+					setNamespace(ns);
 				},
 				style: {
 					flex: 1,
 					...ssid.btn,
-					...status === label ? {
+					...namespace === ns ? {
 						color: ssid.accent,
 						borderColor: ssid.accent
 					} : {}
 				}
-			}, label))), filtered.length === 0 ? (0, react.createElement)("div", { style: ssid.empty }, t("empty")) : filtered.map((record) => (0, react.createElement)("div", {
+			}, ns === null ? t("allNamespaces") : ns === "global" ? t("nsGlobal") : t("nsProject")))), groups.length === 0 ? (0, react.createElement)("div", { style: ssid.empty }, t("empty")) : groups.map((group) => (0, react.createElement)("div", {
+				key: group.key,
+				style: {
+					display: "flex",
+					flexDirection: "column",
+					gap: 6
+				}
+			}, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, group.label), (0, react.createElement)("span", null, `${group.items.length}`)), group.items.map((record) => (0, react.createElement)("div", {
 				key: record.id,
 				style: ssid.card
 			}, (0, react.createElement)("div", { style: ssid.text }, record.content), (0, react.createElement)("div", { style: {
 				...ssid.muted,
 				marginTop: 6
-			} }, `${record.namespace} · ${record.status}`), (0, react.createElement)("div", { style: {
+			} }, `${record.namespace} · ${record.status === "approved" ? t("approved") : t("suggested")}${record.injected ? ` · ${t("groupInjected")}` : ""}`), (0, react.createElement)("div", { style: {
 				display: "flex",
 				gap: 6,
-				marginTop: 8
-			} }, record.status === "suggested" ? (0, react.createElement)("button", {
+				marginTop: 8,
+				alignItems: "center"
+			} }, (0, react.createElement)("button", {
+				type: "button",
+				title: record.status === "approved" ? t("injectSwitch") : t("approveFirst"),
+				disabled: record.status !== "approved",
+				onClick: () => {
+					toggleInjected(record);
+				},
+				style: {
+					...ssid.btn,
+					...record.injected ? {
+						color: ssid.accent,
+						borderColor: ssid.accent
+					} : {},
+					opacity: record.status !== "approved" ? .4 : 1,
+					cursor: record.status !== "approved" ? "not-allowed" : "pointer"
+				}
+			}, record.injected ? `✓ ${t("injectSwitch")}` : t("injectSwitch")), record.status === "suggested" ? (0, react.createElement)("button", {
 				style: ssid.btn,
 				onClick: () => {
 					api("memory.confirm", { id: record.id }).then(() => reload());
@@ -327,7 +444,7 @@ window.__ModuleLoader__.load({
 				onClick: () => {
 					api("memory.forget", { id: record.id }).then(() => reload());
 				}
-			}, t("forget"))))));
+			}, t("forget"))))))));
 		}
 		/** 状态面板：Guardian 触发线快照（1s 轮询，可见时）。 */
 		function GuardianView(props) {
@@ -640,7 +757,10 @@ window.__ModuleLoader__.load({
 					icon: tabIcon("M12 7v14M16 12h2M16 8h2M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3zM6 12h2M6 8h2"),
 					order: 60,
 					single: true,
-					component: ({ visible }) => (0, react.createElement)(MemoryView, { visible })
+					component: ({ visible }) => (0, react.createElement)(MemoryView, {
+						visible,
+						ctx: sidebarCtx
+					})
 				}));
 				sidebarCtx.effect(() => service.registerTab({
 					id: "@max-null/dsh-ssid-panels:guardian",

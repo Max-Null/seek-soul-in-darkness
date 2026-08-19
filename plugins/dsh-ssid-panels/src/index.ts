@@ -269,7 +269,16 @@ export function apply(ctx: Context): void {
       const memory = required(ctx.get('memory'), 'memory')
       const record = payload as { id?: unknown } | null
       if (typeof record?.id !== 'string') throw new PanelsError('bad-request', 'missing or invalid "id"')
-      return memory.setStatus?.(record.id, 'auto') ?? null
+      // 0.3.0 审核语义：suggested → approved（不再直接 auto）
+      return memory.setStatus?.(record.id, 'approved') ?? null
+    },
+    'memory.setInjected': (payload) => {
+      const memory = required(ctx.get('memory'), 'memory')
+      const record = payload as { id?: unknown, injected?: unknown } | null
+      if (typeof record?.id !== 'string') throw new PanelsError('bad-request', 'missing or invalid "id"')
+      if (typeof record?.injected !== 'boolean') throw new PanelsError('bad-request', 'missing or invalid "injected"')
+      // 注入维度开关（dsh-memory 0.3.0；旧版无此方法时降级返回 null）
+      return memory.setInjected?.(record.id, record.injected) ?? null
     },
     'memory.forget': (payload) => {
       const memory = required(ctx.get('memory'), 'memory')

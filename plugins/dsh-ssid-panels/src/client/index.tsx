@@ -27,6 +27,18 @@ const STRINGS = {
     empty: '黑暗中未见灵光',
     confirm: '确认',
     forget: '删除',
+    // 0.3.0 审核与注入解耦：三组 + 注入开关 + 整理按钮
+    groupPending: '待审核',
+    groupOnDemand: '已审核 · 按需',
+    groupInjected: '常驻注入',
+    injectSwitch: '常驻注入',
+    approveFirst: '审核通过后可常驻注入',
+    allNamespaces: '全部',
+    nsGlobal: '全局',
+    nsProject: '项目',
+    organizeMemory: '整理记忆',
+    suggested: '待审核',
+    approved: '已审核',
     assertions: '断言计数',
     quiet: '安静',
     level: '{n} 级',
@@ -80,6 +92,18 @@ const STRINGS = {
     empty: 'No spark in the dark',
     confirm: 'Confirm',
     forget: 'Forget',
+    // 0.3.0 review/injection decoupling: groups + inject switch + organize
+    groupPending: 'Pending review',
+    groupOnDemand: 'Approved · on demand',
+    groupInjected: 'Always injected',
+    injectSwitch: 'Inject every turn',
+    approveFirst: 'Approve to enable injection',
+    allNamespaces: 'All',
+    nsGlobal: 'Global',
+    nsProject: 'Project',
+    organizeMemory: 'Organize memory',
+    suggested: 'Suggested',
+    approved: 'Approved',
     assertions: 'Assertions',
     quiet: 'Quiet',
     level: 'Level {n}',
@@ -199,15 +223,39 @@ function tabIcon(path: string): ReactNode {
   }, createElement('path', { d: path }))
 }
 
-/** 记忆面板：三态过滤 + 搜索 + 确认/删除 + 刷新（外部编辑文件后重读）。 */
-interface MemoryRecord { id: string, content: string, status: string, namespace: string, keywords: string[] }
+/**
+ * 记忆面板（0.3.0）：三组分组（待审核/已审核·按需/常驻注入）+ namespace
+ * 筛选 + 搜索 + 「常驻注入」开关（approved 可切、suggested 禁用）+ 确认/
+ * 删除 + 刷新 + 「整理记忆」按钮（一点即发：建会话→open→input 就绪后
+ * setDraft→submit，机制实证自 dsh-better-sidebar conversation-draft.ts）。
+ */
+interface MemoryRecord { id: string, content: string, status: 'suggested' | 'approved', injected: boolean, namespace: string, keywords: string[] }
 
-function MemoryView(props: { visible: boolean }): ReactNode {
+// 预填指令（设计文档 4.2 草案）：改动全部落 suggested 待审核，不调 confirm
+const ORGANIZE_PROMPT = '请整理我的记忆库：用 memory_list 查看全部记忆，合并重复或可归并的条目，精简冗长内容，为每条补充或修正 keywords（仅用 memory_save 新增、memory_forget 删除，改动全部落在 suggested 等待审核，不要调用 memory_confirm）。完成后用一句话汇报整理结果。'
+
+/** 面板需要的 client 侧服务面（懒获取，与 better-sidebar 同模式）。 */
+interface MemoryViewCtx {
+  sessions?: {
+    create(opts?: { workspaceId?: string, cwd?: string }): Promise<string>
+    open(id: string): void
+    scope(id: string): unknown
+  }
+  get?: (name: string) => unknown
+}
+
+interface MemoryViewProps {
+  visible: boolean
+  ctx: MemoryViewCtx
+}
+
+function MemoryView(props: MemoryViewProps): ReactNode {
   const t = useT()
   const [records, setRecords] = useState<MemoryRecord[]>([])
-  const [status, setStatus] = useState('auto')
   const [query, setQuery] = useState('')
+  const [namespace, setNamespace] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [organizing, setOrganizing] = useState(false)
   const reload = async (): Promise<void> => {
     try {
       setRecords(await api('memory.list') as MemoryRecord[])
@@ -228,11 +276,76 @@ function MemoryView(props: { visible: boolean }): ReactNode {
     }
   }
   useEffect(() => { if (props.visible) void reload() }, [props.visible])
-  const filtered = records
-    .filter(record => record.status === status)
-    .filter(record => query === '' || record.content.toLowerCase().includes(query.toLowerCase()))
+
+  // 注入开关：只动 injected 维度（remote.setInjected），不碰审核状态
+  const toggleInjected = async (record: MemoryRecord): Promise<void> => {
+    if (record.status !== 'approved') return
+    try {
+      await api('memory.setInjected', { id: record.id, injected: !record.injected })
+    } catch {
+      /* 失败保持原状态 */
+    }
+    await reload()
+  }
+
+  // 一点即发整理：sessions.create（继承 workspace/cwd）→ open →
+  // 等 input machine 就绪（新会话 open 后异步绑定，轮询最多 5s）→
+  // setDraft(整理指令) → submit()。
+  const organize = async (): Promise<void> => {
+    if (organizing) return
+    setOrganizing(true)
+    try {
+      const sessions = props.ctx.sessions
+      const conversation = props.ctx.get?.('conversation') as {
+        input?: { for?(actx: unknown): { setDraft(text: string): void, submit(): void } | undefined }
+      } | undefined
+      if (sessions === undefined || conversation?.input?.for === undefined) {
+        throw new Error('sessions/conversation unavailable')
+      }
+      const sessionId = await sessions.create({})
+      sessions.open(sessionId)
+      let input: { setDraft(text: string): void, submit(): void } | undefined
+      for (let i = 0; i < 50; i++) {
+        try {
+          const actx = sessions.scope(sessionId)
+          if (actx !== undefined) {
+            input = conversation.input.for(actx)
+            if (input !== undefined) break
+          }
+        } catch {
+          /* not ready yet */
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+      if (input === undefined) throw new Error('composer input not ready')
+      input.setDraft(ORGANIZE_PROMPT)
+      input.submit()
+    } catch (error) {
+      console.warn('[dsh-ssid-panels] organize memory failed:', error)
+    } finally {
+      setOrganizing(false)
+    }
+  }
+
+  const q = query.trim().toLowerCase()
+  const byNs = namespace === null ? records : records.filter(record => record.namespace === namespace)
+  const filtered = byNs.filter(record => q === '' || record.content.toLowerCase().includes(q))
+  const groups: Array<{ key: string, label: string, items: MemoryRecord[] }> = [
+    { key: 'pending', label: t('groupPending'), items: filtered.filter(record => record.status === 'suggested') },
+    { key: 'ondemand', label: t('groupOnDemand'), items: filtered.filter(record => record.status === 'approved' && !record.injected) },
+    { key: 'injected', label: t('groupInjected'), items: filtered.filter(record => record.status === 'approved' && record.injected) },
+  ].filter(group => group.items.length > 0)
+
   return createElement('div', { style: ssid.wrap },
+    // 头部工具栏：整理记忆（一点即发）+ 搜索 + 刷新
     createElement('div', { style: { display: 'flex', gap: 6 } },
+      createElement('button', {
+        type: 'button',
+        title: t('organizeMemory'),
+        onClick: () => { void organize() },
+        disabled: organizing,
+        style: { ...ssid.btn, color: ssid.accent, borderColor: ssid.accent },
+      }, organizing ? '…' : t('organizeMemory')),
       createElement('input', {
         value: query,
         onChange: (event: { target: { value: string } }) => { setQuery(event.target.value) },
@@ -252,30 +365,52 @@ function MemoryView(props: { visible: boolean }): ReactNode {
         style: ssid.btn,
       }, refreshing ? '…' : '↻'),
     ),
+    // namespace 筛选：全部 / 全局 / 项目
     createElement('div', { style: { display: 'flex', gap: 4 } },
-      ['auto', 'suggested', 'suggest'].map(label => createElement('button', {
-        key: label,
-        onClick: () => { setStatus(label) },
-        style: { flex: 1, ...ssid.btn, ...(status === label ? { color: ssid.accent, borderColor: ssid.accent } : {}) },
-      }, label)),
+      ([null, 'global', 'project'] as Array<string | null>).map(ns => createElement('button', {
+        key: ns ?? 'all',
+        onClick: () => { setNamespace(ns) },
+        style: { flex: 1, ...ssid.btn, ...(namespace === ns ? { color: ssid.accent, borderColor: ssid.accent } : {}) },
+      }, ns === null ? t('allNamespaces') : ns === 'global' ? t('nsGlobal') : t('nsProject'))),
     ),
-    filtered.length === 0
+    // 三组分组：待审核 / 已审核·按需 / 常驻注入（组间分隔）
+    groups.length === 0
       ? createElement('div', { style: ssid.empty }, t('empty'))
-      : filtered.map(record => createElement('div', { key: record.id, style: ssid.card },
-        createElement('div', { style: ssid.text }, record.content),
-        createElement('div', { style: { ...ssid.muted, marginTop: 6 } }, `${record.namespace} · ${record.status}`),
-        createElement('div', { style: { display: 'flex', gap: 6, marginTop: 8 } },
-          record.status === 'suggested'
-            ? createElement('button', {
-              style: ssid.btn,
-              onClick: () => { void api('memory.confirm', { id: record.id }).then(() => reload()) },
-            }, t('confirm'))
-            : null,
-          createElement('button', {
-            style: ssid.btn,
-            onClick: () => { void api('memory.forget', { id: record.id }).then(() => reload()) },
-          }, t('forget')),
+      : groups.map(group => createElement('div', { key: group.key, style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+        createElement('div', { style: ssid.title },
+          createElement('span', null, group.label),
+          createElement('span', null, `${group.items.length}`),
         ),
+        group.items.map(record => createElement('div', { key: record.id, style: ssid.card },
+          createElement('div', { style: ssid.text }, record.content),
+          createElement('div', { style: { ...ssid.muted, marginTop: 6 } },
+            `${record.namespace} · ${record.status === 'approved' ? t('approved') : t('suggested')}${record.injected ? ` · ${t('groupInjected')}` : ''}`),
+          createElement('div', { style: { display: 'flex', gap: 6, marginTop: 8, alignItems: 'center' } },
+            // 「常驻注入」开关：approved 可切换，suggested 禁用（提示审核后可用）
+            createElement('button', {
+              type: 'button',
+              title: record.status === 'approved' ? t('injectSwitch') : t('approveFirst'),
+              disabled: record.status !== 'approved',
+              onClick: () => { void toggleInjected(record) },
+              style: {
+                ...ssid.btn,
+                ...(record.injected ? { color: ssid.accent, borderColor: ssid.accent } : {}),
+                opacity: record.status !== 'approved' ? 0.4 : 1,
+                cursor: record.status !== 'approved' ? 'not-allowed' : 'pointer',
+              },
+            }, record.injected ? `✓ ${t('injectSwitch')}` : t('injectSwitch')),
+            record.status === 'suggested'
+              ? createElement('button', {
+                style: ssid.btn,
+                onClick: () => { void api('memory.confirm', { id: record.id }).then(() => reload()) },
+              }, t('confirm'))
+              : null,
+            createElement('button', {
+              style: ssid.btn,
+              onClick: () => { void api('memory.forget', { id: record.id }).then(() => reload()) },
+            }, t('forget')),
+          ),
+        )),
       )),
   )
 }
@@ -570,7 +705,7 @@ export function apply(ctx: Context): void {
       icon: tabIcon('M12 7v14M16 12h2M16 8h2M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3zM6 12h2M6 8h2'),
       order: 60,
       single: true,
-      component: ({ visible }) => createElement(MemoryView, { visible }),
+      component: ({ visible }) => createElement(MemoryView, { visible, ctx: sidebarCtx as never }),
     }))
     sidebarCtx.effect(() => service.registerTab({
       id: '@max-null/dsh-ssid-panels:guardian',

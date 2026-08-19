@@ -256,7 +256,14 @@ function apply(ctx) {
 			const memory = required(ctx.get("memory"), "memory");
 			const record = payload;
 			if (typeof record?.id !== "string") throw new PanelsError("bad-request", "missing or invalid \"id\"");
-			return memory.setStatus?.(record.id, "auto") ?? null;
+			return memory.setStatus?.(record.id, "approved") ?? null;
+		},
+		"memory.setInjected": (payload) => {
+			const memory = required(ctx.get("memory"), "memory");
+			const record = payload;
+			if (typeof record?.id !== "string") throw new PanelsError("bad-request", "missing or invalid \"id\"");
+			if (typeof record?.injected !== "boolean") throw new PanelsError("bad-request", "missing or invalid \"injected\"");
+			return memory.setInjected?.(record.id, record.injected) ?? null;
 		},
 		"memory.forget": (payload) => {
 			const memory = required(ctx.get("memory"), "memory");
