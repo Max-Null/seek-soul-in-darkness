@@ -61,6 +61,35 @@ Error in macro MUI_INTERFACE on macroline 87
 - koffi `alloc/address/view` 探针：Electron 进程内 view FATAL；纯 node.exe（22.12.0/22.22.2）全部 OK
 - 用户实测：选工作区 → 弹窗 → 选目录 → 进入对话，全部正常
 
+### 3.1 用户反馈复现排查 + worker 分支加固（2026-08-19）
+
+**现象**：用户再次反馈选择工作区报 `directory picker failed: ... win32 folder dialog worker exited before reporting a result`。
+
+**排查结论（本机实测链路健康）**：
+- 模拟 host spawn（`scripts/probes/probe-worker-packaged.mjs`，假 worker 只走 IPC 不发消息）：
+  `win-unpacked\思灵.exe worker.cjs` → `[worker] script=...` → `[worker] node=...\resources\node\node.exe`（内置 node）
+  → showing/done 消息原样转发回 host → **链路完整，无报错**。
+- ssid.log 历史三种失败现场（均已在此前版本修复）：
+  1. 无 worker 分支时代：koffi.view 在 Electron 内 FATAL（exit 134）；
+  2. 修复后早期：`[worker:err] DSH_DIALOG_TITLE is required`（exit 1）——**host 旧版未传该环境变量**；
+  3. `single-instance lock FAILED` 秒退（exit 0）——argv 未命中 worker.cjs 时走普通启动。
+- 结论：**当前源码与 win-unpacked 交付物（0.1.5）链路均正常**；用户报错大概率来自**旧版本安装包**
+  （`dist-electron` 现存安装包为 0.1.3，更早的 0.1.0/0.1.1 无完整修复）或特定环境（杀软拦截 node.exe 等）。
+
+**加固（main.mjs，2026-08-19，已并入 0.1.5 重新打包分发）**：
+- worker 分支从 `start()` 内**上移到顶层**、tsx/kernel 加载之前——worker 进程不再加载整个
+  `kernel.bundle.mjs`（6146 行 + 依赖），消除 bundle 顶层副作用拖垮 worker 的隐患；
+  同时**修正残留 `void start()` 导致的 worker 进程误走单例锁**（排查时实测发现并修复，详见第 9.1 节）。
+- **node 不可用 / spawn 失败时向 host 发 `{kind:'error'}` 消息携带真实原因**，host 显示
+  `win32 folder dialog failed: <原因>`，替代笼统的 worker exited。
+- **DSH_DIALOG_TITLE 兜底**：env 缺失时补默认标题，兼容旧版 host。
+- **无 IPC 通道时记录被丢弃的消息**，便于定位 host 收不到结果的场景。
+
+**验证**：`scripts/probes/probe-worker-source.mjs`（dev electron 直跑源码 main.mjs + 假 worker）
+→ showing/done 全量转发成功、无单例锁误触；`node --check main.mjs` 通过；
+`scripts/probes/verify-pack.mjs` 对 **0.1.5 新打包产物**（`dist-electron-016`）实测全链路 SUCCESS
+（`[worker] script=…` → `[worker] node=内置 node.exe` → showing/done 转发）。
+
 ---
 
 ## 4. DSH boot 对 Node 版本有硬门槛（≥22.18）
@@ -143,6 +172,98 @@ home 在 C 盘）时把 store 落到 cwd 盘符的 `.pnpm-store`；归档打包�
 
 ---
 
+## 9. 本次排查衍生的工程坑（2026-08-19）
+
+> 3.1 节记录了目录选择器问题的排查本身；本节记录排查/修复过程中**顺带踩到或暴露**的工程坑，
+> 按「现象 → 根因 → 修复 → 验证」组织，单节独立可读。
+
+### 9.1 重构后残留调用点：worker 进程误走单例锁
+
+**现象**：把 worker 分支从 `start()` 内上移到顶层 if/else 后，用 dev 版 electron 直跑源码验证时，
+日志同时出现 `[worker] script=…` **和** `ssid: phase single-instance check → lock FAILED → quit`，
+进程退出码 0，done 消息丢失——worker 链路看起来"半好半坏"。打包版（asar 旧代码）probe 却完全正常，
+因此这个坑在改动初期很容易被漏掉。
+
+**根因**：worker 分支上移后，`void start()` 被加进了 else 分支（worker 模式不执行），
+但**文件末尾原本就有一行顶层 `void start()`**（改动前唯一入口），没有同步删除。
+顶层代码执行顺序是：if 分支跑 `runWorkerMode` → 文件末尾残留的 `void start()` **无条件执行**
+→ `start()` 里 `requestSingleInstanceLock()` 失败（主实例已持有锁）→ `app.quit()` 秒退。
+worker 进程在孙进程回报结果前退出，host 自然报「worker exited before reporting a result」。
+
+**修复**：删除文件末尾残留的 `void start()`（保留 else 分支内那处）。`grep "void start()"` 应恰好命中一处。
+
+**验证**：`probe-worker-source.mjs` 复跑 → 只出现 `[worker]` 日志、无 single-instance 日志，
+showing/done 全量转发成功。
+
+**教训**：**把函数调用点从一处搬到另一处时，先 grep 旧调用点是否残留**。ESM 顶层 `void fn()`
+与条件分支内的调用同名同形，肉眼 diff 很容易漏（本次就是靠"日志里出现互斥分支的痕迹"才抓到的）。
+
+### 9.2 应用自身运行中重新打包：win-unpacked 文件被锁定
+
+**现象**：`electron-builder --win nsis` 默认输出到 `dist-electron`，而当前正在运行的思灵
+（本 GUI 所在会话）就是从 `dist-electron\win-unpacked\思灵.exe` 启动的——重新打包会尝试
+删除/覆盖被占用文件，可能失败或产出残缺。
+
+**根因**：Windows 对正在执行的 exe/dll 加文件锁，electron-builder 清空输出目录时删不掉。
+
+**修复**：打包时用独立输出目录，不碰运行中的产物：
+`npx electron-builder --win nsis --config.directories.output=dist-electron-016`。
+验证脚本 `verify-pack.mjs` 支持传入 exe 路径，指向新输出目录即可。
+
+**教训**：**桌面应用的打包产物目录不要与"正在运行的实例"共用**；开发机上 GUI 本身就是
+待打包应用时，独立输出目录是默认姿势。顺带：独立目录会脱离 `dist-electron/` 的 gitignore
+规则（精确目录名匹配），需同步补 `.gitignore`。
+
+### 9.3 electron-builder 残留 `.tmp_probe/` 构建中间目录
+
+**现象**：打包后工作区出现未跟踪的 `.tmp_probe/`（内容为 `probe.nsi` / `probe.exe` 等）。
+
+**根因**：electron-builder 26 用 `.tmp_probe` 作为 NSIS 脚本编译（makensis）的临时工作目录，
+打包结束后未清理（正常残留）。git status 会一直挂着这个脏目录。
+
+**修复**：打包后删除即可（`Remove-Item .tmp_probe -Recurse -Force`）；也可在 `.gitignore` 里
+补 `*.tmp_probe/` 防再犯。
+
+### 9.4 已发布版本不要同名重发：升级感知会失效
+
+**现象**：目录选择器修复先升 0.1.6 打包成功，后因版本管理要求改回 0.1.5 重打。
+
+**根因/影响**：0.1.5 已有正式发布记录（release 收尾提交），若再分发同名 0.1.5 包：
+① 用户无法从版本号区分新旧包（下载/缓存/校验都可能拿旧）；② 基于版本号的升级判断失效。
+本场景 0.1.5 尚未对外铺开、且需保持单版本交付，改回 0.1.5 重打可接受，但属例外。
+
+**修复**：版本号一经发布即不可复用；后续同类修复应升 0.1.6（或 0.1.5.1 补丁号）。
+
+### 9.5 部署落位 EPERM：node_modules 被其他进程占用（2026-08-19 用户实测）
+
+**现象**：安装/更新时内置运行环境部署失败，报
+`EPERM: operation not permitted, rename '…\.dsh\profiles\ssid\.deploy.new\node_modules' -> '…\.dsh\profiles\ssid\node_modules'`。
+关闭其他占用 node 的程序后重开即正常（占用方释放后 rename 成功）。
+
+**根因**：Windows 文件锁——其他进程（用户自己跑的 node/electron、另一个思灵实例、
+杀软扫描等）打开着 `node_modules` 内的文件句柄时，`renameSync` 抛 EPERM。
+旧实现是"先 `rmSync` 删旧目录、再 rename 新目录"：占用时删除可能部分成功/失败，
+旧环境被破坏且无法恢复，用户只能重装。
+
+**修复**（main.mjs `deployRuntime`，v0.1.5）：
+1. **rename 交换代替先删后改**：旧 `node_modules` 先 rename 到 `.deploy.old`，新目录
+   rename 落位，全部成功后才删旧备份——全程原子操作，任何一步失败旧环境完好；
+2. **自动重试**：rename 遇 EPERM/EBUSY 自动重试 5 次（间隔递增，共约 6 秒），短暂占用
+   （杀软扫描、句柄释放）可自愈；
+3. **失败回滚**：恢复旧目录 + 删除 `.runtime-version` 强制下次启动重新部署
+   （版本不一致触发 `deployNeeded`），无需重装；
+4. **可操作提示**：`buildDeployFailHint` 用 `tasklist` 检测占用进程
+   （node/electron/思灵），错误面板提示"关闭以下进程后重新打开思灵，部署会自动继续"。
+
+**验证**：`scripts/verify-deploy-rename.mjs` 模拟两种场景——
+占用方短暂释放（重试后成功交换）/ 持续占用（重试失败、旧环境完好、回滚路径正确）。
+
+**遗留**：若占用方持续不释放（如用户开着长驻 node 服务），部署仍会失败——此时提示
+已列出占用进程，关闭后重开即可自动继续；是否需要"等待重试更久/自动跳过占用文件"
+取决于后续用户反馈。
+
+---
+
 ## 附：验证工具清单
 
 | 用途 | 脚本 |
@@ -150,7 +271,10 @@ home 在 C 盘）时把 store 落到 cwd 盘符的 `.pnpm-store`；归档打包�
 | 内置闭包 boot 冒烟 | `scripts/boot-bundled.mjs`（需 DSH_HOME 指向临时目录） |
 | runtime 重建 | `scripts/prepare-runtime.mjs`（`npm run prepare-runtime`） |
 | 打包后补 node_modules / node.exe | `scripts/after-pack.cjs`（afterPack 钩子） |
+| 模拟 host spawn worker（打包版 asar 链路） | `scripts/probes/probe-worker-packaged.mjs`（配 `fake-worker.cjs`） |
+| 模拟 host spawn worker（源码 main.mjs 链路） | `scripts/probes/probe-worker-source.mjs`（dev electron 直跑 main.mjs） |
+| 部署落位 rename 占用场景验证 | `scripts/verify-deploy-rename.mjs`（临时目录模拟，不碰真实 profile） |
+| 打包产物 worker 链路验收 | `scripts/probes/verify-pack.mjs`（默认 `dist-electron-016`，可传 exe 路径） |
 | koffi view 崩溃对比探针 | `C:\Users\21030442\AppData\Local\Temp\opencode\probe2-view-electron.cjs` |
-| 模拟 host spawn worker | `C:\Users\21030442\AppData\Local\Temp\opencode\test-worker-spawn.mjs` |
 | 运行日志 | `~/.ssid/ssid.log`（SSID_LOG_FILE 可覆盖） |
 | 存活心跳 | `~/.ssid/heartbeat.log`（5 秒间隔） |

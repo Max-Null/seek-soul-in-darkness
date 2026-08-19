@@ -111,10 +111,13 @@
     100% { transform: translateX(320%); }
   }
   /* ── 启动失败详情（默认隐藏，boot 异常时主进程注入） ── */
-  .error {
+  .error-box {
     display: none;
     max-width: 560px;
     margin: 0 auto 14px;
+  }
+  .error-box.show { display: block; }
+  .error {
     padding: 10px 14px;
     font-size: 12px;
     line-height: 1.7;
@@ -125,8 +128,9 @@
     border-radius: 6px;
     white-space: pre-wrap;
     word-break: break-all;
+    max-height: 240px;
+    overflow-y: auto;
   }
-  .error.show { display: block; }
 </style>
 </head>
 <body>
@@ -141,7 +145,9 @@
     <div class="steps" id="steps"></div>
     <div class="status">正在唤醒硅基生命…</div>
     <button id="cancel-update" class="cancel-btn" hidden onclick="window.__cancelRequested = true">取消更新</button>
-    <div class="error" id="boot-error"></div>
+    <div class="error-box" id="boot-error-box">
+      <div class="error" id="boot-error"></div>
+    </div>
     <div class="pct" id="pct"></div>
     <div class="bar indeterminate"><div class="fill"></div></div>
   </div>
@@ -284,10 +290,42 @@
       }
     }
     // 显示启动失败详情（boot 异常时主进程注入）。
+    // 「复制错误信息」复用「取消更新」按钮（同一元素、同一 cancel-btn 样式）：
+    // 错误出现时按钮切换为复制功能（错误文本不可选中，Electron 默认无文本
+    // 选择，用户反馈无法复制只能 OCR），点击写入剪贴板并短暂变绿。
+    const cancelBtn = document.getElementById('cancel-update')
     window.__showError = (text) => {
       const el = document.getElementById('boot-error')
-      if (el) { el.textContent = text; el.classList.add('show') }
+      const box = document.getElementById('boot-error-box')
+      if (el) el.textContent = text
+      if (box) box.classList.add('show')
+      if (cancelBtn) {
+        cancelBtn.textContent = '复制错误信息'
+        cancelBtn.hidden = false
+        cancelBtn.onclick = async () => {
+          if (!el || el.textContent === '') return
+          try {
+            await navigator.clipboard.writeText(el.textContent)
+          } catch {
+            // clipboard API 在非安全上下文可能不可用：回退 execCommand。
+            const ta = document.createElement('textarea')
+            ta.value = el.textContent
+            ta.style.position = 'fixed'
+            ta.style.opacity = '0'
+            document.body.appendChild(ta)
+            ta.select()
+            document.execCommand('copy')
+            ta.remove()
+          }
+          cancelBtn.textContent = '已复制 ✓'
+          setTimeout(() => { cancelBtn.textContent = '复制错误信息' }, 1600)
+        }
+      }
     }
+    // 「取消更新」：版本升级部署期间由主进程显示；点击后主进程 pollCancel
+    // 轮询到 __cancelRequested 即中止部署（旧版无损，下次启动再检测）。
+    // 注意：__showError 会接管本按钮为复制功能，两者不会同时出现（错误即
+    // 终止流程，部署取消只发生在部署进行中）。
     // 步骤清单：items 为文案数组，current 为当前执行下标（完成项打勾、
     // 当前项高亮、未到项变暗）。主进程在启动/部署各节点更新，卡住时
     // 高亮行即卡点，便于反馈定位。

@@ -26,6 +26,7 @@
       "!scripts/**",
       "!build/**",
       "!dist-electron/**",
+      "!dist-electron-016/**",
       "!boot-smoke.ts",
       "!tsconfig.json"
     ],

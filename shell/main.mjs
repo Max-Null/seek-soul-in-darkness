@@ -58,70 +58,111 @@ const safeLog = (text) => {
 // tsx ESM loader: transpiles kernel.ts and resolves @deepseek-ai/dsh-* to the
 // adjacent DSH checkout source. Must run before any TS import.
 // 打包版（app.isPackaged）改用预编译的 kernel.bundle.mjs，不加载 tsx。
-if (!app.isPackaged) {
-  register()
-}
-// 壳版本注入（ssid-panels 的 about API 读取；boot 前设置）。
-try {
-  const shellPkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
-  if (typeof shellPkg.version === 'string') process.env.SSID_SHELL_VERSION = shellPkg.version
-} catch {
-  // 版本缺失不影响启动
-}
-const { bootKernel } = app.isPackaged
-  ? await import('./kernel.bundle.mjs')
-  : await import('./kernel.ts')
-
+// 注意:worker 模式（argv 含 worker.cjs）优先于一切——那是 DSH 目录选择器
+// 子进程,只需转发纯 node 孙进程的 IPC;此时不得加载 tsx / kernel bundle
+// （加载会拖慢、且 bundle 顶层副作用可能让 worker 进程崩溃）。
+// ★ TDZ 修复（2026-08-19）：worker 分支上移后 `void start()` 在模块早期
+// 执行,PRODUCT_NAME 等 const 必须在 start() 调用前完成初始化,否则正常
+// 启动（非 worker 模式）抛 `Cannot access 'PRODUCT_NAME' before
+// initialization`（安装版启动即闪退、进程残留）。定义在此处一并前置。
 /** App name / window title. */
 const PRODUCT_NAME = 'SSiD'
 const WINDOW_TITLE = '思灵 (SSiD)'
 
 const asset = (name) => fileURLToPath(new URL(`./assets/${name}`, import.meta.url))
 
-async function start() {
-  app.setName(PRODUCT_NAME)
+const workerScript = process.argv.find((arg) => arg.endsWith('worker.cjs'))
+// bootKernel 提升到模块顶层：worker 分支上移后原 `const { bootKernel }` 落在
+// else 块内（块级作用域），start() 在模块顶层定义、608 行访问 bootKernel 会
+// 抛 `bootKernel is not defined`（安装版启动报错，2026-08-19 实测）。
+let bootKernel
+if (workerScript !== undefined) {
+  runWorkerMode(workerScript)
+} else {
+  if (!app.isPackaged) {
+    register()
+  }
+  // 壳版本注入（ssid-panels 的 about API 读取；boot 前设置）。
+  try {
+    const shellPkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
+    if (typeof shellPkg.version === 'string') process.env.SSID_SHELL_VERSION = shellPkg.version
+  } catch {
+    // 版本缺失不影响启动
+  }
+  bootKernel = app.isPackaged
+    ? (await import('./kernel.bundle.mjs')).bootKernel
+    : (await import('./kernel.ts')).bootKernel
+  void start()
+}
 
-  // ── DSH 目录选择器 worker 模式 ──────────────────────────────────────────
-  // DSH host 层（dsh-host-directory-picker-native）用 process.execPath spawn 子
-  // 进程执行 worker.cjs 弹 Win32 文件夹对话框。打包版下 execPath = 思灵.exe，
-  // 而 worker 的 koffi.view() 读 COM 内存时，Electron 进程（V8 memory cage）
-  // 禁止 external buffers 会 FATAL 崩溃（koffi.dev 文档明确注明），所以
-  // worker 必须交给纯 node.exe 执行。worker 内的 koffi 是 Node ABI 的 prebuild，
-  // 与系统 Node 22 / 内置 v22.22.2 匹配；用 electron.exe（Node 24 ABI）跑会
-  // 直接崩 → 「worker exited before reporting a result」。
-  // 孙进程的 IPC 消息原样转发给父进程（DSH host），退出码透传。
-  const workerScript = process.argv.find((arg) => arg.endsWith('worker.cjs'))
-  if (workerScript !== undefined) {
-    safeLog(`[worker] script=${workerScript}\n`)
-    // node 候选链：打包版内置 node.exe（afterPack 注入）→ NVM v22.22.2
-    // （开发机）→ PATH 上的 node.exe（交给 spawn 解析，开发裸跑兜底）。
-    // 刻意不放 process.execPath：electron 跑 worker 必崩（ABI 不匹配）。
-    const candidates = [
-      process.resourcesPath ? join(process.resourcesPath, 'node', 'node.exe') : '',
-      process.env.NVM_HOME ? join(process.env.NVM_HOME, 'v22.22.2', 'node.exe') : '',
-      'node.exe',
-    ]
-    const nodeExe = candidates.find((c) => c !== '' && existsSync(c)) ?? 'node.exe'
-    safeLog(`[worker] node=${nodeExe}\n`)
-    const worker = spawn(nodeExe, [workerScript], {
-      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
-      windowsHide: true,
-    })
-    worker.stdout.on('data', (d) => safeLog(`[worker:out] ${d}\n`))
-    worker.stderr.on('data', (d) => safeLog(`[worker:err] ${d}\n`))
-    worker.on('message', (message) => {
-      if (typeof process.send === 'function') process.send(message)
-    })
-    worker.on('error', (e) => {
-      safeLog(`[worker] spawn error: ${e.message}\n`)
-      process.exit(1)
-    })
-    worker.on('exit', (code, signal) => {
-      safeLog(`[worker] exit code=${code} signal=${signal}\n`)
-      process.exit(code ?? (signal !== null ? 1 : 0))
-    })
+// ── DSH 目录选择器 worker 模式（独立函数，顶层前置调用）──────────────
+// DSH host 层（dsh-host-directory-picker-native）用 process.execPath spawn
+// 子进程执行 worker.cjs 弹 Win32 文件夹对话框。打包版下 execPath = 思灵.exe，
+// 而 worker 的 koffi.view() 读 COM 内存时，Electron 进程（V8 memory cage）
+// 禁止 external buffers 会 FATAL 崩溃（koffi.dev 文档明确注明），所以
+// worker 必须交给纯 node.exe 执行。worker 内的 koffi 是 Node ABI 的 prebuild，
+// 与系统 Node 22 / 内置 v22.22.2 匹配；用 electron.exe（Node 24 ABI）跑会
+// 直接崩 → 「worker exited before reporting a result」。
+// 孙进程的 IPC 消息原样转发给父进程（DSH host），退出码透传。
+// 加固（2026-08-19 排查用户反馈）：
+//  - 无法找到 node / spawn 失败时，向 host 发 {kind:'error'} 消息携带真实
+//    原因，而不是静默退出让 host 报笼统的 worker exited；
+//  - DSH_DIALOG_TITLE 兜底：host 旧版未传该变量时 worker.cjs 会抛
+//    "DSH_DIALOG_TITLE is required"（exit 1），此处显式补默认标题；
+//  - 无 IPC 通道时记录丢弃的消息，便于定位 host 收不到结果的场景。
+function runWorkerMode(workerScript) {
+  safeLog(`[worker] script=${workerScript}\n`)
+  // node 候选链：打包版内置 node.exe（afterPack 注入）→ NVM v22.22.2
+  // （开发机）→ PATH 上的 node.exe（交给 spawn 解析，开发裸跑兜底）。
+  // 刻意不放 process.execPath：electron 跑 worker 必崩（ABI 不匹配）。
+  const candidates = [
+    process.resourcesPath ? join(process.resourcesPath, 'node', 'node.exe') : '',
+    process.env.NVM_HOME ? join(process.env.NVM_HOME, 'v22.22.2', 'node.exe') : '',
+    'node.exe',
+  ]
+  const nodeExe = candidates.find((c) => c !== '' && existsSync(c)) ?? 'node.exe'
+  const nodeResolved = nodeExe === 'node.exe' || existsSync(nodeExe)
+  safeLog(`[worker] node=${nodeExe}\n`)
+  if (!nodeResolved) {
+    // node 不可用：向 host 发真实原因，让用户看到可行动的报错。
+    const message = `directory picker worker needs a node.exe but none found (candidates: ${candidates.filter(Boolean).join(', ')})`
+    if (typeof process.send === 'function') process.send({ kind: 'error', message })
+    safeLog(`[worker] FAIL ${message}\n`)
+    process.exit(1)
     return
   }
+  // env 显式构造（默认继承），DSH_DIALOG_TITLE 缺失时兜底，避免 worker.cjs
+  // 因旧版 host 未传该变量而直接抛错退出。
+  const env = { ...process.env }
+  if (!env.DSH_DIALOG_TITLE) env.DSH_DIALOG_TITLE = 'Select Workspace Directory'
+  const worker = spawn(nodeExe, [workerScript], {
+    env,
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+    windowsHide: true,
+  })
+  worker.stdout.on('data', (d) => safeLog(`[worker:out] ${d}\n`))
+  worker.stderr.on('data', (d) => safeLog(`[worker:err] ${d}\n`))
+  worker.on('message', (message) => {
+    if (typeof process.send === 'function') process.send(message)
+    else safeLog(`[worker] NO IPC CHANNEL, dropping: ${JSON.stringify(message)}\n`)
+  })
+  worker.on('error', (e) => {
+    safeLog(`[worker] spawn error: ${e.message}\n`)
+    if (typeof process.send === 'function') {
+      process.send({ kind: 'error', message: `directory picker worker spawn failed: ${e.message}` })
+    }
+    process.exit(1)
+  })
+  worker.on('exit', (code, signal) => {
+    safeLog(`[worker] exit code=${code} signal=${signal}\n`)
+    process.exit(code ?? (signal !== null ? 1 : 0))
+  })
+}
+
+/** App name / window title. (定义已上移至文件顶部,见 PRODUCT_NAME 声明处) */
+
+async function start() {
+  app.setName(PRODUCT_NAME)
 
   // ── 启动阶段埋点（保留勿删）──
   // 所有 `ssid: phase <name>` 日志标记主流程关键节点：single-instance /
@@ -367,6 +408,39 @@ async function start() {
     safeLog(`ssid: pnpm meta rewired (store=${storeDir})\n`)
   }
   /**
+   * 部署失败提示（v0.1.5）：EPERM/EBUSY 通常是 node_modules 被其他进程占用。
+   * 用 tasklist 检测常见占用者（node/electron/思灵 进程），提示用户关闭后
+   * 重新打开思灵（部署会在下次启动自动重试,无需重装）。
+   */
+  const buildDeployFailHint = (cause) => {
+    const message = cause instanceof Error ? cause.message : String(cause)
+    const isLocked = /EPERM|EBUSY|operation not permitted|being used by another process/i.test(message)
+    if (!isLocked) {
+      return '请重新打开思灵重试。若仍失败,可尝试重新安装。'
+    }
+    // 检测占用者：node.exe / electron / 思灵 等可疑进程。
+    let offenders = []
+    try {
+      const out = spawnSync('tasklist', ['/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true })
+      if (out.status === 0) {
+        offenders = out.stdout
+          .split(/\r?\n/)
+          .map((line) => line.split('","')[0]?.replace(/^"|"$/g, ''))
+          .filter((name) => name && /node|electron|思灵|ssid/i.test(name))
+          .filter((v, i, arr) => arr.indexOf(v) === i)
+      }
+    } catch {
+      // tasklist 不可用时降级为通用提示
+    }
+    const list = offenders.length > 0 ? offenders.join('、') : '其他占用 node_modules 的程序'
+    return (
+      `运行环境文件被其他程序占用（Windows 文件锁）。\n\n`
+      + `请关闭以下进程后重新打开思灵,部署会自动继续（无需重装）：\n`
+      + `${list}\n\n`
+      + `如不确定,可注销或重启电脑后再试。`
+    )
+  }
+  /**
    * 从归档部署/更新 profile 闭包（v0.1.3）。
    * - 解压到 profile/.deploy.new：取消/失败只删临时目录，旧版无损（原子替换）
    * - 校验 @max-null/dsh-memory 在 → 删旧 node_modules + 改名（毫秒级）→ 其余
@@ -418,15 +492,66 @@ async function start() {
       if (!existsSync(join(tmpDir, 'node_modules', '@max-null', 'dsh-memory'))) {
         throw new Error('解压结果缺少 @max-null/dsh-memory，部署中止')
       }
-      // 原子落位：node_modules 先删旧再改名（毫秒级窗口，无并发）；
-      // 其余条目（package.json/.runtime-version/vendor 等）逐个覆盖。
+      // 原子落位（v0.1.5 修复 EPERM 占用问题）：
+      // - 旧版先 rename 到 .deploy.old（而非先 rmSync 删除）：rename 是原子
+      //   操作,任何一步失败都可回滚,旧环境不丢;而"先删后改"在文件被其他
+      //   进程占用时,删除会部分成功/失败,旧环境被破坏且无法恢复。
+      // - rename 失败（EPERM/EBUSY,典型:其他 node/electron 进程打开着
+      //   node_modules 里的文件,或杀软扫描）自动重试数次,给占用方释放时间。
+      // - 全部成功后才删 .deploy.old;失败则回滚并保留旧版,下次启动
+      //   版本对比不一致会重新部署,无需重装。
       splashStep(2)
-      rmSync(join(profileDir, 'node_modules'), { recursive: true, force: true })
-      renameSync(join(tmpDir, 'node_modules'), join(profileDir, 'node_modules'))
-      for (const entry of readdirSync(tmpDir)) {
-        if (entry === 'node_modules') continue
-        rmSync(join(profileDir, entry), { recursive: true, force: true })
-        renameSync(join(tmpDir, entry), join(profileDir, entry))
+      const oldModules = join(profileDir, 'node_modules')
+      const oldModulesBackup = join(profileDir, '.deploy.old')
+      const newModules = join(tmpDir, 'node_modules')
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+      // 带重试的 rename:Windows 上 EPERM/EBUSY 常见于文件被占用,短暂重试
+      // 通常可自愈（杀软扫描、句柄释放）。重试间隔递增,最多 5 次约 6 秒。
+      const renameWithRetry = async (from, to) => {
+        let lastErr
+        for (let attempt = 1; attempt <= 5; attempt++) {
+          try {
+            renameSync(from, to)
+            return
+          } catch (err) {
+            lastErr = err
+            safeLog(`ssid: rename retry ${attempt}/5 ${from} -> ${to} (${err.code})\n`)
+            await sleep(300 * attempt)
+          }
+        }
+        throw lastErr
+      }
+      // 1) 旧目录让位（首次部署无旧目录则跳过）
+      if (existsSync(oldModules)) {
+        await renameWithRetry(oldModules, oldModulesBackup)
+      }
+      try {
+        // 2) 新目录落位
+        await renameWithRetry(newModules, oldModules)
+        // 3) 其余条目（package.json/.runtime-version/vendor 等）逐个覆盖
+        for (const entry of readdirSync(tmpDir)) {
+          if (entry === 'node_modules') continue
+          const target = join(profileDir, entry)
+          rmSync(target, { recursive: true, force: true })
+          await renameWithRetry(join(tmpDir, entry), target)
+        }
+        // 4) 全部成功,清理旧备份
+        rmSync(oldModulesBackup, { recursive: true, force: true })
+      } catch (cause) {
+        // 回滚:把旧目录恢复回来（新目录可能只落位了一部分条目）
+        try {
+          if (existsSync(oldModulesBackup)) {
+            rmSync(oldModules, { recursive: true, force: true })
+            await renameWithRetry(oldModulesBackup, oldModules)
+          }
+          // 版本信号归零:若新版 .runtime-version 已落位,删除它,保证下次
+          // 启动 profileVer(null) !== archiveVer → 自动重新部署,不会因
+          // 版本一致而误判 skipped（node_modules 是旧版但版本号是新版）。
+          rmSync(join(profileDir, '.runtime-version'), { recursive: true, force: true })
+        } catch (rollbackErr) {
+          safeLog(`ssid: rollback failed: ${rollbackErr.message}\n`)
+        }
+        throw cause
       }
       splashStep(3)
       // 校正 pnpm 元数据：归档在构建机生成，.modules.yaml 里是构建机绝对路径
@@ -453,7 +578,11 @@ async function start() {
         splashStatus('更新失败，继续使用当前版本启动…')
         return 'skipped'
       }
-      splashError(`内置运行环境部署失败\n\n${cause instanceof Error ? cause.message : String(cause)}\n\n请重新安装思灵后再试。`)
+      // 部署失败：检测常见占用进程，给出可操作提示（而非笼统"请重装"）。
+      // 典型场景：其他程序（如用户自己跑的 node / 另一个思灵实例 / 杀软扫描）
+      // 打开着 node_modules 里的文件，Windows 上 rename 抛 EPERM。
+      const hint = buildDeployFailHint(cause)
+      splashError(`内置运行环境部署失败\n\n${cause instanceof Error ? cause.message : String(cause)}\n\n${hint}`)
       await new Promise(() => {})
       return 'failed'
     } finally {
@@ -471,8 +600,9 @@ async function start() {
    * - 'failed'：初始化失败（继续 boot 会在 splash 显示错误）
    */
   const ensureProfile = async () => {
-    // 上次部署残留（取消/崩溃）先清理
+    // 上次部署残留（取消/崩溃/回滚失败）先清理
     rmSync(join(profileDir, '.deploy.new'), { recursive: true, force: true })
+    rmSync(join(profileDir, '.deploy.old'), { recursive: true, force: true })
     mkdirSync(profileDir, { recursive: true })
     // 归档部署优先：首启（无 node_modules）或版本不一致（新安装包升级）
     const archive = runtimeArchivePath()
@@ -912,5 +1042,3 @@ setInterval(() => {
 app.on('will-quit', () => {
   safeLog('ssid: will-quit\n')
 })
-
-void start()
