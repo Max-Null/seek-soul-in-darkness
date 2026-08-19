@@ -41,6 +41,32 @@ window.__ModuleLoader__.load({
       if (button !== undefined && button !== null && !button.disabled) button.click()
     }
 
+    /**
+     * 面板可见性判断（better-sidebar：侧栏 panel+panelHidden、底栏
+     * bottomPanel+bottomPanelHidden，隐藏靠 class 控制）。用实际渲染
+     * 尺寸过滤（>40px），避免误匹配其他插件的 panel 类名。
+     */
+    function panelVisible(selector) {
+      var el = document.querySelector(selector)
+      if (el === null || el === undefined) return false
+      var rect = el.getBoundingClientRect()
+      return rect.width > 40 && rect.height > 40
+    }
+    var SIDEBAR_SEL = '[class*="panel"]:not([class*="bottomPanel"]):not([class*="panelHidden"])'
+    var BOTTOM_SEL = '[class*="bottomPanel"]:not([class*="bottomPanelHidden"])'
+
+    /**
+     * 反向互斥（2026-08-19 用户补充）：打开插件中心前，若侧栏/底栏
+     * 开着则先收起（点对应 toggleCluster 按钮），避免弹窗被面板遮挡。
+     */
+    function closeSidePanelsBeforePluginCenter() {
+      if (panelVisible(SIDEBAR_SEL)) {
+        clickClusterButton(true) // 侧栏 = 最后一个按钮
+      } else if (panelVisible(BOTTOM_SEL)) {
+        clickClusterButton(false) // 底栏 = 第一个按钮
+      }
+    }
+
     exports.inject = []
 
     exports.apply = function (ctx) {
@@ -52,6 +78,8 @@ window.__ModuleLoader__.load({
       window.addEventListener('ssid:titlebar', function (event) {
         var detail = event !== null && typeof event === 'object' ? event.detail : undefined
         if (detail === 'plugin-center') {
+          // 反向互斥：侧栏/底栏开着先收起，再打开插件中心
+          closeSidePanelsBeforePluginCenter()
           // 优先 toggle（再点关闭）；老版 plugin-center（无 toggle）回退 open
           var toggle = window.__pluginCenterToggle
           if (typeof toggle === 'function') {

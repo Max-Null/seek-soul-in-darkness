@@ -25,6 +25,9 @@ const fakeCluster = {
 let injectedStyle = null
 let titlebarHandler = null
 let pcOpen = 0, pcToggle = 0, pcClose = 0
+// 面板 mock（反向互斥用）：默认不可见；测试中可设为可见对象
+let fakeSidebar = null
+let fakeBottom = null
 
 global.window = {
   __pluginCenterOpen: () => { pcOpen++ },
@@ -50,6 +53,10 @@ global.document = {
   head: { appendChild() {} },
   querySelector(sel) {
     if (sel.includes('toggleCluster')) return fakeCluster
+    // 注意：SIDEBAR_SEL 的 :not 里也含 "bottomPanel" 子串，必须先判
+    // "含 panelHidden"（SIDEBAR_SEL 独有特征）再判底栏。
+    if (sel.includes('panelHidden')) return fakeSidebar   // 侧栏可见性
+    if (sel.includes('bottomPanel')) return fakeBottom    // 底栏可见性
     return null
   },
   querySelectorAll() { return [] },
@@ -80,6 +87,34 @@ check('无 toggle 时回退 open', pcOpen === 1, `open=${pcOpen}`)
 window.__pluginCenterToggle = () => { pcToggle++ }
 titlebarHandler({ detail: 'plugin-center' })
 check('恢复 toggle 后继续用 toggle', pcToggle === 2)
+
+// ── plugin-center：反向互斥（2026-08-19 用户补充）────────────────
+// 侧栏可见 → 先点最后一个按钮收起侧栏，再 toggle 插件中心
+fakeCluster.buttons.forEach((b) => { b.clicked = 0 })
+fakeSidebar = { getBoundingClientRect: () => ({ width: 300, height: 800 }) }
+const pcToggleBefore = pcToggle
+titlebarHandler({ detail: 'plugin-center' })
+check('侧栏可见时 plugin-center 事件先收起侧栏（点最后一个按钮）', fakeCluster.buttons[1].clicked === 1, JSON.stringify(fakeCluster.buttons.map((b) => b.clicked)))
+check('侧栏可见时未点底栏按钮', fakeCluster.buttons[0].clicked === 0)
+check('侧栏可见时仍 toggle 插件中心', pcToggle === pcToggleBefore + 1, `toggle=${pcToggle}`)
+fakeSidebar = null
+
+// 底栏可见 → 先点第一个按钮收起底栏，再 toggle
+fakeCluster.buttons.forEach((b) => { b.clicked = 0 })
+fakeBottom = { getBoundingClientRect: () => ({ width: 800, height: 200 }) }
+const pcToggleBefore2 = pcToggle
+titlebarHandler({ detail: 'plugin-center' })
+check('底栏可见时 plugin-center 事件先收起底栏（点第一个按钮）', fakeCluster.buttons[0].clicked === 1, JSON.stringify(fakeCluster.buttons.map((b) => b.clicked)))
+check('底栏可见时未点侧栏按钮', fakeCluster.buttons[1].clicked === 0)
+check('底栏可见时仍 toggle 插件中心', pcToggle === pcToggleBefore2 + 1)
+fakeBottom = null
+
+// 面板都不可见 → 不点任何按钮，仅 toggle
+fakeCluster.buttons.forEach((b) => { b.clicked = 0 })
+const pcToggleBefore3 = pcToggle
+titlebarHandler({ detail: 'plugin-center' })
+check('面板不可见时不点按钮', fakeCluster.buttons.every((b) => b.clicked === 0))
+check('面板不可见时仍 toggle 插件中心', pcToggle === pcToggleBefore3 + 1)
 
 // ── sidebar：先关插件中心（互斥）再点最后一个按钮 ────────────────
 fakeCluster.buttons.forEach((b) => { b.clicked = 0 })
