@@ -43,14 +43,23 @@ window.__ModuleLoader__.load({
 
     /**
      * 面板可见性判断（better-sidebar：侧栏 panel+panelHidden、底栏
-     * bottomPanel+bottomPanelHidden，隐藏靠 class 控制）。用实际渲染
-     * 尺寸过滤（>40px），避免误匹配其他插件的 panel 类名。
+     * bottomPanel+bottomPanelHidden，隐藏靠 class 控制）。
+     * 遍历所有匹配而非第一个：页面里存在含 "panel" 类的 SVG 图标（如
+     * better-sidebar 的 toggleCluster 图标，className 是 SVGAnimatedString），
+     * querySelector 取第一个会命中它（16px < 40 阈值 → 误判不可见，
+     * 2026-08-19 用户实测右栏互斥失效的根因）。跳过 SVG，找实际渲染
+     * 尺寸 >40px 的普通元素。
      */
     function panelVisible(selector) {
-      var el = document.querySelector(selector)
-      if (el === null || el === undefined) return false
-      var rect = el.getBoundingClientRect()
-      return rect.width > 40 && rect.height > 40
+      var els = document.querySelectorAll(selector)
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i]
+        var tag = el.tagName
+        if (tag === 'svg' || tag === 'path' || tag === 'use' || tag === 'rect' || tag === 'circle') continue
+        var rect = el.getBoundingClientRect()
+        if (rect.width > 40 && rect.height > 40) return true
+      }
+      return false
     }
     var SIDEBAR_SEL = '[class*="panel"]:not([class*="bottomPanel"]):not([class*="panelHidden"])'
     var BOTTOM_SEL = '[class*="bottomPanel"]:not([class*="bottomPanelHidden"])'

@@ -53,13 +53,18 @@ global.document = {
   head: { appendChild() {} },
   querySelector(sel) {
     if (sel.includes('toggleCluster')) return fakeCluster
-    // 注意：SIDEBAR_SEL 的 :not 里也含 "bottomPanel" 子串，必须先判
-    // "含 panelHidden"（SIDEBAR_SEL 独有特征）再判底栏。
     if (sel.includes('panelHidden')) return fakeSidebar   // 侧栏可见性
     if (sel.includes('bottomPanel')) return fakeBottom    // 底栏可见性
     return null
   },
-  querySelectorAll() { return [] },
+  querySelectorAll(sel) {
+    // panelVisible 遍历所有匹配（跳过 SVG）；模拟真实页面：panel 类 SVG
+    // 图标恒存在（16px），面板存在时排在 SVG 之后
+    const svgMock = { tagName: 'svg', getBoundingClientRect: () => ({ width: 16, height: 16 }) }
+    if (sel.includes('panelHidden')) return fakeSidebar ? [svgMock, fakeSidebar] : [svgMock]
+    if (sel.includes('bottomPanel')) return fakeBottom ? [svgMock, fakeBottom] : [svgMock]
+    return []
+  },
 }
 
 // 执行 client.js（触发 __ModuleLoader__.load）
