@@ -14,6 +14,59 @@ import type { Context } from 'cordis'
 
 export const inject = ['slots']
 
+// ---- settings nav icon ----
+// DSH 0.1.x 的 settings.section 注册只投影 id/order/label，设置壳对外部 section
+// 一律渲染默认齿轮（无 icon 契约字段）。照 dsh-better-sidebar 的 settings-nav-icon
+// 模式：MutationObserver 按 label 文本标记设置对话框里本插件「关于 SSiD」那一行，
+// 由下面注入的 CSS 把齿轮替换成 Lucide info 图标。标记不拥有壳结构，disposer
+// 移除标记，HMR-safe。
+const SETTINGS_NAV_MARKER = 'data-dsh-ssid-panels-settings-nav'
+const SETTINGS_NAV_CSS = `
+[data-dsh-ssid-panels-settings-nav] > svg:first-child { display: none; }
+[data-dsh-ssid-panels-settings-nav]::before {
+  content: '';
+  flex: none;
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M12 16v-4'/%3E%3Cpath d='M12 8h.01'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M12 16v-4'/%3E%3Cpath d='M12 8h.01'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+`
+function registerSettingsNavIcon(label: () => string): () => void {
+  if (typeof document === 'undefined') return () => {}
+  let styleInjected = false
+  const injectStyle = (): void => {
+    if (styleInjected) return
+    styleInjected = true
+    const style = document.createElement('style')
+    style.setAttribute('data-plugin', '@max-null/dsh-ssid-panels')
+    style.textContent = SETTINGS_NAV_CSS
+    document.head.append(style)
+  }
+  injectStyle()
+  let disposed = false
+  const sync = (): void => {
+    if (disposed) return
+    const currentLabel = label().trim()
+    const buttons = document.querySelectorAll<HTMLButtonElement>('[role="dialog"] nav button')
+    buttons.forEach((button) => {
+      const matches = currentLabel.length > 0 && button.textContent?.trim() === currentLabel
+      if (matches) button.setAttribute(SETTINGS_NAV_MARKER, '')
+      else button.removeAttribute(SETTINGS_NAV_MARKER)
+    })
+  }
+  sync()
+  const observer = new MutationObserver(sync)
+  observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+  return () => {
+    disposed = true
+    observer.disconnect()
+    document.querySelectorAll(`[${SETTINGS_NAV_MARKER}]`)
+      .forEach((element) => { element.removeAttribute(SETTINGS_NAV_MARKER) })
+  }
+}
+
 // ---- i18n (DSH zh/en bilingual, plugin-center pattern) ----
 type LocaleId = 'zh' | 'en'
 const STRINGS = {
@@ -466,6 +519,9 @@ export function apply(ctx: Context): void {
   const initial = locale?.getLocale?.()?.active
   if (typeof initial === 'string') adoptLocale(initial)
   face.on?.('locale/change', (snap) => { adoptLocale((snap as { active?: string } | undefined)?.active) })
+
+  // 设置导航图标：标记本插件行后由 CSS 把默认齿轮替换为 info（HMR-safe）。
+  ctx.effect(() => registerSettingsNavIcon(() => STRINGS[localeId].about))
 
   // 设置页「关于 SSiD」：settings.section 顶级条目。
   ctx.slots.inject('settings.section', () => ctx.slots.register({
