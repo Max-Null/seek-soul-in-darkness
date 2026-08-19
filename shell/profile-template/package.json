@@ -8,7 +8,7 @@
     "@max-null/dsh-guardian": "^0.1.0",
     "@max-null/dsh-habit": "^0.1.0",
     "@max-null/dsh-header-unify": "file:./vendor/dsh-header-unify",
-    "@max-null/dsh-memory": "^0.2.0",
+    "@max-null/dsh-memory": "^0.3.7",
     "@max-null/dsh-plugin-center": "^0.1.6",
     "@max-null/dsh-skill-mcp-center": "^0.1.0",
     "@max-null/dsh-node-appearance": "^0.1.1",
@@ -17,7 +17,8 @@
     "dsh-excel-panel": "^0.6.1",
     "dsh-sidebar-qa": "^0.2.0",
     "dsh-skin": "^0.4.1",
-    "dsh-video-preview": "^0.1.1"
+    "dsh-video-preview": "^0.1.1",
+    "dsh-memory": "^0.3.7"
   },
   "dsh": {
     "profile": {
