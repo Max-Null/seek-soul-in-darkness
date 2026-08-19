@@ -49,11 +49,11 @@ SSiD 是 fractal 的 **DSH 基座版**——基于 [DeepSeek Harness](https://gi
 
 ## 现状
 
-**v0.1.5 已发布**（2026-08-19）：预设技能包 14 技能出厂（8 mxy + 6 omo，启动非覆盖合并到 `~/.dsh/skills`）+ 预设插件更新（chat-rail 画卷式消息导航、node-appearance 0.1.1、better-sidebar 0.13.1、memory 0.2.2）+ 通知体系扩展（会话完成/卡点通知）；v0.1.4 为安装卡死修复（安装前自动关闭运行中的思灵）+ 安装/首启步骤清单可视化；v0.1.3 为内置运行环境归档与升级感知；v0.1.2 为一键安装（免 DSH_CHECKOUT）+ 首装进度条；v0.1.1 为 EPIPE 崩溃修复；v0.1.0（2026-08-16）起自研壳 + 侧栏生态 + SSiD 面板 + 预制插件 + NSIS 安装器齐备，详见 [v0.1.5 Release Notes](docs/release-notes-v0.1.5.md) / [v0.1.4 Release Notes](docs/release-notes-v0.1.4.md) / [v0.1.3 Release Notes](docs/release-notes-v0.1.3.md) / [v0.1.2 Release Notes](docs/release-notes-v0.1.2.md) / [v0.1.1 Release Notes](docs/release-notes-v0.1.1.md) / [v0.1.0 Release Notes](docs/release-notes-v0.1.0.md)。
+**v0.1.6 已发布**（2026-08-20）：标题栏统一按钮组（插件中心/侧栏/底栏，内置 dsh-header-unify）+ 插件中心交互优化（toggle/互斥/遮罩关）+ 部署 EPERM 自愈 + skill-mcp-center 0.2.0（Skill 管理 UI 重构、MCP 状态修复）；v0.1.5 为预设技能包 14 技能出厂 + 预设插件更新 + 通知体系扩展；v0.1.4 为安装卡死修复（安装前自动关闭运行中的思灵）+ 安装/首启步骤清单可视化；v0.1.3 为内置运行环境归档与升级感知；v0.1.2 为一键安装（免 DSH_CHECKOUT）+ 首装进度条；v0.1.1 为 EPIPE 崩溃修复；v0.1.0（2026-08-16）起自研壳 + 侧栏生态 + SSiD 面板 + 预制插件 + NSIS 安装器齐备，详见 [v0.1.6 Release Notes](docs/release-notes-v0.1.6.md) / [v0.1.5 Release Notes](docs/release-notes-v0.1.5.md) / [v0.1.4 Release Notes](docs/release-notes-v0.1.4.md) / [v0.1.3 Release Notes](docs/release-notes-v0.1.3.md) / [v0.1.2 Release Notes](docs/release-notes-v0.1.2.md) / [v0.1.1 Release Notes](docs/release-notes-v0.1.1.md) / [v0.1.0 Release Notes](docs/release-notes-v0.1.0.md)。
 
 ## 下载安装
 
-- 安装包：[`思灵 Setup 0.1.5.exe`](https://github.com/Max-Null/seek-soul-in-darkness/releases/download/v0.1.5/Setup.0.1.5.exe)（约 214 MB，Windows x64）
+- 安装包：[`思灵 Setup 0.1.6.exe`](https://github.com/Max-Null/seek-soul-in-darkness/releases/download/v0.1.6/Setup.0.1.6.exe)（约 253 MB，Windows x64）
 - 全部版本：[Releases](https://github.com/Max-Null/seek-soul-in-darkness/releases)
 - NSIS 向导安装：安装目录选择、桌面/开始菜单快捷方式
 - **一键安装**：首次启动自动部署内置运行环境（DSH 内核 + 预制插件，约 600MB），无需安装 Node/pnpm、无需设置任何环境变量；安装完成后关闭窗口重新打开即用
