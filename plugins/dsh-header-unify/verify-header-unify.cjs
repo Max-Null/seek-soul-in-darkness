@@ -30,6 +30,8 @@ let fakeSidebar = null
 let fakeBottom = null
 
 global.window = {
+  innerWidth: 1920,
+  innerHeight: 1080,
   __pluginCenterOpen: () => { pcOpen++ },
   __pluginCenterToggle: () => { pcToggle++ },
   __pluginCenterClose: () => { pcClose++ },
@@ -58,9 +60,10 @@ global.document = {
     return null
   },
   querySelectorAll(sel) {
-    // panelVisible 遍历所有匹配（跳过 SVG）；模拟真实页面：panel 类 SVG
-    // 图标恒存在（16px），面板存在时排在 SVG 之后
-    const svgMock = { tagName: 'svg', getBoundingClientRect: () => ({ width: 16, height: 16 }) }
+    // panelVisible 遍历所有匹配：模拟真实页面——panel 类 SVG 图标恒存在
+    // （16px、视口内）；面板存在时排在 SVG 之后（可见=视口内大尺寸；
+    // 关闭的面板是 translateX(102%) 移出屏幕，rect 仍有尺寸但坐标在视口外）
+    const svgMock = { tagName: 'svg', getBoundingClientRect: () => ({ width: 16, height: 16, left: 0, top: 0, right: 16, bottom: 16 }) }
     if (sel.includes('panelHidden')) return fakeSidebar ? [svgMock, fakeSidebar] : [svgMock]
     if (sel.includes('bottomPanel')) return fakeBottom ? [svgMock, fakeBottom] : [svgMock]
     return []
@@ -94,9 +97,9 @@ titlebarHandler({ detail: 'plugin-center' })
 check('恢复 toggle 后继续用 toggle', pcToggle === 2)
 
 // ── plugin-center：反向互斥（2026-08-19 用户补充）────────────────
-// 侧栏可见 → 先点最后一个按钮收起侧栏，再 toggle 插件中心
+// 侧栏可见（视口内）→ 先点最后一个按钮收起侧栏，再 toggle 插件中心
 fakeCluster.buttons.forEach((b) => { b.clicked = 0 })
-fakeSidebar = { getBoundingClientRect: () => ({ width: 300, height: 800 }) }
+fakeSidebar = { tagName: 'div', getBoundingClientRect: () => ({ width: 300, height: 800, left: 1600, top: 0, right: 1900, bottom: 800 }) }
 const pcToggleBefore = pcToggle
 titlebarHandler({ detail: 'plugin-center' })
 check('侧栏可见时 plugin-center 事件先收起侧栏（点最后一个按钮）', fakeCluster.buttons[1].clicked === 1, JSON.stringify(fakeCluster.buttons.map((b) => b.clicked)))
@@ -104,9 +107,9 @@ check('侧栏可见时未点底栏按钮', fakeCluster.buttons[0].clicked === 0)
 check('侧栏可见时仍 toggle 插件中心', pcToggle === pcToggleBefore + 1, `toggle=${pcToggle}`)
 fakeSidebar = null
 
-// 底栏可见 → 先点第一个按钮收起底栏，再 toggle
+// 底栏可见（视口内）→ 先点第一个按钮收起底栏，再 toggle
 fakeCluster.buttons.forEach((b) => { b.clicked = 0 })
-fakeBottom = { getBoundingClientRect: () => ({ width: 800, height: 200 }) }
+fakeBottom = { tagName: 'div', getBoundingClientRect: () => ({ width: 800, height: 200, left: 0, top: 600, right: 800, bottom: 800 }) }
 const pcToggleBefore2 = pcToggle
 titlebarHandler({ detail: 'plugin-center' })
 check('底栏可见时 plugin-center 事件先收起底栏（点第一个按钮）', fakeCluster.buttons[0].clicked === 1, JSON.stringify(fakeCluster.buttons.map((b) => b.clicked)))
@@ -120,6 +123,17 @@ const pcToggleBefore3 = pcToggle
 titlebarHandler({ detail: 'plugin-center' })
 check('面板不可见时不点按钮', fakeCluster.buttons.every((b) => b.clicked === 0))
 check('面板不可见时仍 toggle 插件中心', pcToggle === pcToggleBefore3 + 1)
+
+// 屏幕外大尺寸元素（panelHidden = translateX(102%) 移出屏幕，rect 仍有
+// 尺寸但坐标在视口外——2026-08-19 用户实测「打开插件中心同时打开右栏」
+// 的根因）→ 必须判定不可见
+fakeCluster.buttons.forEach((b) => { b.clicked = 0 })
+fakeSidebar = { tagName: 'div', getBoundingClientRect: () => ({ width: 300, height: 800, left: 2000, top: 0, right: 2300, bottom: 800 }) }
+const pcToggleBefore4 = pcToggle
+titlebarHandler({ detail: 'plugin-center' })
+check('屏幕外的面板（translateX 移出）判定不可见、不点按钮', fakeCluster.buttons.every((b) => b.clicked === 0), JSON.stringify(fakeCluster.buttons.map((b) => b.clicked)))
+check('屏幕外场景仍 toggle 插件中心', pcToggle === pcToggleBefore4 + 1)
+fakeSidebar = null
 
 // ── sidebar：先关插件中心（互斥）再点最后一个按钮 ────────────────
 fakeCluster.buttons.forEach((b) => { b.clicked = 0 })

@@ -43,21 +43,27 @@ window.__ModuleLoader__.load({
 
     /**
      * 面板可见性判断（better-sidebar：侧栏 panel+panelHidden、底栏
-     * bottomPanel+bottomPanelHidden，隐藏靠 class 控制）。
-     * 遍历所有匹配而非第一个：页面里存在含 "panel" 类的 SVG 图标（如
-     * better-sidebar 的 toggleCluster 图标，className 是 SVGAnimatedString），
-     * querySelector 取第一个会命中它（16px < 40 阈值 → 误判不可见，
-     * 2026-08-19 用户实测右栏互斥失效的根因）。跳过 SVG，找实际渲染
-     * 尺寸 >40px 的普通元素。
+     * bottomPanel+bottomPanelHidden）。隐藏是 translateX(102%) 移出屏幕
+     * （CSS 见 sidebar.module.css .panelHidden）——getBoundingClientRect 仍
+     * 有完整尺寸，且 panel 容器隐藏时子元素（panelBody 等含 "panel" 段、
+     * 无 panelHidden）仍在 DOM。因此判断必须同时满足：
+     *   1) 遍历所有匹配、跳过 SVG 图标（className 是 SVGAnimatedString）；
+     *   2) 尺寸 >40px；
+     *   3) 与视口有交集（移出屏幕的面板坐标在视口外，2026-08-19 用户实测
+     *      「打开插件中心同时打开右栏」的根因）。
      */
     function panelVisible(selector) {
       var els = document.querySelectorAll(selector)
+      var vw = window.innerWidth
+      var vh = window.innerHeight
       for (var i = 0; i < els.length; i++) {
         var el = els[i]
         var tag = el.tagName
         if (tag === 'svg' || tag === 'path' || tag === 'use' || tag === 'rect' || tag === 'circle') continue
         var rect = el.getBoundingClientRect()
-        if (rect.width > 40 && rect.height > 40) return true
+        if (rect.width > 40 && rect.height > 40
+          && rect.right > 0 && rect.bottom > 0
+          && rect.left < vw && rect.top < vh) return true
       }
       return false
     }
