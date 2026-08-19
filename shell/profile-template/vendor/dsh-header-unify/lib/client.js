@@ -32,53 +32,47 @@ window.__ModuleLoader__.load({
       '[class*="toggleCluster"] { display: none !important; }',
     ].join('\n')
 
-    /** 程序化点击 toggleCluster 内的按钮（display:none 不影响 click）。 */
-    function clickClusterButton(fromEnd) {
-      var cluster = document.querySelector('[class*="toggleCluster"]')
-      if (cluster === null) return
-      var buttons = cluster.querySelectorAll('button')
-      var button = fromEnd ? buttons[buttons.length - 1] : buttons[0]
-      if (button !== undefined && button !== null && !button.disabled) button.click()
-    }
-
     /**
-     * 面板可见性判断（better-sidebar：侧栏 panel+panelHidden、底栏
-     * bottomPanel+bottomPanelHidden）。隐藏是 translateX(102%) 移出屏幕
-     * （CSS 见 sidebar.module.css .panelHidden）——getBoundingClientRect 仍
-     * 有完整尺寸，且 panel 容器隐藏时子元素（panelBody 等含 "panel" 段、
-     * 无 panelHidden）仍在 DOM。因此判断必须同时满足：
-     *   1) 遍历所有匹配、跳过 SVG 图标（className 是 SVGAnimatedString）；
-     *   2) 尺寸 >40px；
-     *   3) 与视口有交集（移出屏幕的面板坐标在视口外，2026-08-19 用户实测
-     *      「打开插件中心同时打开右栏」的根因）。
+     * 从 toggleCluster 按钮的 aria-label 反推面板状态——不依赖 CSS 类名
+     * 通配（DSH 官方 UI 也有 css.panel 类，[class*="panel"] 会误匹配，
+     * 2026-08-19 用户实测「打开插件中心同时打开右栏」）。
+     * better-sidebar 按钮语义（src/client/locales.ts 实证）：
+     *   侧栏按钮 aria-label：开着='折叠侧边栏'(collapse) / 关着='展开侧边栏'(expand)
+     *   底栏按钮 aria-label：开着='折叠底部面板'(collapseBottomPanel) / 关着='展开底部面板'(expandBottomPanel)
+     * 面板开着 = 对应按钮 label 是「折叠」语义（collapse/折叠）。
      */
-    function panelVisible(selector) {
-      var els = document.querySelectorAll(selector)
-      var vw = window.innerWidth
-      var vh = window.innerHeight
-      for (var i = 0; i < els.length; i++) {
-        var el = els[i]
-        var tag = el.tagName
-        if (tag === 'svg' || tag === 'path' || tag === 'use' || tag === 'rect' || tag === 'circle') continue
-        var rect = el.getBoundingClientRect()
-        if (rect.width > 40 && rect.height > 40
-          && rect.right > 0 && rect.bottom > 0
-          && rect.left < vw && rect.top < vh) return true
+    function clusterSideButtons() {
+      var cluster = document.querySelector('[class*="toggleCluster"]')
+      if (cluster === null) return { sidebar: null, bottom: null }
+      var buttons = cluster.querySelectorAll('button')
+      var sidebar = null, bottom = null
+      for (var i = 0; i < buttons.length; i++) {
+        // 底栏按钮：label 含 bottom（en）或 底部（zh）
+        var label = (buttons[i].getAttribute('aria-label') || '').toLowerCase()
+        if (label.indexOf('bottom') !== -1 || label.indexOf('底部') !== -1) bottom = buttons[i]
+        else sidebar = buttons[i]
       }
-      return false
+      return { sidebar: sidebar, bottom: bottom }
     }
-    var SIDEBAR_SEL = '[class*="panel"]:not([class*="bottomPanel"]):not([class*="panelHidden"])'
-    var BOTTOM_SEL = '[class*="bottomPanel"]:not([class*="bottomPanelHidden"])'
+    function isPanelOpen(button) {
+      if (button === null || button === undefined) return false
+      var label = (button.getAttribute('aria-label') || '').toLowerCase()
+      return label.indexOf('collapse') !== -1 || label.indexOf('折叠') !== -1
+    }
+    function clickButton(button) {
+      if (button !== null && button !== undefined && !button.disabled) button.click()
+    }
 
     /**
      * 反向互斥（2026-08-19 用户补充）：打开插件中心前，若侧栏/底栏
-     * 开着则先收起（点对应 toggleCluster 按钮），避免弹窗被面板遮挡。
+     * 开着则先收起（点其 toggleCluster 按钮），避免弹窗被面板遮挡。
      */
     function closeSidePanelsBeforePluginCenter() {
-      if (panelVisible(SIDEBAR_SEL)) {
-        clickClusterButton(true) // 侧栏 = 最后一个按钮
-      } else if (panelVisible(BOTTOM_SEL)) {
-        clickClusterButton(false) // 底栏 = 第一个按钮
+      var btns = clusterSideButtons()
+      if (isPanelOpen(btns.sidebar)) {
+        clickButton(btns.sidebar) // 侧栏开着 → 收起
+      } else if (isPanelOpen(btns.bottom)) {
+        clickButton(btns.bottom) // 底栏开着 → 收起
       }
     }
 
@@ -116,7 +110,9 @@ window.__ModuleLoader__.load({
           // 互斥：侧栏/底栏打开时，插件中心模态让位（若开着先关闭）。
           var close = window.__pluginCenterClose
           if (typeof close === 'function') close()
-          clickClusterButton(detail === 'sidebar')
+          // 按钮按 aria-label 语义定位（不依赖按钮顺序）
+          var btns = clusterSideButtons()
+          clickButton(detail === 'sidebar' ? btns.sidebar : btns.bottom)
         }
       })
     }
