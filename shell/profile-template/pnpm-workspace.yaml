@@ -1,4 +1,4 @@
-﻿packages:
+packages:
   - .
 
 nodeLinker: hoisted
@@ -22,6 +22,7 @@ minimumReleaseAgeExclude:
   - dsh-excel-panel@0.3.2
   - dsh-sidebar-qa@0.1.0
   - dsh-video-preview@0.1.1
+  - '@max-null/dsh-skill-mcp-center@0.2.0'
   - '@huanlin/dsh-plugin-better-sidebar-plugin-office@0.1.0'
 allowBuilds:
   node-pty: false
