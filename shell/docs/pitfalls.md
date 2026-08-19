@@ -286,6 +286,29 @@ dev 调用点（boot-smoke.ts / _eval-*.ts）不传 opts 走原逻辑，无影�
 源码优先只应属于开发模式（未打包）。排查"版本对不上"类问题先看
 `$env:DSH_CHECKOUT`（User/Machine 级注册表）。
 
+### 10. PowerShell 5.1 调含中文的 JSON API：Invoke-RestMethod 编码损坏
+
+**现象**（2026-08-19）：用 PowerShell 5.1 的 `Invoke-RestMethod -Body (… | ConvertTo-Json)`
+调用 `/ssid/api/memory.update` 写入中文内容，落库后中文全部变成 `????`
+（如"DSH 记忆插件"→"DSH ????"），再读回即乱码。
+
+**根因**：PowerShell 5.1 的 `Invoke-RestMethod -Body <string>` 默认按 ISO-8859-1
+（Latin-1）编码发送 body，中文多字节被截成 `?`；请求头里的
+`Content-Type: application/json` 也不带 charset，服务端按 UTF-8 解析时
+字节已损。`Invoke-WebRequest` 5.1 同病。
+
+**修复/规避**（三选一）：
+1. **用 node 脚本调**（UTF-8 原生）：`node -e "fetch(...)"` 或
+   `node -e "… JSON.stringify 中文 …"`——最稳，推荐；
+2. **curl.exe**：`curl.exe -s -X POST -H "Content-Type: application/json; charset=utf-8" -d '<json>' <url>`（cmd 窗口下注意引号转义）；
+3. 必须用 PowerShell 时显式转 UTF-8 字节：
+   `Invoke-RestMethod -Body ([System.Text.Encoding]::UTF8.GetBytes($json)) -ContentType 'application/json; charset=utf-8'`。
+
+**验证**：写后立即读回，确认中文未变 `?`；面板可见内容正常。
+
+**教训**：含非 ASCII 的 HTTP body 一律显式 UTF-8；Windows PowerShell 5.1
+的字符串 body 默认编码是暗坑，不要依赖默认值。
+
 ---
 
 ## 附：验证工具清单
