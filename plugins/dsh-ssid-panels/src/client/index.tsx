@@ -15,32 +15,21 @@ import type { Context } from 'cordis'
 export const inject = ['slots']
 
 // ---- SSiD 品牌标记（rc.8 品牌槽位：sidebar.brand.mark / conversation.hero.brand.mark） ----
-// 槽位由 ui-sidebar/ui-conversation 声明（带 FishLogo fallback），官方
-// ui-brand-official 仅在 DSH_CLIENT_BUILD_PROFILE=official 时占用，SSiD 场景
-// 无冲突。此组件重现 assets/logo.svg 的 Si 瞳孔（圆角方块 + 轨道 + 瞳孔 + 高光），
-// 纯 currentColor 无关（沿用 logo 的 #0ea5e9 品牌蓝，深色底由壳主题提供）。
-const BRAND_MARK_PATHS = [
-  'M128 76a52 52 0 1 0 0 104 52 52 0 0 0 0-104Zm0 10a42 42 0 1 1 0 84 42 42 0 0 1 0-84Z',
-  'M128 48a80 80 0 1 0 0 160 80 80 0 0 0 0-160Zm0 8a72 72 0 1 1 0 144 72 72 0 0 1 0-144Z',
-  'M128 22a106 106 0 1 0 0 212 106 106 0 0 0 0-212Zm0 8a98 98 0 1 1 0 196 98 98 0 0 1 0-196Z',
-]
-/** SSiD Si-pupil mark, sized by the slot owner prop. */
+// 槽位由 ui-sidebar/ui-conversation 声明（带 FishLogo fallback）。官方
+// ui-brand-official 在发布构建（DSH_CLIENT_BUILD_PROFILE=official 静态编译）
+// 以 priority 0 占用 single 槽；本插件注册 priority -1（lowest renders）
+// shadow 官方占位（2026-08-20 实测同 priority 会抛冲突）。
+// 标记直接使用应用图标（shell/assets/icon.png 96px）内联 data-URL，与
+// 任务栏/窗口图标一致（2026-08-20 用户反馈：之前误用了 assets/logo.svg 重现）。
+import { SSID_ICON_DATA_URL } from './icon-data'
+
+/** SSiD brand mark: the app icon, sized by the slot owner prop. */
 function SsidBrandMark({ size = 24, className }: { size?: number; className?: string }): ReactNode {
-  return createElement('svg', {
-    width: size, height: size, viewBox: '0 0 256 256',
-    className, 'aria-hidden': true,
-  },
-    // 同心轨道（3 层，透明度递减）
-    BRAND_MARK_PATHS.map((d, i) => createElement('path', {
-      key: 'ring' + i, d, fill: 'none', stroke: '#0ea5e9',
-      strokeWidth: 2, opacity: 0.45 - i * 0.09,
-    })),
-    // 瞳孔：虹膜 + 瞳孔 + 高光
-    createElement('circle', { cx: 128, cy: 128, r: 38, fill: '#0369a1' }),
-    createElement('circle', { cx: 128, cy: 128, r: 27, fill: '#0ea5e9' }),
-    createElement('circle', { cx: 128, cy: 128, r: 13, fill: '#0b1220' }),
-    createElement('circle', { cx: 119, cy: 118, r: 7, fill: '#fff', opacity: 0.9 }),
-  )
+  return createElement('img', {
+    width: size, height: size, src: SSID_ICON_DATA_URL,
+    className, alt: '', 'aria-hidden': true,
+    style: { borderRadius: Math.max(2, size * 0.14), display: 'block' },
+  })
 }
 
 // ---- settings nav icon ----
@@ -572,6 +561,11 @@ export function apply(ctx: Context): void {
   ctx.slots.inject('conversation.hero.brand.mark', () => ctx.slots.register(
     { name: 'conversation.hero.brand.mark', priority: -1 },
     ({ size, className }: { size?: number; className?: string }) => createElement(SsidBrandMark, { size, className }),
+  ))
+  // 侧边栏品牌名（fallback "DSH Local Build"）→ 思灵。
+  ctx.slots.inject('sidebar.brand.name', () => ctx.slots.register(
+    { name: 'sidebar.brand.name', priority: -1 },
+    () => createElement('span', { style: { fontSize: 13, fontWeight: 600 } }, '思灵'),
   ))
 
   // 侧栏 3 tab（记忆 tab 已归还 dsh-memory 自带——2026-08-19 归属迁移）：
