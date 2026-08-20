@@ -45,27 +45,44 @@ function readdirSafe(d) {
   }
 }
 
+/**
+ * DSH 运行时版本：单一来源，不再手改。
+ * 优先从本地 deepseek-harness checkout 的聚合包（apps/cli = @deepseek-ai/dsh）
+ * 读取版本号（打包机与源码同源，rc 升级后归档自动跟进）；
+ * checkout 缺失/读取失败时回退到显式常量（升 rc 只改这一处）。
+ */
+const DSH_CHECKOUT = process.env.DSH_CHECKOUT ?? 'H:/MaxNull/WorkStation/deepseek-harness'
+const DSH_VERSION = (() => {
+  try {
+    const pkg = JSON.parse(readFileSync(join(DSH_CHECKOUT, 'apps', 'cli', 'package.json'), 'utf8'))
+    if (typeof pkg.version === 'string' && pkg.version !== '') return pkg.version
+  } catch {
+    // fall through to the explicit constant
+  }
+  return '0.1.0-rc.8'
+})()
+
 /** 缺失 peer 清单（pnpm peers check 实测：官方包的 peer 依赖，pnpm 不自动装） */
 const MISSING_PEERS = [
-  // 官方运行时 peer（版本与闭包一致，DSH 源码 tsconfig 同源）
-  '@deepseek-ai/dsh-fs@0.1.0-rc.7',
-  '@deepseek-ai/dsh-invariants@0.1.0-rc.7',
-  '@deepseek-ai/dsh-scope@0.1.0-rc.7',
-  '@deepseek-ai/dsh-timeout@0.1.0-rc.7',
-  '@deepseek-ai/dsh-code-runtime@0.1.0-rc.7',
-  '@deepseek-ai/dsh-atomic-write@0.1.0-rc.7',
-  '@deepseek-ai/dsh-bash-local@0.1.0-rc.7',
-  '@deepseek-ai/dsh-sandbox@0.1.0-rc.7',
-  '@deepseek-ai/dsh-shell@0.1.0-rc.7',
-  '@deepseek-ai/dsh-anonymous-user-id@0.1.0-rc.7',
-  '@deepseek-ai/dsh-session-telemetry@0.1.0-rc.7',
-  '@deepseek-ai/dsh-session-title-llm@0.1.0-rc.7',
-  '@deepseek-ai/dsh-spill@0.1.0-rc.7',
-  '@deepseek-ai/dsh-output-retention@0.1.0-rc.7',
-  '@deepseek-ai/dsh-subagent-in-process-driver@0.1.0-rc.7',
-  '@deepseek-ai/dsh-subprocess@0.1.0-rc.7',
-  '@deepseek-ai/dsh-compaction@0.1.0-rc.7',
-  '@deepseek-ai/dsh-workflow@0.1.0-rc.7',
+  // 官方运行时 peer（版本与闭包一致 = DSH_VERSION，DSH 源码 tsconfig 同源）
+  `@deepseek-ai/dsh-fs@${DSH_VERSION}`,
+  `@deepseek-ai/dsh-invariants@${DSH_VERSION}`,
+  `@deepseek-ai/dsh-scope@${DSH_VERSION}`,
+  `@deepseek-ai/dsh-timeout@${DSH_VERSION}`,
+  `@deepseek-ai/dsh-code-runtime@${DSH_VERSION}`,
+  `@deepseek-ai/dsh-atomic-write@${DSH_VERSION}`,
+  `@deepseek-ai/dsh-bash-local@${DSH_VERSION}`,
+  `@deepseek-ai/dsh-sandbox@${DSH_VERSION}`,
+  `@deepseek-ai/dsh-shell@${DSH_VERSION}`,
+  `@deepseek-ai/dsh-anonymous-user-id@${DSH_VERSION}`,
+  `@deepseek-ai/dsh-session-telemetry@${DSH_VERSION}`,
+  `@deepseek-ai/dsh-session-title-llm@${DSH_VERSION}`,
+  `@deepseek-ai/dsh-spill@${DSH_VERSION}`,
+  `@deepseek-ai/dsh-output-retention@${DSH_VERSION}`,
+  `@deepseek-ai/dsh-subagent-in-process-driver@${DSH_VERSION}`,
+  `@deepseek-ai/dsh-subprocess@${DSH_VERSION}`,
+  `@deepseek-ai/dsh-compaction@${DSH_VERSION}`,
+  `@deepseek-ai/dsh-workflow@${DSH_VERSION}`,
   // @huanlin / dsh-ssid-panels 声明 cordis 本体（官方闭包用 @deepseek-ai/cordis fork，双实例共存）
   '@deepseek-ai/cordis-plugin-group@1.0.1',
   'cordis@4.0.0-rc.8',
@@ -82,12 +99,13 @@ function main() {
   console.log('[2/5] 已复制 profile-template')
 
   // 3. 注入 @deepseek-ai/dsh 聚合包（boot 的 installAnchor + 官方闭包来源）
-  //    精确 pin（无 ^）：rc 阶段 ^ 会悄悄升级到未回归验证的版本，DSH 跟进必须是显式决策
+  //    精确 pin（无 ^）：rc 阶段 ^ 会悄悄升级到未回归验证的版本，DSH 跟进必须是显式决策；
+  //    版本取自 DSH_VERSION（本地 deepseek-harness checkout 自动读取）。
   const pkgPath = join(runtimeDir, 'package.json')
   const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
-  pkg.dependencies['@deepseek-ai/dsh'] = '0.1.0-rc.7'
+  pkg.dependencies['@deepseek-ai/dsh'] = DSH_VERSION
   writeFileSync(pkgPath, JSON.stringify(pkg, null, 2))
-  console.log('[3/5] 已注入 @deepseek-ai/dsh 0.1.0-rc.7（精确 pin）')
+  console.log(`[3/5] 已注入 @deepseek-ai/dsh ${DSH_VERSION}（精确 pin）`)
 
   // 3.5 扁平布局（electron-builder 26 不复制 pnpm symlink 节点，必须 hoisted）
   writeFileSync(join(runtimeDir, '.npmrc'), 'node-linker=hoisted\n')
