@@ -14,6 +14,35 @@ import type { Context } from 'cordis'
 
 export const inject = ['slots']
 
+// ---- SSiD 品牌标记（rc.8 品牌槽位：sidebar.brand.mark / conversation.hero.brand.mark） ----
+// 槽位由 ui-sidebar/ui-conversation 声明（带 FishLogo fallback），官方
+// ui-brand-official 仅在 DSH_CLIENT_BUILD_PROFILE=official 时占用，SSiD 场景
+// 无冲突。此组件重现 assets/logo.svg 的 Si 瞳孔（圆角方块 + 轨道 + 瞳孔 + 高光），
+// 纯 currentColor 无关（沿用 logo 的 #0ea5e9 品牌蓝，深色底由壳主题提供）。
+const BRAND_MARK_PATHS = [
+  'M128 76a52 52 0 1 0 0 104 52 52 0 0 0 0-104Zm0 10a42 42 0 1 1 0 84 42 42 0 0 1 0-84Z',
+  'M128 48a80 80 0 1 0 0 160 80 80 0 0 0 0-160Zm0 8a72 72 0 1 1 0 144 72 72 0 0 1 0-144Z',
+  'M128 22a106 106 0 1 0 0 212 106 106 0 0 0 0-212Zm0 8a98 98 0 1 1 0 196 98 98 0 0 1 0-196Z',
+]
+/** SSiD Si-pupil mark, sized by the slot owner prop. */
+function SsidBrandMark({ size = 24, className }: { size?: number; className?: string }): ReactNode {
+  return createElement('svg', {
+    width: size, height: size, viewBox: '0 0 256 256',
+    className, 'aria-hidden': true,
+  },
+    // 同心轨道（3 层，透明度递减）
+    BRAND_MARK_PATHS.map((d, i) => createElement('path', {
+      key: 'ring' + i, d, fill: 'none', stroke: '#0ea5e9',
+      strokeWidth: 2, opacity: 0.45 - i * 0.09,
+    })),
+    // 瞳孔：虹膜 + 瞳孔 + 高光
+    createElement('circle', { cx: 128, cy: 128, r: 38, fill: '#0369a1' }),
+    createElement('circle', { cx: 128, cy: 128, r: 27, fill: '#0ea5e9' }),
+    createElement('circle', { cx: 128, cy: 128, r: 13, fill: '#0b1220' }),
+    createElement('circle', { cx: 119, cy: 118, r: 7, fill: '#fff', opacity: 0.9 }),
+  )
+}
+
 // ---- settings nav icon ----
 // DSH 0.1.x 的 settings.section 注册只投影 id/order/label，设置壳对外部 section
 // 一律渲染默认齿轮（无 icon 契约字段）。照 dsh-better-sidebar 的 settings-nav-icon
@@ -308,7 +337,7 @@ function HabitView(props: { visible: boolean }): ReactNode {
   const pending = candidates.filter(candidate => candidate.status === 'pending')
   return createElement('div', { style: ssid.wrap },
     pending.length === 0
-      ? createElement('div', { style: ssid.empty }, t('empty'))
+      ? createElement('div', { style: ssid.empty }, t('noPending'))
       : pending.map(candidate => createElement('div', { key: candidate.id, style: ssid.card },
         createElement('div', { style: ssid.title },
           createElement('span', null, t('habitCandidates')),
@@ -531,6 +560,19 @@ export function apply(ctx: Context): void {
     label: () => STRINGS[localeId].about,
     inject: () => ({}),
   }, () => createElement(SsidAboutSection)))
+
+  // rc.8 品牌槽位（sidebar.brand.mark / conversation.hero.brand.mark）：
+  // 官方 ui-brand-official 在发布构建（DSH_CLIENT_BUILD_PROFILE=official 静态
+  // 编译进 bundle）下以 priority 0 占用；single 槽 lowest renders，注册
+  // priority -1 以 shadow 官方占位（同一 priority 重复注册会抛错）。
+  ctx.slots.inject('sidebar.brand.mark', () => ctx.slots.register(
+    { name: 'sidebar.brand.mark', priority: -1 },
+    ({ size, className }: { size?: number; className?: string }) => createElement(SsidBrandMark, { size, className }),
+  ))
+  ctx.slots.inject('conversation.hero.brand.mark', () => ctx.slots.register(
+    { name: 'conversation.hero.brand.mark', priority: -1 },
+    ({ size, className }: { size?: number; className?: string }) => createElement(SsidBrandMark, { size, className }),
+  ))
 
   // 侧栏 3 tab（记忆 tab 已归还 dsh-memory 自带——2026-08-19 归属迁移）：
   // betterSidebar 是可选软依赖（未安装时设置页仍可用）。
