@@ -38,6 +38,16 @@ process.stdout.on('error', () => { stdioDead = true })
 // 文件日志是唯一诊断通道；SSID_LOG_FILE 可覆盖路径）。
 const LOG_PATH = process.env.SSID_LOG_FILE ?? join(homedir(), '.ssid', 'ssid.log')
 let logFileDead = false
+// 日志目录兜底：~/.ssid 可能不存在（首启/被清理），appendFileSync 一次
+// ENOENT 就会把整个会话的日志静默丢掉——写入前确保目录存在（recursive
+// 幂等），mkdir 失败才标记 dead（磁盘/权限问题，继续尝试无意义）。
+const ensureLogDir = () => {
+  try {
+    mkdirSync(dirname(LOG_PATH), { recursive: true })
+  } catch {
+    logFileDead = true
+  }
+}
 const safeLog = (text) => {
   if (!stdioDead) {
     try {
@@ -49,8 +59,15 @@ const safeLog = (text) => {
   if (!logFileDead) {
     try {
       appendFileSync(LOG_PATH, text)
-    } catch {
-      logFileDead = true
+    } catch (error) {
+      if (error?.code === 'ENOENT') {
+        ensureLogDir()
+        if (!logFileDead) {
+          try { appendFileSync(LOG_PATH, text) } catch { logFileDead = true }
+        }
+      } else {
+        logFileDead = true
+      }
     }
   }
 }
@@ -228,6 +245,14 @@ async function start() {
   await win.loadFile(fileURLToPath(new URL('./splash.html', import.meta.url)))
   setStepList(STARTUP_STEPS, 0)
   win.show()
+  // 焦点诊断（v0.1.x 排查「切走其他应用后 SSID 不定时跳出」）：记录每次
+  // 窗口获得焦点/显示/恢复/最小化的时刻与来源；复现后对照 ssid.log 定位
+  // 是哪条路径抢的焦点。
+  win.on('focus', () => safeLog(`ssid: win focus event @ ${Date.now()}\n`))
+  win.on('show', () => safeLog(`ssid: win show event @ ${Date.now()}\n`))
+  win.on('restore', () => safeLog(`ssid: win restore event @ ${Date.now()}\n`))
+  win.on('minimize', () => safeLog(`ssid: win minimize event @ ${Date.now()}\n`))
+  app.on('browser-window-focus', () => safeLog(`ssid: browser-window-focus @ ${Date.now()}\n`))
 
   // ── 首次初始化：铺 profile 模板 + 自动安装预制插件（换机开箱即用）───
   // 已初始化（本机 profile 有插件）则直接跳过；否则从安装包模板铺设并
@@ -1029,6 +1054,7 @@ async function start() {
 
   // 第二实例启动：聚焦现有窗口。
   app.on('second-instance', () => {
+    safeLog(`ssid: second-instance triggered @ ${Date.now()}\n`)
     win.show()
     win.focus()
   })

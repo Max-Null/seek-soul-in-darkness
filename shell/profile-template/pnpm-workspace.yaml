@@ -24,6 +24,11 @@ minimumReleaseAgeExclude:
   - dsh-video-preview@0.1.1
   - '@max-null/dsh-skill-mcp-center@0.2.0'
   - '@huanlin/dsh-plugin-better-sidebar-plugin-office@0.1.0'
+  - '@max-null/dsh-draft-polish@0.1.0'
+  - '@max-null/dsh-skill-mcp-center@0.3.1'
+  - '@max-null/dsh-memory@0.4.1'
+  - '@max-null/dsh-chat-rail@0.2.0'
+  - '@max-null/dsh-node-appearance@0.2.3'
 allowBuilds:
   node-pty: false
   koffi: true
