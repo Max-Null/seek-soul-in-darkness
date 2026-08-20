@@ -297,7 +297,9 @@ export async function bootKernel(
     const ctx = await boot(BIN_NAME, rootConfig, structuredClone(patches), (hostCtx) => {
       hostCtx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, environment)
       provideCmdline(hostCtx, {
-        args: ['--host', '127.0.0.1', '--port', '0'],
+        // rc.8 起 dsh web 默认打开浏览器（openBrowser 默认 true）；壳内嵌场景
+        // 必须关闭，否则每次启动弹系统浏览器（--no-open 由 web-startup 解析）。
+        args: ['--host', '127.0.0.1', '--port', '0', '--no-open'],
         exit,
       })
     })
