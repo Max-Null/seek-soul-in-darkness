@@ -1,0 +1,6 @@
+# @max-null/dsh-ssid-zh-ui bundle patch: one insert over the profile root.
+# Host half translates input-bar command descriptions and permission preset
+# labels to Chinese for SSiD's non-developer users.
+- insert:
+    - id: dsh-ssid-zh-ui
+      name: '@max-null/dsh-ssid-zh-ui'
