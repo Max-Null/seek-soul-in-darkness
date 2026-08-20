@@ -96,6 +96,16 @@ function main() {
 
   // 2. 复制 profile-template（package.json / pnpm-workspace.yaml / cordis.patch.yml / vendor/）
   cpSync(join(shellDir, 'profile-template'), runtimeDir, { recursive: true })
+  // 2.1 防御性剔除 vendor 副本的 node_modules：内置插件的源码目录带开发构建
+  //     依赖（实测 dsh-ssid-panels 894MB：rolldown/esbuild/typescript 等），一旦
+  //     被 /MIR 同步进 vendor 会让归档与安装包暴涨（0.1.7 起 253MB→469MB 的根因）。
+  //     归档只带运行时产物，开发依赖不进闭包。
+  const vendorRoot = join(runtimeDir, 'vendor')
+  if (existsSync(vendorRoot)) {
+    for (const entry of readdirSafe(vendorRoot)) {
+      rmSync(join(vendorRoot, entry.name, 'node_modules'), { recursive: true, force: true })
+    }
+  }
   console.log('[2/5] 已复制 profile-template')
 
   // 3. 注入 @deepseek-ai/dsh 聚合包（boot 的 installAnchor + 官方闭包来源）
