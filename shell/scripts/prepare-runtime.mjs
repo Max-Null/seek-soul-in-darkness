@@ -134,6 +134,9 @@ function main() {
   const nodeCandidates = [
     process.env.DSH_NODE,
     'D:\\Program Files\\nvm\\v22.22.2\\node.exe',
+    // PATH 上的 node.exe（nvm 路径漂移后仍可用——2026-08-22 D 盘 nvm
+    // 目录消失导致「缺少 Node」失败，构建机 Node ≥22.13 即可）
+    process.env.PATH?.split(';').map(p => join(p, 'node.exe')).find(p => existsSync(p)),
   ].filter(Boolean)
   const node = nodeCandidates.find((c) => existsSync(c))
   if (!node) {
@@ -143,6 +146,9 @@ function main() {
   const pnpmCandidates = [
     process.env.PNPM_CMD,
     join(dirname(node), 'node_modules', 'pnpm', 'bin', 'pnpm.cjs'),
+    // 用户级 npm 全局（nvm 目录消失后 node 用系统安装，pnpm 全局在
+    // %APPDATA%\npm——2026-08-22 实测 D 盘 nvm 移除后此处是唯一来源）
+    join(process.env.APPDATA ?? '', 'npm', 'node_modules', 'pnpm', 'bin', 'pnpm.cjs'),
   ].filter(Boolean)
   const pnpm = pnpmCandidates.find((p) => existsSync(p)) || null
   if (!pnpm) {
