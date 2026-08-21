@@ -105,6 +105,13 @@ window.__ModuleLoader__.load({
           }
           return
         }
+        if (detail === 'open-sea-skin') {
+          // 标题栏「海洋皮肤」按钮 → 点击 open-sea-skin 自建设置按钮
+          // （id=__open-sea-skin-btn__，fixed 定位，无需可见即可触发）。
+          var ossBtn = document.getElementById('__open-sea-skin-btn__')
+          if (ossBtn !== null && ossBtn !== undefined && !ossBtn.disabled) ossBtn.click()
+          return
+        }
         if (detail === 'sidebar' || detail === 'bottom') {
           // 互斥：侧栏/底栏打开时，插件中心模态让位（若开着先关闭）。
           var close = window.__pluginCenterClose

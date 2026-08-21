@@ -10,16 +10,17 @@
     "@max-null/dsh-habit": "^0.2.0",
     "@max-null/dsh-header-unify": "file:./vendor/dsh-header-unify",
     "@max-null/dsh-memory": "^0.5.0",
-    "@max-null/dsh-plugin-center": "^0.2.1",
+    "@max-null/dsh-plugin-center": "^0.2.2",
     "@max-null/dsh-skill-mcp-center": "^0.4.0",
     "@max-null/dsh-node-appearance": "^0.3.0",
     "@max-null/dsh-ssid-panels": "file:./vendor/dsh-ssid-panels",
     "@max-null/dsh-ssid-zh-ui": "file:./vendor/dsh-ssid-zh-ui",
     "dsh-better-sidebar": "^0.14.0",
+    "dsh-dream-skin": "^0.4.10",
     "dsh-excel-panel": "^0.6.1",
     "dsh-sidebar-qa": "^0.2.0",
-    "dsh-skin": "^0.4.1",
-    "dsh-video-preview": "^0.1.1"
+    "dsh-video-preview": "^0.1.1",
+    "open-sea-skin": "https://github.com/d-dev0101/open-sea-skin/releases/download/v1.2.0/open-sea-skin-1.2.0.tgz"
   },
   "dsh": {
     "profile": {
