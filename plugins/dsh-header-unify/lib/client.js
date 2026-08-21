@@ -30,6 +30,12 @@ window.__ModuleLoader__.load({
       '/* SSiD 标题栏统一按钮组：隐藏 DSH 内原按钮，避免双入口与错位 */',
       '[class*="pc-headerbtn"] { display: none !important; }',
       '[class*="toggleCluster"] { display: none !important; }',
+      // open-sea-skin 页面浮动设置按钮：标题栏已提供入口（2026-08-22）。
+      // 不能用 display:none——其面板按按钮 rect 定位（2026-08-22 实测
+      // display:none 后 rect 全 0、面板飞出视口）；visibility:hidden 保留
+      // 布局 rect、不可见不可点，且不影响 JS .click()（标题栏入口照常
+      // 开关面板）。
+      '#__open-sea-skin-btn__ { visibility: hidden !important; pointer-events: none !important; }',
     ].join('\n')
 
     /**
