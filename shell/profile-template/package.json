@@ -20,7 +20,7 @@
     "dsh-excel-panel": "^0.6.1",
     "dsh-sidebar-qa": "^0.2.0",
     "dsh-video-preview": "^0.1.1",
-    "open-sea-skin": "https://github.com/d-dev0101/open-sea-skin/releases/download/v1.2.0/open-sea-skin-1.2.0.tgz"
+    "open-sea-skin": "file:./vendor/open-sea-skin-1.2.1.tgz"
   },
   "dsh": {
     "profile": {
