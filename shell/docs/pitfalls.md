@@ -309,6 +309,29 @@ dev 调用点（boot-smoke.ts / _eval-*.ts）不传 opts 走原逻辑，无影�
 **教训**：含非 ASCII 的 HTTP body 一律显式 UTF-8；Windows PowerShell 5.1
 的字符串 body 默认编码是暗坑，不要依赖默认值。
 
+### 11. file: tarball 依赖 + 手动替换 node_modules 的安装顺序约束（2026-08-22）
+
+**背景**：open-sea-skin 采用本地 fork 增强版（`plugins/open-sea-skin`），
+预制依赖指向 `file:./vendor/open-sea-skin-1.2.1.tgz`。**归档流程（prepare-runtime
+重建 + 替换安装目录归档）由代理负责**；归档落地前，profile 的
+`node_modules/open-sea-skin` 是**手动替换**的本地构建（1.2.1 增强版）。
+
+**约束**：**在完成归档流程（新归档含 file: tarball 版）之前，不要在 profile
+执行 `pnpm install` / `pnpm add`**——pnpm 会按 profile/package.json 的依赖
+声明重建 node_modules，把 open-sea-skin 恢复为声明指向的版本（归档前声明
+仍是官方 1.2.0 URL，增强版即丢失；且手动替换的内容与 lockfile/store 不一致）。
+
+**正确顺序**（代理执行）：
+1. 归档重建：`prepare-runtime.mjs`（profile-template 含 file: tarball 依赖）→
+   新归档落位安装目录
+2. 部署新归档（思灵重启自动，或手工解压）→ profile 的 open-sea-skin 变为
+   本地增强版（来自 tarball）
+3. 此后 `pnpm install` 才安全（lockfile 与 file: tarball 一致）
+
+**一般化**：任何「手工替换 node_modules 里的包」都只对当前进程有效；
+pnpm 锁文件是 node_modules 的唯一事实来源（详见决策记录
+`docs/决策/2026-08-22-插件中心0.2.1发布与归档覆盖机制复盘.md` 第二节）。
+
 ---
 
 ## 附：验证工具清单
