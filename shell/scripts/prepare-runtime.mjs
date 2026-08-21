@@ -111,11 +111,20 @@ function main() {
   // 3. 注入 @deepseek-ai/dsh 聚合包（boot 的 installAnchor + 官方闭包来源）
   //    精确 pin（无 ^）：rc 阶段 ^ 会悄悄升级到未回归验证的版本，DSH 跟进必须是显式决策；
   //    版本取自 DSH_VERSION（本地 deepseek-harness checkout 自动读取）。
+  //    同时把 MISSING_PEERS 作为显式依赖注入（版本随 DSH_VERSION 动态对齐）：
+  //    pnpm 11 不自动装 peer（auto-install-peers 实测失效），且 pnpm add 在
+  //    慢网络 + supply-chain 全量验证下会卡住超时（2026-08-22 实测 10 分钟
+  //    ETIMEDOUT；add 实际已写入依赖与 lockfile 但进程不退出）。
+  //    注入后 install 一步到位，无需再跑 add。
   const pkgPath = join(runtimeDir, 'package.json')
   const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
   pkg.dependencies['@deepseek-ai/dsh'] = DSH_VERSION
+  for (const spec of MISSING_PEERS) {
+    const at = spec.lastIndexOf('@')
+    pkg.dependencies[spec.slice(0, at)] = spec.slice(at + 1)
+  }
   writeFileSync(pkgPath, JSON.stringify(pkg, null, 2))
-  console.log(`[3/5] 已注入 @deepseek-ai/dsh ${DSH_VERSION}（精确 pin）`)
+  console.log(`[3/5] 已注入 @deepseek-ai/dsh ${DSH_VERSION} + ${MISSING_PEERS.length} 个缺失 peer（精确 pin）`)
 
   // 3.5 扁平布局（electron-builder 26 不复制 pnpm symlink 节点，必须 hoisted）
   writeFileSync(join(runtimeDir, '.npmrc'), 'node-linker=hoisted\n')
@@ -148,7 +157,7 @@ function main() {
     const r = spawnSync(node, [pnpm, ...args], {
       cwd: runtimeDir,
       stdio: 'inherit',
-      timeout: 10 * 60 * 1000,
+      timeout: 30 * 60 * 1000,
       env: {
         ...process.env,
         PATH: dirname(node) + ';' + process.env.PATH,
@@ -165,10 +174,23 @@ function main() {
   }
 
   runPnpm('pnpm install（完整依赖，hoisted 布局）', ['install', '--no-frozen-lockfile'])
-  // pnpm 11 不自动装 peer（auto-install-peers 配置实测失效），显式补装
-  // 成功后这些 peer 会写进 package.json dependencies，后续重跑 install 天然自愈
-  runPnpm(`pnpm add 缺失 peer（${MISSING_PEERS.length} 个）`, ['add', ...MISSING_PEERS])
-  console.log('[5/5] pnpm install 完成')
+  // 缺失 peer 已在第 3 步注入 dependencies，install 一步到位，无需再 pnpm add
+  // （pnpm add 慢网络 + supply-chain 全量验证下会卡住进程不退出，2026-08-22 实测）
+
+  // 4.5 vendor 插件实体兜底：pnpm 对 file:./vendor/* 依赖不感知源目录变化
+  //    且可能复用 store 中的损坏/空副本（2026-08-22 实测 dsh-header-unify
+  //    的 node_modules 副本是空目录，rc.8 归档正常）。install 后校验
+  //    package.json 实体，缺失则删除后从 vendor 源重新复制（幂等防御）。
+  for (const entry of readdirSafe(vendorRoot)) {
+    const src = join(vendorRoot, entry.name)
+    const dst = join(runtimeDir, 'node_modules', '@max-null', entry.name)
+    if (!existsSync(join(dst, 'package.json'))) {
+      console.log(`      → 修复 vendor 副本 ${entry.name}（pnpm 产物缺失，从源目录复制）`)
+      rmSync(dst, { recursive: true, force: true })
+      cpSync(src, dst, { recursive: true })
+    }
+  }
+  console.log('[5/5] pnpm install 完成（含 vendor 副本校验）')
 
   // 5. 体积报告
   const nm = join(runtimeDir, 'node_modules')
