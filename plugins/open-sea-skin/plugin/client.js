@@ -355,6 +355,7 @@ body[data-ds-dark-theme] {
         state.time = clamp(timeRange.value, 0, 100, DEFAULTS.time);
         state.autoCycle = false;
         timeOut.textContent = timeLabel(copy, state.time);
+        cycleBox.checked = false;
         void save({ time: state.time, autoCycle: false });
         postToOcean();
       });
@@ -365,11 +366,11 @@ body[data-ds-dark-theme] {
         void save({ glass: state.glass });
       });
 
-      // SSiD 增强（2026-08-22）：启用开关 / 自动昼夜循环开关 / 恢复默认。
       on(enabledBox, 'change', () => {
         state.enabled = enabledBox.checked;
         void save({ enabled: state.enabled });
-        // 只切换海洋背景，保留按钮/面板（否则禁用后无法再启用）。
+        // Only tear down the ocean surface, never the button/panel: otherwise
+        // a disabled skin has no settings entry left to re-enable it.
         applyEnabled();
       });
       on(cycleBox, 'change', () => {
@@ -378,14 +379,7 @@ body[data-ds-dark-theme] {
         postToOcean();
       });
       on(resetBtn, 'click', () => {
-        state = { ...DEFAULTS };
-        void save({
-          enabled: DEFAULTS.enabled,
-          sea: DEFAULTS.sea,
-          time: DEFAULTS.time,
-          glass: DEFAULTS.glass,
-          autoCycle: DEFAULTS.autoCycle,
-        }).then(() => {
+        void save({ ...DEFAULTS }).then(() => {
           syncUi();
           updateGlass();
           postToOcean();
@@ -438,8 +432,8 @@ body[data-ds-dark-theme] {
 
     const applyEnabled = () => {
       if (!state.enabled) {
-        // 只卸载海洋背景（frame + glass），保留按钮/面板——否则禁用后
-        // 设置入口也消失，无法再启用（2026-08-22 SSiD 增强）。
+        // Tear down only the ocean surface (frame + glass), keeping the
+        // button/panel so the skin can be re-enabled from the same page.
         if (ownsSurface) {
           document.getElementById(IDS.frame)?.remove();
           document.getElementById(IDS.glass)?.remove();

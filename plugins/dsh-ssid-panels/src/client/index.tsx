@@ -8,7 +8,8 @@
  * + 'locale/change'), silently falling back to Chinese otherwise — the same
  * pattern dsh-plugin-center uses.
  */
-import { createElement, useEffect, useState, type ReactNode } from 'react'
+import { createElement, Fragment, useEffect, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import type {} from 'dsh-better-sidebar'
 import type { Context } from 'cordis'
 
@@ -135,6 +136,33 @@ const STRINGS = {
     notifyQuestionDesc: 'AI 向你提问、需要回复时通知',
     notifyApproval: '授权申请',
     notifyApprovalDesc: '工具请求授权、需要处理时通知',
+    sessionRootTitle: '会话存储',
+    sessionRootIsolated: '独立会话存储',
+    sessionRootIsolatedDesc: '与手动 dsh web 的会话目录隔离，避免两个宿主并发写坏会话日志；重启 SSiD 后生效',
+    sessionRootApplied: '当前生效：{v}',
+    sessionRootAppliedOn: '独立（sessions-ssid）',
+    sessionRootAppliedOff: '共享（sessions）',
+    sessionRootPendingHint: '重启 SSiD 后生效（当前开关与生效状态不一致）',
+    sessionRootImport: '载入原 DSH 会话',
+    sessionRootImportDesc: '把共享根的历史会话复制到独立根（原件保留，已存在的会话跳过）',
+    sessionRootImporting: '载入中…',
+    sessionRootImportDone: '已载入 {copied} 个，跳过 {skipped} 个',
+    sessionRootImportFailed: '载入出错 {n} 个，请查看日志',
+    sessionRootRestartConfirm: '切换后需要重启 DSH 才能生效，是否现在重启？',
+    sessionRootRestartBusy: '有 {n} 个会话正在进行中，未执行重启；设置已保存，请等待完成后再重启',
+    sessionRootRestarting: '正在重启 DSH…',
+    sessionRootRestartUnavailable: '当前环境不支持自动重启，请手动重启 SSiD',
+    sessionRootRestartAskTitle: '需要重启生效',
+    sessionRootRestartAskBody: '切换已保存，重启思灵后生效（有进行中会话时会先检查）',
+    sessionRootRestartNow: '立即重启',
+    sessionRootRestartLater: '稍后',
+    sessionRootCounts: '独立根 {a} 个会话 · 共享根 {b} 个会话 · 已载入 {c} 个',
+    sessionRootClear: '移除已载入会话',
+    sessionRootClearConfirm: '将删除 {n} 个已载入的会话（隔离后新建的会话与共享根都不受影响，原件保留）。确定移除？',
+    sessionRootCleared: '已移除 {n} 个已载入会话',
+    sessionRootRefreshHint: '重启思灵后生效（载入/清空不触发会话列表刷新）',
+    sessionRootRestartBtn: '重启思灵',
+    sessionRootLoadFailed: '无法读取会话存储状态（插件服务未就绪）；请重启 SSiD 后重试',
   },
   en: {
     about: 'About SSiD',
@@ -183,6 +211,33 @@ const STRINGS = {
     notifyQuestionDesc: 'Notify when the AI asks you a question',
     notifyApproval: 'Approvals',
     notifyApprovalDesc: 'Notify when a tool requests approval',
+    sessionRootTitle: 'Session storage',
+    sessionRootIsolated: 'Isolate session storage',
+    sessionRootIsolatedDesc: 'Separate the session directory from the manual dsh web, so two hosts cannot corrupt the same log; takes effect after restarting SSiD',
+    sessionRootApplied: 'Active: {v}',
+    sessionRootAppliedOn: 'isolated (sessions-ssid)',
+    sessionRootAppliedOff: 'shared (sessions)',
+    sessionRootPendingHint: 'Takes effect after restarting SSiD (switch differs from active state)',
+    sessionRootImport: 'Import original DSH sessions',
+    sessionRootImportDesc: 'Copy historical sessions from the shared root into the isolated root (originals kept; existing ids skipped)',
+    sessionRootImporting: 'Importing…',
+    sessionRootImportDone: 'Imported {copied}, skipped {skipped}',
+    sessionRootImportFailed: '{n} import error(s); check the log',
+    sessionRootRestartConfirm: 'A DSH restart is required for the switch to take effect. Restart now?',
+    sessionRootRestartBusy: '{n} session(s) still in progress — restart skipped; setting saved, restart later',
+    sessionRootRestarting: 'Restarting DSH…',
+    sessionRootRestartUnavailable: 'Auto-restart unavailable here; please restart DSH manually',
+    sessionRootRestartAskTitle: 'Restart required',
+    sessionRootRestartAskBody: 'Switch saved; takes effect after restarting SSiD (active sessions are checked first)',
+    sessionRootRestartNow: 'Restart now',
+    sessionRootRestartLater: 'Later',
+    sessionRootCounts: 'Isolated root {a} sessions · shared root {b} sessions · imported {c}',
+    sessionRootClear: 'Remove imported sessions',
+    sessionRootClearConfirm: 'This deletes {n} imported session(s) only (sessions created after isolation and the shared root are untouched; originals kept). Remove now?',
+    sessionRootCleared: 'Removed {n} imported session(s)',
+    sessionRootRefreshHint: 'Takes effect after restarting SSiD (import/clear does not refresh the session list in-place)',
+    sessionRootRestartBtn: 'Restart SSiD',
+    sessionRootLoadFailed: 'Cannot read session storage state (plugin service not ready); restart SSiD and retry',
   },
 } as const
 type StringKey = keyof typeof STRINGS.zh
@@ -430,6 +485,244 @@ function NotifySettings(): ReactNode {
   )
 }
 
+/** 自绘确认弹窗（2026-08-22，替代原生 window.confirm，与插件中心同款样式；
+ *  重启确认与「清空独立根」的二次确认共用，danger 时确认按钮红色）。 */
+function ConfirmDialog({ title, body, confirmLabel, cancelLabel, danger = false, onConfirm, onClose }: {
+  title: string, body: string, confirmLabel: string, cancelLabel: string, danger?: boolean,
+  onConfirm: () => void, onClose: () => void,
+}): ReactNode {
+  return createPortal(
+    createElement('div', { style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 } },
+      createElement('div', { style: { width: 'min(420px, 92vw)', background: 'var(--dsw-alias-bg-layer-1, #131a26)', border: '1px solid var(--dsw-alias-border-l2, #1e2836)', borderRadius: 10, padding: 14, display: 'flex', flexDirection: 'column', gap: 10 } },
+        createElement('div', { style: { fontSize: 13, fontWeight: 600, color: 'var(--dsw-alias-label-primary, #d8e0ea)' } }, title),
+        createElement('div', { style: { fontSize: 12, color: 'var(--dsw-alias-label-secondary, #67748a)', lineHeight: 1.5 } }, body),
+        createElement('div', { style: { display: 'flex', gap: 8, justifyContent: 'flex-end' } },
+          createElement('button', { type: 'button', style: ssid.btn, onClick: onClose }, cancelLabel),
+          createElement('button', {
+            type: 'button',
+            style: danger
+              ? { padding: '3px 12px', fontSize: 11.5, background: 'var(--dsw-alias-state-business-critical, #f76f4f)', border: 'none', borderRadius: 6, color: '#fff', cursor: 'pointer', fontWeight: 600 }
+              : {
+                padding: '3px 12px', fontSize: 11.5, border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600,
+                background: 'var(--dsw-alias-button-primary-fill)',
+                color: 'var(--dsw-alias-label-primary-foreground)',
+              },
+            onClick: onConfirm,
+          }, confirmLabel),
+        ),
+      ),
+    ),
+    document.body,
+  )
+}
+
+/** 会话存储隔离设置（2026-08-22）：独立 root 开关 + 载入原 DSH 会话。
+ *  配置存 ~/.ssid/session-root.json（isolated=开关，applied=boot 生效值，
+ *  由 shell/kernel.ts 回写）；载入＝把共享根会话复制到独立根（原件保留）。 */
+interface SessionRootInfo {
+  isolated: boolean
+  applied: boolean
+  /** 壳层重启通道是否可用（SSiD 内嵌 boot 才有；手动 dsh web 为 false）。 */
+  restartable?: boolean
+  sharedRoot?: string
+  isolatedRoot?: string
+  sharedSessions?: number
+  isolatedSessions?: number
+  /** B 方案（2026-08-23）：已从共享根载入的会话数（移除按钮可用性依据）。 */
+  importedSessions?: number
+  /** 持久判定（host）：本次启动后是否载入/移除过会话（重启按钮按需展示）。 */
+  listNeedsRestart?: boolean
+}
+interface SessionImportResult { copied: number, skipped: number, errors: string[] }
+
+function SessionRootSettings(): ReactNode {
+  const t = useT()
+  const [info, setInfo] = useState<SessionRootInfo | null>(null)
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [importing, setImporting] = useState(false)
+  // 统一「操作反馈行」：载入/移除/重启结果都显示在卡片内同一位置。
+  const [resultNotice, setResultNotice] = useState<string | null>(null)
+  // 自绘「立即重启 / 稍后」确认弹窗（与插件中心 RestartDialog 同款样式，
+  // 不再用原生 window.confirm，保持与 DSH 主题一致）。
+  const [restartAsk, setRestartAsk] = useState(false)
+  useEffect(() => {
+    void api('sessionRoot.get').then(value => {
+      setInfo(value as SessionRootInfo)
+      setLoadFailed(false)
+    }, () => { setLoadFailed(true) })
+  }, [])
+  const runRestartNow = (): void => {
+    void api('sessionRoot.restart').then(result => {
+      const r = result as { ok?: boolean, code?: string, activeSessions?: number }
+      if (r.code === 'busy') {
+        setResultNotice(t('sessionRootRestartBusy', { n: r.activeSessions ?? 0 }))
+      } else if (r.ok === true) {
+        setResultNotice(t('sessionRootRestarting'))
+      }
+    }).catch(() => setResultNotice(t('sessionRootRestartUnavailable')))
+  }
+  const toggle = async (): Promise<void> => {
+    if (info === null) return
+    const nextIsolated = !info.isolated
+    const previous = info
+    setInfo({ ...info, isolated: nextIsolated })
+    setResultNotice(null)
+    try {
+      const saved = await api('sessionRoot.set', { isolated: nextIsolated }) as SessionRootInfo
+      setInfo(saved)
+      // 状态发生变化时才需要重启（isolation 开启/关闭都算变化）。
+      if (nextIsolated !== info.applied) {
+        if (saved.restartable === true) {
+          // 壳层重启通道可用（SSiD）：自绘弹窗确认后自动重启。
+          setRestartAsk(true)
+        } else {
+          // 手动 dsh web：只保存，提示手动重启生效。
+          setResultNotice(t('sessionRootRestartUnavailable'))
+        }
+      }
+    } catch {
+      setInfo(previous)
+    }
+  }
+  const runImport = async (): Promise<void> => {
+    setImporting(true)
+    try {
+      const r = await api('sessionRoot.import') as SessionImportResult
+      // 统一操作反馈行：载入/移除/重启提示都进 resultNotice（同一位置）。
+      setResultNotice(r.errors.length > 0
+        ? t('sessionRootImportFailed', { n: r.errors.length })
+        : t('sessionRootImportDone', { copied: r.copied, skipped: r.skipped }))
+      // 重启按钮是否出现由 host 持久判定（listNeedsRestart：清单 mtime vs
+      // boot 时刻），重开面板/跳过再载入都不会丢；重启后自动消失。
+      void api('sessionRoot.get').then(value => setInfo(value as SessionRootInfo), () => { /* keep */ })
+    } catch (error: unknown) {
+      setResultNotice(t('sessionRootImportFailed', { n: 1 }))
+    } finally {
+      setImporting(false)
+    }
+  }
+  const [clearAsk, setClearAsk] = useState(false)
+  const runClear = async (): Promise<void> => {
+    setClearAsk(false)
+    try {
+      const r = await api('sessionRoot.clear') as { cleared?: number }
+      setResultNotice(t('sessionRootCleared', { n: r.cleared ?? 0 }))
+      void api('sessionRoot.get').then(value => setInfo(value as SessionRootInfo), () => { /* keep */ })
+    } catch (error: unknown) {
+      setResultNotice(t('sessionRootImportFailed', { n: 1 }))
+    }
+  }
+  const pending = info !== null && info.isolated !== info.applied
+  return createElement(Fragment, null,
+    createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+      createElement('div', { style: ssid.card },
+        createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
+          createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', gap: 4 } },
+            createElement('span', { style: { fontSize: 14, fontWeight: 600, color: 'var(--dsw-alias-label-primary, #d8e0ea)' } }, t('sessionRootIsolated')),
+            createElement('span', { style: { ...ssid.muted, fontSize: 12 } }, t('sessionRootIsolatedDesc')),
+          ),
+          createElement('button', {
+            type: 'button',
+            disabled: info === null,
+            style: {
+              width: 40, height: 22, borderRadius: 11, border: 'none', cursor: info === null ? 'not-allowed' : 'pointer', padding: 0, opacity: info === null ? 0.5 : 1,
+              background: info !== null && info.isolated ? 'var(--dsw-alias-state-business-primary, #4FC3F7)' : 'var(--dsw-alias-bg-module-platform, rgba(128,148,168,.2))',
+              transition: 'background .15s',
+            },
+            onClick: () => { void toggle() },
+          },
+            createElement('span', { style: { display: 'block', width: 16, height: 16, borderRadius: 8, background: '#fff', marginLeft: info !== null && info.isolated ? 22 : 2, transition: 'margin-left .15s' } }),
+          ),
+        ),
+      ),
+      info === null
+        ? createElement('div', { style: { ...ssid.muted, fontSize: 12, padding: '0 2px', color: '#f76f4f' } }, t('sessionRootLoadFailed'))
+        : createElement('div', { style: { ...ssid.muted, fontSize: 12, padding: '0 2px' } },
+          pending
+            ? t('sessionRootPendingHint')
+            : t('sessionRootApplied', { v: info.applied ? t('sessionRootAppliedOn') : t('sessionRootAppliedOff') }),
+        ),
+      info !== null
+        ? createElement('div', { style: { ...ssid.muted, fontSize: 12, padding: '0 2px' } },
+          t('sessionRootCounts', { a: info.isolatedSessions ?? 0, b: info.sharedSessions ?? 0, c: info.importedSessions ?? 0 }),
+        )
+        : null,
+      info?.isolated === true
+        ? createElement('div', { style: ssid.card },
+          // 1) 标题 + 描述（垂直堆叠，描述可换行不再被按钮挤压）
+          createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+            createElement('span', { style: { fontSize: 14, fontWeight: 600, color: 'var(--dsw-alias-label-primary, #d8e0ea)' } }, t('sessionRootImport')),
+            createElement('span', { style: { ...ssid.muted, fontSize: 12, lineHeight: 1.5 } }, t('sessionRootImportDesc')),
+          ),
+          // 2) 主操作行：与 DSH 官方「编辑/删除」同款幽灵按钮（右对齐）
+          createElement('div', { style: { display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 10 } },
+            createElement('button', {
+              type: 'button',
+              disabled: importing,
+              style: {
+                padding: '3px 12px', fontSize: 11.5, borderRadius: 6, cursor: 'pointer', fontWeight: 600,
+                border: 'none', background: 'transparent',
+                color: 'var(--dsw-alias-label-primary, #d8e0ea)',
+              },
+              onClick: () => { void runImport() },
+            }, importing ? t('sessionRootImporting') : t('sessionRootImport')),
+            createElement('button', {
+              type: 'button',
+              style: {
+                padding: '3px 12px', fontSize: 11.5, borderRadius: 6, cursor: 'pointer',
+                border: 'none', background: 'transparent',
+                color: 'var(--dsw-alias-state-error-primary, #f76f4f)',
+              },
+              disabled: (info?.importedSessions ?? 0) === 0,
+              onClick: () => { setClearAsk(true) },
+            }, t('sessionRootClear')),
+          ),
+          // 3) 统一操作反馈行（载入/移除/重启提示都在此）
+          resultNotice !== null
+            ? createElement('div', { style: { ...ssid.muted, fontSize: 12, marginTop: 8, color: ssid.accent } }, resultNotice)
+            : null,
+          // 4) 重启行（host 持久判定：本次启动后载入/移除过会话才出现）
+          info?.listNeedsRestart === true
+            ? createElement('div', {
+              style: {
+                display: 'flex', gap: 8, alignItems: 'center', marginTop: 12, paddingTop: 10,
+                borderTop: '1px solid var(--dsw-alias-border-l2, #1e2836)',
+              },
+            },
+              createElement('button', {
+                type: 'button',
+                style: {
+                  padding: '3px 12px', fontSize: 11.5, borderRadius: 6, cursor: 'pointer',
+                  border: 'none', background: 'transparent',
+                  color: 'var(--dsw-alias-label-primary, #d8e0ea)',
+                },
+                onClick: () => { setRestartAsk(true) },
+              }, t('sessionRootRestartBtn')),
+              createElement('span', { style: { ...ssid.muted, fontSize: 11 } }, t('sessionRootRefreshHint')),
+            )
+            : null,
+        )
+        : null,
+    ),
+    restartAsk
+      ? createElement(ConfirmDialog, {
+        title: t('sessionRootRestartAskTitle'), body: t('sessionRootRestartAskBody'),
+        confirmLabel: t('sessionRootRestartNow'), cancelLabel: t('sessionRootRestartLater'),
+        onConfirm: () => { setRestartAsk(false); runRestartNow() },
+        onClose: () => { setRestartAsk(false) },
+      })
+      : null,
+    clearAsk
+      ? createElement(ConfirmDialog, {
+        title: t('sessionRootClear'), body: t('sessionRootClearConfirm', { n: info?.importedSessions ?? 0 }),
+        confirmLabel: t('sessionRootClear'), cancelLabel: t('sessionRootRestartLater'), danger: true,
+        onConfirm: () => { void runClear() },
+        onClose: () => { setClearAsk(false) },
+      })
+      : null,
+  )
+}
+
 /** 关于 SSiD 设置页：版本 / 检查更新 / 更新日志 / 预制插件。 */
 interface UpdateInfo {  currentVersion: string
   code?: 'api-failed' | 'check-failed'
@@ -479,6 +772,10 @@ function SsidAboutSection(): ReactNode {
     createElement('div', { style: ssid.card },
       createElement('div', { style: ssid.title }, createElement('span', null, t('notifyTitle'))),
       createElement(NotifySettings),
+    ),
+    createElement('div', { style: ssid.card },
+      createElement('div', { style: ssid.title }, createElement('span', null, t('sessionRootTitle'))),
+      createElement(SessionRootSettings),
     ),
     createElement('div', { style: ssid.card },
       createElement('div', { style: ssid.title }, createElement('span', null, t('checkUpdates'))),      latest === null

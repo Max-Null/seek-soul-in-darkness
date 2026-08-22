@@ -5,10 +5,12 @@
  * or the web runtime's trustedHosts, cross-site browser markers refused.
  */
 import type { Context } from 'cordis'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
+import { zstdDecompressSync } from 'node:zlib'
+import { interruptedTurnClosers, type SessionEvent } from '@deepseek-ai/dsh-session'
 
 const require = createRequire(import.meta.url)
 
@@ -193,6 +195,219 @@ function readNotifyConfig(): NotifyConfig {
   }
 }
 
+// ── 会话存储隔离开关（2026-08-22）：独立 root 与共享 root 的切换 + 载入 ───
+// 开关状态存 ~/.ssid/session-root.json：isolated（设置页开关）+ applied（本次
+// boot 实际生效值，shell/kernel.ts 回写）。两个根路径由 kernel.ts 启动时经
+// 环境变量注入（插件侧不再计算 home，避免与 kernel 的 DSH_HOME 口径分叉）。
+const SESSION_ROOT_CONFIG_PATH = join(homedir(), '.ssid', 'session-root.json')
+/** B 方案（2026-08-23）：已载入会话清单——「移除已载入会话」只删清单内，
+ *  隔离后新建的会话不受影响。 */
+const IMPORTED_SESSIONS_PATH = join(homedir(), '.ssid', 'imported-sessions.json')
+const ISOLATED_ROOT = process.env.SSID_SESSION_ISOLATED_ROOT
+const SHARED_ROOT = process.env.SSID_SESSION_SHARED_ROOT
+
+interface SessionRootState { isolated: boolean, applied: boolean }
+
+function readImportedSessions(): Array<{ project: string, id: string }> {
+  try {
+    const parsed = JSON.parse(readFileSync(IMPORTED_SESSIONS_PATH, 'utf8')) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((entry: unknown): entry is { project: string, id: string } => {
+      const e = entry as { project?: unknown, id?: unknown } | null
+      return e !== null && typeof e.project === 'string' && typeof e.id === 'string'
+    })
+  } catch {
+    return []
+  }
+}
+
+function writeImportedSessions(entries: Array<{ project: string, id: string }>): void {
+  mkdirSync(dirname(IMPORTED_SESSIONS_PATH), { recursive: true })
+  writeFileSync(IMPORTED_SESSIONS_PATH, JSON.stringify(entries, null, 2) + '\n')
+}
+
+/** 把 present（载入/已存在）并入清单（幂等按 project+id 去重）。 */
+function mergeImportedSessions(present: Array<{ project: string, id: string }>): void {
+  const merged = readImportedSessions()
+  const seen = new Set(merged.map(entry => `${entry.project}/${entry.id}`))
+  for (const entry of present) {
+    const key = `${entry.project}/${entry.id}`
+    if (!seen.has(key)) {
+      seen.add(key)
+      merged.push(entry)
+    }
+  }
+  writeImportedSessions(merged)
+}
+
+function readSessionRootState(): SessionRootState {
+  try {
+    const parsed = JSON.parse(readFileSync(SESSION_ROOT_CONFIG_PATH, 'utf8')) as {
+      isolated?: unknown, applied?: unknown
+    } | null
+    return { isolated: parsed?.isolated === true, applied: parsed?.applied === true }
+  } catch {
+    return { isolated: false, applied: false }
+  }
+}
+
+function writeSessionRootState(next: SessionRootState): void {
+  mkdirSync(dirname(SESSION_ROOT_CONFIG_PATH), { recursive: true })
+  writeFileSync(SESSION_ROOT_CONFIG_PATH, JSON.stringify(next, null, 2) + '\n')
+}
+
+/** 一个根目录下携带会话目录的计数（只列目录，不解析日志）。 */
+function countSessionRoot(root: string | undefined): number {
+  if (root === undefined || root === '') return 0
+  let projects: string[] = []
+  try {
+    projects = readdirSync(root, { withFileTypes: true })
+      .filter(entry => entry.isDirectory()).map(entry => entry.name)
+  } catch {
+    return 0
+  }
+  let count = 0
+  for (const project of projects) {
+    try {
+      count += readdirSync(join(root, project), { withFileTypes: true })
+        .filter(entry => entry.isDirectory() && existsSync(join(root, project, entry.name, 'session.jsonl.zstd')))
+        .length
+    } catch {
+      // 项目目录不可读不影响整体计数
+    }
+  }
+  return count
+}
+
+/** 取一个 zstd 文件的第一个完整帧（header record 所在帧；扫描规则与
+ *  dsh session-persistence-jsonl 的 scanZstdFrames 一致）。 */
+function firstZstdFrame(buf: Buffer): Buffer | undefined {
+  if (buf.length < 4 || buf.readUInt32LE(0) !== 0xFD2FB528) return undefined
+  let offset = 4
+  const descriptor = buf.readUInt8(offset); offset += 1
+  const single = (descriptor & 0x20) !== 0
+  const csum = (descriptor & 0x04) !== 0
+  const dictFlag = descriptor & 0x03
+  const dictBytes = dictFlag === 3 ? 4 : dictFlag
+  const contentSizeFlag = descriptor >>> 6
+  const contentSizeBytes = contentSizeFlag === 0 ? (single ? 1 : 0) : 1 << contentSizeFlag
+  const remainingHeaderBytes = (single ? 0 : 1) + dictBytes + contentSizeBytes
+  if (buf.length - offset < remainingHeaderBytes) return undefined
+  offset += remainingHeaderBytes
+  for (;;) {
+    if (buf.length - offset < 3) return undefined
+    const blockHeader = buf.readUIntLE(offset, 3); offset += 3
+    const lastBlock = (blockHeader & 1) !== 0
+    const blockType = (blockHeader >>> 1) & 0x03
+    const blockSize = blockHeader >>> 3
+    if (blockType === 0x03) return undefined
+    const payloadBytes = blockType === 0x01 ? 1 : blockSize
+    if (buf.length - offset < payloadBytes) return undefined
+    offset += payloadBytes
+    if (lastBlock) break
+  }
+  if (csum) {
+    if (buf.length - offset < 4) return undefined
+    offset += 4
+  }
+  return buf.subarray(0, offset)
+}
+
+/** 读一个会话 artifact 的 header cwd（只解压第一个 zstd 帧，成本 ~KB 级）。 */
+function readArtifactHeaderCwd(artifact: string): string | undefined {
+  try {
+    const frame = firstZstdFrame(readFileSync(artifact))
+    if (frame === undefined) return undefined
+    const plain = zstdDecompressSync(frame).toString('utf8')
+    const first = plain.split('\n')[0]
+    if (first === undefined) return undefined
+    const parsed = JSON.parse(first) as { cwd?: unknown }
+    return typeof parsed.cwd === 'string' ? parsed.cwd : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** 把共享根的会话日志复制到独立根（只复制 session.jsonl.zstd，原件保留）。
+ *  `present` 收集所有「已存在（复制或跳过）」的会话，供载入后进行
+ *  workspace attach（侧栏分组可见——workspace 账目只随 attach/首次 bootstrap
+ *  填充，直接复制文件不会写入，2026-08-23 实测）。 */
+function importSharedSessions(): { copied: number, skipped: number, errors: string[], present: Array<{ id: string, project: string, source: string }> } {
+  if (ISOLATED_ROOT === undefined || SHARED_ROOT === undefined || ISOLATED_ROOT === SHARED_ROOT) {
+    throw new PanelsError('not-configured', 'session roots are not configured (SSiD boot must inject SSID_SESSION_* env)', 503)
+  }
+  let copied = 0
+  let skipped = 0
+  const errors: string[] = []
+  const present: Array<{ id: string, project: string, source: string }> = []
+  let projects: string[] = []
+  try {
+    projects = readdirSync(SHARED_ROOT, { withFileTypes: true })
+      .filter(entry => entry.isDirectory()).map(entry => entry.name)
+  } catch {
+    return { copied, skipped, errors, present } // 共享根不存在 = 没有可载入的会话
+  }
+  for (const project of projects) {
+    const projectSource = join(SHARED_ROOT, project)
+    let ids: string[] = []
+    try {
+      ids = readdirSync(projectSource, { withFileTypes: true })
+        .filter(entry => entry.isDirectory()).map(entry => entry.name)
+    } catch {
+      continue
+    }
+    for (const id of ids) {
+      const sourceArtifact = join(projectSource, id, 'session.jsonl.zstd')
+      if (!existsSync(sourceArtifact)) continue
+      const targetArtifact = join(ISOLATED_ROOT, project, id, 'session.jsonl.zstd')
+      if (existsSync(targetArtifact)) {
+        skipped += 1
+        present.push({ id, project, source: sourceArtifact })
+        continue
+      }
+      try {
+        mkdirSync(dirname(targetArtifact), { recursive: true })
+        copyFileSync(sourceArtifact, targetArtifact)
+        copied += 1
+        present.push({ id, project, source: sourceArtifact })
+      } catch (error: unknown) {
+        errors.push(`${id}: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+  }
+  return { copied, skipped, errors: errors.slice(0, 20), present }
+}
+
+/** 把（载入/已存在的）会话 attach 到其 cwd 对应的 workspace：workspace 归属
+ *  要求「账目记录 + cwd 匹配」（types.ts:17-22），复制文件不写账目，故此步
+ *  幂等补齐——侧栏分组即时可见。cwd 不存在的会话与无匹配 workspace 的跳过。 */
+async function attachCopiedToWorkspaces(
+  ctx: Context,
+  present: Array<{ id: string, source: string }>,
+): Promise<number> {
+  const registry = ctx.get('workspaceRegistry') as {
+    list?: () => Array<{ path: string, attachSession: (id: string) => Promise<void> }>
+  } | undefined
+  if (registry === undefined) return 0
+  const workspaces = registry.list?.() ?? []
+  let attached = 0
+  for (const item of present) {
+    const cwd = readArtifactHeaderCwd(item.source)
+    if (cwd === undefined) continue
+    let real: string
+    try { real = realpathSync(cwd) } catch { continue }
+    const ws = workspaces.find(w => w.path === real)
+    if (ws === undefined) continue
+    try {
+      await ws.attachSession(item.id)
+      attached++
+    } catch {
+      // 单会话 attach 失败（header 校验等）不影响整体
+    }
+  }
+  return attached
+}
+
 /** Read one optional service or throw 503 so the client can degrade. */
 function required<T>(service: T | undefined, label: string): T {
   if (service === undefined) {
@@ -218,6 +433,110 @@ export function apply(ctx: Context): void {
       mkdirSync(dirname(NOTIFY_CONFIG_PATH), { recursive: true })
       writeFileSync(NOTIFY_CONFIG_PATH, JSON.stringify(next, null, 2) + '\n')
       return next
+    },
+    'sessionRoot.get': () => {
+      const state = readSessionRootState()
+      return {
+        ...state,
+        // 壳层重启通道是否存在（SSiD 内嵌 boot 才有；手动 dsh web 为 false，
+        // 客户端据此跳过「确认后自动重启」、提示手动重启）。
+        restartable: typeof ctx.get('ssid.shell.restart') === 'function',
+        sharedRoot: SHARED_ROOT,
+        isolatedRoot: ISOLATED_ROOT,
+        sharedSessions: countSessionRoot(SHARED_ROOT),
+        isolatedSessions: countSessionRoot(ISOLATED_ROOT),
+        // B 方案：已载入会话数（「移除已载入会话」按钮的可用性依据）。
+        importedSessions: readImportedSessions().length,
+        // 持久判定「列表需要重启」：清单最后变更时刻 > 本次启动时刻 ⇒
+        // 本次运行中载入/移除过会话，workspace 索引尚未重建；重启后自然消失。
+        listNeedsRestart: (() => {
+          try {
+            const bootedAt = Number(process.env.SSID_BOOTED_AT ?? 0)
+            if (!Number.isFinite(bootedAt) || bootedAt === 0) return false
+            return statSync(IMPORTED_SESSIONS_PATH).mtimeMs > bootedAt
+          } catch {
+            return false // 清单不存在（从未载入）＝无需重启
+          }
+        })(),
+      }
+    },
+    'sessionRoot.set': (payload) => {
+      const record = payload as { isolated?: unknown } | null
+      if (typeof record?.isolated !== 'boolean') {
+        throw new PanelsError('bad-request', 'missing or invalid "isolated"')
+      }
+      const next: SessionRootState = { isolated: record.isolated, applied: readSessionRootState().applied }
+      writeSessionRootState(next)
+      return {
+        ...next,
+        // 与 get 一致：client 的 toggle 用 saved.restartable 决定「自绘重启
+        // 弹窗」还是「提示手动重启」（2026-08-22：曾漏传导致永远走提示分支）。
+        restartable: typeof ctx.get('ssid.shell.restart') === 'function',
+        sharedRoot: SHARED_ROOT,
+        isolatedRoot: ISOLATED_ROOT,
+      }
+    },
+    'sessionRoot.import': async () => {
+      const state = readSessionRootState()
+      if (!state.isolated) {
+        throw new PanelsError('not-isolated', 'session isolation is off; enable the switch first')
+      }
+      const result = importSharedSessions()
+      // B 方案：记录已载入清单（「移除已载入会话」只删清单内，新建会话保护）。
+      mergeImportedSessions(result.present.map(({ id, project }) => ({ id, project })))
+      // 复制文件 ≠ 分组可见：把全部已存在会话 attach 到对应 workspace（幂等，
+      // 侧栏分组即时出现；attach 失败不阻断统计结果）。
+      let attached = 0
+      try {
+        attached = await attachCopiedToWorkspaces(ctx, result.present)
+      } catch {
+        attached = 0
+      }
+      return { ...result, attached }
+    },
+    // 移除已载入会话（2026-08-23 B 方案）：只删 imported-sessions.json 清单内
+    // 的会话（即从共享根载入的），隔离后新建的会话与共享根不受影响。
+    'sessionRoot.clear': () => {
+      if (ISOLATED_ROOT === undefined || ISOLATED_ROOT === '') {
+        throw new PanelsError('not-configured', 'session roots are not configured', 503)
+      }
+      const imported = readImportedSessions()
+      let cleared = 0
+      for (const entry of imported) {
+        const dir = join(ISOLATED_ROOT, entry.project, entry.id)
+        if (existsSync(dir)) {
+          try {
+            rmSync(dir, { recursive: true, force: true })
+            cleared++
+          } catch {
+            // 单会话删除失败（文件锁等）不阻断整体
+          }
+        }
+      }
+      writeImportedSessions([])
+      return { cleared }
+    },
+    'sessionRoot.restart': () => {
+      // 重启通道：main.mjs 经 bootKernel opts.restart 注入（服务键
+      // 'ssid.shell.restart'，kernel.ts 的 SSID_SHELL_RESTART_KEY 契约）。
+      const restart = ctx.get('ssid.shell.restart')
+      if (typeof restart !== 'function') {
+        throw new PanelsError('restart-unavailable', 'SSiD restart channel is unavailable (not booted by the shell?)', 503)
+      }
+      // 进行中会话检查（2026-08-22）：任何 live session 带未闭合 turn
+      // （open turn，interruptedTurnClosers 非空）时拒绝执行重启——重启会让
+      // 该轮按 interrupted 收尾，进行中的对话会被打断。
+      // 注：检查与 shutdown 之间存在极窄竞态（新 turn 可能恰好开始），
+      // 但对用户触发的这个场景足够；真·边界由 DSH 的 crash-repair 兜底。
+      const store = ctx.get('sessions') as { list?: () => Array<{ events: readonly SessionEvent[] }> } | undefined
+      const activeSessions = (store?.list?.() ?? [])
+        .filter(session => interruptedTurnClosers(session.events).length > 0)
+        .length
+      if (activeSessions > 0) {
+        return { ok: false, code: 'busy', activeSessions }
+      }
+      ;(restart as () => void)()
+      return { ok: true, activeSessions: 0 }
     },
     'about': () => ({
       shellVersion: SHELL_VERSION,
