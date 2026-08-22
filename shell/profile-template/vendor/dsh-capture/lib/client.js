@@ -61,6 +61,8 @@ window.__ModuleLoader__.load({
 			".ssd3ov-toolbar{position:absolute;display:none;align-items:center;gap:8px;padding:6px 10px;border-radius:10px;background:rgba(26,32,42,.94);box-shadow:0 4px 16px rgba(0,0,0,.4);z-index:2}",
 			".ssd3ov-tool{display:grid;place-items:center;width:30px;height:30px;border:none;border-radius:7px;background:transparent;color:#C7D3E3;cursor:pointer}",
 			".ssd3ov-tool:hover{background:rgba(255,255,255,.12);color:#fff}",
+			".ssd3ov-tool-active{background:#2E6BE6;color:#fff}",
+			".ssd3ov-tool-active:hover{background:#2E6BE6;color:#fff}",
 			".ssd3ov-sep{width:1px;height:20px;background:rgba(255,255,255,.18)}",
 			".ssd3ov-done{padding:5px 16px;border:none;border-radius:14px;background:#2E6BE6;color:#fff;font:13px/1.6 \"Microsoft YaHei UI\",\"PingFang SC\",\"Segoe UI\",sans-serif;cursor:pointer}",
 			".ssd3ov-done:hover{background:#3B78F5}"
@@ -149,20 +151,22 @@ window.__ModuleLoader__.load({
 			const [sel, setSel] = (0, react.useState)(null);
 			const [annoRects, setAnnoRects] = (0, react.useState)([]);
 			const [annoDraft, setAnnoDraft] = (0, react.useState)(null);
-			const [undoStack, setUndoStack] = (0, react.useState)([]);
+			const [toolKind, setToolKind] = (0, react.useState)("rect");
 			const live = (0, react.useRef)({
 				phase,
 				sel,
 				annoRects,
 				annoDraft,
-				showSize
+				showSize,
+				toolKind
 			});
 			live.current = {
 				phase,
 				sel,
 				annoRects,
 				annoDraft,
-				showSize
+				showSize,
+				toolKind
 			};
 			const dragStart = (0, react.useRef)(null);
 			const annoStart = (0, react.useRef)(null);
@@ -195,8 +199,15 @@ window.__ModuleLoader__.load({
 				for (const r of s.annoRects) {
 					const x = r.x - s.sel.x;
 					const y = r.y - s.sel.y;
-					ctx.strokeRect(x, y, r.w, r.h);
-					ctx.fillRect(x, y, r.w, r.h);
+					if (r.kind === "ellipse") {
+						ctx.beginPath();
+						ctx.ellipse(x + r.w / 2, y + r.h / 2, r.w / 2, r.h / 2, 0, 0, Math.PI * 2);
+						ctx.stroke();
+						ctx.fill();
+					} else {
+						ctx.strokeRect(x, y, r.w, r.h);
+						ctx.fillRect(x, y, r.w, r.h);
+					}
 				}
 				ctx.restore();
 				onDone(canvas.toDataURL("image/png"));
@@ -211,7 +222,7 @@ window.__ModuleLoader__.load({
 				setSel(null);
 				setAnnoRects([]);
 				setAnnoDraft(null);
-				setUndoStack([]);
+				setToolKind("rect");
 			}, []);
 			const cancelOrBack = (0, react.useCallback)(() => {
 				const s = live.current;
@@ -227,7 +238,7 @@ window.__ModuleLoader__.load({
 				setPhase("tool");
 				setAnnoRects([]);
 				setAnnoDraft(null);
-				setUndoStack([]);
+				setToolKind("rect");
 			}, []);
 			(0, react.useEffect)(() => {
 				const onMouseDown = (event) => {
@@ -246,7 +257,8 @@ window.__ModuleLoader__.load({
 							x: annoStart.current.x,
 							y: annoStart.current.y,
 							w: 0,
-							h: 0
+							h: 0,
+							kind: s.toolKind
 						});
 						return;
 					}
@@ -262,7 +274,11 @@ window.__ModuleLoader__.load({
 						if (s.annoDraft !== null && annoStart.current !== null) {
 							const p = toPhys(event.clientX, event.clientY);
 							if (p === null) return;
-							setAnnoDraft(clampToSel(norm(annoStart.current.x, annoStart.current.y, p.x, p.y), s.sel));
+							const clipped = clampToSel(norm(annoStart.current.x, annoStart.current.y, p.x, p.y), s.sel);
+							setAnnoDraft(clipped === null ? null : {
+								...clipped,
+								kind: s.toolKind
+							});
 						}
 						return;
 					}
@@ -281,10 +297,7 @@ window.__ModuleLoader__.load({
 					const drag = dragStart.current;
 					const s = live.current;
 					if (s.phase === "tool") {
-						if (s.annoDraft !== null && s.annoDraft.w >= 3 && s.annoDraft.h >= 3) {
-							setUndoStack((prev) => [...prev, JSON.stringify(s.annoRects)]);
-							setAnnoRects([...s.annoRects, s.annoDraft]);
-						}
+						if (s.annoDraft !== null && s.annoDraft.w >= 3 && s.annoDraft.h >= 3) setAnnoRects([...s.annoRects, s.annoDraft]);
 						setAnnoDraft(null);
 						annoStart.current = null;
 						return;
@@ -340,12 +353,23 @@ window.__ModuleLoader__.load({
 				ctx.clearRect(0, 0, canvas.width, canvas.height);
 				const sx = showSize.w / width;
 				const sy = showSize.h / height;
+				ctx.strokeStyle = "#FF5B4D";
+				ctx.fillStyle = "rgba(255, 91, 77, .12)";
+				ctx.lineWidth = 2.5;
 				const draw = (r) => {
-					ctx.strokeStyle = "#FF5B4D";
-					ctx.lineWidth = 2.5;
-					ctx.strokeRect(r.x * sx, r.y * sy, r.w * sx, r.h * sy);
-					ctx.fillStyle = "rgba(255, 91, 77, .12)";
-					ctx.fillRect(r.x * sx, r.y * sy, r.w * sx, r.h * sy);
+					const x = r.x * sx;
+					const y = r.y * sy;
+					const w = r.w * sx;
+					const h = r.h * sy;
+					if (r.kind === "ellipse") {
+						ctx.beginPath();
+						ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+						ctx.stroke();
+						ctx.fill();
+						return;
+					}
+					ctx.strokeRect(x, y, w, h);
+					ctx.fillRect(x, y, w, h);
 				};
 				for (const r of annoRects) draw(r);
 				if (annoDraft !== null) draw(annoDraft);
@@ -379,9 +403,29 @@ window.__ModuleLoader__.load({
 				(0, react.createElement)("button", {
 					key: "box",
 					type: "button",
-					className: "ssd3ov-tool",
-					title: "红框工具"
+					className: `ssd3ov-tool${toolKind === "rect" ? " ssd3ov-tool-active" : ""}`,
+					title: "矩形框",
+					onClick: () => setToolKind("rect")
 				}, icon(ICON_BOX, "#FF5B4D")),
+				(0, react.createElement)("button", {
+					key: "ellipse",
+					type: "button",
+					className: `ssd3ov-tool${toolKind === "ellipse" ? " ssd3ov-tool-active" : ""}`,
+					title: "椭圆框",
+					onClick: () => setToolKind("ellipse")
+				}, (0, react.createElement)("svg", {
+					viewBox: "0 0 16 16",
+					width: "15",
+					height: "15",
+					fill: "none",
+					"aria-hidden": true
+				}, (0, react.createElement)("circle", {
+					cx: "8",
+					cy: "8",
+					r: "5.6",
+					stroke: "#FF5B4D",
+					strokeWidth: "1.8"
+				}))),
 				(0, react.createElement)("div", {
 					key: "sep",
 					className: "ssd3ov-sep"
@@ -390,12 +434,9 @@ window.__ModuleLoader__.load({
 					key: "undo",
 					type: "button",
 					className: "ssd3ov-tool",
-					title: "撤销红框",
+					title: "撤销（上一标注）",
 					onClick: () => {
-						if (s.annoRects.length > 0) {
-							setUndoStack((prev) => [...prev, JSON.stringify(s.annoRects.slice(0, -1))]);
-							setAnnoRects(s.annoRects.slice(0, -1));
-						}
+						if (s.annoRects.length > 0) setAnnoRects(s.annoRects.slice(0, -1));
 					}
 				}, icon(ICON_UNDO, "none")),
 				(0, react.createElement)("button", {
@@ -414,7 +455,7 @@ window.__ModuleLoader__.load({
 					}
 				}, "完成")
 			]) : null;
-			const tip = s.phase === "select" ? (0, react.createElement)("div", { className: "ssd3ov-tip" }, (0, react.createElement)("em", null, "拖拽 "), "选择截图区域 · ", (0, react.createElement)("em", null, "右键"), " 取消") : (0, react.createElement)("div", { className: "ssd3ov-tip" }, "拖拽画", (0, react.createElement)("em", { className: "red" }, "红框 "), "强调 · ", (0, react.createElement)("em", null, "回车"), " 完成 · ", (0, react.createElement)("em", null, "右键"), " 逐级回退");
+			const tip = s.phase === "select" ? (0, react.createElement)("div", { className: "ssd3ov-tip" }, (0, react.createElement)("em", null, "拖拽 "), "选择截图区域 · ", (0, react.createElement)("em", null, "右键"), " 取消") : (0, react.createElement)("div", { className: "ssd3ov-tip" }, "拖拽画", (0, react.createElement)("em", { className: "red" }, "标注框 "), "强调 · ", (0, react.createElement)("em", null, "回车"), " 完成 · ", (0, react.createElement)("em", null, "右键"), " 逐级回退");
 			return (0, react_dom.createPortal)((0, react.createElement)("div", { className: "ssd3ov" }, [(0, react.createElement)("div", {
 				key: "wrap",
 				className: "ssd3ov-wrap",
