@@ -21,6 +21,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import { ScreenshotButton } from './ScreenshotButton'
 import { ScreenshotHideRow, ScreenshotHotkeyRow } from './ScreenshotSettings'
+import { deliverToComposer, isImageDataUrl } from './delivery'
 
 export const inject = ['slots']
 
@@ -33,32 +34,6 @@ declare global {
 
 /** 事件名（与 shell/main.mjs 派发一致）。 */
 const SCREENSHOT_EVENT = 'ssid:screenshot'
-
-/** 事件 detail 的最低校验：必须是 image data URL。 */
-function isImageDataUrl(value: unknown): value is string {
-  return typeof value === 'string' && value.startsWith('data:image/')
-}
-
-/** data URL → Blob（浏览器自带 fetch 解码，无需手动 base64 解析）。 */
-async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
-  const response = await fetch(dataUrl)
-  return response.blob()
-}
-
-/** 一次与真实图片拖拽等价的落放：PNG File 经官方 drop 通道进草稿。 */
-async function deliverToComposer(dataUrl: string): Promise<void> {
-  const blob = await dataUrlToBlob(dataUrl)
-  const file = new File([blob], 'ssid-screenshot.png', { type: 'image/png' })
-  const transfer = new DataTransfer()
-  transfer.items.add(file)
-  console.info(`[ssid-screenshot] drop ${file.size} bytes, types=${transfer.types.join(',')}`)
-  document.dispatchEvent(new DragEvent('drop', {
-    bubbles: true,
-    cancelable: true,
-    dataTransfer: transfer,
-  }))
-  console.info('[ssid-screenshot] drop dispatched')
-}
 
 /** Plugin body: register the delivery listener, the composer capture button,
  *  and the two General-settings rows. */

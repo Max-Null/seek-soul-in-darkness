@@ -1,30 +1,40 @@
 /**
  * ScreenshotButton: the composer's right-tool-seat entry (conversation.input.right
- * — the official "before the send button" seat, same seat as dsh-draft-polish).
- * Clicked → POST /ssid/api/screenshot/trigger → 壳层开全屏框选浮层；截图完成后
- * 由本插件 client 半（index.ts）投递到输入框。无 SSiD 壳（手动 dsh web）时
- * 503 → toast 提示。
+ * — the same seat as dsh-draft-polish), dual-engine:
  *
- * 视觉顺序：本按钮显示在润色按钮左侧（CSS order 规则，见下方 STYLES：
- * model seat/ContextMeter = 0，本 wrap = 1，润色 wrap = 2，发送 = 3）。
+ *  - SSiD 壳内（引擎 A）：POST /ssid/api/screenshot/trigger → 壳开全屏浮层
+ *    （多显示器、快捷键、隐藏窗口、像素级帧）。
+ *  - 纯 DSH / 无壳（引擎 B）：点击手势内同步调用 navigator.mediaDevices
+ *    .getDisplayMedia（系统选择器选一个屏幕）→ 抓一帧 → 页面内全屏遮罩
+ *    CaptureOverlay（框选 + 红框标注）→ 官方 drop intake 投递。
+ *
+ * 探测（shellAvailable，来自 host 的 /ssid/api/screenshot/get）在组件挂载时
+ * 拉取并缓存——点击必须同步决定引擎（getDisplayMedia 要求用户手势调用栈），
+ * 不能先 await 再选。
  */
 import { createElement, useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { screenshotTrigger } from './api'
+import { screenshotGet, screenshotTrigger } from './api'
+import { CaptureOverlay, type CaptureOverlayProps } from './CaptureOverlay'
+import { deliverToComposer } from './delivery'
 
 /** Product copy (zh/en via the document lang, same pattern as dsh-draft-polish). */
 const STRINGS: Record<string, Record<string, string>> = {
   zh: {
     button: '截图',
-    tooltip: '框选屏幕区域，截图直接进入消息框（快捷键见设置）',
-    shellOnly: '截图仅在思灵桌面壳（SSiD）可用',
-    failed: '截图触发失败：',
+    tooltip: '框选屏幕区域，截图直接进入消息框（支持标注；思灵壳内可用快捷键）',
+    triggerFailed: '截图触发失败：',
+    captureUnsupported: '当前浏览器不支持屏幕捕获',
+    captureRejected: '未获得屏幕共享权限',
+    captureFailed: '截图失败：',
   },
   en: {
     button: 'Capture',
-    tooltip: 'Box-select a screen region; the image lands in the composer',
-    shellOnly: 'Capture is only available inside the SSiD desktop shell',
-    failed: 'Capture failed: ',
+    tooltip: 'Box-select a screen region; the image lands in the composer (annotation supported)',
+    triggerFailed: 'Capture failed: ',
+    captureUnsupported: 'Screen capture is not supported by this browser',
+    captureRejected: 'Screen share permission was not granted',
+    captureFailed: 'Capture failed: ',
   },
 }
 
@@ -69,11 +79,15 @@ function IconCamera(): ReactNode {
   }))
 }
 
-/** 截图按钮：触发壳层框选浮层（无草稿依赖，任何会话状态可点）。 */
+/** 壳探测缓存（模块级，避免重复探测；失败后回调为 false 即切换引擎 B）。 */
+let shellProbe: boolean | null = null
+
+/** 截图按钮：双引擎截图（壳浮层 或 浏览器 getDisplayMedia + 页面遮罩）。 */
 export function ScreenshotButton(): ReactNode {
   const t = langStrings()
   const [busy, setBusy] = useState(false)
   const [toast, setToast] = useState<{ text: string, error: boolean } | null>(null)
+  const [overlay, setOverlay] = useState<Omit<CaptureOverlayProps, 'onDone' | 'onCancel'> | null>(null)
   const toastTimer = useRef(0)
 
   const showToast = useCallback((text: string, error: boolean): void => {
@@ -84,23 +98,91 @@ export function ScreenshotButton(): ReactNode {
 
   useEffect(() => () => window.clearTimeout(toastTimer.current), [])
 
-  const handleClick = useCallback((): void => {
-    if (busy) return
-    setBusy(true)
+  // 挂载时探测壳（失败不阻塞：引擎 B 兜底）。
+  useEffect(() => {
+    let cancelled = false
+    screenshotGet()
+      .then((config) => { if (!cancelled) shellProbe = config.shellAvailable })
+      .catch(() => { if (!cancelled) shellProbe = false })
+    return () => { cancelled = true }
+  }, [])
+
+  /** 引擎 A：壳浮层（异步触发；失败切换引擎 B 缓存）。 */
+  const triggerShell = useCallback((): void => {
     screenshotTrigger()
+      .then(() => { setBusy(false) })
       .catch((error: unknown) => {
+        shellProbe = false
+        setBusy(false)
         const message = error instanceof Error ? error.message : String(error)
-        showToast(message.includes('shell') ? t.shellOnly : t.failed + message, true)
+        showToast(t.triggerFailed + message, true)
       })
-      .finally(() => { setBusy(false) })
-  }, [busy, showToast, t])
+  }, [showToast, t])
+
+  /** 引擎 B：浏览器屏幕捕获（必须在用户手势内同步调用 getDisplayMedia）。 */
+  const beginBrowserCapture = useCallback((): void => {
+    const media = navigator.mediaDevices
+    if (media === undefined || typeof media.getDisplayMedia !== 'function') {
+      showToast(t.captureUnsupported, true)
+      return
+    }
+    setBusy(true)
+    void (async () => {
+      const stream = await media.getDisplayMedia({ video: { displaySurface: 'screen' }, audio: false }).catch(() => null)
+      if (stream === null) {
+        setBusy(false)
+        showToast(t.captureRejected, true)
+        return
+      }
+      try {
+        const track = stream.getVideoTracks()[0]
+        const settings = track.getSettings()
+        const video = document.createElement('video')
+        video.srcObject = stream
+        video.muted = true
+        await video.play()
+        const w = Math.max(1, Math.round(settings.width ?? video.videoWidth ?? 0))
+        const h = Math.max(1, Math.round(settings.height ?? video.videoHeight ?? 0))
+        const canvas = document.createElement('canvas')
+        canvas.width = w
+        canvas.height = h
+        canvas.getContext('2d')!.drawImage(video, 0, 0, w, h)
+        const dataUrl = canvas.toDataURL('image/png')
+        for (const item of stream.getTracks()) item.stop()
+        video.srcObject = null
+        setBusy(false)
+        setOverlay({ dataUrl, width: w, height: h })
+      } catch (error: unknown) {
+        for (const item of stream.getTracks()) item.stop()
+        setBusy(false)
+        showToast(t.captureFailed + (error instanceof Error ? error.message : String(error)), true)
+      }
+    })()
+  }, [showToast, t])
+
+  const handleClick = useCallback((): void => {
+    if (busy || overlay !== null) return
+    setBusy(true)
+    // 同步决定引擎：壳存在走壳浮层；否则浏览器捕获（getDisplayMedia 在手势内）。
+    if (shellProbe === true) triggerShell()
+    else beginBrowserCapture()
+  }, [busy, overlay, triggerShell, beginBrowserCapture])
+
+  const overlayDone = useCallback((dataUrl: string): void => {
+    setOverlay(null)
+    void deliverToComposer(dataUrl).catch((error: unknown) => {
+      console.warn(`[ssid-screenshot] delivery failed: ${error instanceof Error ? error.message : String(error)}`)
+    })
+  }, [])
+
+  const overlayCancel = useCallback((): void => { setOverlay(null) }, [])
 
   return createElement('div', { className: 'ssd3-wrap' }, [
     createElement('button', {
       key: 'btn',
       type: 'button',
       className: 'ssd3-btn',
-      disabled: busy,
+      disabled: busy || overlay !== null,
       'aria-label': t.button,
       title: t.tooltip,
       onClick: handleClick,
@@ -108,6 +190,16 @@ export function ScreenshotButton(): ReactNode {
     toast !== null
       ? createElement('div', { key: 'toast', className: 'ssd3-toast' },
         createElement('span', { 'data-error': toast.error ? 'true' : 'false' }, toast.text))
+      : null,
+    overlay !== null
+      ? createElement(CaptureOverlay, {
+          key: 'overlay',
+          dataUrl: overlay.dataUrl,
+          width: overlay.width,
+          height: overlay.height,
+          onDone: overlayDone,
+          onCancel: overlayCancel,
+        })
       : null,
   ])
 }

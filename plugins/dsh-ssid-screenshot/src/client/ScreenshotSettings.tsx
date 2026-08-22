@@ -85,19 +85,29 @@ function Row(props: { title: string, desc: string, control: ReactNode, msg: { ok
   ])
 }
 
-/** 隐藏窗口开关行：切换即保存。 */
+/** 隐藏窗口开关行：切换即保存；非壳环境（无此能力）整行隐藏。 */
 export function ScreenshotHideRow(): ReactNode {
   const t = langStrings()
   const [value, setValue] = useState<boolean | null>(null)
   const [msg, setMsg] = useState<{ ok: boolean, text: string } | null>(null)
+  const [hidden, setHidden] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     screenshotGet()
-      .then((config) => { if (!cancelled) setValue(config.hideWindow) })
+      .then((config) => {
+        if (cancelled) return
+        if (!config.shellAvailable) {
+          setHidden(true)
+          return
+        }
+        setValue(config.hideWindow)
+      })
       .catch(() => { if (!cancelled) setMsg({ ok: false, text: t.loadFail }) })
     return () => { cancelled = true }
   }, [t])
+
+  if (hidden) return null
 
   const toggle = useCallback((): void => {
     const next = !value
@@ -126,23 +136,33 @@ export function ScreenshotHideRow(): ReactNode {
   })
 }
 
-/** 全局快捷键行：回车/失焦即保存（延时 300ms 防抖）。 */
+/** 全局快捷键行：回车/失焦即保存（延时 300ms 防抖）；非壳环境整行隐藏。 */
 export function ScreenshotHotkeyRow(): ReactNode {
   const t = langStrings()
   const [value, setValue] = useState('')
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState<{ ok: boolean, text: string } | null>(null)
+  const [hidden, setHidden] = useState(false)
   const timer = useRef(0)
 
   useEffect(() => {
     let cancelled = false
     screenshotGet()
-      .then((config) => { if (!cancelled) setValue(config.hotkey) })
+      .then((config) => {
+        if (cancelled) return
+        if (!config.shellAvailable) {
+          setHidden(true)
+          return
+        }
+        setValue(config.hotkey)
+      })
       .catch(() => { if (!cancelled) setMsg({ ok: false, text: t.loadFail }) })
     return () => { cancelled = true }
   }, [t])
 
   useEffect(() => () => window.clearTimeout(timer.current), [])
+
+  if (hidden) return null
 
   const save = useCallback((raw: string): void => {
     window.clearTimeout(timer.current)
