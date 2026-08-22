@@ -1132,6 +1132,10 @@ async function start() {
         minimizable: false,
         maximizable: false,
         fullscreenable: false,
+        // 全屏覆盖不用 fullscreen（实测 fullscreen 会与构造尺寸互相覆盖，
+        // inner 出现 2574x1399 这类怪异尺寸 → 坐标错位）：照 electron-pixel-picker
+        // 的最佳实践——普通窗口 + 创建后 setBounds 二次精确钉位（覆盖含任务栏
+        // 的整块显示器），alwaysOnTop 置顶。
         backgroundColor: '#000000',
         webPreferences: {
           sandbox: true,
@@ -1139,6 +1143,7 @@ async function start() {
           preload: fileURLToPath(new URL('./screenshot-preload.cjs', import.meta.url)),
         },
       })
+      overlay.setBounds({ x: display.bounds.x, y: display.bounds.y, width: display.bounds.width, height: display.bounds.height })
       captureSession.overlays.push(overlay)
       overlay.on('closed', () => {
         // 任一浮层被外部关闭（如系统强制销毁）：视为取消整次截图。

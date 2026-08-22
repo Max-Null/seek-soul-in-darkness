@@ -22,11 +22,12 @@
   /* 选区：本体透明，四周阴影遮暗（Snipaste 式镂空） */
   #selection {
     position: absolute;
-    border: 1px solid #4FC3F7;
-    background: rgba(79, 195, 247, .08);
-    box-shadow: 0 0 0 100000px rgba(0, 0, 0, .42);
+    border: 2px solid #4FC3F7;
+    background: rgba(79, 195, 247, .10);
+    box-shadow: 0 0 0 100000px rgba(0, 0, 0, .45);
     pointer-events: none;
     display: none;
+    z-index: 5;
   }
   #selection::before, #selection::after {
     content: ''; position: absolute; width: 14px; height: 14px;
@@ -39,6 +40,7 @@
     background: rgba(10, 14, 20, .85); color: #E1F5FE;
     font: 12px/1.6 "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
     pointer-events: none; display: none;
+    z-index: 6;
   }
   #tip {
     position: fixed; top: 24px; left: 50%; transform: translateX(-50%);
@@ -59,6 +61,7 @@
     background: rgba(26, 32, 42, .94);
     box-shadow: 0 4px 16px rgba(0, 0, 0, .4);
     pointer-events: auto;
+    z-index: 7;
   }
   #toolbar .tool {
     display: grid; place-items: center;
@@ -156,6 +159,7 @@
   window.__setFrame = (value) => {
     frame = value
     frameEl.src = value.dataUrl
+    dbg(`frame set phys=${value.physicalW}x${value.physicalH} logical=${value.logicalW}x${value.logicalH} inner=${window.innerWidth}x${window.innerHeight}`)
   }
 
   const norm = (x1, y1, x2, y2) => ({
@@ -163,16 +167,47 @@
     w: Math.abs(x2 - x1), h: Math.abs(y2 - y1),
   })
 
-  /** 显示坐标 → 帧物理坐标（浮层 = 整屏 1:1 逻辑/物理映射）。 */
-  const toPhys = (clientX, clientY) => ({
-    x: clientX * (frame.physicalW / window.innerWidth),
-    y: clientY * (frame.physicalH / window.innerHeight),
+  /** 把点吸附进选区（红框起点在选区外时贴到就近边界）。 */
+  const clampPoint = (p) => ({
+    x: Math.min(Math.max(p.x, sel.x), sel.x + sel.w),
+    y: Math.min(Math.max(p.y, sel.y), sel.y + sel.h),
   })
+  /** 红框与选区的交集（无交集返回 null——红框不允许超出蓝框）。 */
+  const clampToSel = (r) => {
+    const x1 = Math.max(r.x, sel.x)
+    const y1 = Math.max(r.y, sel.y)
+    const x2 = Math.min(r.x + r.w, sel.x + sel.w)
+    const y2 = Math.min(r.y + r.h, sel.y + sel.h)
+    if (x2 <= x1 || y2 <= y1) return null
+    return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 }
+  }
+
+  /** 帧元素的实时显示矩形（坐标基准：不用 window.innerWidth——窗口/视口
+   *  边界差（边框、DPI、系统约束）会让 inner 偏离屏幕尺寸，产生毫米差的
+   *  「错位」；pixel-picker 同款做法：以元素 rect 为基准映射）。 */
+  const frameRect = () => frameEl.getBoundingClientRect()
+  /** 显示坐标 → 帧物理坐标。 */
+  const toPhys = (clientX, clientY) => {
+    const r = frameRect()
+    return {
+      x: (clientX - r.left) / r.width * frame.physicalW,
+      y: (clientY - r.top) / r.height * frame.physicalH,
+    }
+  }
   /** 物理坐标 → 显示坐标。 */
-  const toDisplay = (p) => ({
-    x: p.x * (window.innerWidth / frame.physicalW),
-    y: p.y * (window.innerHeight / frame.physicalH),
-  })
+  const toDisplay = (p) => {
+    const r = frameRect()
+    return {
+      x: p.x / frame.physicalW * r.width + r.left,
+      y: p.y / frame.physicalH * r.height + r.top,
+    }
+  }
+  /** 物理矩形 → 显示矩形（含缩放后的宽高）。 */
+  const toDisplayRect = (r) => {
+    const p0 = toDisplay({ x: r.x, y: r.y })
+    const p1 = toDisplay({ x: r.x + r.w, y: r.y + r.h })
+    return { x: p0.x, y: p0.y, w: p1.x - p0.x, h: p1.y - p0.y }
+  }
 
   const renderSelection = () => {
     if (sel === null || sel.w < 1 || sel.h < 1) {
@@ -181,7 +216,8 @@
       toolbarEl.style.display = 'none'
       return
     }
-    const d = toDisplay(sel)
+    const fr = frameRect()
+    const d = toDisplayRect(sel)
     selectionEl.style.display = 'block'
     selectionEl.style.left = `${d.x}px`
     selectionEl.style.top = `${d.y}px`
@@ -190,13 +226,13 @@
     sizeEl.style.display = 'block'
     sizeEl.textContent = `${Math.round(sel.w)} × ${Math.round(sel.h)}`
     // 工具条：先显示再测量（display:none 时 rect 为 0），选区下方居中；
-    // 超出视口底部则移到选区上方。
+    // 超出帧区域底部则移到选区上方。
     toolbarEl.style.display = 'flex'
     const tb = toolbarEl.getBoundingClientRect()
-    const maxX = Math.max(4, window.innerWidth - tb.width - 4)
+    const maxX = Math.max(4, fr.left + fr.width - tb.width - 4)
     const left = Math.max(4, Math.min(maxX, d.x + d.w / 2 - tb.width / 2))
     const below = d.y + d.h + 8
-    const top = below + tb.height + 8 <= window.innerHeight ? below : d.y - tb.height - 8
+    const top = below + tb.height + 8 <= fr.top + fr.height ? below : d.y - tb.height - 8
     toolbarEl.style.left = `${left}px`
     toolbarEl.style.top = `${Math.max(4, top)}px`
   }
@@ -205,25 +241,27 @@
     const ctx = annoCanvas().getContext('2d')
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
     const draw = (r) => {
-      const s = toDisplay({ x: r.x, y: r.y })
+      const s = toDisplayRect(r)
       ctx.strokeStyle = '#FF5B4D'
       ctx.lineWidth = 2.5
-      ctx.strokeRect(s.x, s.y, r.w * (window.innerWidth / frame.physicalW), r.h * (window.innerHeight / frame.physicalH))
+      ctx.strokeRect(s.x, s.y, s.w, s.h)
       ctx.fillStyle = 'rgba(255, 91, 77, .12)'
-      ctx.fillRect(s.x, s.y, r.w * (window.innerWidth / frame.physicalW), r.h * (window.innerHeight / frame.physicalH))
+      ctx.fillRect(s.x, s.y, s.w, s.h)
     }
     for (const r of annoRects) draw(r)
     if (annoDraft !== null) draw(annoDraft)
   }
   const annoCanvas = () => frameEl.parentElement.querySelector('canvas[data-anno]') || (() => {
-    // 若无覆盖 canvas（首次），创建一个全屏覆盖层。
+    // 若无覆盖 canvas（首次），创建一个与帧元素对齐的覆盖层。
+    const fr = frameRect()
     const c = document.createElement('canvas')
     c.dataset.anno = '1'
     c.style.position = 'absolute'
-    c.style.inset = '0'
+    c.style.left = `${fr.left}px`
+    c.style.top = `${fr.top}px`
     c.style.pointerEvents = 'none'
-    c.width = window.innerWidth
-    c.height = window.innerHeight
+    c.width = fr.width
+    c.height = fr.height
     frameEl.parentElement.appendChild(c)
     return c
   })()
@@ -293,26 +331,33 @@
     tipEl.innerHTML = '拖拽画<em class="red">红框</em>强调 · <em>回车</em> 完成 · <em>右键</em> 逐级回退'
   }
 
+  /** 临时调试：关键事件经 error 通道上报主进程日志（[screenshot] overlay error: [dbg] ...）。 */
+  const dbg = (message) => { try { window.ssidCapture.error(`[dbg] ${message}`) } catch { /* ignore */ } }
+
   // ---- 事件 ----
   document.addEventListener('contextmenu', (event) => { event.preventDefault() })
   document.addEventListener('mousedown', (event) => {
     if (event.button === 2) { cancelOrBack(); return }
     if (event.button !== 0) return
     if (mode === 'tool') {
-      annoStart = toPhys(event.clientX, event.clientY)
+      const p = toPhys(event.clientX, event.clientY)
+      dbg(`mousedown tool@${Math.round(event.clientX)},${Math.round(event.clientY)} phys=${Math.round(p.x)},${Math.round(p.y)}`)
+      annoStart = clampPoint(p)
       annoDraft = { x: annoStart.x, y: annoStart.y, w: 0, h: 0 }
       renderAnno()
       return
     }
     // select：记录起点但不立即清空已定格选区（双击确认不被打断）。
     const p = toPhys(event.clientX, event.clientY)
+    dbg(`mousedown select@${Math.round(event.clientX)},${Math.round(event.clientY)} phys=${Math.round(p.x)},${Math.round(p.y)} inner=${window.innerWidth}x${window.innerHeight} physFrame=${frame.physicalW}x${frame.physicalH}`)
     dragStart = { x: event.clientX, y: event.clientY, phys: p, moved: false }
   })
   document.addEventListener('mousemove', (event) => {
     if (mode === 'tool') {
       if (annoDraft !== null && annoStart !== null) {
         const p = toPhys(event.clientX, event.clientY)
-        annoDraft = norm(annoStart.x, annoStart.y, p.x, p.y)
+        // 拖拽中的红框永远与蓝框取交集（不允许超出选区；无交集则不显示）。
+        annoDraft = clampToSel(norm(annoStart.x, annoStart.y, p.x, p.y))
         renderAnno()
       }
       return
@@ -323,8 +368,12 @@
       if (!dragStart.moved && Math.hypot(p.x - dragStart.phys.x, p.y - dragStart.phys.y) > 4) {
         dragStart.moved = true
         sel = null
+        dbg(`drag started phys=${Math.round(p.x)},${Math.round(p.y)}`)
       }
-      if (dragStart.moved) sel = norm(dragStart.phys.x, dragStart.phys.y, p.x, p.y)
+      if (dragStart.moved) {
+        sel = norm(dragStart.phys.x, dragStart.phys.y, p.x, p.y)
+        if (sel.w % 300 < 2) dbg(`sel ${Math.round(sel.w)}x${Math.round(sel.h)}`)
+      }
       renderSelection()
     } else {
       crossV.style.display = 'block'
@@ -339,6 +388,7 @@
         if (annoDraft.w >= 3 && annoDraft.h >= 3) {
           annoRects.push(annoDraft)
           undoStack.push(JSON.stringify(annoRects.slice(0, -1)))
+          dbg(`anno added ${Math.round(annoDraft.w)}x${Math.round(annoDraft.h)} total=${annoRects.length}`)
         }
         annoDraft = null
         annoStart = null
@@ -350,6 +400,7 @@
     const justDragged = dragStart.moved
     dragStart = null
     renderCrossClear()
+    dbg(`mouseup sel=${sel === null ? 'null' : `${Math.round(sel.x)},${Math.round(sel.y)} ${Math.round(sel.w)}x${Math.round(sel.h)}`} moved=${justDragged}`)
     if (justDragged && sel !== null && sel.w >= 4 && sel.h >= 4) enterTool()
     else renderSelection()
   })
