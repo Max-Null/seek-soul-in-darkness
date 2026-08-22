@@ -19,7 +19,7 @@
  */
 
 import { register } from 'tsx/esm/api'
-import { app, BrowserView, BrowserWindow, ipcMain, Menu, nativeImage, Notification, Tray } from 'electron'
+import { app, BrowserView, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, Menu, nativeImage, Notification, screen, Tray } from 'electron'
 import { spawn, spawnSync } from 'node:child_process'
 import { appendFileSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -720,12 +720,31 @@ async function start() {
 
   // ── boot DSH kernel (this process) ──────────────────────────────────────
   let kernel
+  // 重启回调：注入 DSH 内核（服务键 'ssid.shell.restart'，供 dsh-ssid-panels
+  // 设置开关「确认后重启」）与托盘「重启」走同一路径。必须定义在 try 块外
+  // （托盘菜单 1026 行的 click 闭包引用它；try 内 const 是块级作用域，
+  // 会 ReferenceError——2026-08-23 托盘重启失效实锤）。
+  // 先标记 relaunch 再优雅退出：shutdown 内部 await fiber.dispose 后
+  // app.exit(0)，Electron 检测到 relaunch 标志自动以新进程重启；
+  // 过滤 worker.cjs：worker 模式 relaunch 不能沿用原始 argv。
+  const restartDsh = () => {
+    app.relaunch({ args: process.argv.slice(1).filter((arg) => !arg.endsWith('worker.cjs')) })
+    quitting = true
+    void kernel.shutdown(0).catch(() => app.exit(0))
+  }
   try {
     safeLog('ssid: phase bootKernel start\n')
     splashStep(2)
     // preferBundled: 打包版强制用内置闭包（忽略用户环境的 DSH_CHECKOUT，
     // 避免标题栏版本与归档不一致——pitfalls #5 幽灵依赖的根治）。
-    kernel = await bootKernel(undefined, { preferBundled: app.isPackaged })
+    kernel = await bootKernel(undefined, {
+      preferBundled: app.isPackaged,
+      restart: restartDsh,
+      screenshot: {
+        trigger: () => { void startScreenshotCapture() },
+        apply: () => applyScreenshotHotkey(),
+      },
+    })
     safeLog(`ssid: phase bootKernel ok port=${kernel.port}\n`)
     splashStep(3)
   } catch (cause) {
@@ -1010,23 +1029,197 @@ async function start() {
   tray.setToolTip(WINDOW_TITLE)
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '显示思灵', click: () => { win.show(); win.focus() } },
+    {
+      label: '截图引用',
+      click: () => { startScreenshotCapture() },
+    },
     { type: 'separator' },
     {
       label: '重启',
-      click: () => {
-        // 先标记 relaunch 再优雅退出：shutdown 内部 await fiber.dispose 后
-        // app.exit(0)，Electron 检测到 relaunch 标志自动以新进程重启。
-        // 过滤 worker.cjs：worker 模式（argv 含 worker.cjs）relaunch 不能
-        // 沿用原始 argv，否则会再次走 worker 分支而不是启动壳。
-        app.relaunch({ args: process.argv.slice(1).filter((arg) => !arg.endsWith('worker.cjs')) })
-        quitting = true
-        void kernel.shutdown(0).catch(() => app.exit(0))
-      },
+      click: () => restartDsh(),
     },
     { type: 'separator' },
     { label: '退出', click: () => app.quit() },
   ]))
   tray.on('click', () => { win.show(); win.focus() })
+
+  // ── 快捷截图引用：托盘/全局快捷键 → 全屏冻结帧 → 逐屏框选浮层 → 裁剪 ──
+  // → 派发 ssid:screenshot CustomEvent 给 DSH UI（mainView），由
+  // @max-null/dsh-ssid-screenshot 走官方 drop intake 填入当前会话输入框。
+  // 多屏：每屏一个浮层窗口；任一浮层确认/取消 = 整个截图会话结束。
+  let captureSession = null
+  const delay = (ms) => new Promise((resolve) => { setTimeout(resolve, ms) })
+
+  /** 把裁剪结果（PNG data URL）派发给 DSH UI（与 ssid:titlebar 同一通道）。 */
+  const deliverScreenshot = (dataUrl) => {
+    if (typeof dataUrl !== 'string' || dataUrl === '') {
+      safeLog('[screenshot] deliver skipped: empty dataUrl\n')
+      return
+    }
+    const js = `window.dispatchEvent(new CustomEvent('ssid:screenshot', { detail: ${JSON.stringify(dataUrl)} }))`
+    void mainView.webContents.executeJavaScript(js).then(() => {
+      safeLog(`[screenshot] delivered ${dataUrl.length} bytes to DSH UI\n`)
+    }).catch((error) => {
+      safeLog(`[screenshot] deliver failed: ${error instanceof Error ? error.message : String(error)}\n`)
+    })
+  }
+
+  /** 关闭全部浮层并（可选）恢复主窗口。
+   *  先摘走 session 再逐个 destroy：destroy 同步触发 'closed' 事件重入本
+   *  函数，若 session 仍挂在全局上会在递归层把 captureSession 置 null，
+   *  回到外层再访问就抛 TypeError（2026-08-23 实测：confirm 后崩溃导致
+   *  deliver 不执行、截图不进输入框）。 */
+  const closeOverlays = (restore) => {
+    if (captureSession === null) return
+    const session = captureSession
+    captureSession = null
+    for (const overlay of session.overlays) {
+      if (!overlay.isDestroyed()) overlay.destroy()
+    }
+    if (restore && session.restoreOnFinish) {
+      win.show()
+      win.focus()
+    }
+  }
+
+  const startScreenshotCapture = async () => {
+    if (captureSession !== null) return
+    safeLog(`ssid: phase screenshot start @ ${Date.now()}\n`)
+    const displays = screen.getAllDisplays()
+    if (displays.length === 0) return
+    // 隐藏主窗口（设置可关：不隐藏时冻结帧包含 DSH 自身，浮层覆盖后可框选
+    // DSH 内容，用于引用对话内既有的展示——2026-08-23 用户需求）。
+    const captureConfig = readScreenshotConfig()
+    captureSession = { overlays: [], restoreOnFinish: captureConfig.hideWindow === true && win.isVisible() }
+    if (captureSession.restoreOnFinish) win.hide()
+    await delay(captureSession.restoreOnFinish ? 250 : 50)
+    // 逐屏抓帧：desktopCapturer 单次调用的 thumbnailSize 作用于全部源
+    // （统一缩放到请求盒——实测两屏会被各自放大/缩小到盒内，画面失真），
+    // 所以每屏按自身物理分辨率单独请求一次，取 display_id 匹配的源
+    // （匹配不到按枚举顺序兜底），thumbnail 即该屏物理像素帧（2026-08-23
+    // 探针实测：2560x1440@1.0 请求 → 精确 2560x1440；3840x2162 请求 →
+    // 3840x2160，浮层换算以返回尺寸为基准）。
+    const frames = []
+    for (let index = 0; index < displays.length; index++) {
+      const display = displays[index]
+      const scale = display.scaleFactor || 1
+      const physW = Math.round(display.bounds.width * scale)
+      const physH = Math.round(display.bounds.height * scale)
+      let sources = []
+      try {
+        sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: physW, height: physH } })
+      } catch (error) {
+        safeLog(`[screenshot] desktopCapturer failed: ${error instanceof Error ? error.message : String(error)}\n`)
+        continue
+      }
+      const source = sources.find((candidate) => String(candidate.display_id) === String(display.id)) ?? sources[index]
+      if (source === undefined || source.thumbnail.isEmpty()) continue
+      frames.push({ display, source })
+    }
+    for (const { display, source } of frames) {
+      const physical = source.thumbnail.getSize()
+      const overlay = new BrowserWindow({
+        x: display.bounds.x,
+        y: display.bounds.y,
+        width: display.bounds.width,
+        height: display.bounds.height,
+        frame: false,
+        show: false,
+        alwaysOnTop: true,
+        skipTaskbar: true,
+        resizable: false,
+        movable: false,
+        minimizable: false,
+        maximizable: false,
+        fullscreenable: false,
+        backgroundColor: '#000000',
+        webPreferences: {
+          sandbox: true,
+          contextIsolation: true,
+          preload: fileURLToPath(new URL('./screenshot-preload.cjs', import.meta.url)),
+        },
+      })
+      captureSession.overlays.push(overlay)
+      overlay.on('closed', () => {
+        // 任一浮层被外部关闭（如系统强制销毁）：视为取消整次截图。
+        closeOverlays(true)
+      })
+      overlay.webContents.once('did-finish-load', () => {
+        if (overlay.isDestroyed()) return
+        const frame = {
+          dataUrl: source.thumbnail.toDataURL(),
+          logicalW: display.bounds.width,
+          logicalH: display.bounds.height,
+          physicalW: physical.width,
+          physicalH: physical.height,
+        }
+        void overlay.webContents
+          .executeJavaScript(`window.__setFrame(${JSON.stringify(frame)})`)
+          .then(() => {
+            if (!overlay.isDestroyed()) {
+              overlay.show()
+              overlay.focus()
+            }
+          })
+          .catch((error) => {
+            safeLog(`[screenshot] overlay frame inject failed: ${error instanceof Error ? error.message : String(error)}\n`)
+          })
+      })
+      void overlay.loadFile(fileURLToPath(new URL('./screenshot.html', import.meta.url)))
+    }
+    if (captureSession.overlays.length === 0) {
+      safeLog('[screenshot] no screen sources matched\n')
+      closeOverlays(true)
+      return
+    }
+  }
+  // 浮层确认：关全部 → 恢复主窗口 → 派发给 DSH UI。captureSession 为空
+  // 表示本次截图已确认/取消——忽略重复（浮层销毁前 Enter/点击可能双发）。
+  ipcMain.on('ssid:shot:confirm', (_event, dataUrl) => {
+    if (captureSession === null) return
+    safeLog(`[screenshot] confirm received (${typeof dataUrl === 'string' ? dataUrl.length : 'non-string'} bytes)\n`)
+    closeOverlays(true)
+    deliverScreenshot(dataUrl)
+  })
+  // 浮层取消：关全部 → 恢复主窗口。
+  ipcMain.on('ssid:shot:cancel', () => {
+    safeLog('[screenshot] cancel received\n')
+    closeOverlays(true)
+  })
+  // 浮层侧错误（裁剪/解码失败等）。
+  ipcMain.on('ssid:shot:error', (_event, message) => {
+    safeLog(`[screenshot] overlay error: ${typeof message === 'string' ? message : String(message)}\n`)
+  })
+  // ── 截图配置（~/.ssid/screenshot.json，host 半 /ssid/api 读写）─────────
+  const SCREENSHOT_CONFIG_PATH = join(homedir(), '.ssid', 'screenshot.json')
+  const SCREENSHOT_CONFIG_DEFAULTS = { hideWindow: true, hotkey: 'Control+Shift+A' }
+  const readScreenshotConfig = () => {
+    try {
+      const parsed = JSON.parse(readFileSync(SCREENSHOT_CONFIG_PATH, 'utf8'))
+      return {
+        hideWindow: !(parsed !== null && typeof parsed === 'object' && parsed.hideWindow === false),
+        hotkey: parsed !== null && typeof parsed === 'object' && typeof parsed.hotkey === 'string' && parsed.hotkey.trim() !== ''
+          ? parsed.hotkey
+          : SCREENSHOT_CONFIG_DEFAULTS.hotkey,
+      }
+    } catch {
+      return { ...SCREENSHOT_CONFIG_DEFAULTS }
+    }
+  }
+
+  /** 按当前配置重新注册全局快捷键（配置保存后由 host 半经服务触发）。
+   *  @returns 是否注册成功（false = 快捷键被其他软件占用）。 */
+  const applyScreenshotHotkey = () => {
+    globalShortcut.unregisterAll()
+    const { hotkey } = readScreenshotConfig()
+    const ok = globalShortcut.register(hotkey, () => { void startScreenshotCapture() })
+    safeLog(`ssid: screenshot hotkey ${hotkey} ${ok ? 'OK' : 'conflict'}\n`)
+    return ok
+  }
+
+  // 全局快捷键注册失败（被其他软件占用）不阻断启动。
+  applyScreenshotHotkey()
+  app.on('will-quit', () => globalShortcut.unregisterAll())
 
   let quitting = false
   let trayNoticeShown = false

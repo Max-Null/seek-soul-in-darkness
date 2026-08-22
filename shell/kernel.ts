@@ -18,8 +18,10 @@
  * 服务，M1 的 memory 数据通道不需要跨进程桥。
  */
 
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { spawnSync } from 'node:child_process'
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   boot,
@@ -49,6 +51,20 @@ const PROFILE_BUNDLES = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app']
 const ROOT_CONFIG_FILENAME = 'cordis.yml'
 /** 会话遥测 row id（官方 profile-boot 的 DSH_TELEMETRY_DISABLED 开关目标）。 */
 const TELEMETRY_ROW_ID = 'session-telemetry-otel'
+
+/**
+ * 内核内「重启 DSH」能力的服务键（字符串键，主进程同进程注入，插件经
+ * `ctx.get(SSID_SHELL_RESTART_KEY)` 取得 `() => void`）。main.mjs 的
+ * restartDsh（app.relaunch + kernel.shutdown）经 bootKernel opts.restart 注入；
+ * 裸跑/测试未注入时该服务不存在，插件返回 restart-unavailable。
+ */
+export const SSID_SHELL_RESTART_KEY = 'ssid.shell.restart'
+
+/** 壳层「快捷截图」能力（main.mjs 的 startScreenshotCapture 与
+ *  applyScreenshotHotkey），经服务键注入内核，供 dsh-ssid-screenshot 的
+ *  host 半调用（客户端按钮触发截图 / 设置保存后重注册快捷键）。
+ *  bare dsh web（无 Electron 壳）不提供。 */
+export const SSID_SHELL_SCREENSHOT_KEY = 'ssid.shell.screenshot'
 
 /**
  * DSH 运行时来源解析结果：installAnchor（heal/loadProfile 的锚点）和
@@ -181,6 +197,63 @@ export function syncPresetSkills(sourceDir: string, targetDir: string): number {
   return copied
 }
 
+// ── pending 插件更新消费（2026-08-22）：两段式更新的第二步 ──────────────
+// dsh-plugin-center 的更新现在是「下载到 ~/.ssid/pending-plugin-updates/ +
+// 重启时安装」：运行中替换原生模块（node-pty 等）会被 Windows 锁死
+// （EPERM）。本函数位于 boot DSH 之前——node_modules 尚无加载锁，是安全的
+// 安装窗口。失败绝不阻断 boot：条目保留并在下次启动重试。
+function applyPendingPluginUpdates(profileDir: string): void {
+  const pendingDir = join(homedir(), '.ssid', 'pending-plugin-updates')
+  const indexFile = join(pendingDir, 'index.json')
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(readFileSync(indexFile, 'utf8'))
+  } catch {
+    return // 无待办更新（或目录不存在）：正常启动路径
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) return
+  const candidates = ['pnpm', 'pnpm.cmd']
+  const remaining: Array<Record<string, unknown>> = []
+  for (const raw of parsed) {
+    const entry = raw as { name?: unknown, version?: unknown, tgz?: unknown } | null
+    if (entry === null || typeof entry.name !== 'string' || typeof entry.version !== 'string') continue
+    const spec = `${entry.name}@${entry.version}`
+    let done = false
+    let detail = 'no pnpm candidate found'
+    for (const command of candidates) {
+      // shell: true —— Windows 下 .cmd shim 必须经 shell；timeout 防止
+      // 网络/registry 卡死拖住启动（10 分钟上限）。
+      const result = spawnSync(
+        command,
+        ['add', '-w', spec],
+        { cwd: profileDir, shell: true, windowsHide: true, timeout: 10 * 60_000, encoding: 'utf8' },
+      )
+      if (result.status === 0) {
+        done = true
+        break
+      }
+      detail = result.error !== undefined
+        ? result.error.message
+        : `exit ${result.status ?? 1}${typeof result.stderr === 'string' ? `\n${result.stderr.slice(-1200)}` : ''}`
+    }
+    if (done) {
+      if (typeof entry.tgz === 'string') {
+        try { rmSync(entry.tgz, { force: true }) } catch { /* tgz 清理失败不影响安装结果 */ }
+      }
+      console.log(`ssid: pending plugin update applied: ${spec}`)
+    } else {
+      console.log(`ssid: pending plugin update deferred (retry next boot): ${spec}\n  ${detail}`)
+      remaining.push(entry as Record<string, unknown>)
+    }
+  }
+  try {
+    if (remaining.length === 0) rmSync(indexFile, { force: true })
+    else writeFileSync(indexFile, JSON.stringify(remaining, null, 2) + '\n')
+  } catch {
+    // 清单写回失败：下次启动会重试，不阻断 boot
+  }
+}
+
 /**
  * 内核启动。
  * @param exit - 最终进程退出，默认 `process.exit`；electron 传 `app.exit`。
@@ -193,7 +266,19 @@ export function syncPresetSkills(sourceDir: string, targetDir: string): number {
  */
 export async function bootKernel(
   exit: (code: number) => void = code => process.exit(code),
-  opts: { preferBundled?: boolean } = {},
+  opts: {
+    preferBundled?: boolean
+    /** 壳层「重启 DSH」回调（app.relaunch + kernel.shutdown），经服务键
+     *  `SSID_SHELL_RESTART_KEY` 注入内核，供 dsh-ssid-panels 设置页调用。 */
+    restart?: () => void
+    /** 壳层「快捷截图」能力（触发浮层 / 重注册快捷键），经服务键
+     *  `SSID_SHELL_SCREENSHOT_KEY` 注入，供 dsh-ssid-screenshot 调用。 */
+    screenshot?: {
+      trigger: () => void
+      /** 重注册全局快捷键；返回注册是否成功（false = 被其他软件占用）。 */
+      apply: () => boolean
+    }
+  } = {},
 ): Promise<Kernel> {
   const home = resolveDshHome()
   const profileDir = resolveProfileDir(PROFILE_NAME, home)
@@ -206,6 +291,12 @@ export async function bootKernel(
   // 预设技能同步：出厂技能（profileDir/skills，随归档部署）非覆盖合并到
   // $DSH_HOME/skills。旧版/开发裸跑 profile 无 skills 目录时静默跳过。
   syncPresetSkills(join(profileDir, 'skills'), join(home, 'skills'))
+  // pending 插件更新消费（两段式第二步）：boot DSH 前安装（无锁窗口）。
+  // 先声明消费能力：插件中心（engine.update）据此决定启用两段式还是直装
+  // ——旧打包 kernel（应用 asar 里的 kernel.bundle 无此函数）不会设置该
+  // 变量，安装版上插件中心保持直装旧行为，避免「待重启但不生效」假象。
+  process.env.SSID_PENDING_CONSUMER = '1'
+  applyPendingPluginUpdates(profileDir)
   // 官方 INSTALL_ANCHOR：DSH 运行时（源码 checkout 的 apps/cli/package.json，
   // 或内置闭包的 @deepseek-ai/dsh/package.json）——healProfilesModuleFallback
   // 和 loadProfile 从这里解析 bundle 的物理目录（pnpm workspace symlink
@@ -293,9 +384,63 @@ export async function bootKernel(
       patches.push({ id: TELEMETRY_ROW_ID, disabled: true })
     }
 
+    // ── 会话存储隔离开关（设置页「关于 SSiD」可切换，重启生效）────────────
+    // 与手动 dsh web 共享 ~/.dsh/sessions 时，两个宿主并发写同一 JSONL 日志
+    // 会反复造成 "corrupt session log: seq gap"（2026-08-22 已三度复发）。
+    // 开关状态存 ~/.ssid/session-root.json（与 notify.json 同模式）：
+    //   isolated = 设置页开关；applied = 本次 boot 实际生效值（kernel 回写）。
+    // 独立根与两个根的绝对路径经环境变量发布给 /ssid/api 插件（载入按钮）。
+    // 预设（2026-08-23 用户拍板）：无配置文件＝默认开启独立会话存储（新装机
+    // 即与手动 dsh web 隔离），首次启动落盘成显式配置，用户仍可随时关闭。
+    const sessionRootConfigPath = join(homedir(), '.ssid', 'session-root.json')
+    const isolatedSessionsRoot = join(home, 'sessions-ssid')
+    const sharedSessionsRoot = join(home, 'sessions')
+    let isolatedSessionRoot = true
+    try {
+      const parsed = JSON.parse(readFileSync(sessionRootConfigPath, 'utf8')) as { isolated?: unknown } | null
+      isolatedSessionRoot = parsed?.isolated === true
+    } catch {
+      // 无配置文件 = 按预设启用隔离
+    }
+    process.env.SSID_SESSION_ISOLATED_ROOT = isolatedSessionsRoot
+    process.env.SSID_SESSION_SHARED_ROOT = sharedSessionsRoot
+    // 本次 boot 时刻：dsh-ssid-panels 据此判断「载入/移除会话后是否需要重启」
+    // （清单 mtime > bootedAt ⇒ 本次运行中改过存储，侧栏列表尚未重建）。
+    process.env.SSID_BOOTED_AT = String(Date.now())
+    if (isolatedSessionRoot) {
+      patches.push({
+        id: 'session-persistence-jsonl',
+        config: { root: isolatedSessionsRoot },
+      })
+    }
+    try {
+      if (!existsSync(sessionRootConfigPath)) {
+        // 预设落地：首次启动把「默认隔离」写成显式配置（设置页因此可见/可关）。
+        mkdirSync(dirname(sessionRootConfigPath), { recursive: true })
+        writeFileSync(
+          sessionRootConfigPath,
+          JSON.stringify({ isolated: true, applied: true }, null, 2) + '\n',
+        )
+      } else {
+        // 回写 applied 供设置页显示「重启后生效」（已存在配置文件时）。
+        const prev = JSON.parse(readFileSync(sessionRootConfigPath, 'utf8')) as Record<string, unknown> | null
+        writeFileSync(
+          sessionRootConfigPath,
+          JSON.stringify({ ...(prev ?? {}), applied: isolatedSessionRoot }, null, 2) + '\n',
+        )
+      }
+    } catch {
+      // 配置不可写不阻断启动：开关状态以本次 boot 读到的为准
+    }
+
     const environment = loadLayeredEnv(BIN_NAME)
     const ctx = await boot(BIN_NAME, rootConfig, structuredClone(patches), (hostCtx) => {
       hostCtx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, environment)
+      // 壳层「重启 DSH」能力（main.mjs 的 restartDsh：app.relaunch +
+      // kernel.shutdown），dsh-ssid-panels 设置页经 ctx.get(SSID_SHELL_RESTART_KEY)
+      // 调用；bootKernel 未传 restart 时（裸跑/测试）不提供。
+      if (opts.restart !== undefined) hostCtx.provide(SSID_SHELL_RESTART_KEY, opts.restart)
+      if (opts.screenshot !== undefined) hostCtx.provide(SSID_SHELL_SCREENSHOT_KEY, opts.screenshot)
       provideCmdline(hostCtx, {
         // rc.8 起 dsh web 默认打开浏览器（openBrowser 默认 true）；壳内嵌场景
         // 必须关闭，否则每次启动弹系统浏览器（--no-open 由 web-startup 解析）。

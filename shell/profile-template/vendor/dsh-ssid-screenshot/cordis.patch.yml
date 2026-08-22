@@ -1,0 +1,7 @@
+# @max-null/dsh-ssid-screenshot bundle patch: one insert over the profile root.
+# Host half is a no-op; the client half listens for the `ssid:screenshot`
+# CustomEvent dispatched by the shell and drops the cropped PNG into the
+# current conversation composer through the official attachment intake.
+- insert:
+    - id: dsh-ssid-screenshot
+      name: '@max-null/dsh-ssid-screenshot'
