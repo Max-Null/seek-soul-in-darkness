@@ -16,17 +16,10 @@
     pointer-events: none;
   }
   #dim { position: absolute; inset: 0; background: rgba(0, 0, 0, .42); pointer-events: none; }
-  /* 十字准星（跟随鼠标，无选区时显示） */
-  .cross {
-    position: absolute;
-    background: #4FC3F7;
-    opacity: .8;
-    pointer-events: none;
-    display: none;
-  }
+  .cross { position: absolute; background: #4FC3F7; opacity: .8; pointer-events: none; display: none; }
   #cross-v { top: 0; bottom: 0; width: 1px; }
   #cross-h { left: 0; right: 0; height: 1px; }
-  /* 选区：本体透明（露出冻结帧），四周阴影遮暗（Snipaste 式镂空） */
+  /* 选区：本体透明，四周阴影遮暗（Snipaste 式镂空） */
   #selection {
     position: absolute;
     border: 1px solid #4FC3F7;
@@ -35,101 +28,56 @@
     pointer-events: none;
     display: none;
   }
-  /* 四角 L 形角标（加强选区视觉强调） */
   #selection::before, #selection::after {
-    content: '';
-    position: absolute;
-    width: 14px;
-    height: 14px;
-    border-color: #4FC3F7;
-    border-style: solid;
+    content: ''; position: absolute; width: 14px; height: 14px;
+    border-color: #4FC3F7; border-style: solid;
   }
   #selection::before { left: -1px; top: -1px; border-width: 3px 0 0 3px; }
   #selection::after { right: -1px; bottom: -1px; border-width: 0 3px 3px 0; }
-  /* 选区尺寸标注（选区右下角内侧） */
   #size {
-    position: absolute;
-    right: 6px;
-    bottom: 6px;
-    padding: 2px 8px;
-    border-radius: 4px;
-    background: rgba(10, 14, 20, .85);
-    color: #E1F5FE;
+    position: absolute; right: 6px; bottom: 6px; padding: 2px 8px; border-radius: 4px;
+    background: rgba(10, 14, 20, .85); color: #E1F5FE;
     font: 12px/1.6 "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
-    pointer-events: none;
-    display: none;
+    pointer-events: none; display: none;
   }
   #tip {
-    position: fixed;
-    top: 24px;
-    left: 50%;
-    transform: translateX(-50%);
-    padding: 8px 20px;
-    border-radius: 18px;
-    background: rgba(10, 14, 20, .78);
-    color: #E1F5FE;
+    position: fixed; top: 24px; left: 50%; transform: translateX(-50%);
+    padding: 8px 20px; border-radius: 18px; background: rgba(10, 14, 20, .78); color: #E1F5FE;
     font: 13px/1.6 "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
-    letter-spacing: .04em;
-    pointer-events: none;
-    white-space: nowrap;
+    letter-spacing: .04em; pointer-events: none; white-space: nowrap;
   }
   #tip em { font-style: normal; color: #4FC3F7; }
-  /* ── 标注阶段 ── */
-  #annotate {
+  #tip em.red { color: #FF5B4D; }
+  /* ── 选区工具条（微信式，挂选区下方/上方） ── */
+  #toolbar {
     position: absolute;
-    inset: 0;
     display: none;
     align-items: center;
-    justify-content: center;
-    background: rgba(0, 0, 0, .94);
-    cursor: crosshair;
-  }
-  #annotate-wrap { position: relative; display: none; }
-  #crop-img { display: block; pointer-events: none; }
-  #annotate-canvas { position: absolute; inset: 0; pointer-events: none; }
-  #annotate .panel {
-    position: fixed;
-    right: 20px;
-    top: 20px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 12px;
+    gap: 8px;
+    padding: 6px 10px;
     border-radius: 10px;
-    background: rgba(10, 14, 20, .82);
+    background: rgba(26, 32, 42, .94);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, .4);
     pointer-events: auto;
   }
-  #annotate .hint { color: var(--c, #E1F5FE); font: 12px/1.5 "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif; }
-  #annotate .done-btn {
-    padding: 5px 16px;
-    border: none;
-    border-radius: 14px;
-    background: #2E6BE6;
-    color: #fff;
+  #toolbar .tool {
+    display: grid; place-items: center;
+    width: 30px; height: 30px;
+    border: none; border-radius: 7px;
+    background: transparent; color: #C7D3E3;
+    cursor: pointer;
+  }
+  #toolbar .tool:hover { background: rgba(255, 255, 255, .12); color: #fff; }
+  #toolbar .tool.active { background: #2E6BE6; color: #fff; }
+  #toolbar .tool[data-tool="redo"] svg { transform: scaleX(-1); }
+  #toolbar .sep { width: 1px; height: 20px; background: rgba(255, 255, 255, .18); }
+  #toolbar .done {
+    padding: 5px 16px; border: none; border-radius: 14px;
+    background: #2E6BE6; color: #fff;
     font: 13px/1.6 "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
     cursor: pointer;
   }
-  #annotate .done-btn:hover { background: #3B78F5; }
-  #annotate .clear-btn {
-    padding: 5px 12px;
-    border: 1px solid rgba(255, 255, 255, .25);
-    border-radius: 14px;
-    background: transparent;
-    color: #E1F5FE;
-    font: 13px/1.6 "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
-    cursor: pointer;
-  }
-  #annotate .clear-btn:hover { border-color: #FF5B4D; color: #FF5B4D; }
-  #annotate .undo-btn {
-    padding: 5px 12px;
-    border: none;
-    border-radius: 14px;
-    background: rgba(255, 255, 255, .12);
-    color: #E1F5FE;
-    font: 13px/1.6 "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
-    cursor: pointer;
-  }
-  #annotate .undo-btn:hover { background: rgba(255, 255, 255, .2); }
+  #toolbar .done:hover { background: #3B78F5; }
 </style>
 </head>
 <body>
@@ -139,18 +87,30 @@
 <div id="cross-h" class="cross"></div>
 <div id="selection"></div>
 <div id="size"></div>
-<div id="tip"><em>拖拽</em> 选择截图区域 · <em>双击 / 回车</em> 确认 · <em>Esc</em> 取消</div>
-<div id="annotate">
-  <div id="annotate-wrap">
-    <img id="crop-img" alt="">
-    <canvas id="annotate-canvas"></canvas>
-  </div>
-  <div class="panel">
-    <span class="hint">拖拽画<em style="color:#FF5B4D">红框</em>强调 · 回车完成 · Esc 撤销框 / 重选</span>
-    <button id="undo-btn" type="button" class="undo-btn">撤销</button>
-    <button id="clear-btn" type="button" class="clear-btn">重选</button>
-    <button id="done-btn" type="button" class="done-btn">完成</button>
-  </div>
+<div id="tip"><em>拖拽</em> 选择截图区域 · <em>右键</em> 取消</div>
+<div id="toolbar">
+  <button id="tool-box" type="button" class="tool active" title="红框工具">
+    <svg viewBox="0 0 16 16" width="15" height="15" fill="none" aria-hidden="true">
+      <path d="M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v9a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12.5v-9Zm1.2.8v7.4c0 .17.13.3.3.3h7.4c.17 0 .3-.13.3-.3V4.3c0-.17-.13-.3-.3-.3H3.5c-.17 0-.3.13-.3.3Z" fill="#FF5B4D"/>
+    </svg>
+  </button>
+  <button id="tool-undo" type="button" class="tool" title="撤销红框">
+    <svg viewBox="0 0 16 16" width="15" height="15" fill="none" aria-hidden="true">
+      <path d="M6.7 3.2 3.2 6.7l3.5 3.5M3.6 6.7h6.1a3.1 3.1 0 0 1 0 6.2H8.3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    </svg>
+  </button>
+  <button id="tool-redo" type="button" class="tool" title="恢复红框">
+    <svg viewBox="0 0 16 16" width="15" height="15" fill="none" aria-hidden="true">
+      <path d="M6.7 3.2 3.2 6.7l3.5 3.5M3.6 6.7h6.1a3.1 3.1 0 0 1 0 6.2H8.3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    </svg>
+  </button>
+  <div class="sep"></div>
+  <button id="tool-redo-sel" type="button" class="tool" title="重选区域">
+    <svg viewBox="0 0 16 16" width="15" height="15" fill="none" aria-hidden="true">
+      <path d="M3 5.5A2.5 2.5 0 0 1 5.5 3h5A2.5 2.5 0 0 1 13 5.5v5a2.5 2.5 0 0 1-2.5 2.5h-5A2.5 2.5 0 0 1 3 10.5v-5Z" stroke="currentColor" stroke-width="1.4" fill="none"/>
+    </svg>
+  </button>
+  <button id="tool-done" type="button" class="done">完成</button>
 </div>
 <script>
 (() => {
@@ -162,36 +122,26 @@
   const selectionEl = document.getElementById('selection')
   const sizeEl = document.getElementById('size')
   const tipEl = document.getElementById('tip')
-  const annotateEl = document.getElementById('annotate')
-  const annotateWrapEl = document.getElementById('annotate-wrap')
-  const cropImgEl = document.getElementById('crop-img')
-  const annotateCanvasEl = document.getElementById('annotate-canvas')
-  const undoBtn = document.getElementById('undo-btn')
-  const clearBtn = document.getElementById('clear-btn')
-  const doneBtn = document.getElementById('done-btn')
+  const toolbarEl = document.getElementById('toolbar')
+  const toolBox = document.getElementById('tool-box')
+  const toolUndo = document.getElementById('tool-undo')
+  const toolRedo = document.getElementById('tool-redo')
+  const toolRedoSel = document.getElementById('tool-redo-sel')
+  const toolDone = document.getElementById('tool-done')
 
   /** 主进程注入：{ dataUrl, logicalW, logicalH, physicalW, physicalH }。 */
   let frame = null
-  /** 当前定格选区（逻辑像素，归一化后 x/y 非负）。 */
-  let rect = null
-  let selecting = false
-  let start = null
-  /** 本次按下是否已进入真实拖动（>4px 阈值，见 mousedown/mousemove）。 */
-  let dragStarted = false
 
-  // ---- 标注阶段状态 ----
-  let mode = 'select' // 'select' | 'annotate'
-  /** 框选确认后裁剪出的原图（物理像素 dataURL）。 */
-  let crop = null
-  /** 已完成的强调框（原图物理坐标）。 */
-  let annoRects = []
-  /** 正在画的强调框（原图物理坐标，画完移入 annoRects）。 */
-  let annoDraft = null
-  /** 标注视图映射：显示尺寸 → 原图物理尺寸。 */
-  let viewScale = 1
+  // ---- 状态（全部按「帧物理坐标」口径；渲染时换算显示） ----
+  let mode = 'select' // 'select'（框选） | 'tool'（选区定格，画红框）
+  let sel = null       // 选区（物理 Rect）
+  let dragStart = null // 拖拽起点（显示坐标，select 阶段）
+  let annoRects = []   // 红框（物理 Rect）
+  let annoDraft = null // 画框中（物理 Rect）
+  let annoStart = null // 画框起点（物理 Point）
+  let undoStack = []   // 撤销恢复栈（JSON 快照）
 
-  // 闲置超时：3 分钟无任何交互自动取消（防卡屏，框选+标注长思考不受影响）。
-  // 统一在捕获阶段重置：鼠标/键盘/按钮点击都归一，无需逐 handler 埋点。
+  // ---- 闲置超时 3 分钟（交互重置） ----
   let idleTimer = 0
   const IDLE_MS = 180_000
   const resetIdle = () => {
@@ -213,31 +163,95 @@
     w: Math.abs(x2 - x1), h: Math.abs(y2 - y1),
   })
 
+  /** 显示坐标 → 帧物理坐标（浮层 = 整屏 1:1 逻辑/物理映射）。 */
+  const toPhys = (clientX, clientY) => ({
+    x: clientX * (frame.physicalW / window.innerWidth),
+    y: clientY * (frame.physicalH / window.innerHeight),
+  })
+  /** 物理坐标 → 显示坐标。 */
+  const toDisplay = (p) => ({
+    x: p.x * (window.innerWidth / frame.physicalW),
+    y: p.y * (window.innerHeight / frame.physicalH),
+  })
+
   const renderSelection = () => {
-    if (rect === null || rect.w < 1 || rect.h < 1) {
+    if (sel === null || sel.w < 1 || sel.h < 1) {
       selectionEl.style.display = 'none'
       sizeEl.style.display = 'none'
+      toolbarEl.style.display = 'none'
       return
     }
+    const d = toDisplay(sel)
     selectionEl.style.display = 'block'
-    selectionEl.style.left = `${rect.x}px`
-    selectionEl.style.top = `${rect.y}px`
-    selectionEl.style.width = `${rect.w}px`
-    selectionEl.style.height = `${rect.h}px`
+    selectionEl.style.left = `${d.x}px`
+    selectionEl.style.top = `${d.y}px`
+    selectionEl.style.width = `${d.w}px`
+    selectionEl.style.height = `${d.h}px`
     sizeEl.style.display = 'block'
-    sizeEl.textContent = `${Math.round(rect.w)} × ${Math.round(rect.h)}`
+    sizeEl.textContent = `${Math.round(sel.w)} × ${Math.round(sel.h)}`
+    // 工具条：先显示再测量（display:none 时 rect 为 0），选区下方居中；
+    // 超出视口底部则移到选区上方。
+    toolbarEl.style.display = 'flex'
+    const tb = toolbarEl.getBoundingClientRect()
+    const maxX = Math.max(4, window.innerWidth - tb.width - 4)
+    const left = Math.max(4, Math.min(maxX, d.x + d.w / 2 - tb.width / 2))
+    const below = d.y + d.h + 8
+    const top = below + tb.height + 8 <= window.innerHeight ? below : d.y - tb.height - 8
+    toolbarEl.style.left = `${left}px`
+    toolbarEl.style.top = `${Math.max(4, top)}px`
   }
 
-  const renderCross = (clientX, clientY) => {
-    if (selecting || rect !== null) {
-      crossV.style.display = 'none'
-      crossH.style.display = 'none'
-      return
+  const renderAnno = () => {
+    const ctx = annoCanvas().getContext('2d')
+    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
+    const draw = (r) => {
+      const s = toDisplay({ x: r.x, y: r.y })
+      ctx.strokeStyle = '#FF5B4D'
+      ctx.lineWidth = 2.5
+      ctx.strokeRect(s.x, s.y, r.w * (window.innerWidth / frame.physicalW), r.h * (window.innerHeight / frame.physicalH))
+      ctx.fillStyle = 'rgba(255, 91, 77, .12)'
+      ctx.fillRect(s.x, s.y, r.w * (window.innerWidth / frame.physicalW), r.h * (window.innerHeight / frame.physicalH))
     }
-    crossV.style.display = 'block'
-    crossH.style.display = 'block'
-    crossV.style.left = `${clientX}px`
-    crossH.style.top = `${clientY}px`
+    for (const r of annoRects) draw(r)
+    if (annoDraft !== null) draw(annoDraft)
+  }
+  const annoCanvas = () => frameEl.parentElement.querySelector('canvas[data-anno]') || (() => {
+    // 若无覆盖 canvas（首次），创建一个全屏覆盖层。
+    const c = document.createElement('canvas')
+    c.dataset.anno = '1'
+    c.style.position = 'absolute'
+    c.style.inset = '0'
+    c.style.pointerEvents = 'none'
+    c.width = window.innerWidth
+    c.height = window.innerHeight
+    frameEl.parentElement.appendChild(c)
+    return c
+  })()
+
+  /** 完成：裁剪选区 + 红框合成 → 交付（一次确认）。 */
+  const finish = async () => {
+    if (frame === null || sel === null || sel.w < 2 || sel.h < 2) return
+    const image = await loadImage(frameEl.src)
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.round(sel.w)
+    canvas.height = Math.round(sel.h)
+    const ctx = canvas.getContext('2d')
+    ctx.drawImage(image, sel.x, sel.y, sel.w, sel.h, 0, 0, sel.w, sel.h)
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(0, 0, canvas.width, canvas.height)
+    ctx.clip()
+    ctx.strokeStyle = '#FF3B30'
+    ctx.lineWidth = 3
+    ctx.fillStyle = 'rgba(255, 59, 48, .12)'
+    for (const r of annoRects) {
+      const x = r.x - sel.x
+      const y = r.y - sel.y
+      ctx.strokeRect(x, y, r.w, r.h)
+      ctx.fillRect(x, y, r.w, r.h)
+    }
+    ctx.restore()
+    window.ssidCapture.confirm(canvas.toDataURL('image/png'))
   }
 
   const loadImage = (src) => new Promise((resolve, reject) => {
@@ -247,224 +261,123 @@
     image.src = src
   })
 
-  /** 逻辑选区 → 物理像素比例映射 → canvas 裁剪 → PNG data URL。 */
-  const cropDataUrl = async () => {
-    const scaleX = frame.physicalW / frame.logicalW
-    const scaleY = frame.physicalH / frame.logicalH
-    const sx = Math.max(0, Math.round(rect.x * scaleX))
-    const sy = Math.max(0, Math.round(rect.y * scaleY))
-    const sw = Math.min(frame.physicalW - sx, Math.max(1, Math.round(rect.w * scaleX)))
-    const sh = Math.min(frame.physicalH - sy, Math.max(1, Math.round(rect.h * scaleY)))
-    const image = await loadImage(frameEl.src)
-    const canvas = document.createElement('canvas')
-    canvas.width = sw
-    canvas.height = sh
-    canvas.getContext('2d').drawImage(image, sx, sy, sw, sh, 0, 0, sw, sh)
-    return { dataUrl: canvas.toDataURL('image/png'), width: sw, height: sh }
-  }
-
-  // ---- 标注阶段 ----
-
-  const enterAnnotate = async () => {
-    if (frame === null || rect === null || rect.w < 2 || rect.h < 2) return
-    crop = await cropDataUrl()
-    annoRects = []
-    annoDraft = null
-    finished = false
-    mode = 'annotate'
-    // 冻结帧视图隐藏，标注视图显示。
-    frameEl.style.display = 'none'
-    dimEl.style.display = 'none'
-    crossV.style.display = 'none'
-    crossH.style.display = 'none'
-    selectionEl.style.display = 'none'
-    sizeEl.style.display = 'none'
-    tipEl.style.display = 'none'
-    const image = await loadImage(crop.dataUrl)
-    // 缩放适配（≤ 92% 视口），保持长宽比。
-    const availW = window.innerWidth * 0.92
-    const availH = window.innerHeight * 0.92
-    viewScale = Math.min(availW / crop.width, availH / crop.height, 1)
-    const displayW = Math.max(1, Math.round(crop.width * viewScale))
-    const displayH = Math.max(1, Math.round(crop.height * viewScale))
-    cropImgEl.src = crop.dataUrl
-    cropImgEl.style.width = `${displayW}px`
-    cropImgEl.style.height = `${displayH}px`
-    annotateWrapEl.style.display = 'block'
-    annotateCanvasEl.width = displayW
-    annotateCanvasEl.height = displayH
-    annotateEl.style.display = 'flex'
-    renderAnnotate()
-  }
-
-  /** 重绘标注 canvas（把 annoRects/annoDraft 画到显示坐标系）。 */
-  const renderAnnotate = () => {
-    const ctx = annotateCanvasEl.getContext('2d')
-    ctx.clearRect(0, 0, annotateCanvasEl.width, annotateCanvasEl.height)
-    const drawRect = (r) => {
-      const x = r.x * viewScale
-      const y = r.y * viewScale
-      const w = r.w * viewScale
-      const h = r.h * viewScale
-      ctx.strokeStyle = '#FF5B4D'
-      ctx.lineWidth = 2.5
-      ctx.strokeRect(x, y, w, h)
-      ctx.fillStyle = 'rgba(255, 91, 77, .12)'
-      ctx.fillRect(x, y, w, h)
-    }
-    for (const r of annoRects) drawRect(r)
-    if (annoDraft !== null) drawRect(annoDraft)
-  }
-
-  /** 完成：合成（原图 + 全部强调框）→ 交付。一次性守卫：Enter/双击/按钮
-   *  可能并发触发（点击按钮后焦点在其上，回车会同时命中 keydown 与 click）。 */
-  let finished = false
-  const finishAnnotate = async () => {
-    if (finished || crop === null) return
-    finished = true
-    const image = await loadImage(crop.dataUrl)
-    const canvas = document.createElement('canvas')
-    canvas.width = crop.width
-    canvas.height = crop.height
-    const ctx = canvas.getContext('2d')
-    ctx.drawImage(image, 0, 0)
-    ctx.strokeStyle = '#FF3B30'
-    ctx.lineWidth = 3
-    ctx.fillStyle = 'rgba(255, 59, 48, .12)'
-    for (const r of annoRects) {
-      ctx.strokeRect(r.x, r.y, r.w, r.h)
-      ctx.fillRect(r.x, r.y, r.w, r.h)
-    }
-    window.ssidCapture.confirm(canvas.toDataURL('image/png'))
-  }
-
-  /** 返回框选（丢弃标注）。 */
-  const backToSelect = () => {
-    mode = 'select'
-    crop = null
-    annoRects = []
-    annoDraft = null
-    finished = false
-    annotateEl.style.display = 'none'
-    annotateWrapEl.style.display = 'none'
-    frameEl.style.display = 'block'
-    dimEl.style.display = 'block'
-    tipEl.style.display = 'block'
-    renderSelection()
-  }
-
-  // 右键 = 逐级回退（与 Esc 一致）：标注时撤销画框/当前框 → 无框回框选；
-  // 框选时直接取消截图。屏蔽右键默认菜单。
+  /** 右键/Esc 层级：画框中 → 撤框 → 重选 → 取消。 */
   const cancelOrBack = () => {
-    if (mode === 'annotate') {
-      if (annoDraft !== null) {
-        annoDraft = null
-        renderAnnotate()
-      } else if (annoRects.length > 0) {
-        annoRects.pop()
-        renderAnnotate()
-      } else {
-        backToSelect()
-      }
+    if (mode === 'tool') {
+      if (annoDraft !== null) { annoDraft = null; renderAnno(); return }
+      if (annoRects.length > 0) { annoRects.pop(); renderAnno(); return }
+      backToSelect()
       return
     }
     window.ssidCapture.cancel()
   }
 
+  const backToSelect = () => {
+    mode = 'select'
+    sel = null
+    annoRects = []
+    annoDraft = null
+    annoStart = null
+    undoStack = []
+    renderAnno()
+    renderSelection()
+    tipEl.innerHTML = '<em>拖拽</em> 选择截图区域 · <em>右键</em> 取消'
+  }
+
+  const enterTool = () => {
+    mode = 'tool'
+    annoRects = []
+    undoStack = []
+    renderAnno()
+    renderSelection()
+    tipEl.innerHTML = '拖拽画<em class="red">红框</em>强调 · <em>回车</em> 完成 · <em>右键</em> 逐级回退'
+  }
+
+  // ---- 事件 ----
   document.addEventListener('contextmenu', (event) => { event.preventDefault() })
-
   document.addEventListener('mousedown', (event) => {
-    if (event.button === 2) {
-      cancelOrBack()
-      return
-    }
+    if (event.button === 2) { cancelOrBack(); return }
     if (event.button !== 0) return
-    if (mode === 'annotate') {
-      // 标注内：仅点在裁剪图区域内才画框（换算回原图坐标）。
-      const wrapRect = annotateWrapEl.getBoundingClientRect()
-      const x = event.clientX - wrapRect.left
-      const y = event.clientY - wrapRect.top
-      if (x < 0 || y < 0 || x > wrapRect.width || y > wrapRect.height) return
-      annoDraft = {
-        x: 0,
-        y: 0,
-        w: 0,
-        h: 0,
-        originX: x / viewScale,
-        originY: y / viewScale,
-      }
+    if (mode === 'tool') {
+      annoStart = toPhys(event.clientX, event.clientY)
+      annoDraft = { x: annoStart.x, y: annoStart.y, w: 0, h: 0 }
+      renderAnno()
       return
     }
-    selecting = true
-    start = { x: event.clientX, y: event.clientY }
-    dragStarted = false
+    // select：记录起点但不立即清空已定格选区（双击确认不被打断）。
+    const p = toPhys(event.clientX, event.clientY)
+    dragStart = { x: event.clientX, y: event.clientY, phys: p, moved: false }
   })
-
   document.addEventListener('mousemove', (event) => {
-    if (mode === 'annotate') {
-      if (annoDraft !== null) {
-        const wrapRect = annotateWrapEl.getBoundingClientRect()
-        const x = (event.clientX - wrapRect.left) / viewScale
-        const y = (event.clientY - wrapRect.top) / viewScale
-        const draft = norm(annoDraft.originX, annoDraft.originY, x, y)
-        annoDraft = { ...draft, originX: annoDraft.originX, originY: annoDraft.originY }
-        renderAnnotate()
+    if (mode === 'tool') {
+      if (annoDraft !== null && annoStart !== null) {
+        const p = toPhys(event.clientX, event.clientY)
+        annoDraft = norm(annoStart.x, annoStart.y, p.x, p.y)
+        renderAnno()
       }
       return
     }
-    if (selecting && start !== null) {
-      // 拖动超过阈值才开始新框选：纯点击（含双击序列的两次 mousedown）
-      // 不销毁已定格的选区——否则双击确认永远拿不到 rect（2026-08-23 实测）。
-      if (!dragStarted && Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) {
-        dragStarted = true
-        rect = null
+    if (dragStart !== null) {
+      const p = toPhys(event.clientX, event.clientY)
+      // 拖动超过 4px 才开始新框选：纯点击（含双击序列）不销毁已定格选区。
+      if (!dragStart.moved && Math.hypot(p.x - dragStart.phys.x, p.y - dragStart.phys.y) > 4) {
+        dragStart.moved = true
+        sel = null
       }
-      if (dragStarted) {
-        rect = norm(start.x, start.y, event.clientX, event.clientY)
-        renderSelection()
-      }
+      if (dragStart.moved) sel = norm(dragStart.phys.x, dragStart.phys.y, p.x, p.y)
+      renderSelection()
     } else {
-      renderCross(event.clientX, event.clientY)
+      crossV.style.display = 'block'
+      crossH.style.display = 'block'
+      crossV.style.left = `${event.clientX}px`
+      crossH.style.top = `${event.clientY}px`
     }
   })
-
   document.addEventListener('mouseup', () => {
-    if (mode === 'annotate') {
+    if (mode === 'tool') {
       if (annoDraft !== null) {
-        if (annoDraft.w >= 4 && annoDraft.h >= 4) annoRects.push(annoDraft)
+        if (annoDraft.w >= 3 && annoDraft.h >= 3) {
+          annoRects.push(annoDraft)
+          undoStack.push(JSON.stringify(annoRects.slice(0, -1)))
+        }
         annoDraft = null
-        renderAnnotate()
+        annoStart = null
+        renderAnno()
       }
       return
     }
-    if (!selecting) return
-    selecting = false
-    start = null
-    dragStarted = false
-    renderCross(0, 0)
+    if (dragStart === null) return
+    const justDragged = dragStart.moved
+    dragStart = null
+    renderCrossClear()
+    if (justDragged && sel !== null && sel.w >= 4 && sel.h >= 4) enterTool()
+    else renderSelection()
   })
+  const renderCrossClear = () => {
+    crossV.style.display = 'none'
+    crossH.style.display = 'none'
+  }
 
-  undoBtn.addEventListener('click', () => {
-    if (annoRects.length > 0) {
-      annoRects.pop()
-      renderAnnotate()
-    }
+  // 工具条
+  toolBox.addEventListener('click', () => { renderAnno() })
+  toolUndo.addEventListener('click', () => {
+    if (annoRects.length > 0) { undoStack.push(JSON.stringify(annoRects.slice(0, -1))); annoRects.pop(); renderAnno() }
   })
-  clearBtn.addEventListener('click', () => { backToSelect() })
-  doneBtn.addEventListener('click', () => { void finishAnnotate().catch((error) => { window.ssidCapture.error(String(error)) }) })
+  toolRedo.addEventListener('click', () => {
+    const prev = undoStack.pop()
+    if (prev !== undefined) { annoRects = JSON.parse(prev); renderAnno() }
+  })
+  toolRedoSel.addEventListener('click', () => { backToSelect() })
+  toolDone.addEventListener('click', () => { void finish().catch((error) => { window.ssidCapture.error(String(error)) }) })
 
   document.addEventListener('dblclick', () => {
-    if (mode === 'annotate') { void finishAnnotate().catch((error) => { window.ssidCapture.error(String(error)) }); return }
-    void enterAnnotate().catch((error) => { window.ssidCapture.error(String(error)) })
+    if (mode === 'tool') { void finish().catch((error) => { window.ssidCapture.error(String(error)) }); return }
+    if (sel !== null && sel.w >= 4 && sel.h >= 4) enterTool()
   })
   window.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') {
-      cancelOrBack()
-      return
-    }
-    if (event.key === 'Enter') {
-      if (mode === 'annotate') { void finishAnnotate().catch((error) => { window.ssidCapture.error(String(error)) }); return }
-      void enterAnnotate().catch((error) => { window.ssidCapture.error(String(error)) })
+    if (event.key === 'Escape') { cancelOrBack(); return }
+    if (event.key === 'Enter' && mode === 'tool') {
+      void finish().catch((error) => { window.ssidCapture.error(String(error)) })
     }
   })
 })()
