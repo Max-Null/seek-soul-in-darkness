@@ -212,7 +212,12 @@ function applyPendingPluginUpdates(profileDir: string): void {
     return // 无待办更新（或目录不存在）：正常启动路径
   }
   if (!Array.isArray(parsed) || parsed.length === 0) return
-  const candidates = ['pnpm', 'pnpm.cmd']
+  // 壳内捆绑 pnpm（SSID_PNPM，与归档 store 布局同 major）最优先——重启消费
+  // pending 清单时避免用户机器全局 pnpm 版本不一致（2026-08-23 鸡生蛋防护）。
+  const candidates = [
+    ...(process.env.SSID_PNPM !== undefined && process.env.SSID_PNPM !== '' ? [process.env.SSID_PNPM] : []),
+    'pnpm', 'pnpm.cmd',
+  ]
   const remaining: Array<Record<string, unknown>> = []
   for (const raw of parsed) {
     const entry = raw as { name?: unknown, version?: unknown, tgz?: unknown } | null

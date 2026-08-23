@@ -316,9 +316,13 @@ async function start() {
       code === 0 ? resolve() : reject(new Error(`pnpm install exited with code ${code}`))
     })
   })
-  /** pnpm 候选命令：GUI 进程 PATH 常缺用户级 npm 全局目录，补常见安装位。 */
+  /** pnpm 候选命令：壳内捆绑（SSID_PNPM，与归档 store 布局同 major）最优先，
+   *  其次 GUI 进程 PATH/用户级 npm 全局目录（2026-08-23 自更新鸡生蛋防护：
+   *  重启消费 pending 清单用捆绑 pnpm，避免用户机器全局版本不一致）。 */
   const pnpmCandidates = () => {
-    const commands = ['pnpm', 'pnpm.cmd']
+    const commands = []
+    if (process.env.SSID_PNPM !== undefined && process.env.SSID_PNPM !== '') commands.push(process.env.SSID_PNPM)
+    commands.push('pnpm', 'pnpm.cmd')
     const userNpm = join(homedir(), 'AppData', 'Roaming', 'npm')
     for (const name of ['pnpm.cmd', 'pnpm.exe', 'pnpm']) {
       const candidate = join(userNpm, name)
