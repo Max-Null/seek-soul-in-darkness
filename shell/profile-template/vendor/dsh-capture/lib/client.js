@@ -246,6 +246,7 @@ window.__ModuleLoader__.load({
 					if (toolbarEl !== null && toolbarEl.contains(event.target)) return;
 					if (event.button === 2) {
 						event.preventDefault();
+						cancelOrBack();
 						return;
 					}
 					if (event.button !== 0) return;
@@ -456,7 +457,7 @@ window.__ModuleLoader__.load({
 					}
 				}, "完成")
 			]) : null;
-			const tip = s.phase === "select" ? (0, react.createElement)("div", { className: "ssd3ov-tip" }, (0, react.createElement)("em", null, "拖拽 "), "选择截图区域 · ", (0, react.createElement)("em", null, "Esc"), " 取消") : (0, react.createElement)("div", { className: "ssd3ov-tip" }, "拖拽画", (0, react.createElement)("em", { className: "red" }, "标注框 "), "强调 · ", (0, react.createElement)("em", null, "回车"), " 完成 · ", (0, react.createElement)("em", null, "Esc"), " 逐级回退");
+			const tip = s.phase === "select" ? (0, react.createElement)("div", { className: "ssd3ov-tip" }, (0, react.createElement)("em", null, "拖拽 "), "选择截图区域 · ", (0, react.createElement)("em", null, "右键 / Esc"), " 取消") : (0, react.createElement)("div", { className: "ssd3ov-tip" }, "拖拽画", (0, react.createElement)("em", { className: "red" }, "标注框 "), "强调 · ", (0, react.createElement)("em", null, "回车"), " 完成 · ", (0, react.createElement)("em", null, "右键 / Esc"), " 逐级回退");
 			return (0, react_dom.createPortal)((0, react.createElement)("div", { className: "ssd3ov" }, [(0, react.createElement)("div", {
 				key: "wrap",
 				className: "ssd3ov-wrap",

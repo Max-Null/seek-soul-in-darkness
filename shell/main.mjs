@@ -1150,22 +1150,16 @@ async function start() {
       // 浏览器遮住「看着像消失」）——最高置顶层级不受普通窗口激活影响。
       overlay.setAlwaysOnTop(true, 'screen-saver')
       captureSession.overlays.push(overlay)
-      safeLog(`[screenshot] overlay created displayId=${display.id} webContentsId=${overlay.webContents.id}\n`)
       overlay.on('closed', () => {
         // 任一浮层被外部关闭（如系统强制销毁）：视为取消整次截图。
-        safeLog(`[screenshot] overlay closed (displayId=${display.id})\n`)
         closeOverlays(true)
       })
-      // 生命周期诊断（2026-08-23 B 屏遮罩消失问题）：show/焦点/边界/隐藏/移动/渲染崩溃全部留痕。
-      overlay.on('show', () => safeLog(`[screenshot] overlay show displayId=${display.id} bounds=${JSON.stringify(overlay.getBounds())} content=${JSON.stringify(overlay.getContentBounds())}\n`))
-      overlay.on('focus', () => safeLog(`[screenshot] overlay focus displayId=${display.id}\n`))
-      overlay.on('blur', () => safeLog(`[screenshot] overlay blur displayId=${display.id}\n`))
-      overlay.on('hide', () => safeLog(`[screenshot] overlay HIDE displayId=${display.id}\n`))
-      overlay.on('move', () => safeLog(`[screenshot] overlay MOVE displayId=${display.id} bounds=${JSON.stringify(overlay.getBounds())}\n`))
+      // 错误级留痕：渲染进程崩溃（异常时定位用）。
       overlay.webContents.on('render-process-gone', (_event, details) => {
         safeLog(`[screenshot] overlay RENDERER GONE displayId=${display.id} reason=${details?.reason} exitCode=${details?.exitCode}\n`)
       })
-      // 无边框窗口右键会弹 Windows 系统菜单（抢占焦点、外观异常）——一律拦截。
+      // 无边框窗口右键会弹 Windows 系统菜单（抢占焦点、外观异常）——DOM 层
+      // 已屏蔽，这里再兜底一次。
       overlay.webContents.on('context-menu', (event) => event.preventDefault())
       overlay.webContents.once('did-finish-load', () => {
         if (overlay.isDestroyed()) return

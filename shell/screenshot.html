@@ -91,7 +91,7 @@
 <div id="cross-h" class="cross"></div>
 <div id="selection"></div>
 <div id="size"></div>
-<div id="tip"><em>拖拽</em> 选择截图区域 · <em>Esc</em> 取消</div>
+<div id="tip"><em>拖拽</em> 选择截图区域 · <em>右键 / Esc</em> 取消</div>
 <div id="toolbar">
   <button id="tool-box" type="button" class="tool active" title="矩形框">
     <svg viewBox="0 0 16 16" width="15" height="15" fill="none" aria-hidden="true">
@@ -159,7 +159,6 @@
   window.__setFrame = (value) => {
     frame = value
     frameEl.src = value.dataUrl
-    dbg(`frame set phys=${value.physicalW}x${value.physicalH} logical=${value.logicalW}x${value.logicalH} inner=${window.innerWidth}x${window.innerHeight}`)
   }
 
   const norm = (x1, y1, x2, y2) => ({
@@ -322,7 +321,6 @@
       backToSelect()
       return
     }
-    dbg('cancelOrBack -> cancel (select phase)')
     window.ssidCapture.cancel()
   }
 
@@ -335,7 +333,7 @@
     undoStack = []
     renderAnno()
     renderSelection()
-    tipEl.innerHTML = '<em>拖拽</em> 选择截图区域 · <em>Esc</em> 取消'
+    tipEl.innerHTML = '<em>拖拽</em> 选择截图区域 · <em>右键 / Esc</em> 取消'
   }
 
   const enterTool = () => {
@@ -345,29 +343,25 @@
     setToolKind('rect')
     renderAnno()
     renderSelection()
-    tipEl.innerHTML = '拖拽画<em class="red">标注框</em>强调 · <em>回车</em> 完成 · <em>Esc</em> 逐级回退'
+    tipEl.innerHTML = '拖拽画<em class="red">标注框</em>强调 · <em>回车</em> 完成 · <em>右键 / Esc</em> 逐级回退'
   }
-
-  /** 临时调试：关键事件经 error 通道上报主进程日志（[screenshot] overlay error: [dbg] ...）。 */
-  const dbg = (message) => { try { window.ssidCapture.error(`[dbg] ${message}`) } catch { /* ignore */ } }
 
   // ---- 事件 ----
   document.addEventListener('contextmenu', (event) => { event.preventDefault() })
   document.addEventListener('mousedown', (event) => {
     // 工具条按钮上的按下不触发任何绘制/选择（点击按钮不应被误认为画框）。
     if (toolbarEl.contains(event.target)) return
-    // 右键不再承担任何操作：曾作为「取消/回退」入口，但在负坐标副屏上
-    // 出现过左键被上报为 button2 的怪异事件（2026-08-23 实测：左键单击
-    // 后日志出现 mousedown button2 → 误取消）。取消/回退只用 Esc 与按钮。
+    // 右键 = 逐级回退（画框中 → 撤框 → 重选 → 取消）。此前误以为右键是
+    // 「浮层消失」元凶而禁用，实测根因是 hideWindow=false 时普通置顶层级
+    // 被激活窗口覆盖（screen-saver 置顶修复后恢复右键，2026-08-23 用户确认）。
     if (event.button === 2) {
       event.preventDefault()
-      dbg(`mousedown button2 ignored (mode=${mode})`)
+      cancelOrBack()
       return
     }
     if (event.button !== 0) return
     if (mode === 'tool') {
       const p = toPhys(event.clientX, event.clientY)
-      dbg(`mousedown tool@${Math.round(event.clientX)},${Math.round(event.clientY)} phys=${Math.round(p.x)},${Math.round(p.y)}`)
       annoStart = clampPoint(p)
       annoDraft = { x: annoStart.x, y: annoStart.y, w: 0, h: 0, kind: toolKind }
       renderAnno()
@@ -375,7 +369,6 @@
     }
     // select：记录起点但不立即清空已定格选区（双击确认不被打断）。
     const p = toPhys(event.clientX, event.clientY)
-    dbg(`mousedown select@${Math.round(event.clientX)},${Math.round(event.clientY)} phys=${Math.round(p.x)},${Math.round(p.y)} inner=${window.innerWidth}x${window.innerHeight} physFrame=${frame.physicalW}x${frame.physicalH}`)
     dragStart = { x: event.clientX, y: event.clientY, phys: p, moved: false }
   })
   document.addEventListener('mousemove', (event) => {
@@ -397,11 +390,9 @@
       if (!dragStart.moved && Math.hypot(p.x - dragStart.phys.x, p.y - dragStart.phys.y) > 4) {
         dragStart.moved = true
         sel = null
-        dbg(`drag started phys=${Math.round(p.x)},${Math.round(p.y)}`)
       }
       if (dragStart.moved) {
         sel = norm(dragStart.phys.x, dragStart.phys.y, p.x, p.y)
-        if (sel.w % 300 < 2) dbg(`sel ${Math.round(sel.w)}x${Math.round(sel.h)}`)
       }
       renderSelection()
     } else {
@@ -417,7 +408,6 @@
         if (annoDraft.w >= 3 && annoDraft.h >= 3) {
           annoRects.push(annoDraft)
           undoStack.push(JSON.stringify(annoRects.slice(0, -1)))
-          dbg(`anno added ${Math.round(annoDraft.w)}x${Math.round(annoDraft.h)} total=${annoRects.length}`)
         }
         annoDraft = null
         annoStart = null
@@ -429,7 +419,6 @@
     const justDragged = dragStart.moved
     dragStart = null
     renderCrossClear()
-    dbg(`mouseup sel=${sel === null ? 'null' : `${Math.round(sel.x)},${Math.round(sel.y)} ${Math.round(sel.w)}x${Math.round(sel.h)}`} moved=${justDragged}`)
     if (justDragged && sel !== null && sel.w >= 4 && sel.h >= 4) enterTool()
     else renderSelection()
   })
@@ -457,7 +446,7 @@
     if (sel !== null && sel.w >= 4 && sel.h >= 4) enterTool()
   })
   window.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') { dbg(`keydown Escape mode=${mode}`); cancelOrBack(); return }
+    if (event.key === 'Escape') { cancelOrBack(); return }
     if (event.key === 'Enter' && mode === 'tool') {
       void finish().catch((error) => { window.ssidCapture.error(String(error)) })
     }
