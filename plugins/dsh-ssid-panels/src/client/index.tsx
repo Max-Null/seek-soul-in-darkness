@@ -468,7 +468,7 @@ function NotifySettings(): ReactNode {
         type: 'button',
         style: {
           width: 40, height: 22, borderRadius: 11, border: 'none', cursor: 'pointer', padding: 0,
-          background: config !== null && config[key] ? 'var(--dsw-alias-state-business-primary, #4FC3F7)' : 'var(--dsw-alias-bg-module-platform, rgba(128,148,168,.2))',
+          background: config !== null && config[key] ? 'var(--dsw-alias-state-business-primary, #4FC3F7)' : 'var(--dsw-alias-border-l4, rgba(0,0,0,.16))',
           transition: 'background .15s',
         },
         onClick: () => { void toggle(key) },
@@ -626,7 +626,7 @@ function SessionRootSettings(): ReactNode {
             disabled: info === null,
             style: {
               width: 40, height: 22, borderRadius: 11, border: 'none', cursor: info === null ? 'not-allowed' : 'pointer', padding: 0, opacity: info === null ? 0.5 : 1,
-              background: info !== null && info.isolated ? 'var(--dsw-alias-state-business-primary, #4FC3F7)' : 'var(--dsw-alias-bg-module-platform, rgba(128,148,168,.2))',
+              background: info !== null && info.isolated ? 'var(--dsw-alias-state-business-primary, #4FC3F7)' : 'var(--dsw-alias-border-l4, rgba(0,0,0,.16))',
               transition: 'background .15s',
             },
             onClick: () => { void toggle() },
