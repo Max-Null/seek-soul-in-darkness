@@ -804,6 +804,7 @@ async function start() {
   // addBrowserView（不是 setBrowserView）——setBrowserView 会移除上面的 titleBar。
   const mainView = new BrowserView({ webPreferences: { sandbox: true, contextIsolation: true } })
   win.addBrowserView(mainView)
+  safeLog(`ssid: mainView webContentsId=${mainView.webContents.id} (main window contentId=${win.webContents.id})\n`)
 
   // ── SSiD 标题栏统一按钮组：动作转发 ────────────────────────────────────
   // 标题栏按钮（插件中心/侧栏/底栏）→ IPC → 在 DSH UI（mainView）内派发
@@ -1144,11 +1145,28 @@ async function start() {
         },
       })
       overlay.setBounds({ x: display.bounds.x, y: display.bounds.y, width: display.bounds.width, height: display.bounds.height })
+      // 强置顶（screen-saver 层级）：hideWindow=false 时主窗口可见并参与层级，
+      // 点击浮层后普通置顶会被激活的普通窗口盖住（实测 B 屏浮层被主窗口/
+      // 浏览器遮住「看着像消失」）——最高置顶层级不受普通窗口激活影响。
+      overlay.setAlwaysOnTop(true, 'screen-saver')
       captureSession.overlays.push(overlay)
+      safeLog(`[screenshot] overlay created displayId=${display.id} webContentsId=${overlay.webContents.id}\n`)
       overlay.on('closed', () => {
         // 任一浮层被外部关闭（如系统强制销毁）：视为取消整次截图。
+        safeLog(`[screenshot] overlay closed (displayId=${display.id})\n`)
         closeOverlays(true)
       })
+      // 生命周期诊断（2026-08-23 B 屏遮罩消失问题）：show/焦点/边界/隐藏/移动/渲染崩溃全部留痕。
+      overlay.on('show', () => safeLog(`[screenshot] overlay show displayId=${display.id} bounds=${JSON.stringify(overlay.getBounds())} content=${JSON.stringify(overlay.getContentBounds())}\n`))
+      overlay.on('focus', () => safeLog(`[screenshot] overlay focus displayId=${display.id}\n`))
+      overlay.on('blur', () => safeLog(`[screenshot] overlay blur displayId=${display.id}\n`))
+      overlay.on('hide', () => safeLog(`[screenshot] overlay HIDE displayId=${display.id}\n`))
+      overlay.on('move', () => safeLog(`[screenshot] overlay MOVE displayId=${display.id} bounds=${JSON.stringify(overlay.getBounds())}\n`))
+      overlay.webContents.on('render-process-gone', (_event, details) => {
+        safeLog(`[screenshot] overlay RENDERER GONE displayId=${display.id} reason=${details?.reason} exitCode=${details?.exitCode}\n`)
+      })
+      // 无边框窗口右键会弹 Windows 系统菜单（抢占焦点、外观异常）——一律拦截。
+      overlay.webContents.on('context-menu', (event) => event.preventDefault())
       overlay.webContents.once('did-finish-load', () => {
         if (overlay.isDestroyed()) return
         const frame = {
@@ -1180,15 +1198,15 @@ async function start() {
   }
   // 浮层确认：关全部 → 恢复主窗口 → 派发给 DSH UI。captureSession 为空
   // 表示本次截图已确认/取消——忽略重复（浮层销毁前 Enter/点击可能双发）。
-  ipcMain.on('ssid:shot:confirm', (_event, dataUrl) => {
+  ipcMain.on('ssid:shot:confirm', (event, dataUrl) => {
     if (captureSession === null) return
-    safeLog(`[screenshot] confirm received (${typeof dataUrl === 'string' ? dataUrl.length : 'non-string'} bytes)\n`)
+    safeLog(`[screenshot] confirm received (${typeof dataUrl === 'string' ? dataUrl.length : 'non-string'} bytes) sender=${event.sender.id}\n`)
     closeOverlays(true)
     deliverScreenshot(dataUrl)
   })
   // 浮层取消：关全部 → 恢复主窗口。
-  ipcMain.on('ssid:shot:cancel', () => {
-    safeLog('[screenshot] cancel received\n')
+  ipcMain.on('ssid:shot:cancel', (event) => {
+    safeLog(`[screenshot] cancel received sender=${event.sender.id}\n`)
     closeOverlays(true)
   })
   // 浮层侧错误（裁剪/解码失败等）。

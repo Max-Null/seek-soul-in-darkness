@@ -63,6 +63,7 @@ window.__ModuleLoader__.load({
 			".ssd3ov-tool:hover{background:rgba(255,255,255,.12);color:#fff}",
 			".ssd3ov-tool-active{background:#2E6BE6;color:#fff}",
 			".ssd3ov-tool-active:hover{background:#2E6BE6;color:#fff}",
+			".ssd3ov-tool-text{width:auto;padding:0 12px;font:13px/1.6 \"Microsoft YaHei UI\",\"PingFang SC\",\"Segoe UI\",sans-serif}",
 			".ssd3ov-sep{width:1px;height:20px;background:rgba(255,255,255,.18)}",
 			".ssd3ov-done{padding:5px 16px;border:none;border-radius:14px;background:#2E6BE6;color:#fff;font:13px/1.6 \"Microsoft YaHei UI\",\"PingFang SC\",\"Segoe UI\",sans-serif;cursor:pointer}",
 			".ssd3ov-done:hover{background:#3B78F5}"
@@ -123,7 +124,6 @@ window.__ModuleLoader__.load({
 		}
 		const ICON_BOX = "M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v9a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12.5v-9Zm1.2.8v7.4c0 .17.13.3.3.3h7.4c.17 0 .3-.13.3-.3V4.3c0-.17-.13-.3-.3-.3H3.5c-.17 0-.3.13-.3.3Z";
 		const ICON_UNDO = "M6.7 3.2 3.2 6.7l3.5 3.5M3.6 6.7h6.1a3.1 3.1 0 0 1 0 6.2H8.3";
-		const ICON_REDO_SEL = "M3 5.5A2.5 2.5 0 0 1 5.5 3h5A2.5 2.5 0 0 1 13 5.5v5a2.5 2.5 0 0 1-2.5 2.5h-5A2.5 2.5 0 0 1 3 10.5v-5Z";
 		function icon(iconPath, color, flip = false) {
 			return (0, react.createElement)("svg", {
 				viewBox: "0 0 16 16",
@@ -242,6 +242,8 @@ window.__ModuleLoader__.load({
 			}, []);
 			(0, react.useEffect)(() => {
 				const onMouseDown = (event) => {
+					const toolbarEl = document.querySelector(".ssd3ov-toolbar");
+					if (toolbarEl !== null && toolbarEl.contains(event.target)) return;
 					if (event.button === 2) {
 						event.preventDefault();
 						return;
@@ -441,10 +443,10 @@ window.__ModuleLoader__.load({
 				(0, react.createElement)("button", {
 					key: "reselect",
 					type: "button",
-					className: "ssd3ov-tool",
-					title: "重选区域",
+					className: "ssd3ov-tool ssd3ov-tool-text",
+					title: "取消（清除标注并重新选择）",
 					onClick: backToSelect
-				}, icon(ICON_REDO_SEL, "none")),
+				}, "取消"),
 				(0, react.createElement)("button", {
 					key: "done",
 					type: "button",
