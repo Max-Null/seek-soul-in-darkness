@@ -21,7 +21,7 @@
     "dsh-sidebar-qa": "^0.4.0",
     "dsh-video-preview": "^0.1.1",
     "open-sea-skin": "file:./vendor/open-sea-skin-1.2.1.tgz",
-    "@max-null/dsh-ssid-screenshot": "file:./vendor/dsh-ssid-screenshot"
+    "@max-null/dsh-capture": "file:./vendor/dsh-capture"
   },
   "dsh": {
     "profile": {
@@ -40,7 +40,7 @@
         "@max-null/dsh-draft-polish",
         "@max-null/dsh-ssid-panels",
         "@max-null/dsh-ssid-zh-ui",
-        "@max-null/dsh-ssid-screenshot",
+        "@max-null/dsh-capture",
         "dsh-better-sidebar",
         "dsh-dream-skin",
         "open-sea-skin",
