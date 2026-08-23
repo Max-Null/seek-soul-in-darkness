@@ -735,6 +735,19 @@ async function start() {
   try {
     safeLog('ssid: phase bootKernel start\n')
     splashStep(2)
+    // 壳内捆绑 pnpm（与归档 store 布局一致的 major）：作为应用私有 CLI 注入
+    // SSID_PNPM，插件中心优先使用——避免用户机器全局 pnpm 版本不一致导致
+    // ERR_PNPM_UNEXPECTED_STORE（2026-08-23 用户机器 v10/v11 实测）。
+    // dev（app.getAppPath()=shell 目录）与打包（resources/app.asar.unpacked）
+    // 两种布局都覆盖；实体存在才注入（裸跑/旧包无捆绑时静默降级）。
+    const pnpmCli = join(
+      app.getAppPath().replace(/app\.asar$/, 'app.asar.unpacked'),
+      'node_modules', 'pnpm', 'bin', 'pnpm.cjs',
+    )
+    if (existsSync(pnpmCli)) {
+      process.env.SSID_PNPM = pnpmCli
+      safeLog(`ssid: bundled pnpm at ${pnpmCli}\n`)
+    }
     // preferBundled: 打包版强制用内置闭包（忽略用户环境的 DSH_CHECKOUT，
     // 避免标题栏版本与归档不一致——pitfalls #5 幽灵依赖的根治）。
     kernel = await bootKernel(undefined, {

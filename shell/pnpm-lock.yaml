@@ -21,6 +21,9 @@ importers:
       electron-builder:
         specifier: ^26.0.0
         version: 26.15.3(electron-builder-squirrel-windows@26.15.3)(supports-color@7.2.0)
+      pnpm:
+        specifier: 11.21.0
+        version: 11.21.0
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -942,6 +945,11 @@ packages:
   plist@3.1.0:
     resolution: {integrity: sha512-uysumyrvkUX0rX/dEVqt8gC3sTBzd4zoWfLeS29nb53imdaXVvLINYXTI2GNqzaMuvacNx4uJQ8+b3zXR0pkgQ==}
     engines: {node: '>=10.4.0'}
+
+  pnpm@11.21.0:
+    resolution: {integrity: sha512-UhcFvOaJkk6scvWjWHEi82JonvZXHlW6gAdv1jfBETLs/62ib61Op5xIW/3b/T1aKlsFgFp36JPeceyKbMo7sQ==}
+    engines: {node: '>=22.13'}
+    hasBin: true
 
   postject@1.0.0-alpha.6:
     resolution: {integrity: sha512-b9Eb8h2eVqNE8edvKdwqkrY6O7kAwmI8kcnBv1NScolYJbo59XUF0noFq+lxbC1yN20bmC0WBEbDC5H/7ASb0A==}
@@ -1990,7 +1998,7 @@ snapshots:
       es6-error: 4.1.1
       matcher: 3.0.0
       roarr: 2.15.4
-      semver: 7.7.4
+      semver: 7.8.5
       serialize-error: 7.0.1
     optional: true
 
@@ -2177,11 +2185,11 @@ snapshots:
 
   node-abi@4.33.0:
     dependencies:
-      semver: 7.7.4
+      semver: 7.8.5
 
   node-api-version@0.2.1:
     dependencies:
-      semver: 7.7.4
+      semver: 7.8.5
 
   node-gyp@12.4.0:
     dependencies:
@@ -2190,7 +2198,7 @@ snapshots:
       graceful-fs: 4.2.11
       nopt: 9.0.0
       proc-log: 6.1.0
-      semver: 7.7.4
+      semver: 7.8.5
       tar: 7.5.22
       tinyglobby: 0.2.17
       undici: 6.28.0
@@ -2241,6 +2249,8 @@ snapshots:
       '@xmldom/xmldom': 0.8.14
       base64-js: 1.5.1
       xmlbuilder: 15.1.1
+
+  pnpm@11.21.0: {}
 
   postject@1.0.0-alpha.6:
     dependencies:
