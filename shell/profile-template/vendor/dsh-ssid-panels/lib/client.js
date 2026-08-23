@@ -290,48 +290,56 @@ window.__ModuleLoader__.load({
 				boxSizing: "border-box"
 			},
 			card: {
-				background: "var(--dsw-alias-bg-layer-1, #131a26)",
+				background: "var(--dsw-alias-bg-layer-3, #1a2333)",
 				border: "1px solid var(--dsw-alias-border-l2, #1e2836)",
-				borderRadius: 10,
-				padding: "12px 14px"
+				borderRadius: 12,
+				padding: "14px 16px"
 			},
 			title: {
 				fontSize: 12,
 				fontWeight: 600,
-				color: "var(--dsw-alias-label-secondary, #67748a)",
+				letterSpacing: ".06em",
+				textTransform: "uppercase",
+				color: "var(--dsw-alias-label-tertiary, #8a95a8)",
 				marginBottom: 6,
 				display: "flex",
 				justifyContent: "space-between",
 				alignItems: "center"
 			},
 			text: {
-				fontSize: 12.5,
+				fontSize: 13,
 				color: "var(--dsw-alias-label-primary, #d8e0ea)",
-				lineHeight: 1.55
+				lineHeight: 1.5
 			},
 			muted: {
-				fontSize: 11,
-				color: "var(--dsw-alias-label-secondary, #67748a)"
+				fontSize: 12,
+				color: "var(--dsw-alias-label-tertiary, #8a95a8)",
+				lineHeight: 1.5
 			},
 			empty: {
 				padding: "28px 12px",
 				textAlign: "center",
-				fontSize: 12.5,
-				color: "var(--dsw-alias-label-secondary, #67748a)"
+				fontSize: 13,
+				color: "var(--dsw-alias-label-tertiary, #8a95a8)"
 			},
 			btn: {
-				padding: "3px 12px",
-				fontSize: 11.5,
+				padding: "5px 14px",
+				fontSize: 13,
+				lineHeight: 1.5,
 				background: "none",
 				border: "1px solid var(--dsw-alias-border-l2, #1e2836)",
-				borderRadius: 6,
+				borderRadius: 8,
 				color: "var(--dsw-alias-label-primary, #d8e0ea)",
-				cursor: "pointer"
+				cursor: "pointer",
+				fontFamily: "inherit"
 			},
 			badge: (level) => ({
-				fontSize: 10.5,
-				padding: "2px 8px",
-				borderRadius: 10,
+				fontSize: 11,
+				fontWeight: 500,
+				lineHeight: 17,
+				padding: "1px 8px",
+				borderRadius: 999,
+				whiteSpace: "nowrap",
 				border: "1px solid",
 				color: level === 0 ? "var(--dsw-alias-label-secondary, #67748a)" : level === 1 ? "#f7c94f" : level === 2 ? "#f7a14f" : "#f76f4f",
 				borderColor: level === 0 ? "var(--dsw-alias-border-l2, #1e2836)" : level === 1 ? "#f7c94f55" : level === 2 ? "#f7a14f55" : "#f76f4f55"
@@ -527,7 +535,7 @@ window.__ModuleLoader__.load({
 					border: "none",
 					cursor: "pointer",
 					padding: 0,
-					background: config !== null && config[key] ? "var(--dsw-alias-state-business-primary, #4FC3F7)" : "var(--dsw-alias-bg-module-platform, rgba(128,148,168,.2))",
+					background: config !== null && config[key] ? "var(--dsw-alias-state-business-primary, #4FC3F7)" : "var(--dsw-alias-border-l4, rgba(0,0,0,.16))",
 					transition: "background .15s"
 				},
 				onClick: () => {
@@ -561,9 +569,9 @@ window.__ModuleLoader__.load({
 				zIndex: 9999
 			} }, (0, react.createElement)("div", { style: {
 				width: "min(420px, 92vw)",
-				background: "var(--dsw-alias-bg-layer-1, #131a26)",
+				background: "var(--dsw-alias-bg-layer-3, #1a2333)",
 				border: "1px solid var(--dsw-alias-border-l2, #1e2836)",
-				borderRadius: 10,
+				borderRadius: 12,
 				padding: 14,
 				display: "flex",
 				flexDirection: "column",
@@ -708,7 +716,7 @@ window.__ModuleLoader__.load({
 					cursor: info === null ? "not-allowed" : "pointer",
 					padding: 0,
 					opacity: info === null ? .5 : 1,
-					background: info !== null && info.isolated ? "var(--dsw-alias-state-business-primary, #4FC3F7)" : "var(--dsw-alias-bg-module-platform, rgba(128,148,168,.2))",
+					background: info !== null && info.isolated ? "var(--dsw-alias-state-business-primary, #4FC3F7)" : "var(--dsw-alias-border-l4, rgba(0,0,0,.16))",
 					transition: "background .15s"
 				},
 				onClick: () => {
@@ -760,9 +768,10 @@ window.__ModuleLoader__.load({
 				type: "button",
 				disabled: importing,
 				style: {
-					padding: "3px 12px",
-					fontSize: 11.5,
-					borderRadius: 6,
+					padding: "5px 14px",
+					fontSize: 13,
+					lineHeight: 1.5,
+					borderRadius: 8,
 					cursor: "pointer",
 					fontWeight: 600,
 					border: "none",
@@ -775,9 +784,10 @@ window.__ModuleLoader__.load({
 			}, importing ? t("sessionRootImporting") : t("sessionRootImport")), (0, react.createElement)("button", {
 				type: "button",
 				style: {
-					padding: "3px 12px",
-					fontSize: 11.5,
-					borderRadius: 6,
+					padding: "5px 14px",
+					fontSize: 13,
+					lineHeight: 1.5,
+					borderRadius: 8,
 					cursor: "pointer",
 					border: "none",
 					background: "transparent",
@@ -802,9 +812,10 @@ window.__ModuleLoader__.load({
 			} }, (0, react.createElement)("button", {
 				type: "button",
 				style: {
-					padding: "3px 12px",
-					fontSize: 11.5,
-					borderRadius: 6,
+					padding: "5px 14px",
+					fontSize: 13,
+					lineHeight: 1.5,
+					borderRadius: 8,
 					cursor: "pointer",
 					border: "none",
 					background: "transparent",
@@ -878,14 +889,15 @@ window.__ModuleLoader__.load({
 				width: "100%"
 			} }, (0, react.createElement)("div", { style: { margin: "10px 2px 2px" } }, (0, react.createElement)("h3", { style: {
 				margin: "0 0 4px",
-				fontSize: 16,
+				fontSize: 18,
 				fontWeight: 600,
+				lineHeight: "26px",
 				color: "var(--dsw-alias-label-primary)"
 			} }, t("about")), (0, react.createElement)("p", { style: {
 				margin: 0,
 				fontSize: 13,
 				lineHeight: "20px",
-				color: "var(--dsw-alias-label-secondary)"
+				color: "var(--dsw-alias-label-tertiary)"
 			} }, t("slogan"))), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("title"))), (0, react.createElement)("div", { style: {
 				fontSize: 22,
 				fontWeight: 700,
@@ -919,7 +931,7 @@ window.__ModuleLoader__.load({
 				...ssid.muted,
 				whiteSpace: "pre-wrap",
 				margin: "4px 0 0",
-				fontSize: 11.5
+				fontSize: 12
 			} }, release.body)))), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("presetPlugins"))), (about?.plugins ?? []).length === 0 ? (0, react.createElement)("div", { style: ssid.muted }, t("none")) : (about?.plugins ?? []).map((plugin) => (0, react.createElement)("div", {
 				key: plugin.id,
 				style: {
