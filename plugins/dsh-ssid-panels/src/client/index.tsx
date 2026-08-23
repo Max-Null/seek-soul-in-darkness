@@ -285,7 +285,7 @@ const ssid = {
     background: 'var(--dsw-alias-bg-layer-1, #131a26)',
     border: '1px solid var(--dsw-alias-border-l2, #1e2836)',
     borderRadius: 10,
-    padding: '10px 12px',
+    padding: '12px 14px',
   },
   title: { fontSize: 12, fontWeight: 600, color: 'var(--dsw-alias-label-secondary, #67748a)', marginBottom: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
   text: { fontSize: 12.5, color: 'var(--dsw-alias-label-primary, #d8e0ea)', lineHeight: 1.55 },
@@ -461,7 +461,7 @@ function NotifySettings(): ReactNode {
   const row = (key: keyof NotifyConfig, labelKey: StringKey, descKey: StringKey): ReactNode => createElement('div', { style: ssid.card },
     createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
       createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', gap: 4 } },
-        createElement('span', { style: { fontSize: 14, fontWeight: 600, color: 'var(--dsw-alias-label-primary, #d8e0ea)' } }, t(labelKey)),
+        createElement('span', { style: { fontSize: 13, fontWeight: 500, color: 'var(--dsw-alias-label-primary, #d8e0ea)' } }, t(labelKey)),
         createElement('span', { style: { ...ssid.muted, fontSize: 12 } }, t(descKey)),
       ),
       createElement('button', {
@@ -618,7 +618,7 @@ function SessionRootSettings(): ReactNode {
       createElement('div', { style: ssid.card },
         createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
           createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', gap: 4 } },
-            createElement('span', { style: { fontSize: 14, fontWeight: 600, color: 'var(--dsw-alias-label-primary, #d8e0ea)' } }, t('sessionRootIsolated')),
+            createElement('span', { style: { fontSize: 13, fontWeight: 500, color: 'var(--dsw-alias-label-primary, #d8e0ea)' } }, t('sessionRootIsolated')),
             createElement('span', { style: { ...ssid.muted, fontSize: 12 } }, t('sessionRootIsolatedDesc')),
           ),
           createElement('button', {
@@ -651,7 +651,7 @@ function SessionRootSettings(): ReactNode {
         ? createElement('div', { style: ssid.card },
           // 1) 标题 + 描述（垂直堆叠，描述可换行不再被按钮挤压）
           createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
-            createElement('span', { style: { fontSize: 14, fontWeight: 600, color: 'var(--dsw-alias-label-primary, #d8e0ea)' } }, t('sessionRootImport')),
+            createElement('span', { style: { fontSize: 13, fontWeight: 500, color: 'var(--dsw-alias-label-primary, #d8e0ea)' } }, t('sessionRootImport')),
             createElement('span', { style: { ...ssid.muted, fontSize: 12, lineHeight: 1.5 } }, t('sessionRootImportDesc')),
           ),
           // 2) 主操作行：与 DSH 官方「编辑/删除」同款幽灵按钮（右对齐）
@@ -763,11 +763,15 @@ function SsidAboutSection(): ReactNode {
       ? (plugin.descriptionEn ?? plugin.descriptionZh ?? '')
       : (plugin.descriptionZh ?? plugin.descriptionEn ?? '')
   return createElement('div', { style: { ...ssid.wrap, maxWidth: 640, margin: '0 auto', width: '100%' } },
+    // 家族页头（与草稿润色/插件中心/Skill 一致：16/600 主色标题 + 13 次要副标题）。
+    createElement('div', { style: { margin: '10px 2px 2px' } },
+      createElement('h3', { style: { margin: '0 0 4px', fontSize: 16, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' } }, t('about')),
+      createElement('p', { style: { margin: 0, fontSize: 13, lineHeight: '20px', color: 'var(--dsw-alias-label-secondary)' } }, t('slogan')),
+    ),
     createElement('div', { style: ssid.card },
       createElement('div', { style: ssid.title }, createElement('span', null, t('title'))),
       createElement('div', { style: { fontSize: 22, fontWeight: 700, color: 'var(--dsw-alias-label-primary, #d8e0ea)' } },
         `v${about?.shellVersion ?? '…'}`),
-      createElement('div', { style: ssid.muted }, t('slogan')),
     ),
     createElement('div', { style: ssid.card },
       createElement('div', { style: ssid.title }, createElement('span', null, t('notifyTitle'))),

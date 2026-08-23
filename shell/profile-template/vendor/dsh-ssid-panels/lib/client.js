@@ -5,6 +5,7 @@ window.__ModuleLoader__.load({
 		var exports = module.exports;
 		Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 		let react = require("react");
+		let react_dom = require("react-dom");
 		//#region src/client/icon-data.ts
 		/**
 		* SSiD 应用图标（shell/assets/icon.png 96px 缩放）内联 data-URL。
@@ -136,7 +137,34 @@ window.__ModuleLoader__.load({
 				notifyQuestion: "提问",
 				notifyQuestionDesc: "AI 向你提问、需要回复时通知",
 				notifyApproval: "授权申请",
-				notifyApprovalDesc: "工具请求授权、需要处理时通知"
+				notifyApprovalDesc: "工具请求授权、需要处理时通知",
+				sessionRootTitle: "会话存储",
+				sessionRootIsolated: "独立会话存储",
+				sessionRootIsolatedDesc: "与手动 dsh web 的会话目录隔离，避免两个宿主并发写坏会话日志；重启 SSiD 后生效",
+				sessionRootApplied: "当前生效：{v}",
+				sessionRootAppliedOn: "独立（sessions-ssid）",
+				sessionRootAppliedOff: "共享（sessions）",
+				sessionRootPendingHint: "重启 SSiD 后生效（当前开关与生效状态不一致）",
+				sessionRootImport: "载入原 DSH 会话",
+				sessionRootImportDesc: "把共享根的历史会话复制到独立根（原件保留，已存在的会话跳过）",
+				sessionRootImporting: "载入中…",
+				sessionRootImportDone: "已载入 {copied} 个，跳过 {skipped} 个",
+				sessionRootImportFailed: "载入出错 {n} 个，请查看日志",
+				sessionRootRestartConfirm: "切换后需要重启 DSH 才能生效，是否现在重启？",
+				sessionRootRestartBusy: "有 {n} 个会话正在进行中，未执行重启；设置已保存，请等待完成后再重启",
+				sessionRootRestarting: "正在重启 DSH…",
+				sessionRootRestartUnavailable: "当前环境不支持自动重启，请手动重启 SSiD",
+				sessionRootRestartAskTitle: "需要重启生效",
+				sessionRootRestartAskBody: "切换已保存，重启思灵后生效（有进行中会话时会先检查）",
+				sessionRootRestartNow: "立即重启",
+				sessionRootRestartLater: "稍后",
+				sessionRootCounts: "独立根 {a} 个会话 · 共享根 {b} 个会话 · 已载入 {c} 个",
+				sessionRootClear: "移除已载入会话",
+				sessionRootClearConfirm: "将删除 {n} 个已载入的会话（隔离后新建的会话与共享根都不受影响，原件保留）。确定移除？",
+				sessionRootCleared: "已移除 {n} 个已载入会话",
+				sessionRootRefreshHint: "重启思灵后生效（载入/清空不触发会话列表刷新）",
+				sessionRootRestartBtn: "重启思灵",
+				sessionRootLoadFailed: "无法读取会话存储状态（插件服务未就绪）；请重启 SSiD 后重试"
 			},
 			en: {
 				about: "About SSiD",
@@ -184,7 +212,34 @@ window.__ModuleLoader__.load({
 				notifyQuestion: "Questions",
 				notifyQuestionDesc: "Notify when the AI asks you a question",
 				notifyApproval: "Approvals",
-				notifyApprovalDesc: "Notify when a tool requests approval"
+				notifyApprovalDesc: "Notify when a tool requests approval",
+				sessionRootTitle: "Session storage",
+				sessionRootIsolated: "Isolate session storage",
+				sessionRootIsolatedDesc: "Separate the session directory from the manual dsh web, so two hosts cannot corrupt the same log; takes effect after restarting SSiD",
+				sessionRootApplied: "Active: {v}",
+				sessionRootAppliedOn: "isolated (sessions-ssid)",
+				sessionRootAppliedOff: "shared (sessions)",
+				sessionRootPendingHint: "Takes effect after restarting SSiD (switch differs from active state)",
+				sessionRootImport: "Import original DSH sessions",
+				sessionRootImportDesc: "Copy historical sessions from the shared root into the isolated root (originals kept; existing ids skipped)",
+				sessionRootImporting: "Importing…",
+				sessionRootImportDone: "Imported {copied}, skipped {skipped}",
+				sessionRootImportFailed: "{n} import error(s); check the log",
+				sessionRootRestartConfirm: "A DSH restart is required for the switch to take effect. Restart now?",
+				sessionRootRestartBusy: "{n} session(s) still in progress — restart skipped; setting saved, restart later",
+				sessionRootRestarting: "Restarting DSH…",
+				sessionRootRestartUnavailable: "Auto-restart unavailable here; please restart DSH manually",
+				sessionRootRestartAskTitle: "Restart required",
+				sessionRootRestartAskBody: "Switch saved; takes effect after restarting SSiD (active sessions are checked first)",
+				sessionRootRestartNow: "Restart now",
+				sessionRootRestartLater: "Later",
+				sessionRootCounts: "Isolated root {a} sessions · shared root {b} sessions · imported {c}",
+				sessionRootClear: "Remove imported sessions",
+				sessionRootClearConfirm: "This deletes {n} imported session(s) only (sessions created after isolation and the shared root are untouched; originals kept). Remove now?",
+				sessionRootCleared: "Removed {n} imported session(s)",
+				sessionRootRefreshHint: "Takes effect after restarting SSiD (import/clear does not refresh the session list in-place)",
+				sessionRootRestartBtn: "Restart SSiD",
+				sessionRootLoadFailed: "Cannot read session storage state (plugin service not ready); restart SSiD and retry"
 			}
 		};
 		let localeId = "zh";
@@ -238,7 +293,7 @@ window.__ModuleLoader__.load({
 				background: "var(--dsw-alias-bg-layer-1, #131a26)",
 				border: "1px solid var(--dsw-alias-border-l2, #1e2836)",
 				borderRadius: 10,
-				padding: "10px 12px"
+				padding: "12px 14px"
 			},
 			title: {
 				fontSize: 12,
@@ -457,8 +512,8 @@ window.__ModuleLoader__.load({
 				flexDirection: "column",
 				gap: 4
 			} }, (0, react.createElement)("span", { style: {
-				fontSize: 14,
-				fontWeight: 600,
+				fontSize: 13,
+				fontWeight: 500,
 				color: "var(--dsw-alias-label-primary, #d8e0ea)"
 			} }, t(labelKey)), (0, react.createElement)("span", { style: {
 				...ssid.muted,
@@ -492,6 +547,300 @@ window.__ModuleLoader__.load({
 				flexDirection: "column",
 				gap: 8
 			} }, row("enabled", "notifyEnabled", "notifyEnabledDesc"), row("replyDone", "notifyReplyDone", "notifyReplyDoneDesc"), row("question", "notifyQuestion", "notifyQuestionDesc"), row("approval", "notifyApproval", "notifyApprovalDesc"));
+		}
+		/** 自绘确认弹窗（2026-08-22，替代原生 window.confirm，与插件中心同款样式；
+		*  重启确认与「清空独立根」的二次确认共用，danger 时确认按钮红色）。 */
+		function ConfirmDialog({ title, body, confirmLabel, cancelLabel, danger = false, onConfirm, onClose }) {
+			return (0, react_dom.createPortal)((0, react.createElement)("div", { style: {
+				position: "fixed",
+				inset: 0,
+				background: "rgba(0,0,0,.55)",
+				display: "flex",
+				alignItems: "center",
+				justifyContent: "center",
+				zIndex: 9999
+			} }, (0, react.createElement)("div", { style: {
+				width: "min(420px, 92vw)",
+				background: "var(--dsw-alias-bg-layer-1, #131a26)",
+				border: "1px solid var(--dsw-alias-border-l2, #1e2836)",
+				borderRadius: 10,
+				padding: 14,
+				display: "flex",
+				flexDirection: "column",
+				gap: 10
+			} }, (0, react.createElement)("div", { style: {
+				fontSize: 13,
+				fontWeight: 600,
+				color: "var(--dsw-alias-label-primary, #d8e0ea)"
+			} }, title), (0, react.createElement)("div", { style: {
+				fontSize: 12,
+				color: "var(--dsw-alias-label-secondary, #67748a)",
+				lineHeight: 1.5
+			} }, body), (0, react.createElement)("div", { style: {
+				display: "flex",
+				gap: 8,
+				justifyContent: "flex-end"
+			} }, (0, react.createElement)("button", {
+				type: "button",
+				style: ssid.btn,
+				onClick: onClose
+			}, cancelLabel), (0, react.createElement)("button", {
+				type: "button",
+				style: danger ? {
+					padding: "3px 12px",
+					fontSize: 11.5,
+					background: "var(--dsw-alias-state-business-critical, #f76f4f)",
+					border: "none",
+					borderRadius: 6,
+					color: "#fff",
+					cursor: "pointer",
+					fontWeight: 600
+				} : {
+					padding: "3px 12px",
+					fontSize: 11.5,
+					border: "none",
+					borderRadius: 6,
+					cursor: "pointer",
+					fontWeight: 600,
+					background: "var(--dsw-alias-button-primary-fill)",
+					color: "var(--dsw-alias-label-primary-foreground)"
+				},
+				onClick: onConfirm
+			}, confirmLabel)))), document.body);
+		}
+		function SessionRootSettings() {
+			const t = useT();
+			const [info, setInfo] = (0, react.useState)(null);
+			const [loadFailed, setLoadFailed] = (0, react.useState)(false);
+			const [importing, setImporting] = (0, react.useState)(false);
+			const [resultNotice, setResultNotice] = (0, react.useState)(null);
+			const [restartAsk, setRestartAsk] = (0, react.useState)(false);
+			(0, react.useEffect)(() => {
+				api("sessionRoot.get").then((value) => {
+					setInfo(value);
+					setLoadFailed(false);
+				}, () => {
+					setLoadFailed(true);
+				});
+			}, []);
+			const runRestartNow = () => {
+				api("sessionRoot.restart").then((result) => {
+					const r = result;
+					if (r.code === "busy") setResultNotice(t("sessionRootRestartBusy", { n: r.activeSessions ?? 0 }));
+					else if (r.ok === true) setResultNotice(t("sessionRootRestarting"));
+				}).catch(() => setResultNotice(t("sessionRootRestartUnavailable")));
+			};
+			const toggle = async () => {
+				if (info === null) return;
+				const nextIsolated = !info.isolated;
+				const previous = info;
+				setInfo({
+					...info,
+					isolated: nextIsolated
+				});
+				setResultNotice(null);
+				try {
+					const saved = await api("sessionRoot.set", { isolated: nextIsolated });
+					setInfo(saved);
+					if (nextIsolated !== info.applied) {
+						if (saved.restartable === true) setRestartAsk(true);
+						else setResultNotice(t("sessionRootRestartUnavailable"));
+					}
+				} catch {
+					setInfo(previous);
+				}
+			};
+			const runImport = async () => {
+				setImporting(true);
+				try {
+					const r = await api("sessionRoot.import");
+					setResultNotice(r.errors.length > 0 ? t("sessionRootImportFailed", { n: r.errors.length }) : t("sessionRootImportDone", {
+						copied: r.copied,
+						skipped: r.skipped
+					}));
+					api("sessionRoot.get").then((value) => setInfo(value), () => {});
+				} catch (error) {
+					setResultNotice(t("sessionRootImportFailed", { n: 1 }));
+				} finally {
+					setImporting(false);
+				}
+			};
+			const [clearAsk, setClearAsk] = (0, react.useState)(false);
+			const runClear = async () => {
+				setClearAsk(false);
+				try {
+					const r = await api("sessionRoot.clear");
+					setResultNotice(t("sessionRootCleared", { n: r.cleared ?? 0 }));
+					api("sessionRoot.get").then((value) => setInfo(value), () => {});
+				} catch (error) {
+					setResultNotice(t("sessionRootImportFailed", { n: 1 }));
+				}
+			};
+			const pending = info !== null && info.isolated !== info.applied;
+			return (0, react.createElement)(react.Fragment, null, (0, react.createElement)("div", { style: {
+				display: "flex",
+				flexDirection: "column",
+				gap: 8
+			} }, (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: {
+				display: "flex",
+				alignItems: "center",
+				gap: 10
+			} }, (0, react.createElement)("div", { style: {
+				flex: 1,
+				display: "flex",
+				flexDirection: "column",
+				gap: 4
+			} }, (0, react.createElement)("span", { style: {
+				fontSize: 13,
+				fontWeight: 500,
+				color: "var(--dsw-alias-label-primary, #d8e0ea)"
+			} }, t("sessionRootIsolated")), (0, react.createElement)("span", { style: {
+				...ssid.muted,
+				fontSize: 12
+			} }, t("sessionRootIsolatedDesc"))), (0, react.createElement)("button", {
+				type: "button",
+				disabled: info === null,
+				style: {
+					width: 40,
+					height: 22,
+					borderRadius: 11,
+					border: "none",
+					cursor: info === null ? "not-allowed" : "pointer",
+					padding: 0,
+					opacity: info === null ? .5 : 1,
+					background: info !== null && info.isolated ? "var(--dsw-alias-state-business-primary, #4FC3F7)" : "var(--dsw-alias-bg-module-platform, rgba(128,148,168,.2))",
+					transition: "background .15s"
+				},
+				onClick: () => {
+					toggle();
+				}
+			}, (0, react.createElement)("span", { style: {
+				display: "block",
+				width: 16,
+				height: 16,
+				borderRadius: 8,
+				background: "#fff",
+				marginLeft: info !== null && info.isolated ? 22 : 2,
+				transition: "margin-left .15s"
+			} })))), info === null ? (0, react.createElement)("div", { style: {
+				...ssid.muted,
+				fontSize: 12,
+				padding: "0 2px",
+				color: "#f76f4f"
+			} }, t("sessionRootLoadFailed")) : (0, react.createElement)("div", { style: {
+				...ssid.muted,
+				fontSize: 12,
+				padding: "0 2px"
+			} }, pending ? t("sessionRootPendingHint") : t("sessionRootApplied", { v: info.applied ? t("sessionRootAppliedOn") : t("sessionRootAppliedOff") })), info !== null ? (0, react.createElement)("div", { style: {
+				...ssid.muted,
+				fontSize: 12,
+				padding: "0 2px"
+			} }, t("sessionRootCounts", {
+				a: info.isolatedSessions ?? 0,
+				b: info.sharedSessions ?? 0,
+				c: info.importedSessions ?? 0
+			})) : null, info?.isolated === true ? (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: {
+				display: "flex",
+				flexDirection: "column",
+				gap: 4
+			} }, (0, react.createElement)("span", { style: {
+				fontSize: 13,
+				fontWeight: 500,
+				color: "var(--dsw-alias-label-primary, #d8e0ea)"
+			} }, t("sessionRootImport")), (0, react.createElement)("span", { style: {
+				...ssid.muted,
+				fontSize: 12,
+				lineHeight: 1.5
+			} }, t("sessionRootImportDesc"))), (0, react.createElement)("div", { style: {
+				display: "flex",
+				gap: 8,
+				justifyContent: "flex-end",
+				marginTop: 10
+			} }, (0, react.createElement)("button", {
+				type: "button",
+				disabled: importing,
+				style: {
+					padding: "3px 12px",
+					fontSize: 11.5,
+					borderRadius: 6,
+					cursor: "pointer",
+					fontWeight: 600,
+					border: "none",
+					background: "transparent",
+					color: "var(--dsw-alias-label-primary, #d8e0ea)"
+				},
+				onClick: () => {
+					runImport();
+				}
+			}, importing ? t("sessionRootImporting") : t("sessionRootImport")), (0, react.createElement)("button", {
+				type: "button",
+				style: {
+					padding: "3px 12px",
+					fontSize: 11.5,
+					borderRadius: 6,
+					cursor: "pointer",
+					border: "none",
+					background: "transparent",
+					color: "var(--dsw-alias-state-error-primary, #f76f4f)"
+				},
+				disabled: (info?.importedSessions ?? 0) === 0,
+				onClick: () => {
+					setClearAsk(true);
+				}
+			}, t("sessionRootClear"))), resultNotice !== null ? (0, react.createElement)("div", { style: {
+				...ssid.muted,
+				fontSize: 12,
+				marginTop: 8,
+				color: ssid.accent
+			} }, resultNotice) : null, info?.listNeedsRestart === true ? (0, react.createElement)("div", { style: {
+				display: "flex",
+				gap: 8,
+				alignItems: "center",
+				marginTop: 12,
+				paddingTop: 10,
+				borderTop: "1px solid var(--dsw-alias-border-l2, #1e2836)"
+			} }, (0, react.createElement)("button", {
+				type: "button",
+				style: {
+					padding: "3px 12px",
+					fontSize: 11.5,
+					borderRadius: 6,
+					cursor: "pointer",
+					border: "none",
+					background: "transparent",
+					color: "var(--dsw-alias-label-primary, #d8e0ea)"
+				},
+				onClick: () => {
+					setRestartAsk(true);
+				}
+			}, t("sessionRootRestartBtn")), (0, react.createElement)("span", { style: {
+				...ssid.muted,
+				fontSize: 11
+			} }, t("sessionRootRefreshHint"))) : null) : null), restartAsk ? (0, react.createElement)(ConfirmDialog, {
+				title: t("sessionRootRestartAskTitle"),
+				body: t("sessionRootRestartAskBody"),
+				confirmLabel: t("sessionRootRestartNow"),
+				cancelLabel: t("sessionRootRestartLater"),
+				onConfirm: () => {
+					setRestartAsk(false);
+					runRestartNow();
+				},
+				onClose: () => {
+					setRestartAsk(false);
+				}
+			}) : null, clearAsk ? (0, react.createElement)(ConfirmDialog, {
+				title: t("sessionRootClear"),
+				body: t("sessionRootClearConfirm", { n: info?.importedSessions ?? 0 }),
+				confirmLabel: t("sessionRootClear"),
+				cancelLabel: t("sessionRootRestartLater"),
+				danger: true,
+				onConfirm: () => {
+					runClear();
+				},
+				onClose: () => {
+					setClearAsk(false);
+				}
+			}) : null);
 		}
 		function SsidAboutSection() {
 			const t = useT();
@@ -527,11 +876,21 @@ window.__ModuleLoader__.load({
 				maxWidth: 640,
 				margin: "0 auto",
 				width: "100%"
-			} }, (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("title"))), (0, react.createElement)("div", { style: {
+			} }, (0, react.createElement)("div", { style: { margin: "10px 2px 2px" } }, (0, react.createElement)("h3", { style: {
+				margin: "0 0 4px",
+				fontSize: 16,
+				fontWeight: 600,
+				color: "var(--dsw-alias-label-primary)"
+			} }, t("about")), (0, react.createElement)("p", { style: {
+				margin: 0,
+				fontSize: 13,
+				lineHeight: "20px",
+				color: "var(--dsw-alias-label-secondary)"
+			} }, t("slogan"))), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("title"))), (0, react.createElement)("div", { style: {
 				fontSize: 22,
 				fontWeight: 700,
 				color: "var(--dsw-alias-label-primary, #d8e0ea)"
-			} }, `v${about?.shellVersion ?? "…"}`), (0, react.createElement)("div", { style: ssid.muted }, t("slogan"))), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("notifyTitle"))), (0, react.createElement)(NotifySettings)), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("checkUpdates"))), latest === null ? update?.code === "api-failed" ? (0, react.createElement)("div", { style: ssid.muted }, t("apiFailed", { status: update.status ?? "?" })) : update?.code === "check-failed" ? (0, react.createElement)("div", { style: ssid.muted }, t("checkFailed")) : (0, react.createElement)("div", { style: ssid.muted }, t("noRelease")) : newer ? (0, react.createElement)("div", { style: {
+			} }, `v${about?.shellVersion ?? "…"}`)), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("notifyTitle"))), (0, react.createElement)(NotifySettings)), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("sessionRootTitle"))), (0, react.createElement)(SessionRootSettings)), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("checkUpdates"))), latest === null ? update?.code === "api-failed" ? (0, react.createElement)("div", { style: ssid.muted }, t("apiFailed", { status: update.status ?? "?" })) : update?.code === "check-failed" ? (0, react.createElement)("div", { style: ssid.muted }, t("checkFailed")) : (0, react.createElement)("div", { style: ssid.muted }, t("noRelease")) : newer ? (0, react.createElement)("div", { style: {
 				...ssid.text,
 				color: ssid.accent
 			} }, t("newVersion", {

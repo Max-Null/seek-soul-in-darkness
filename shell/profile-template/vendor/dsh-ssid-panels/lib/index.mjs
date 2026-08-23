@@ -1,7 +1,9 @@
 import { createRequire } from "node:module";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { zstdDecompressSync } from "node:zlib";
+import { interruptedTurnClosers } from "@deepseek-ai/dsh-session";
 //#region src/index.ts
 const require = createRequire(import.meta.url);
 /** 预制插件中文简介（未知插件回退包内 description）。 */
@@ -170,6 +172,211 @@ function readNotifyConfig() {
 		return { ...NOTIFY_DEFAULTS };
 	}
 }
+const SESSION_ROOT_CONFIG_PATH = join(homedir(), ".ssid", "session-root.json");
+/** B 方案（2026-08-23）：已载入会话清单——「移除已载入会话」只删清单内，
+*  隔离后新建的会话不受影响。 */
+const IMPORTED_SESSIONS_PATH = join(homedir(), ".ssid", "imported-sessions.json");
+const ISOLATED_ROOT = process.env.SSID_SESSION_ISOLATED_ROOT;
+const SHARED_ROOT = process.env.SSID_SESSION_SHARED_ROOT;
+function readImportedSessions() {
+	try {
+		const parsed = JSON.parse(readFileSync(IMPORTED_SESSIONS_PATH, "utf8"));
+		if (!Array.isArray(parsed)) return [];
+		return parsed.filter((entry) => {
+			const e = entry;
+			return e !== null && typeof e.project === "string" && typeof e.id === "string";
+		});
+	} catch {
+		return [];
+	}
+}
+function writeImportedSessions(entries) {
+	mkdirSync(dirname(IMPORTED_SESSIONS_PATH), { recursive: true });
+	writeFileSync(IMPORTED_SESSIONS_PATH, JSON.stringify(entries, null, 2) + "\n");
+}
+/** 把 present（载入/已存在）并入清单（幂等按 project+id 去重）。 */
+function mergeImportedSessions(present) {
+	const merged = readImportedSessions();
+	const seen = new Set(merged.map((entry) => `${entry.project}/${entry.id}`));
+	for (const entry of present) {
+		const key = `${entry.project}/${entry.id}`;
+		if (!seen.has(key)) {
+			seen.add(key);
+			merged.push(entry);
+		}
+	}
+	writeImportedSessions(merged);
+}
+function readSessionRootState() {
+	try {
+		const parsed = JSON.parse(readFileSync(SESSION_ROOT_CONFIG_PATH, "utf8"));
+		return {
+			isolated: parsed?.isolated === true,
+			applied: parsed?.applied === true
+		};
+	} catch {
+		return {
+			isolated: false,
+			applied: false
+		};
+	}
+}
+function writeSessionRootState(next) {
+	mkdirSync(dirname(SESSION_ROOT_CONFIG_PATH), { recursive: true });
+	writeFileSync(SESSION_ROOT_CONFIG_PATH, JSON.stringify(next, null, 2) + "\n");
+}
+/** 一个根目录下携带会话目录的计数（只列目录，不解析日志）。 */
+function countSessionRoot(root) {
+	if (root === void 0 || root === "") return 0;
+	let projects = [];
+	try {
+		projects = readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+	} catch {
+		return 0;
+	}
+	let count = 0;
+	for (const project of projects) try {
+		count += readdirSync(join(root, project), { withFileTypes: true }).filter((entry) => entry.isDirectory() && existsSync(join(root, project, entry.name, "session.jsonl.zstd"))).length;
+	} catch {}
+	return count;
+}
+/** 取一个 zstd 文件的第一个完整帧（header record 所在帧；扫描规则与
+*  dsh session-persistence-jsonl 的 scanZstdFrames 一致）。 */
+function firstZstdFrame(buf) {
+	if (buf.length < 4 || buf.readUInt32LE(0) !== 4247762216) return void 0;
+	let offset = 4;
+	const descriptor = buf.readUInt8(offset);
+	offset += 1;
+	const single = (descriptor & 32) !== 0;
+	const csum = (descriptor & 4) !== 0;
+	const dictFlag = descriptor & 3;
+	const dictBytes = dictFlag === 3 ? 4 : dictFlag;
+	const contentSizeFlag = descriptor >>> 6;
+	const contentSizeBytes = contentSizeFlag === 0 ? single ? 1 : 0 : 1 << contentSizeFlag;
+	const remainingHeaderBytes = (single ? 0 : 1) + dictBytes + contentSizeBytes;
+	if (buf.length - offset < remainingHeaderBytes) return void 0;
+	offset += remainingHeaderBytes;
+	for (;;) {
+		if (buf.length - offset < 3) return void 0;
+		const blockHeader = buf.readUIntLE(offset, 3);
+		offset += 3;
+		const lastBlock = (blockHeader & 1) !== 0;
+		const blockType = blockHeader >>> 1 & 3;
+		const blockSize = blockHeader >>> 3;
+		if (blockType === 3) return void 0;
+		const payloadBytes = blockType === 1 ? 1 : blockSize;
+		if (buf.length - offset < payloadBytes) return void 0;
+		offset += payloadBytes;
+		if (lastBlock) break;
+	}
+	if (csum) {
+		if (buf.length - offset < 4) return void 0;
+		offset += 4;
+	}
+	return buf.subarray(0, offset);
+}
+/** 读一个会话 artifact 的 header cwd（只解压第一个 zstd 帧，成本 ~KB 级）。 */
+function readArtifactHeaderCwd(artifact) {
+	try {
+		const frame = firstZstdFrame(readFileSync(artifact));
+		if (frame === void 0) return void 0;
+		const first = zstdDecompressSync(frame).toString("utf8").split("\n")[0];
+		if (first === void 0) return void 0;
+		const parsed = JSON.parse(first);
+		return typeof parsed.cwd === "string" ? parsed.cwd : void 0;
+	} catch {
+		return;
+	}
+}
+/** 把共享根的会话日志复制到独立根（只复制 session.jsonl.zstd，原件保留）。
+*  `present` 收集所有「已存在（复制或跳过）」的会话，供载入后进行
+*  workspace attach（侧栏分组可见——workspace 账目只随 attach/首次 bootstrap
+*  填充，直接复制文件不会写入，2026-08-23 实测）。 */
+function importSharedSessions() {
+	if (ISOLATED_ROOT === void 0 || SHARED_ROOT === void 0 || ISOLATED_ROOT === SHARED_ROOT) throw new PanelsError("not-configured", "session roots are not configured (SSiD boot must inject SSID_SESSION_* env)", 503);
+	let copied = 0;
+	let skipped = 0;
+	const errors = [];
+	const present = [];
+	let projects = [];
+	try {
+		projects = readdirSync(SHARED_ROOT, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+	} catch {
+		return {
+			copied,
+			skipped,
+			errors,
+			present
+		};
+	}
+	for (const project of projects) {
+		const projectSource = join(SHARED_ROOT, project);
+		let ids = [];
+		try {
+			ids = readdirSync(projectSource, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+		} catch {
+			continue;
+		}
+		for (const id of ids) {
+			const sourceArtifact = join(projectSource, id, "session.jsonl.zstd");
+			if (!existsSync(sourceArtifact)) continue;
+			const targetArtifact = join(ISOLATED_ROOT, project, id, "session.jsonl.zstd");
+			if (existsSync(targetArtifact)) {
+				skipped += 1;
+				present.push({
+					id,
+					project,
+					source: sourceArtifact
+				});
+				continue;
+			}
+			try {
+				mkdirSync(dirname(targetArtifact), { recursive: true });
+				copyFileSync(sourceArtifact, targetArtifact);
+				copied += 1;
+				present.push({
+					id,
+					project,
+					source: sourceArtifact
+				});
+			} catch (error) {
+				errors.push(`${id}: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
+	}
+	return {
+		copied,
+		skipped,
+		errors: errors.slice(0, 20),
+		present
+	};
+}
+/** 把（载入/已存在的）会话 attach 到其 cwd 对应的 workspace：workspace 归属
+*  要求「账目记录 + cwd 匹配」（types.ts:17-22），复制文件不写账目，故此步
+*  幂等补齐——侧栏分组即时可见。cwd 不存在的会话与无匹配 workspace 的跳过。 */
+async function attachCopiedToWorkspaces(ctx, present) {
+	const registry = ctx.get("workspaceRegistry");
+	if (registry === void 0) return 0;
+	const workspaces = registry.list?.() ?? [];
+	let attached = 0;
+	for (const item of present) {
+		const cwd = readArtifactHeaderCwd(item.source);
+		if (cwd === void 0) continue;
+		let real;
+		try {
+			real = realpathSync(cwd);
+		} catch {
+			continue;
+		}
+		const ws = workspaces.find((w) => w.path === real);
+		if (ws === void 0) continue;
+		try {
+			await ws.attachSession(item.id);
+			attached++;
+		} catch {}
+	}
+	return attached;
+}
 /** Read one optional service or throw 503 so the client can degrade. */
 function required(service, label) {
 	if (service === void 0) throw new PanelsError("service-unavailable", `the ${label} service is not mounted in this deployment`, 503);
@@ -197,6 +404,91 @@ function apply(ctx) {
 			mkdirSync(dirname(NOTIFY_CONFIG_PATH), { recursive: true });
 			writeFileSync(NOTIFY_CONFIG_PATH, JSON.stringify(next, null, 2) + "\n");
 			return next;
+		},
+		"sessionRoot.get": () => {
+			return {
+				...readSessionRootState(),
+				restartable: typeof ctx.get("ssid.shell.restart") === "function",
+				sharedRoot: SHARED_ROOT,
+				isolatedRoot: ISOLATED_ROOT,
+				sharedSessions: countSessionRoot(SHARED_ROOT),
+				isolatedSessions: countSessionRoot(ISOLATED_ROOT),
+				importedSessions: readImportedSessions().length,
+				listNeedsRestart: (() => {
+					try {
+						const bootedAt = Number(process.env.SSID_BOOTED_AT ?? 0);
+						if (!Number.isFinite(bootedAt) || bootedAt === 0) return false;
+						return statSync(IMPORTED_SESSIONS_PATH).mtimeMs > bootedAt;
+					} catch {
+						return false;
+					}
+				})()
+			};
+		},
+		"sessionRoot.set": (payload) => {
+			const record = payload;
+			if (typeof record?.isolated !== "boolean") throw new PanelsError("bad-request", "missing or invalid \"isolated\"");
+			const next = {
+				isolated: record.isolated,
+				applied: readSessionRootState().applied
+			};
+			writeSessionRootState(next);
+			return {
+				...next,
+				restartable: typeof ctx.get("ssid.shell.restart") === "function",
+				sharedRoot: SHARED_ROOT,
+				isolatedRoot: ISOLATED_ROOT
+			};
+		},
+		"sessionRoot.import": async () => {
+			if (!readSessionRootState().isolated) throw new PanelsError("not-isolated", "session isolation is off; enable the switch first");
+			const result = importSharedSessions();
+			mergeImportedSessions(result.present.map(({ id, project }) => ({
+				id,
+				project
+			})));
+			let attached = 0;
+			try {
+				attached = await attachCopiedToWorkspaces(ctx, result.present);
+			} catch {
+				attached = 0;
+			}
+			return {
+				...result,
+				attached
+			};
+		},
+		"sessionRoot.clear": () => {
+			if (ISOLATED_ROOT === void 0 || ISOLATED_ROOT === "") throw new PanelsError("not-configured", "session roots are not configured", 503);
+			const imported = readImportedSessions();
+			let cleared = 0;
+			for (const entry of imported) {
+				const dir = join(ISOLATED_ROOT, entry.project, entry.id);
+				if (existsSync(dir)) try {
+					rmSync(dir, {
+						recursive: true,
+						force: true
+					});
+					cleared++;
+				} catch {}
+			}
+			writeImportedSessions([]);
+			return { cleared };
+		},
+		"sessionRoot.restart": () => {
+			const restart = ctx.get("ssid.shell.restart");
+			if (typeof restart !== "function") throw new PanelsError("restart-unavailable", "SSiD restart channel is unavailable (not booted by the shell?)", 503);
+			const activeSessions = (ctx.get("sessions")?.list?.() ?? []).filter((session) => interruptedTurnClosers(session.events).length > 0).length;
+			if (activeSessions > 0) return {
+				ok: false,
+				code: "busy",
+				activeSessions
+			};
+			restart();
+			return {
+				ok: true,
+				activeSessions: 0
+			};
 		},
 		"about": () => ({
 			shellVersion: SHELL_VERSION,
