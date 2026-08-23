@@ -90,7 +90,7 @@
 <div id="cross-h" class="cross"></div>
 <div id="selection"></div>
 <div id="size"></div>
-<div id="tip"><em>拖拽</em> 选择截图区域 · <em>右键</em> 取消</div>
+<div id="tip"><em>拖拽</em> 选择截图区域 · <em>Esc</em> 取消</div>
 <div id="toolbar">
   <button id="tool-box" type="button" class="tool active" title="矩形框">
     <svg viewBox="0 0 16 16" width="15" height="15" fill="none" aria-hidden="true">
@@ -325,6 +325,7 @@
       backToSelect()
       return
     }
+    dbg('cancelOrBack -> cancel (select phase)')
     window.ssidCapture.cancel()
   }
 
@@ -337,7 +338,7 @@
     undoStack = []
     renderAnno()
     renderSelection()
-    tipEl.innerHTML = '<em>拖拽</em> 选择截图区域 · <em>右键</em> 取消'
+    tipEl.innerHTML = '<em>拖拽</em> 选择截图区域 · <em>Esc</em> 取消'
   }
 
   const enterTool = () => {
@@ -347,7 +348,7 @@
     setToolKind('rect')
     renderAnno()
     renderSelection()
-    tipEl.innerHTML = '拖拽画<em class="red">标注框</em>强调 · <em>回车</em> 完成 · <em>右键</em> 逐级回退'
+    tipEl.innerHTML = '拖拽画<em class="red">标注框</em>强调 · <em>回车</em> 完成 · <em>Esc</em> 逐级回退'
   }
 
   /** 临时调试：关键事件经 error 通道上报主进程日志（[screenshot] overlay error: [dbg] ...）。 */
@@ -356,7 +357,14 @@
   // ---- 事件 ----
   document.addEventListener('contextmenu', (event) => { event.preventDefault() })
   document.addEventListener('mousedown', (event) => {
-    if (event.button === 2) { cancelOrBack(); return }
+    // 右键不再承担任何操作：曾作为「取消/回退」入口，但在负坐标副屏上
+    // 出现过左键被上报为 button2 的怪异事件（2026-08-23 实测：左键单击
+    // 后日志出现 mousedown button2 → 误取消）。取消/回退只用 Esc 与按钮。
+    if (event.button === 2) {
+      event.preventDefault()
+      dbg(`mousedown button2 ignored (mode=${mode})`)
+      return
+    }
     if (event.button !== 0) return
     if (mode === 'tool') {
       const p = toPhys(event.clientX, event.clientY)
@@ -373,9 +381,11 @@
   })
   document.addEventListener('mousemove', (event) => {
     if (mode === 'tool') {
-      if (annoDraft !== null && annoStart !== null) {
+      if (annoStart !== null) {
         const p = toPhys(event.clientX, event.clientY)
-        // 拖拽中的标注框永远与蓝框取交集（不允许超出选区；无交集则不显示）。
+        // 标注框与蓝框实时取交集（不允许超出选区）。拖出选区时预览消失、
+        // 拖回来立即恢复——以「画框起点存在」为条件，不能以 annoDraft 为条件
+        // （否则 clamp 置 null 后拖回选区就不会再出现，2026-08-23 实测）。
         const clipped = clampToSel(norm(annoStart.x, annoStart.y, p.x, p.y))
         annoDraft = clipped === null ? null : { ...clipped, kind: toolKind }
         renderAnno()
@@ -448,7 +458,7 @@
     if (sel !== null && sel.w >= 4 && sel.h >= 4) enterTool()
   })
   window.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') { cancelOrBack(); return }
+    if (event.key === 'Escape') { dbg(`keydown Escape mode=${mode}`); cancelOrBack(); return }
     if (event.key === 'Enter' && mode === 'tool') {
       void finish().catch((error) => { window.ssidCapture.error(String(error)) })
     }
