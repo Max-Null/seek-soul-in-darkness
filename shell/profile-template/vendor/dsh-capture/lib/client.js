@@ -794,13 +794,16 @@ window.__ModuleLoader__.load({
 			".ssd3r-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}",
 			".ssd3r-title{font-size:13px;font-weight:500;line-height:1.5;color:var(--dsw-alias-label-primary)}",
 			".ssd3r-desc{font-size:12px;line-height:1.5;color:var(--dsw-alias-label-tertiary)}",
-			".ssd3r-check{flex:none;width:16px;height:16px;margin:0;accent-color:var(--dsw-alias-brand-primary);cursor:pointer}",
 			".ssd3r-input{flex:none;width:200px;height:34px;padding:0 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-3);font:inherit;font-size:13px;line-height:1.5;color:var(--dsw-alias-label-primary)}",
 			".ssd3r-input:focus-visible{outline:none;border-color:var(--dsw-alias-brand-primary)}",
 			".ssd3r-input::placeholder{color:var(--dsw-alias-label-tertiary)}",
 			".ssd3r-msg{font-size:12px;line-height:1.5}",
 			".ssd3r-msg[data-ok=true]{color:var(--dsw-alias-state-success-primary)}",
-			".ssd3r-msg[data-ok=false]{color:var(--dsw-alias-state-error-primary)}"
+			".ssd3r-msg[data-ok=false]{color:var(--dsw-alias-state-error-primary)}",
+			".ssd3r-switch{width:40px;height:22px;flex:none;border:none;border-radius:11px;cursor:pointer;padding:0;background:var(--dsw-alias-bg-module-platform,rgba(128,148,168,.2));transition:background .15s}",
+			".ssd3r-switch.on{background:var(--dsw-alias-state-business-primary,#4FC3F7)}",
+			".ssd3r-switch .knob{display:block;width:16px;height:16px;border-radius:8px;background:#fff;margin-left:2px;transition:margin-left .15s}",
+			".ssd3r-switch.on .knob{margin-left:22px}"
 		].join("");
 		const STYLE_ID = "@max-null/dsh-capture/settings.css";
 		if (typeof document !== "undefined" && document.querySelector(`style[data-plugin-css="${STYLE_ID}"]`) === null) {
@@ -877,14 +880,13 @@ window.__ModuleLoader__.load({
 				title: t.hideTitle,
 				desc: t.hideDesc,
 				msg,
-				control: (0, react.createElement)("input", {
-					className: "ssd3r-check",
-					type: "checkbox",
-					checked: value === true,
+				control: (0, react.createElement)("button", {
+					className: `ssd3r-switch${value === true ? " on" : ""}`,
+					type: "button",
 					disabled: value === null,
 					"aria-label": t.hideTitle,
-					onChange: toggle
-				})
+					onClick: toggle
+				}, (0, react.createElement)("span", { className: "knob" }))
 			});
 		}
 		/** 全局快捷键行：回车/失焦即保存（延时 300ms 防抖）；非壳环境整行隐藏。 */
