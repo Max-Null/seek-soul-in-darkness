@@ -282,22 +282,22 @@ const ssid = {
   accent: '#4FC3F7',
   wrap: { display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 12px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' },
   card: {
-    background: 'var(--dsw-alias-bg-layer-1, #131a26)',
+    background: 'var(--dsw-alias-bg-layer-3, #1a2333)',
     border: '1px solid var(--dsw-alias-border-l2, #1e2836)',
-    borderRadius: 10,
-    padding: '12px 14px',
+    borderRadius: 12,
+    padding: '14px 16px',
   },
-  title: { fontSize: 12, fontWeight: 600, color: 'var(--dsw-alias-label-secondary, #67748a)', marginBottom: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-  text: { fontSize: 12.5, color: 'var(--dsw-alias-label-primary, #d8e0ea)', lineHeight: 1.55 },
-  muted: { fontSize: 11, color: 'var(--dsw-alias-label-secondary, #67748a)' },
-  empty: { padding: '28px 12px', textAlign: 'center', fontSize: 12.5, color: 'var(--dsw-alias-label-secondary, #67748a)' },
+  title: { fontSize: 12, fontWeight: 600, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--dsw-alias-label-tertiary, #8a95a8)', marginBottom: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
+  text: { fontSize: 13, color: 'var(--dsw-alias-label-primary, #d8e0ea)', lineHeight: 1.5 },
+  muted: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary, #8a95a8)', lineHeight: 1.5 },
+  empty: { padding: '28px 12px', textAlign: 'center', fontSize: 13, color: 'var(--dsw-alias-label-tertiary, #8a95a8)' },
   btn: {
-    padding: '3px 12px', fontSize: 11.5, background: 'none',
-    border: '1px solid var(--dsw-alias-border-l2, #1e2836)', borderRadius: 6,
-    color: 'var(--dsw-alias-label-primary, #d8e0ea)', cursor: 'pointer',
+    padding: '5px 14px', fontSize: 13, lineHeight: 1.5, background: 'none',
+    border: '1px solid var(--dsw-alias-border-l2, #1e2836)', borderRadius: 8,
+    color: 'var(--dsw-alias-label-primary, #d8e0ea)', cursor: 'pointer', fontFamily: 'inherit',
   },
   badge: (level: number): React.CSSProperties => ({
-    fontSize: 10.5, padding: '2px 8px', borderRadius: 10,
+    fontSize: 11, fontWeight: 500, lineHeight: 17, padding: '1px 8px', borderRadius: 999, whiteSpace: 'nowrap',
     border: '1px solid',
     color: level === 0 ? 'var(--dsw-alias-label-secondary, #67748a)'
       : level === 1 ? '#f7c94f'
@@ -493,7 +493,7 @@ function ConfirmDialog({ title, body, confirmLabel, cancelLabel, danger = false,
 }): ReactNode {
   return createPortal(
     createElement('div', { style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 } },
-      createElement('div', { style: { width: 'min(420px, 92vw)', background: 'var(--dsw-alias-bg-layer-1, #131a26)', border: '1px solid var(--dsw-alias-border-l2, #1e2836)', borderRadius: 10, padding: 14, display: 'flex', flexDirection: 'column', gap: 10 } },
+      createElement('div', { style: { width: 'min(420px, 92vw)', background: 'var(--dsw-alias-bg-layer-3, #1a2333)', border: '1px solid var(--dsw-alias-border-l2, #1e2836)', borderRadius: 12, padding: 14, display: 'flex', flexDirection: 'column', gap: 10 } },
         createElement('div', { style: { fontSize: 13, fontWeight: 600, color: 'var(--dsw-alias-label-primary, #d8e0ea)' } }, title),
         createElement('div', { style: { fontSize: 12, color: 'var(--dsw-alias-label-secondary, #67748a)', lineHeight: 1.5 } }, body),
         createElement('div', { style: { display: 'flex', gap: 8, justifyContent: 'flex-end' } },
@@ -660,7 +660,7 @@ function SessionRootSettings(): ReactNode {
               type: 'button',
               disabled: importing,
               style: {
-                padding: '3px 12px', fontSize: 11.5, borderRadius: 6, cursor: 'pointer', fontWeight: 600,
+                padding: '5px 14px', fontSize: 13, lineHeight: 1.5, borderRadius: 8, cursor: 'pointer', fontWeight: 600,
                 border: 'none', background: 'transparent',
                 color: 'var(--dsw-alias-label-primary, #d8e0ea)',
               },
@@ -669,7 +669,7 @@ function SessionRootSettings(): ReactNode {
             createElement('button', {
               type: 'button',
               style: {
-                padding: '3px 12px', fontSize: 11.5, borderRadius: 6, cursor: 'pointer',
+                padding: '5px 14px', fontSize: 13, lineHeight: 1.5, borderRadius: 8, cursor: 'pointer',
                 border: 'none', background: 'transparent',
                 color: 'var(--dsw-alias-state-error-primary, #f76f4f)',
               },
@@ -692,7 +692,7 @@ function SessionRootSettings(): ReactNode {
               createElement('button', {
                 type: 'button',
                 style: {
-                  padding: '3px 12px', fontSize: 11.5, borderRadius: 6, cursor: 'pointer',
+                  padding: '5px 14px', fontSize: 13, lineHeight: 1.5, borderRadius: 8, cursor: 'pointer',
                   border: 'none', background: 'transparent',
                   color: 'var(--dsw-alias-label-primary, #d8e0ea)',
                 },
@@ -763,10 +763,10 @@ function SsidAboutSection(): ReactNode {
       ? (plugin.descriptionEn ?? plugin.descriptionZh ?? '')
       : (plugin.descriptionZh ?? plugin.descriptionEn ?? '')
   return createElement('div', { style: { ...ssid.wrap, maxWidth: 640, margin: '0 auto', width: '100%' } },
-    // 家族页头（与草稿润色/插件中心/Skill 一致：16/600 主色标题 + 13 次要副标题）。
+    // 家族页头（与 DSH 原生设置页一致：18/600 主色标题 + 13 tertiary 副标题）。
     createElement('div', { style: { margin: '10px 2px 2px' } },
-      createElement('h3', { style: { margin: '0 0 4px', fontSize: 16, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' } }, t('about')),
-      createElement('p', { style: { margin: 0, fontSize: 13, lineHeight: '20px', color: 'var(--dsw-alias-label-secondary)' } }, t('slogan')),
+      createElement('h3', { style: { margin: '0 0 4px', fontSize: 18, fontWeight: 600, lineHeight: '26px', color: 'var(--dsw-alias-label-primary)' } }, t('about')),
+      createElement('p', { style: { margin: 0, fontSize: 13, lineHeight: '20px', color: 'var(--dsw-alias-label-tertiary)' } }, t('slogan')),
     ),
     createElement('div', { style: ssid.card },
       createElement('div', { style: ssid.title }, createElement('span', null, t('title'))),
@@ -799,7 +799,7 @@ function SsidAboutSection(): ReactNode {
         ? createElement('div', { style: ssid.muted }, t('none'))
         : (update?.releases ?? []).map(release => createElement('div', { key: release.tag, style: { marginBottom: 10 } },
           createElement('div', { style: { ...ssid.text, fontWeight: 600 } }, `${release.name}（${release.tag}）· ${release.publishedAt.slice(0, 10)}`),
-          createElement('pre', { style: { ...ssid.muted, whiteSpace: 'pre-wrap', margin: '4px 0 0', fontSize: 11.5 } }, release.body),
+          createElement('pre', { style: { ...ssid.muted, whiteSpace: 'pre-wrap', margin: '4px 0 0', fontSize: 12 } }, release.body),
         )),
     ),
     createElement('div', { style: ssid.card },
