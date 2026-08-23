@@ -10,7 +10,7 @@
     "@max-null/dsh-habit": "^0.2.0",
     "@max-null/dsh-header-unify": "file:./vendor/dsh-header-unify",
     "@max-null/dsh-memory": "^0.5.0",
-    "@max-null/dsh-plugin-center": "^0.2.4",
+    "@max-null/dsh-plugin-center": "^0.2.10",
     "@max-null/dsh-skill-mcp-center": "^0.4.1",
     "@max-null/dsh-node-appearance": "^0.3.3",
     "@max-null/dsh-ssid-panels": "file:./vendor/dsh-ssid-panels",
