@@ -15,7 +15,7 @@
     "@max-null/dsh-node-appearance": "^0.3.3",
     "@max-null/dsh-ssid-panels": "file:./vendor/dsh-ssid-panels",
     "@max-null/dsh-ssid-zh-ui": "file:./vendor/dsh-ssid-zh-ui",
-    "dsh-better-sidebar": "^0.15.2",
+    "dsh-better-sidebar": "^0.16.0",
     "dsh-dream-skin": "^0.4.10",
     "dsh-excel-panel": "^0.6.1",
     "dsh-sidebar-qa": "^0.4.0",
