@@ -501,6 +501,10 @@
       const p = toPhys(event.clientX, event.clientY)
       if (toolKind === 'text') {
         // 文字工具：单击放置锚点并开始输入（无拖拽语义）；已有输入先提交。
+        // preventDefault：不带它，mousedown 默认行为会把焦点从刚 focus 的
+        // 输入框抢回目标元素 → blur → 空文本提交 → 输入框立即关闭（2026-08-24
+        // 自动化复现：前后 display=block/none、left/top 已设置但 focused=false）。
+        event.preventDefault()
         beginTextEdit(clampPoint(p).x, clampPoint(p).y)
         return
       }

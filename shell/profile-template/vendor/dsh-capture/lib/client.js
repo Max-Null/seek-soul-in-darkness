@@ -345,6 +345,7 @@ window.__ModuleLoader__.load({
 						if (p === null) return;
 						if (s.toolKind === "text") {
 							if (textEditRef.current !== null) commitText(textEditRef.current.value);
+							event.preventDefault();
 							const anchor = clampPoint(p, s.sel);
 							setTextEdit({
 								x: anchor.x,
@@ -714,8 +715,26 @@ window.__ModuleLoader__.load({
 		async function dataUrlToBlob(dataUrl) {
 			return (await fetch(dataUrl)).blob();
 		}
+		/** 重复投递防抖：同内容 800ms 内的第二次调用直接丢弃。
+		*  背景：client-hmr 热替换前的旧 bundle 曾用一次性 window 守卫注册永不移除的
+		*  监听器（2026-08-24 修复），页面未刷新时新旧监听并存 → 一次确认投递两次、
+		*  消息区出现两张截图。投递层幂等兜底，任何路径残留监听都不会双发。 */
+		let lastKey = "";
+		let lastAt = 0;
+		function isDuplicate(dataUrl) {
+			const key = `${dataUrl.length}:${dataUrl.slice(0, 64)}`;
+			const now = Date.now();
+			if (key === lastKey && now - lastAt < 800) return true;
+			lastKey = key;
+			lastAt = now;
+			return false;
+		}
 		/** 一次与真实图片拖拽等价的落放：PNG File 经官方 drop 通道进草稿。 */
 		async function deliverToComposer(dataUrl) {
+			if (isDuplicate(dataUrl)) {
+				console.warn("[ssid-screenshot] duplicate delivery skipped");
+				return;
+			}
 			const blob = await dataUrlToBlob(dataUrl);
 			const file = new File([blob], "ssid-screenshot.png", { type: "image/png" });
 			const transfer = new DataTransfer();
