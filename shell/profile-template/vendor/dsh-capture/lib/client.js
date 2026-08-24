@@ -1166,16 +1166,18 @@ window.__ModuleLoader__.load({
 		/** Plugin body: register the delivery listener, the composer capture button,
 		*  and the two General-settings rows. */
 		function apply(ctx) {
-			if (window.__dshCaptureInstalled === true) return;
-			window.__dshCaptureInstalled = true;
-			window.addEventListener(SCREENSHOT_EVENT, (event) => {
+			const onScreenshot = (event) => {
 				const detail = event.detail;
 				if (!isImageDataUrl(detail)) return;
 				console.info(`[ssid-screenshot] event received (${detail.length} chars)`);
 				deliverToComposer(detail).catch((error) => {
 					console.warn(`[ssid-screenshot] delivery failed: ${error instanceof Error ? error.message : String(error)}`);
 				});
-			});
+			};
+			ctx.effect(() => {
+				window.addEventListener(SCREENSHOT_EVENT, onScreenshot);
+				return () => window.removeEventListener(SCREENSHOT_EVENT, onScreenshot);
+			}, "dsh-capture: screenshot delivery");
 			ctx.slots.inject("conversation.input.right", () => ctx.slots.register({
 				name: "conversation.input.right",
 				id: "ssid-screenshot",
