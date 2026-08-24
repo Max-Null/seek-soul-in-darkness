@@ -1,4 +1,23 @@
 # Your patch layer for this dsh profile, applied after every bundle layer:
 # a top-level YAML array of loader patch entries (id-targeted config
 # overrides, disables, and insert lists; `!!js` expressions allowed).
-[]
+#
+# SSiD 预制 MCP：Playwright MCP（浏览器自动化，默认启用）。
+# 运行时由 shell/main.mjs 注入 env（与 SSID_PNPM 同模式）：
+#   SSID_MCP_NODE   — 打包内置 node.exe → NVM v22.22.2 → PATH（electron 的
+#                     execPath 因 ABI 不匹配不可用，见 worker 分支同款注释）
+#   SSID_MCP_PW_CLI — 本 profile pin 依赖 @playwright/mcp 的 cli.js 绝对路径
+# 浏览器二进制不随安装包发布：首次使用需 `playwright install chromium`
+# （方案与命令详见 docs/决策/2026-08-24-Playwright-MCP-预制-实施方案.md）。
+- insert:
+    - id: mcp-playwright
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: playwright
+        transport: stdio
+        command: !!js 'process.env.SSID_MCP_NODE || "node"'
+        args:
+          - !!js 'process.env.SSID_MCP_PW_CLI'
+          - '--headless'
+- insert:
+    - name: dsh-web-preview-panel
