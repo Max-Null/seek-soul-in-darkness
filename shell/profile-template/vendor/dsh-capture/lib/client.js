@@ -168,7 +168,7 @@ window.__ModuleLoader__.load({
 				style: flip ? { transform: "scaleX(-1)" } : void 0
 			}, (0, react.createElement)("path", {
 				d: iconPath,
-				stroke: color === "none" ? "none" : "currentColor",
+				stroke: color === "none" ? "currentColor" : "none",
 				fill: color === "none" ? "none" : color,
 				strokeWidth: "1.4",
 				strokeLinecap: "round",
@@ -1225,6 +1225,15 @@ window.__ModuleLoader__.load({
 			tag.textContent = EDIT_BTN_CSS;
 			document.head.appendChild(tag);
 		}
+		/** 触发官方面板关闭：点预览 dialog 内的关闭按钮（aria-label 文案稳定）。
+		*  找不到按钮时静默跳过——dialog 由 React 状态驱动,只能经它的控件关闭。 */
+		function closePreviewDialog(dialog) {
+			if (dialog === null || !dialog.isConnected) return;
+			for (const btn of Array.from(dialog.querySelectorAll("button"))) if (/^(关闭原图预览|Close original image preview)$/.test(btn.getAttribute("aria-label") ?? "")) {
+				btn.click();
+				return;
+			}
+		}
 		/** 常驻注入宿主：观察预览对话框并注入编辑按钮；零视觉输出（null portal）。 */
 		function ImagePreviewEditHost() {
 			const [edit, setEdit] = (0, react.useState)(null);
@@ -1234,7 +1243,7 @@ window.__ModuleLoader__.load({
 			editRef.current = edit;
 			(0, react.useEffect)(() => {
 				ensureStyle();
-				const openEdit = (src) => {
+				const openEdit = (src, dialog) => {
 					if (busyRef.current || editRef.current !== null) return;
 					busyRef.current = true;
 					const probe = new Image();
@@ -1243,7 +1252,8 @@ window.__ModuleLoader__.load({
 						setEdit({
 							src,
 							width: probe.naturalWidth,
-							height: probe.naturalHeight
+							height: probe.naturalHeight,
+							dialog
 						});
 					};
 					probe.onerror = () => {
@@ -1263,7 +1273,7 @@ window.__ModuleLoader__.load({
 					btn.innerHTML = "✎";
 					btn.addEventListener("click", (event) => {
 						event.stopPropagation();
-						openEdit(img.src);
+						openEdit(img.src, img.closest("[role=\"dialog\"]"));
 					});
 					dialog.appendChild(btn);
 					return true;
@@ -1293,7 +1303,9 @@ window.__ModuleLoader__.load({
 			}, [error]);
 			if (edit === null) return null;
 			const onDone = (result) => {
+				const dialog = editRef.current?.dialog ?? null;
 				setEdit(null);
+				closePreviewDialog(dialog);
 				if (result.annotated === void 0) return;
 				deliverToComposer(result.annotated, "image-edit-annotated.png").catch((err) => {
 					console.warn(`[ssid-screenshot] image edit delivery failed: ${err instanceof Error ? err.message : String(err)}`);
