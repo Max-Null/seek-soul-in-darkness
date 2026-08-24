@@ -1220,15 +1220,16 @@ async function start() {
     const source = typeof payload === 'object' && payload !== null
       ? (typeof payload.source === 'string' ? payload.source : '')
       : (typeof payload === 'string' ? payload : '')
+    // annotated 仅当浮层确已编辑时携带（空标注不传编辑图，2026-08-24）。
     const annotated = typeof payload === 'object' && payload !== null && typeof payload.annotated === 'string'
       ? payload.annotated
-      : source
-    safeLog(`[screenshot] confirm received (source=${source.length} annotated=${annotated.length} bytes) sender=${event.sender.id}\n`)
+      : null
+    safeLog(`[screenshot] confirm received (source=${source.length} annotated=${annotated === null ? 'none' : annotated.length}) sender=${event.sender.id}\n`)
     closeOverlays(true)
     deliverScreenshot({
       uid: `shot-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
       source,
-      annotated,
+      ...(annotated !== null ? { annotated } : {}),
     })
   })
   // 浮层取消：关全部 → 恢复主窗口。

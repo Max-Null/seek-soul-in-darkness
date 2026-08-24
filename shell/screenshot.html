@@ -372,9 +372,8 @@
   })()
 
   /** 完成：裁剪选区 + 标注合成（颜色/箭头/文字）→ 交付（一次确认）。
-   *  协议(v2)：confirm({ source, annotated }) —— 原图(纯裁剪,不遮挡任何
-   *  原始内容) + 编辑图(标注合成)。两张都投递给 DSH，帮助理解方(LLM)在
-   *  标注遮盖原内容时仍能看到上下文（2026-08-24 用户决定）。 */
+   *  协议(v2)：confirm({ source, annotated? }) —— annotated 仅当存在标注时
+   *  携带；无标注时只传原图（2026-08-24 用户决定：没编辑就不传编辑图）。 */
   const finish = async () => {
     if (frame === null || sel === null || sel.w < 2 || sel.h < 2) return
     const image = await loadImage(frameEl.src)
@@ -384,6 +383,10 @@
     const ctx = canvas.getContext('2d')
     ctx.drawImage(image, sel.x, sel.y, sel.w, sel.h, 0, 0, sel.w, sel.h)
     const source = canvas.toDataURL('image/png')
+    if (annoRects.length === 0) {
+      window.ssidCapture.confirm({ source })
+      return
+    }
     ctx.save()
     ctx.beginPath()
     ctx.rect(0, 0, canvas.width, canvas.height)

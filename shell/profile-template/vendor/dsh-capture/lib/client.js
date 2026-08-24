@@ -280,10 +280,10 @@ window.__ModuleLoader__.load({
 					}
 				}
 				ctx.restore();
-				onDone({
+				onDone(s.annoRects.length > 0 ? {
 					source,
 					annotated: canvas.toDataURL("image/png")
-				});
+				} : { source });
 			}, [
 				dataUrl,
 				width,
@@ -925,7 +925,11 @@ window.__ModuleLoader__.load({
 			]);
 			const overlayDone = (0, react.useCallback)((result) => {
 				setOverlay(null);
-				deliverToComposer(result.source, "ssid-screenshot-source.png").then(() => deliverToComposer(result.annotated, "ssid-screenshot-annotated.png")).catch((error) => {
+				const annotated = result.annotated;
+				deliverToComposer(result.source, "ssid-screenshot-source.png").then(() => {
+					if (annotated === void 0) return void 0;
+					return deliverToComposer(annotated, "ssid-screenshot-annotated.png");
+				}).catch((error) => {
 					console.warn(`[ssid-screenshot] delivery failed: ${error instanceof Error ? error.message : String(error)}`);
 				});
 			}, []);
@@ -1192,11 +1196,15 @@ window.__ModuleLoader__.load({
 			const p = detail;
 			if (typeof p.uid !== "string" || p.uid === "") return null;
 			if (typeof p.source !== "string" || !isImageDataUrl(p.source)) return null;
-			if (typeof p.annotated !== "string" || !isImageDataUrl(p.annotated)) return null;
+			let annotated;
+			if (p.annotated !== void 0) {
+				if (typeof p.annotated !== "string" || !isImageDataUrl(p.annotated)) return null;
+				annotated = p.annotated;
+			}
 			return {
 				uid: p.uid,
 				source: p.source,
-				annotated: p.annotated
+				annotated
 			};
 		}
 		/** 已投递 uid 集合：主进程单会话只派发一次，防御性去重；
@@ -1213,8 +1221,12 @@ window.__ModuleLoader__.load({
 					return;
 				}
 				deliveredUids.add(payload.uid);
-				console.info(`[ssid-screenshot] event received uid=${payload.uid} (source ${payload.source.length}, annotated ${payload.annotated.length})`);
-				deliverToComposer(payload.source, "ssid-screenshot-source.png").then(() => deliverToComposer(payload.annotated, "ssid-screenshot-annotated.png")).catch((error) => {
+				console.info(`[ssid-screenshot] event received uid=${payload.uid} (source ${payload.source.length}, annotated ${payload.annotated?.length ?? 0})`);
+				const annotated = payload.annotated;
+				deliverToComposer(payload.source, "ssid-screenshot-source.png").then(() => {
+					if (annotated === void 0) return void 0;
+					return deliverToComposer(annotated, "ssid-screenshot-annotated.png");
+				}).catch((error) => {
 					console.warn(`[ssid-screenshot] delivery failed: ${error instanceof Error ? error.message : String(error)}`);
 				});
 			};
