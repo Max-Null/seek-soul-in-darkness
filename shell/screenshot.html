@@ -62,10 +62,11 @@
     box-shadow: 0 4px 16px rgba(0, 0, 0, .4);
     pointer-events: auto;
     z-index: 7;
+    width: max-content;
   }
   #toolbar .tool {
     display: grid; place-items: center;
-    width: 30px; height: 30px;
+    width: 30px; height: 30px; flex: none;
     border: none; border-radius: 7px;
     background: transparent; color: #C7D3E3;
     cursor: pointer;
@@ -73,10 +74,11 @@
   #toolbar .tool:hover { background: rgba(255, 255, 255, .12); color: #fff; }
   #toolbar .tool.active { background: #2E6BE6; color: #fff; }
   #toolbar .tool[data-tool="redo"] svg { transform: scaleX(-1); }
-  #toolbar .tool-text { width: auto; padding: 0 12px; font: 13px/1.6 "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif; }
-  #toolbar .sep { width: 1px; height: 20px; background: rgba(255, 255, 255, .18); }
+  #toolbar .tool-text { width: auto; padding: 0 12px; flex: none; white-space: nowrap; font: 13px/1.6 "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif; }
+  #toolbar .sep { width: 1px; height: 20px; flex: none; background: rgba(255, 255, 255, .18); }
   #toolbar .done {
     padding: 5px 16px; border: none; border-radius: 14px;
+    flex: none; white-space: nowrap;
     background: #2E6BE6; color: #fff;
     font: 13px/1.6 "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
     cursor: pointer;
