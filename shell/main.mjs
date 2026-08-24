@@ -752,6 +752,31 @@ async function start() {
       process.env.SSID_PNPM = pnpmCli
       safeLog(`ssid: bundled pnpm at ${pnpmCli}\n`)
     }
+    // 预制 Playwright MCP 运行时定位（v0.2.0）：profile 的 mcp-playwright
+    // 条目（profile-template/cordis.patch.yml）通过 !!js 读取这两个 env：
+    //   SSID_MCP_NODE   —— 执行 @playwright/mcp/cli.js 的 node.exe
+    //   SSID_MCP_PW_CLI —— 本 profile 内 pin 依赖的 cli.js 绝对路径
+    // node 候选链与 worker 分支一致：打包内置 node.exe（afterPack 注入）→
+    // NVM v22.22.2 → PATH 上的 node.exe。刻意不用 process.execPath（electron
+    // ABI 不匹配）。浏览器二进制不随安装包发布，首次使用需
+    // `playwright install chromium`（见 docs/决策/2026-08-24-Playwright-MCP-预制-实施方案.md）。
+    const mcpNodeCandidates = [
+      process.resourcesPath ? join(process.resourcesPath, 'node', 'node.exe') : '',
+      process.env.NVM_HOME ? join(process.env.NVM_HOME, 'v22.22.2', 'node.exe') : '',
+      'node.exe',
+    ]
+    const mcpNodeExe = mcpNodeCandidates.find((c) => c !== '' && existsSync(c))
+    if (mcpNodeExe) {
+      process.env.SSID_MCP_NODE = mcpNodeExe
+      safeLog(`ssid: prefab mcp node=${mcpNodeExe}\n`)
+    }
+    const mcpPwCli = join(profileDir, 'node_modules', '@playwright', 'mcp', 'cli.js')
+    if (existsSync(mcpPwCli)) {
+      process.env.SSID_MCP_PW_CLI = mcpPwCli
+      safeLog(`ssid: prefab mcp cli=${mcpPwCli}\n`)
+    } else {
+      safeLog(`ssid: prefab mcp cli missing (profile not redeployed yet?): ${mcpPwCli}\n`)
+    }
     // preferBundled: 打包版强制用内置闭包（忽略用户环境的 DSH_CHECKOUT，
     // 避免标题栏版本与归档不一致——pitfalls #5 幽灵依赖的根治）。
     kernel = await bootKernel(undefined, {
