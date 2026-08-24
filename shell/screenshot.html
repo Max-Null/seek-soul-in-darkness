@@ -82,6 +82,21 @@
     cursor: pointer;
   }
   #toolbar .done:hover { background: #3B78F5; }
+  /* 色板：圆点 + 选中描边环 */
+  #toolbar .swatch {
+    width: 16px; height: 16px; flex: none; border: none; border-radius: 50%;
+    cursor: pointer; padding: 0; box-shadow: 0 0 0 2px rgba(255, 255, 255, 0);
+  }
+  #toolbar .swatch.on { box-shadow: 0 0 0 2px rgba(255, 255, 255, .85); }
+  /* 文字工具输入框（浮于画布上，坐标覆盖层） */
+  #text-input {
+    position: absolute; border: 1px solid #4FC3F7;
+    background: rgba(10, 14, 20, .82); color: #fff;
+    font: 15px/1.4 "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
+    padding: 2px 6px; border-radius: 4px; outline: none; min-width: 40px;
+    z-index: 8; display: none;
+  }
+  #text-input::placeholder { color: rgba(255, 255, 255, .45); }
 </style>
 </head>
 <body>
@@ -103,6 +118,14 @@
       <circle cx="8" cy="8" r="5.6" fill="none" stroke="#FF5B4D" stroke-width="1.8"/>
     </svg>
   </button>
+  <button id="tool-arrow" type="button" class="tool" title="箭头（指向要改的内容）">
+    <svg viewBox="0 0 16 16" width="15" height="15" fill="none" aria-hidden="true">
+      <path d="M13.2 2.8 4.9 11.1M13.2 2.8v4.6M13.2 2.8H8.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </button>
+  <button id="tool-text" type="button" class="tool" title="文字（点一下输入描述）">T</button>
+  <div class="sep"></div>
+  <span id="swatches"></span>
   <div class="sep"></div>
   <button id="tool-undo" type="button" class="tool" title="撤销（上一标注）">
     <svg viewBox="0 0 16 16" width="15" height="15" fill="none" aria-hidden="true">
@@ -112,6 +135,7 @@
   <button id="tool-redo-sel" type="button" class="tool tool-text" title="取消（清除标注并重新选择）">取消</button>
   <button id="tool-done" type="button" class="done">完成</button>
 </div>
+<input id="text-input" type="text" placeholder="输入文字…" tabindex="-1">
 <script>
 (() => {
   'use strict'
@@ -125,9 +149,13 @@
   const toolbarEl = document.getElementById('toolbar')
   const toolBox = document.getElementById('tool-box')
   const toolEllipse = document.getElementById('tool-ellipse')
+  const toolArrow = document.getElementById('tool-arrow')
+  const toolText = document.getElementById('tool-text')
   const toolUndo = document.getElementById('tool-undo')
   const toolRedoSel = document.getElementById('tool-redo-sel')
   const toolDone = document.getElementById('tool-done')
+  const swatchesEl = document.getElementById('swatches')
+  const textInputEl = document.getElementById('text-input')
 
   /** 主进程注入：{ dataUrl, logicalW, logicalH, physicalW, physicalH }。 */
   let frame = null
@@ -136,13 +164,45 @@
   let mode = 'select' // 'select'（框选） | 'tool'（选区定格，画标注框）
   let sel = null       // 选区（物理 Rect）
   let dragStart = null // 拖拽起点（显示坐标，select 阶段）
-  /** 标注框（物理 Rect + kind: 'rect' | 'ellipse'）。 */
+  /** 标注（物理坐标 + kind + color；rect/ellipse 用 x/y/w/h 归一化矩形，
+   *  arrow 的 w/h 为带方向向量（可负，保留指向），text 的 w/h 合成时测量）。 */
   let annoRects = []
   let annoDraft = null
   let annoStart = null
   let undoStack = []   // 撤销栈（JSON 快照）
   /** 当前标注工具（工具条切换）。 */
   let toolKind = 'rect'
+  /** 当前标注颜色（色板）。 */
+  let annoColor = '#FF5B4D'
+  /** 文字输入进行中：物理锚点 + 草稿值；提交后并入 annoRects。 */
+  let textEdit = null
+
+  // ---- 色板 ----
+  const ANNO_COLORS = [
+    ['#FF5B4D', '红'], ['#FF9F43', '橙'], ['#FFD93D', '黄'], ['#3ED598', '绿'],
+    ['#4FC3F7', '青'], ['#7C6BFF', '紫'], ['#FF5CA8', '品红'], ['#FFFFFF', '白'],
+  ]
+  for (const [color, name] of ANNO_COLORS) {
+    const b = document.createElement('button')
+    b.type = 'button'
+    b.className = 'swatch'
+    b.title = name
+    b.style.background = color
+    b.addEventListener('click', () => { annoColor = color; syncSwatches() })
+    swatchesEl.appendChild(b)
+  }
+  const syncSwatches = () => {
+    for (let i = 0; i < swatchesEl.children.length; i++) {
+      swatchesEl.children[i].classList.toggle('on', ANNO_COLORS[i][0] === annoColor)
+    }
+  }
+  syncSwatches()
+
+  /** '#RRGGBB' → 'rgba(r,g,b,a)'。 */
+  const hexToRgba = (hex, alpha) => {
+    const n = parseInt(hex.slice(1), 16)
+    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`
+  }
 
   // ---- 闲置超时 3 分钟（交互重置） ----
   let idleTimer = 0
@@ -247,14 +307,52 @@
     annotateCtx().strokeRect(s.x, s.y, s.w, s.h)
     annotateCtx().fillRect(s.x, s.y, s.w, s.h)
   }
+  /** 箭头：主线段 + 头翼（30° 两翼）。 */
+  const drawArrowOn = (ctx, x1, y1, x2, y2) => {
+    ctx.beginPath()
+    ctx.moveTo(x1, y1)
+    ctx.lineTo(x2, y2)
+    const angle = Math.atan2(y2 - y1, x2 - x1)
+    const head = 12
+    ctx.moveTo(x2, y2)
+    ctx.lineTo(x2 - head * Math.cos(angle - Math.PI / 6), y2 - head * Math.sin(angle - Math.PI / 6))
+    ctx.moveTo(x2, y2)
+    ctx.lineTo(x2 - head * Math.cos(angle + Math.PI / 6), y2 - head * Math.sin(angle + Math.PI / 6))
+    ctx.stroke()
+  }
+  /** 文字标注：深色半透明底 + 标注色文字。 */
+  const drawTextOn = (ctx, x, y, text, color, font) => {
+    ctx.font = font
+    ctx.textBaseline = 'top'
+    const tw = ctx.measureText(text).width
+    const th = 20
+    ctx.fillStyle = 'rgba(0, 0, 0, .45)'
+    ctx.fillRect(x - 2, y - 2, tw + 4, th + 4)
+    ctx.fillStyle = color
+    ctx.fillText(text, x, y)
+  }
   const annotateCtx = () => annoCanvas().getContext('2d')
   const renderAnno = () => {
     const ctx = annotateCtx()
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
-    ctx.strokeStyle = '#FF5B4D'
-    ctx.fillStyle = 'rgba(255, 91, 77, .12)'
-    ctx.lineWidth = 2.5
-    const draw = (r) => drawAnnoRect(toDisplayRect(r), r)
+    const draw = (r) => {
+      ctx.strokeStyle = r.color
+      ctx.fillStyle = hexToRgba(r.color, .12)
+      ctx.lineWidth = 2.5
+      if (r.kind === 'text') {
+        const d = toDisplay({ x: r.x, y: r.y })
+        drawTextOn(ctx, d.x, d.y, r.text || '', r.color, '15px "Microsoft YaHei UI", "PingFang SC", sans-serif')
+        return
+      }
+      const s = toDisplayRect({ x: r.x, y: r.y, w: r.w, h: r.h })
+      if (r.kind === 'arrow') {
+        const p1 = toDisplay({ x: r.x, y: r.y })
+        const p2 = toDisplay({ x: r.x + r.w, y: r.y + r.h })
+        drawArrowOn(ctx, p1.x, p1.y, p2.x, p2.y)
+        return
+      }
+      drawAnnoRect(s, r)
+    }
     for (const r of annoRects) draw(r)
     if (annoDraft !== null) draw(annoDraft)
   }
@@ -273,7 +371,7 @@
     return c
   })()
 
-  /** 完成：裁剪选区 + 红框合成 → 交付（一次确认）。 */
+  /** 完成：裁剪选区 + 标注合成（颜色/箭头/文字）→ 交付（一次确认）。 */
   const finish = async () => {
     if (frame === null || sel === null || sel.w < 2 || sel.h < 2) return
     const image = await loadImage(frameEl.src)
@@ -286,12 +384,20 @@
     ctx.beginPath()
     ctx.rect(0, 0, canvas.width, canvas.height)
     ctx.clip()
-    ctx.strokeStyle = '#FF3B30'
-    ctx.lineWidth = 3
-    ctx.fillStyle = 'rgba(255, 59, 48, .12)'
     for (const r of annoRects) {
+      ctx.strokeStyle = r.color
+      ctx.lineWidth = 3
+      ctx.fillStyle = hexToRgba(r.color, .12)
+      if (r.kind === 'text') {
+        drawTextOn(ctx, r.x - sel.x, r.y - sel.y, r.text || '', r.color, '16px "Microsoft YaHei UI", "PingFang SC", sans-serif')
+        continue
+      }
       const x = r.x - sel.x
       const y = r.y - sel.y
+      if (r.kind === 'arrow') {
+        drawArrowOn(ctx, x, y, x + r.w, y + r.h)
+        continue
+      }
       if (r.kind === 'ellipse') {
         ctx.beginPath()
         ctx.ellipse(x + r.w / 2, y + r.h / 2, r.w / 2, r.h / 2, 0, 0, Math.PI * 2)
@@ -313,8 +419,35 @@
     image.src = src
   })
 
-  /** 右键/Esc 层级：画框中 → 撤框 → 重选 → 取消。 */
+  /** 提交进行中的文字输入（空值丢弃锚点）。 */
+  const commitText = () => {
+    if (textEdit === null) return
+    const clean = textEdit.value.trim()
+    if (clean !== '') {
+      annoRects.push({ kind: 'text', x: textEdit.x, y: textEdit.y, w: 0, h: 0, color: annoColor, text: clean })
+      undoStack.push(JSON.stringify(annoRects.slice(0, -1)))
+    }
+    endTextEdit()
+    renderAnno()
+  }
+  const endTextEdit = () => {
+    textEdit = null
+    textInputEl.style.display = 'none'
+    textInputEl.value = ''
+  }
+  const beginTextEdit = (x, y) => {
+    commitText()
+    textEdit = { x, y, value: '' }
+    textInputEl.style.display = 'block'
+    textInputEl.style.left = `${toDisplay({ x, y }).x}px`
+    textInputEl.style.top = `${toDisplay({ x, y }).y}px`
+    textInputEl.value = ''
+    textInputEl.focus()
+  }
+
+  /** 右键/Esc 层级：文字输入中 → 取消输入；画框中 → 撤框 → 重选 → 取消。 */
   const cancelOrBack = () => {
+    if (textEdit !== null) { endTextEdit(); renderAnno(); return }
     if (mode === 'tool') {
       if (annoDraft !== null) { annoDraft = null; renderAnno(); return }
       if (annoRects.length > 0) { annoRects.pop(); renderAnno(); return }
@@ -331,6 +464,7 @@
     annoDraft = null
     annoStart = null
     undoStack = []
+    endTextEdit()
     renderAnno()
     renderSelection()
     tipEl.innerHTML = '<em>拖拽</em> 选择截图区域 · <em>右键 / Esc</em> 取消'
@@ -341,9 +475,10 @@
     annoRects = []
     undoStack = []
     setToolKind('rect')
+    endTextEdit()
     renderAnno()
     renderSelection()
-    tipEl.innerHTML = '拖拽画<em class="red">标注框</em>强调 · <em>回车</em> 完成 · <em>右键 / Esc</em> 逐级回退'
+    tipEl.innerHTML = '拖拽画<em class="red">标注</em> · <em>T</em> 点一下写文字 · <em>回车</em> 完成 · <em>右键 / Esc</em> 逐级回退'
   }
 
   // ---- 事件 ----
@@ -351,6 +486,8 @@
   document.addEventListener('mousedown', (event) => {
     // 工具条按钮上的按下不触发任何绘制/选择（点击按钮不应被误认为画框）。
     if (toolbarEl.contains(event.target)) return
+    // 文字输入框内的交互交给 input 自身（提交/取消走它的键盘事件）。
+    if (event.target === textInputEl) return
     // 右键 = 逐级回退（画框中 → 撤框 → 重选 → 取消）。此前误以为右键是
     // 「浮层消失」元凶而禁用，实测根因是 hideWindow=false 时普通置顶层级
     // 被激活窗口覆盖（screen-saver 置顶修复后恢复右键，2026-08-23 用户确认）。
@@ -362,8 +499,13 @@
     if (event.button !== 0) return
     if (mode === 'tool') {
       const p = toPhys(event.clientX, event.clientY)
+      if (toolKind === 'text') {
+        // 文字工具：单击放置锚点并开始输入（无拖拽语义）；已有输入先提交。
+        beginTextEdit(clampPoint(p).x, clampPoint(p).y)
+        return
+      }
       annoStart = clampPoint(p)
-      annoDraft = { x: annoStart.x, y: annoStart.y, w: 0, h: 0, kind: toolKind }
+      annoDraft = { x: annoStart.x, y: annoStart.y, w: 0, h: 0, kind: toolKind, color: annoColor }
       renderAnno()
       return
     }
@@ -375,11 +517,19 @@
     if (mode === 'tool') {
       if (annoStart !== null) {
         const p = toPhys(event.clientX, event.clientY)
+        if (toolKind === 'arrow') {
+          // 箭头保留方向（首尾都 clamp 进选区）。
+          const a = clampPoint(annoStart)
+          const b = clampPoint(p)
+          annoDraft = { x: a.x, y: a.y, w: b.x - a.x, h: b.y - a.y, kind: 'arrow', color: annoColor }
+          renderAnno()
+          return
+        }
         // 标注框与蓝框实时取交集（不允许超出选区）。拖出选区时预览消失、
         // 拖回来立即恢复——以「画框起点存在」为条件，不能以 annoDraft 为条件
         // （否则 clamp 置 null 后拖回选区就不会再出现，2026-08-23 实测）。
         const clipped = clampToSel(norm(annoStart.x, annoStart.y, p.x, p.y))
-        annoDraft = clipped === null ? null : { ...clipped, kind: toolKind }
+        annoDraft = clipped === null ? null : { ...clipped, kind: toolKind, color: annoColor }
         renderAnno()
       }
       return
@@ -405,8 +555,12 @@
   document.addEventListener('mouseup', () => {
     if (mode === 'tool') {
       if (annoDraft !== null) {
-        if (annoDraft.w >= 3 && annoDraft.h >= 3) {
-          annoRects.push(annoDraft)
+        const d = annoDraft
+        const ok = d.kind === 'arrow'
+          ? Math.hypot(d.w, d.h) >= 8
+          : d.kind !== 'text' && d.w >= 3 && d.h >= 3
+        if (ok) {
+          annoRects.push(d)
           undoStack.push(JSON.stringify(annoRects.slice(0, -1)))
         }
         annoDraft = null
@@ -432,22 +586,44 @@
     toolKind = kind
     toolBox.classList.toggle('active', kind === 'rect')
     toolEllipse.classList.toggle('active', kind === 'ellipse')
+    toolArrow.classList.toggle('active', kind === 'arrow')
+    toolText.classList.toggle('active', kind === 'text')
+    if (kind !== 'text' && textEdit !== null) { endTextEdit(); renderAnno() }
   }
   toolBox.addEventListener('click', () => setToolKind('rect'))
   toolEllipse.addEventListener('click', () => setToolKind('ellipse'))
+  toolArrow.addEventListener('click', () => setToolKind('arrow'))
+  toolText.addEventListener('click', () => setToolKind('text'))
   toolUndo.addEventListener('click', () => {
     if (annoRects.length > 0) { undoStack.push(JSON.stringify(annoRects.slice(0, -1))); annoRects.pop(); renderAnno() }
   })
   toolRedoSel.addEventListener('click', () => { backToSelect() })
-  toolDone.addEventListener('click', () => { void finish().catch((error) => { window.ssidCapture.error(String(error)) }) })
+  toolDone.addEventListener('click', () => {
+    if (textEdit !== null) commitText()
+    void finish().catch((error) => { window.ssidCapture.error(String(error)) })
+  })
+
+  // 文字输入框：回车提交 / Esc 取消 / 失焦提交。
+  textInputEl.addEventListener('input', () => { textEdit.value = textInputEl.value })
+  textInputEl.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') { commitText(); }
+    else if (event.key === 'Escape') { endTextEdit(); renderAnno() }
+    event.stopPropagation()
+  })
+  textInputEl.addEventListener('blur', () => { if (textEdit !== null) commitText() })
 
   document.addEventListener('dblclick', () => {
-    if (mode === 'tool') { void finish().catch((error) => { window.ssidCapture.error(String(error)) }); return }
+    if (mode === 'tool') {
+      if (textEdit !== null) commitText()
+      void finish().catch((error) => { window.ssidCapture.error(String(error)) })
+      return
+    }
     if (sel !== null && sel.w >= 4 && sel.h >= 4) enterTool()
   })
   window.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') { cancelOrBack(); return }
     if (event.key === 'Enter' && mode === 'tool') {
+      if (textEdit !== null) commitText()
       void finish().catch((error) => { window.ssidCapture.error(String(error)) })
     }
   })

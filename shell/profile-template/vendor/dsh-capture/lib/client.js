@@ -45,6 +45,32 @@ window.__ModuleLoader__.load({
 		* 坐标口径：全部交互状态存「帧物理坐标」（拖拽时经 wrap 显示尺寸实时换算），
 		* 渲染时换算回显示像素绘制；最终合成：裁剪选区 + 红框 clip 叠加。
 		*/
+		/** 画标注色板（默认红；可见性按背景自动对比，白/黄/绿常驻）。 */
+		const ANNO_COLORS = [
+			"#FF5B4D",
+			"#FF9F43",
+			"#FFD93D",
+			"#3ED598",
+			"#4FC3F7",
+			"#7C6BFF",
+			"#FF5CA8",
+			"#FFFFFF"
+		];
+		const COLOR_NAMES = [
+			"红",
+			"橙",
+			"黄",
+			"绿",
+			"青",
+			"紫",
+			"品红",
+			"白"
+		];
+		/** '#RRGGBB' → 'rgba(r,g,b,a)'。 */
+		function hexToRgba(hex, alpha) {
+			const n = parseInt(hex.slice(1), 16);
+			return `rgba(${n >> 16 & 255}, ${n >> 8 & 255}, ${n & 255}, ${alpha})`;
+		}
 		const CSS$2 = [
 			".ssd3ov{position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.98);display:flex;align-items:center;justify-content:center;cursor:crosshair;user-select:none}",
 			".ssd3ov-wrap{position:relative;display:flex;align-items:center;justify-content:center}",
@@ -66,7 +92,11 @@ window.__ModuleLoader__.load({
 			".ssd3ov-tool-text{width:auto;padding:0 12px;font:13px/1.6 \"Microsoft YaHei UI\",\"PingFang SC\",\"Segoe UI\",sans-serif}",
 			".ssd3ov-sep{width:1px;height:20px;background:rgba(255,255,255,.18)}",
 			".ssd3ov-done{padding:5px 16px;border:none;border-radius:14px;background:#2E6BE6;color:#fff;font:13px/1.6 \"Microsoft YaHei UI\",\"PingFang SC\",\"Segoe UI\",sans-serif;cursor:pointer}",
-			".ssd3ov-done:hover{background:#3B78F5}"
+			".ssd3ov-done:hover{background:#3B78F5}",
+			".ssd3ov-swatch{width:16px;height:16px;flex:none;border:none;border-radius:50%;cursor:pointer;padding:0;box-shadow:0 0 0 2px rgba(255,255,255,0)}",
+			".ssd3ov-swatch.on{box-shadow:0 0 0 2px rgba(255,255,255,.85)}",
+			".ssd3ov-text-input{position:absolute;border:1px solid #4FC3F7;background:rgba(10,14,20,.82);color:#fff;font:15px/1.4 \"Microsoft YaHei UI\",\"PingFang SC\",\"Segoe UI\",sans-serif;padding:2px 6px;border-radius:4px;outline:none;min-width:40px;z-index:3}",
+			".ssd3ov-text-input::placeholder{color:rgba(255,255,255,.45)}"
 		].join("\n");
 		const STYLE_ID$2 = "@max-null/dsh-capture/overlay.css";
 		if (typeof document !== "undefined" && document.querySelector(`style[data-plugin-css="${STYLE_ID$2}"]`) === null) {
@@ -124,6 +154,8 @@ window.__ModuleLoader__.load({
 		}
 		const ICON_BOX = "M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v9a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12.5v-9Zm1.2.8v7.4c0 .17.13.3.3.3h7.4c.17 0 .3-.13.3-.3V4.3c0-.17-.13-.3-.3-.3H3.5c-.17 0-.3.13-.3.3Z";
 		const ICON_UNDO = "M6.7 3.2 3.2 6.7l3.5 3.5M3.6 6.7h6.1a3.1 3.1 0 0 1 0 6.2H8.3";
+		/** 箭头：主线段 + 两翼（指向右上）。 */
+		const ICON_ARROW = "M13.2 2.8 4.9 11.1M13.2 2.8v4.6M13.2 2.8H8.6";
 		function icon(iconPath, color, flip = false) {
 			return (0, react.createElement)("svg", {
 				viewBox: "0 0 16 16",
@@ -152,13 +184,19 @@ window.__ModuleLoader__.load({
 			const [annoRects, setAnnoRects] = (0, react.useState)([]);
 			const [annoDraft, setAnnoDraft] = (0, react.useState)(null);
 			const [toolKind, setToolKind] = (0, react.useState)("rect");
+			const [annoColor, setAnnoColor] = (0, react.useState)(ANNO_COLORS[0]);
+			/** 文字工具进行中的输入（物理锚点 + 草稿值）；提交后并入 annoRects。 */
+			const [textEdit, setTextEdit] = (0, react.useState)(null);
+			const textEditRef = (0, react.useRef)(textEdit);
+			textEditRef.current = textEdit;
 			const live = (0, react.useRef)({
 				phase,
 				sel,
 				annoRects,
 				annoDraft,
 				showSize,
-				toolKind
+				toolKind,
+				annoColor
 			});
 			live.current = {
 				phase,
@@ -166,7 +204,8 @@ window.__ModuleLoader__.load({
 				annoRects,
 				annoDraft,
 				showSize,
-				toolKind
+				toolKind,
+				annoColor
 			};
 			const dragStart = (0, react.useRef)(null);
 			const annoStart = (0, react.useRef)(null);
@@ -180,6 +219,31 @@ window.__ModuleLoader__.load({
 					y: (clientY - r.top) / r.height * height
 				};
 			}, [width, height]);
+			/** 合成箭头（含头翼）的共用绘制：坐标为画布内坐标。 */
+			const drawArrowPath = (ctx, x1, y1, x2, y2) => {
+				ctx.beginPath();
+				ctx.moveTo(x1, y1);
+				ctx.lineTo(x2, y2);
+				const angle = Math.atan2(y2 - y1, x2 - x1);
+				const head = 12;
+				ctx.moveTo(x2, y2);
+				ctx.lineTo(x2 - head * Math.cos(angle - Math.PI / 6), y2 - head * Math.sin(angle - Math.PI / 6));
+				ctx.moveTo(x2, y2);
+				ctx.lineTo(x2 - head * Math.cos(angle + Math.PI / 6), y2 - head * Math.sin(angle + Math.PI / 6));
+				ctx.stroke();
+			};
+			/** 合成文字标注：深色半透明底 + 标注色文字（浅背景/深背景都可读）。 */
+			const drawTextAnno = (ctx, an, ox, oy) => {
+				const x = an.x - ox;
+				const y = an.y - oy;
+				ctx.font = "16px \"Microsoft YaHei UI\", \"PingFang SC\", sans-serif";
+				ctx.textBaseline = "top";
+				const tw = ctx.measureText(an.text ?? "").width;
+				ctx.fillStyle = "rgba(0, 0, 0, .45)";
+				ctx.fillRect(x - 2, y - 2, tw + 4, 24);
+				ctx.fillStyle = an.color;
+				ctx.fillText(an.text ?? "", x, y);
+			};
 			const finish = (0, react.useCallback)(async () => {
 				const s = live.current;
 				if (s.sel === null || s.sel.w < 2 || s.sel.h < 2) return;
@@ -193,13 +257,18 @@ window.__ModuleLoader__.load({
 				ctx.beginPath();
 				ctx.rect(0, 0, canvas.width, canvas.height);
 				ctx.clip();
-				ctx.strokeStyle = "#FF3B30";
-				ctx.lineWidth = 3;
-				ctx.fillStyle = "rgba(255, 59, 48, .12)";
 				for (const r of s.annoRects) {
+					ctx.strokeStyle = r.color;
+					ctx.lineWidth = 3;
+					ctx.fillStyle = hexToRgba(r.color, .12);
+					if (r.kind === "text") {
+						drawTextAnno(ctx, r, s.sel.x, s.sel.y);
+						continue;
+					}
 					const x = r.x - s.sel.x;
 					const y = r.y - s.sel.y;
-					if (r.kind === "ellipse") {
+					if (r.kind === "arrow") drawArrowPath(ctx, x, y, x + r.w, y + r.h);
+					else if (r.kind === "ellipse") {
 						ctx.beginPath();
 						ctx.ellipse(x + r.w / 2, y + r.h / 2, r.w / 2, r.h / 2, 0, 0, Math.PI * 2);
 						ctx.stroke();
@@ -240,10 +309,30 @@ window.__ModuleLoader__.load({
 				setAnnoDraft(null);
 				setToolKind("rect");
 			}, []);
+			/** 提交进行中的文字输入（空值丢弃锚点）；供 input/画布点击共用。 */
+			const commitText = (0, react.useCallback)((text) => {
+				const e = textEditRef.current;
+				if (e === null) return;
+				const clean = text.trim();
+				if (clean !== "") {
+					const d = {
+						kind: "text",
+						x: e.x,
+						y: e.y,
+						w: 0,
+						h: 0,
+						color: live.current.annoColor,
+						text: clean
+					};
+					setAnnoRects([...live.current.annoRects, d]);
+				}
+				setTextEdit(null);
+			}, []);
 			(0, react.useEffect)(() => {
 				const onMouseDown = (event) => {
 					const toolbarEl = document.querySelector(".ssd3ov-toolbar");
 					if (toolbarEl !== null && toolbarEl.contains(event.target)) return;
+					if (event.target instanceof HTMLInputElement && event.target.classList.contains("ssd3ov-text-input")) return;
 					if (event.button === 2) {
 						event.preventDefault();
 						cancelOrBack();
@@ -254,13 +343,24 @@ window.__ModuleLoader__.load({
 					if (s.phase === "tool" && s.sel !== null) {
 						const p = toPhys(event.clientX, event.clientY);
 						if (p === null) return;
+						if (s.toolKind === "text") {
+							if (textEditRef.current !== null) commitText(textEditRef.current.value);
+							const anchor = clampPoint(p, s.sel);
+							setTextEdit({
+								x: anchor.x,
+								y: anchor.y,
+								value: ""
+							});
+							return;
+						}
 						annoStart.current = clampPoint(p, s.sel);
 						setAnnoDraft({
 							x: annoStart.current.x,
 							y: annoStart.current.y,
 							w: 0,
 							h: 0,
-							kind: s.toolKind
+							kind: s.toolKind,
+							color: s.annoColor
 						});
 						return;
 					}
@@ -276,11 +376,25 @@ window.__ModuleLoader__.load({
 						if (annoStart.current !== null) {
 							const p = toPhys(event.clientX, event.clientY);
 							if (p === null) return;
-							const clipped = clampToSel(norm(annoStart.current.x, annoStart.current.y, p.x, p.y), s.sel);
-							setAnnoDraft(clipped === null ? null : {
-								...clipped,
-								kind: s.toolKind
-							});
+							if (s.toolKind === "arrow") {
+								const a = clampPoint(annoStart.current, s.sel);
+								const b = clampPoint(p, s.sel);
+								setAnnoDraft({
+									x: a.x,
+									y: a.y,
+									w: b.x - a.x,
+									h: b.y - a.y,
+									kind: "arrow",
+									color: s.annoColor
+								});
+							} else {
+								const clipped = clampToSel(norm(annoStart.current.x, annoStart.current.y, p.x, p.y), s.sel);
+								setAnnoDraft(clipped === null ? null : {
+									...clipped,
+									kind: s.toolKind,
+									color: s.annoColor
+								});
+							}
 						}
 						return;
 					}
@@ -299,7 +413,10 @@ window.__ModuleLoader__.load({
 					const drag = dragStart.current;
 					const s = live.current;
 					if (s.phase === "tool") {
-						if (s.annoDraft !== null && s.annoDraft.w >= 3 && s.annoDraft.h >= 3) setAnnoRects([...s.annoRects, s.annoDraft]);
+						if (s.annoDraft !== null) {
+							const d = s.annoDraft;
+							if (d.kind === "arrow" ? Math.hypot(d.w, d.h) >= 8 : d.kind !== "text" && d.w >= 3 && d.h >= 3) setAnnoRects([...s.annoRects, d]);
+						}
 						setAnnoDraft(null);
 						annoStart.current = null;
 						return;
@@ -310,6 +427,13 @@ window.__ModuleLoader__.load({
 					if (justDragged && s.sel !== null && s.sel.w >= 4 && s.sel.h >= 4) enterTool();
 				};
 				const onKeyDown = (event) => {
+					if (textEditRef.current !== null) {
+						if (event.key === "Escape") {
+							event.preventDefault();
+							setTextEdit(null);
+						}
+						return;
+					}
 					if (event.key === "Escape") cancelOrBack();
 					else if (event.key === "Enter" && live.current.phase === "tool") finish().catch(() => {});
 				};
@@ -335,6 +459,7 @@ window.__ModuleLoader__.load({
 				};
 			}, [
 				cancelOrBack,
+				commitText,
 				enterTool,
 				finish,
 				toPhys
@@ -355,14 +480,28 @@ window.__ModuleLoader__.load({
 				ctx.clearRect(0, 0, canvas.width, canvas.height);
 				const sx = showSize.w / width;
 				const sy = showSize.h / height;
-				ctx.strokeStyle = "#FF5B4D";
-				ctx.fillStyle = "rgba(255, 91, 77, .12)";
-				ctx.lineWidth = 2.5;
 				const draw = (r) => {
+					ctx.strokeStyle = r.color;
+					ctx.fillStyle = hexToRgba(r.color, .12);
+					ctx.lineWidth = 2.5;
+					if (r.kind === "text") {
+						ctx.font = "15px \"Microsoft YaHei UI\", \"PingFang SC\", sans-serif";
+						ctx.textBaseline = "top";
+						const tw = ctx.measureText(r.text ?? "").width;
+						ctx.fillStyle = "rgba(0, 0, 0, .45)";
+						ctx.fillRect(r.x * sx - 2, r.y * sy - 2, tw + 4, 21);
+						ctx.fillStyle = r.color;
+						ctx.fillText(r.text ?? "", r.x * sx, r.y * sy);
+						return;
+					}
 					const x = r.x * sx;
 					const y = r.y * sy;
 					const w = r.w * sx;
 					const h = r.h * sy;
+					if (r.kind === "arrow") {
+						drawArrowPath(ctx, x, y, x + w, y + h);
+						return;
+					}
 					if (r.kind === "ellipse") {
 						ctx.beginPath();
 						ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
@@ -398,7 +537,8 @@ window.__ModuleLoader__.load({
 				className: "ssd3ov-toolbar",
 				style: {
 					display: "flex",
-					left: Math.max(4, selDisplay.x + selDisplay.w / 2 - 96),
+					left: Math.max(170, Math.min(showSize.w - 170, selDisplay.x + selDisplay.w / 2)),
+					transform: "translateX(-50%)",
 					top: selDisplay.y + selDisplay.h + 8 <= showSize.h - 48 ? selDisplay.y + selDisplay.h + 8 : Math.max(4, selDisplay.y - 48)
 				}
 			}, [
@@ -428,8 +568,34 @@ window.__ModuleLoader__.load({
 					stroke: "#FF5B4D",
 					strokeWidth: "1.8"
 				}))),
+				(0, react.createElement)("button", {
+					key: "arrow",
+					type: "button",
+					className: `ssd3ov-tool${toolKind === "arrow" ? " ssd3ov-tool-active" : ""}`,
+					title: "箭头（指向要改的内容）",
+					onClick: () => setToolKind("arrow")
+				}, icon(ICON_ARROW, "none")),
+				(0, react.createElement)("button", {
+					key: "text",
+					type: "button",
+					className: `ssd3ov-tool${toolKind === "text" ? " ssd3ov-tool-active" : ""}`,
+					title: "文字（点一下输入描述）",
+					onClick: () => setToolKind("text")
+				}, "T"),
 				(0, react.createElement)("div", {
-					key: "sep",
+					key: "sep1",
+					className: "ssd3ov-sep"
+				}),
+				...ANNO_COLORS.map((color, i) => (0, react.createElement)("button", {
+					key: `swatch-${color}`,
+					type: "button",
+					className: `ssd3ov-swatch${annoColor === color ? " on" : ""}`,
+					title: COLOR_NAMES[i],
+					style: { background: color },
+					onClick: () => setAnnoColor(color)
+				})),
+				(0, react.createElement)("div", {
+					key: "sep2",
 					className: "ssd3ov-sep"
 				}),
 				(0, react.createElement)("button", {
@@ -457,7 +623,7 @@ window.__ModuleLoader__.load({
 					}
 				}, "完成")
 			]) : null;
-			const tip = s.phase === "select" ? (0, react.createElement)("div", { className: "ssd3ov-tip" }, (0, react.createElement)("em", null, "拖拽 "), "选择截图区域 · ", (0, react.createElement)("em", null, "右键 / Esc"), " 取消") : (0, react.createElement)("div", { className: "ssd3ov-tip" }, "拖拽画", (0, react.createElement)("em", { className: "red" }, "标注框 "), "强调 · ", (0, react.createElement)("em", null, "回车"), " 完成 · ", (0, react.createElement)("em", null, "右键 / Esc"), " 逐级回退");
+			const tip = s.phase === "select" ? (0, react.createElement)("div", { className: "ssd3ov-tip" }, (0, react.createElement)("em", null, "拖拽 "), "选择截图区域 · ", (0, react.createElement)("em", null, "右键 / Esc"), " 取消") : (0, react.createElement)("div", { className: "ssd3ov-tip" }, "拖拽画", (0, react.createElement)("em", { className: "red" }, "标注 "), "· ", (0, react.createElement)("em", null, "T"), " 点一下写文字 · ", (0, react.createElement)("em", null, "回车"), " 完成 · ", (0, react.createElement)("em", null, "右键 / Esc"), " 逐级回退");
 			return (0, react_dom.createPortal)((0, react.createElement)("div", { className: "ssd3ov" }, [(0, react.createElement)("div", {
 				key: "wrap",
 				className: "ssd3ov-wrap",
@@ -508,6 +674,27 @@ window.__ModuleLoader__.load({
 						pointerEvents: "none"
 					}
 				}),
+				textEdit !== null ? (0, react.createElement)("input", {
+					key: "text-input",
+					className: "ssd3ov-text-input",
+					type: "text",
+					style: {
+						left: textEdit.x * sx,
+						top: textEdit.y * sy
+					},
+					value: textEdit.value,
+					placeholder: "输入文字…",
+					autoFocus: true,
+					onChange: (e) => setTextEdit({
+						...textEdit,
+						value: e.target.value
+					}),
+					onKeyDown: (e) => {
+						if (e.key === "Enter") commitText(textEdit.value);
+						else if (e.key === "Escape") setTextEdit(null);
+					},
+					onBlur: () => commitText(textEdit.value)
+				}) : null,
 				toolbar
 			]), tip]), document.body);
 		}
