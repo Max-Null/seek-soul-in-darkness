@@ -320,14 +320,13 @@
     ctx.lineTo(x2 - head * Math.cos(angle + Math.PI / 6), y2 - head * Math.sin(angle + Math.PI / 6))
     ctx.stroke()
   }
-  /** 文字标注：深色半透明底 + 标注色文字。 */
+  /** 文字标注：标注色文字 + 细黑描边（无背景块；描边保证任意底色可读）。 */
   const drawTextOn = (ctx, x, y, text, color, font) => {
     ctx.font = font
     ctx.textBaseline = 'top'
-    const tw = ctx.measureText(text).width
-    const th = 20
-    ctx.fillStyle = 'rgba(0, 0, 0, .45)'
-    ctx.fillRect(x - 2, y - 2, tw + 4, th + 4)
+    ctx.lineWidth = 3
+    ctx.strokeStyle = 'rgba(0, 0, 0, .55)'
+    ctx.strokeText(text, x, y)
     ctx.fillStyle = color
     ctx.fillText(text, x, y)
   }
