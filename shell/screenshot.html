@@ -371,7 +371,10 @@
     return c
   })()
 
-  /** 完成：裁剪选区 + 标注合成（颜色/箭头/文字）→ 交付（一次确认）。 */
+  /** 完成：裁剪选区 + 标注合成（颜色/箭头/文字）→ 交付（一次确认）。
+   *  协议(v2)：confirm({ source, annotated }) —— 原图(纯裁剪,不遮挡任何
+   *  原始内容) + 编辑图(标注合成)。两张都投递给 DSH，帮助理解方(LLM)在
+   *  标注遮盖原内容时仍能看到上下文（2026-08-24 用户决定）。 */
   const finish = async () => {
     if (frame === null || sel === null || sel.w < 2 || sel.h < 2) return
     const image = await loadImage(frameEl.src)
@@ -380,6 +383,7 @@
     canvas.height = Math.round(sel.h)
     const ctx = canvas.getContext('2d')
     ctx.drawImage(image, sel.x, sel.y, sel.w, sel.h, 0, 0, sel.w, sel.h)
+    const source = canvas.toDataURL('image/png')
     ctx.save()
     ctx.beginPath()
     ctx.rect(0, 0, canvas.width, canvas.height)
@@ -409,7 +413,7 @@
       }
     }
     ctx.restore()
-    window.ssidCapture.confirm(canvas.toDataURL('image/png'))
+    window.ssidCapture.confirm({ source, annotated: canvas.toDataURL('image/png') })
   }
 
   const loadImage = (src) => new Promise((resolve, reject) => {

@@ -1068,15 +1068,17 @@ async function start() {
   let captureSession = null
   const delay = (ms) => new Promise((resolve) => { setTimeout(resolve, ms) })
 
-  /** 把裁剪结果（PNG data URL）派发给 DSH UI（与 ssid:titlebar 同一通道）。 */
-  const deliverScreenshot = (dataUrl) => {
-    if (typeof dataUrl !== 'string' || dataUrl === '') {
-      safeLog('[screenshot] deliver skipped: empty dataUrl\n')
+  /** 把截图结果（v2：{ uid, source, annotated }）派发给 DSH UI
+   *  （与 ssid:titlebar 同一通道）。 */
+  const deliverScreenshot = (payload) => {
+    if (payload === null || typeof payload !== 'object'
+      || typeof payload.source !== 'string' || payload.source === '') {
+      safeLog('[screenshot] deliver skipped: empty payload\n')
       return
     }
-    const js = `window.dispatchEvent(new CustomEvent('ssid:screenshot', { detail: ${JSON.stringify(dataUrl)} }))`
+    const js = `window.dispatchEvent(new CustomEvent('ssid:screenshot', { detail: ${JSON.stringify(payload)} }))`
     void mainView.webContents.executeJavaScript(js).then(() => {
-      safeLog(`[screenshot] delivered ${dataUrl.length} bytes to DSH UI\n`)
+      safeLog(`[screenshot] delivered ${payload.uid} (source=${payload.source.length} annotated=${payload.annotated?.length ?? 0}) to DSH UI\n`)
     }).catch((error) => {
       safeLog(`[screenshot] deliver failed: ${error instanceof Error ? error.message : String(error)}\n`)
     })
@@ -1209,11 +1211,25 @@ async function start() {
   }
   // 浮层确认：关全部 → 恢复主窗口 → 派发给 DSH UI。captureSession 为空
   // 表示本次截图已确认/取消——忽略重复（浮层销毁前 Enter/点击可能双发）。
-  ipcMain.on('ssid:shot:confirm', (event, dataUrl) => {
+  // 协议 v2：确认携带 { source, annotated } 两张图（原图=纯裁剪，编辑图=
+  // 标注合成），派发事件 detail 为 { uid, source, annotated } 对象——旧版
+  // dsh-capture 监听器只认字符串 dataURL 会自然忽略新事件，杜绝旧监听器
+  // 残留造成双发（2026-08-24 用户实测 ssid 里插入两张一样的图）。
+  ipcMain.on('ssid:shot:confirm', (event, payload) => {
     if (captureSession === null) return
-    safeLog(`[screenshot] confirm received (${typeof dataUrl === 'string' ? dataUrl.length : 'non-string'} bytes) sender=${event.sender.id}\n`)
+    const source = typeof payload === 'object' && payload !== null
+      ? (typeof payload.source === 'string' ? payload.source : '')
+      : (typeof payload === 'string' ? payload : '')
+    const annotated = typeof payload === 'object' && payload !== null && typeof payload.annotated === 'string'
+      ? payload.annotated
+      : source
+    safeLog(`[screenshot] confirm received (source=${source.length} annotated=${annotated.length} bytes) sender=${event.sender.id}\n`)
     closeOverlays(true)
-    deliverScreenshot(dataUrl)
+    deliverScreenshot({
+      uid: `shot-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      source,
+      annotated,
+    })
   })
   // 浮层取消：关全部 → 恢复主窗口。
   ipcMain.on('ssid:shot:cancel', (event) => {

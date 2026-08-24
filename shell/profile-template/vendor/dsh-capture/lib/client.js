@@ -253,6 +253,7 @@ window.__ModuleLoader__.load({
 				canvas.height = Math.round(s.sel.h);
 				const ctx = canvas.getContext("2d");
 				ctx.drawImage(image, s.sel.x, s.sel.y, s.sel.w, s.sel.h, 0, 0, canvas.width, canvas.height);
+				const source = canvas.toDataURL("image/png");
 				ctx.save();
 				ctx.beginPath();
 				ctx.rect(0, 0, canvas.width, canvas.height);
@@ -279,7 +280,10 @@ window.__ModuleLoader__.load({
 					}
 				}
 				ctx.restore();
-				onDone(canvas.toDataURL("image/png"));
+				onDone({
+					source,
+					annotated: canvas.toDataURL("image/png")
+				});
 			}, [
 				dataUrl,
 				width,
@@ -729,14 +733,15 @@ window.__ModuleLoader__.load({
 			lastAt = now;
 			return false;
 		}
-		/** 一次与真实图片拖拽等价的落放：PNG File 经官方 drop 通道进草稿。 */
-		async function deliverToComposer(dataUrl) {
+		/** 一次与真实图片拖拽等价的落放：PNG File 经官方 drop 通道进草稿。
+		*  @param filename - 附件名（原图/编辑图区分，如 ssid-screenshot-source.png）。 */
+		async function deliverToComposer(dataUrl, filename = "ssid-screenshot.png") {
 			if (isDuplicate(dataUrl)) {
 				console.warn("[ssid-screenshot] duplicate delivery skipped");
 				return;
 			}
 			const blob = await dataUrlToBlob(dataUrl);
-			const file = new File([blob], "ssid-screenshot.png", { type: "image/png" });
+			const file = new File([blob], filename, { type: "image/png" });
 			const transfer = new DataTransfer();
 			transfer.items.add(file);
 			console.info(`[ssid-screenshot] drop ${file.size} bytes, types=${transfer.types.join(",")}`);
@@ -918,9 +923,9 @@ window.__ModuleLoader__.load({
 				triggerShell,
 				beginBrowserCapture
 			]);
-			const overlayDone = (0, react.useCallback)((dataUrl) => {
+			const overlayDone = (0, react.useCallback)((result) => {
 				setOverlay(null);
-				deliverToComposer(dataUrl).catch((error) => {
+				deliverToComposer(result.source, "ssid-screenshot-source.png").then(() => deliverToComposer(result.annotated, "ssid-screenshot-annotated.png")).catch((error) => {
 					console.warn(`[ssid-screenshot] delivery failed: ${error instanceof Error ? error.message : String(error)}`);
 				});
 			}, []);
@@ -1182,14 +1187,34 @@ window.__ModuleLoader__.load({
 		const inject = ["slots"];
 		/** 事件名（与 shell/main.mjs 派发一致）。 */
 		const SCREENSHOT_EVENT = "ssid:screenshot";
+		function parseShotPayload(detail) {
+			if (typeof detail !== "object" || detail === null) return null;
+			const p = detail;
+			if (typeof p.uid !== "string" || p.uid === "") return null;
+			if (typeof p.source !== "string" || !isImageDataUrl(p.source)) return null;
+			if (typeof p.annotated !== "string" || !isImageDataUrl(p.annotated)) return null;
+			return {
+				uid: p.uid,
+				source: p.source,
+				annotated: p.annotated
+			};
+		}
+		/** 已投递 uid 集合：主进程单会话只派发一次，防御性去重；
+		*  模块级缓存防止 hmr 后重复投递。 */
+		const deliveredUids = /* @__PURE__ */ new Set();
 		/** Plugin body: register the delivery listener, the composer capture button,
 		*  and the two General-settings rows. */
 		function apply(ctx) {
 			const onScreenshot = (event) => {
-				const detail = event.detail;
-				if (!isImageDataUrl(detail)) return;
-				console.info(`[ssid-screenshot] event received (${detail.length} chars)`);
-				deliverToComposer(detail).catch((error) => {
+				const payload = parseShotPayload(event.detail);
+				if (payload === null) return;
+				if (deliveredUids.has(payload.uid)) {
+					console.warn(`[ssid-screenshot] duplicate uid ${payload.uid} skipped`);
+					return;
+				}
+				deliveredUids.add(payload.uid);
+				console.info(`[ssid-screenshot] event received uid=${payload.uid} (source ${payload.source.length}, annotated ${payload.annotated.length})`);
+				deliverToComposer(payload.source, "ssid-screenshot-source.png").then(() => deliverToComposer(payload.annotated, "ssid-screenshot-annotated.png")).catch((error) => {
 					console.warn(`[ssid-screenshot] delivery failed: ${error instanceof Error ? error.message : String(error)}`);
 				});
 			};
