@@ -5,7 +5,9 @@ window.__ModuleLoader__.load({
 		var exports = module.exports;
 		Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 		let react = require("react");
+		let react_dom_client = require("react-dom/client");
 		let react_dom = require("react-dom");
+		let react_jsx_runtime = require("react/jsx-runtime");
 		//#region src/client/api.ts
 		/** POST one method and unwrap the envelope. */
 		async function api(method, payload) {
@@ -98,11 +100,11 @@ window.__ModuleLoader__.load({
 			".ssd3ov-text-input{position:absolute;border:1px solid #4FC3F7;background:rgba(10,14,20,.82);color:#fff;font:15px/1.4 \"Microsoft YaHei UI\",\"PingFang SC\",\"Segoe UI\",sans-serif;padding:2px 6px;border-radius:4px;outline:none;min-width:40px;z-index:3}",
 			".ssd3ov-text-input::placeholder{color:rgba(255,255,255,.45)}"
 		].join("\n");
-		const STYLE_ID$2 = "@max-null/dsh-capture/overlay.css";
-		if (typeof document !== "undefined" && document.querySelector(`style[data-plugin-css="${STYLE_ID$2}"]`) === null) {
+		const STYLE_ID$3 = "@max-null/dsh-capture/overlay.css";
+		if (typeof document !== "undefined" && document.querySelector(`style[data-plugin-css="${STYLE_ID$3}"]`) === null) {
 			const tag = document.createElement("style");
 			tag.dataset.plugin = "dsh-capture";
-			tag.dataset.pluginCss = STYLE_ID$2;
+			tag.dataset.pluginCss = STYLE_ID$3;
 			tag.textContent = CSS$2;
 			document.head.appendChild(tag);
 		}
@@ -173,14 +175,19 @@ window.__ModuleLoader__.load({
 				strokeLinejoin: "round"
 			}));
 		}
-		/** 浏览器截图遮罩：框选 + 单阶段红框标注 + 交付。 */
+		/** 浏览器截图遮罩：框选 + 单阶段红框标注 + 交付（immediate=整图编辑模式）。 */
 		function CaptureOverlay(props) {
-			const { dataUrl, width, height, onDone, onCancel } = props;
+			const { dataUrl, width, height, immediate = false, onDone, onCancel } = props;
 			const wrapRef = (0, react.useRef)(null);
 			const annoRef = (0, react.useRef)(null);
-			const [phase, setPhase] = (0, react.useState)("select");
+			const [phase, setPhase] = (0, react.useState)(immediate ? "tool" : "select");
 			const [showSize, setShowSize] = (0, react.useState)(null);
-			const [sel, setSel] = (0, react.useState)(null);
+			const [sel, setSel] = (0, react.useState)(immediate ? {
+				x: 0,
+				y: 0,
+				w: width,
+				h: height
+			} : null);
 			const [annoRects, setAnnoRects] = (0, react.useState)([]);
 			const [annoDraft, setAnnoDraft] = (0, react.useState)(null);
 			const [toolKind, setToolKind] = (0, react.useState)("rect");
@@ -291,12 +298,16 @@ window.__ModuleLoader__.load({
 				onDone
 			]);
 			const backToSelect = (0, react.useCallback)(() => {
+				if (immediate) {
+					onCancel();
+					return;
+				}
 				setPhase("select");
 				setSel(null);
 				setAnnoRects([]);
 				setAnnoDraft(null);
 				setToolKind("rect");
-			}, []);
+			}, [immediate, onCancel]);
 			const cancelOrBack = (0, react.useCallback)(() => {
 				const s = live.current;
 				if (s.phase === "tool") {
@@ -432,6 +443,7 @@ window.__ModuleLoader__.load({
 					if (justDragged && s.sel !== null && s.sel.w >= 4 && s.sel.h >= 4) enterTool();
 				};
 				const onKeyDown = (event) => {
+					if (event.target instanceof HTMLInputElement && event.target.classList.contains("ssd3ov-text-input")) return;
 					if (textEditRef.current !== null) {
 						if (event.key === "Escape") {
 							event.preventDefault();
@@ -652,7 +664,7 @@ window.__ModuleLoader__.load({
 					key: "dim",
 					className: "ssd3ov-dim"
 				}) : null,
-				selDisplay !== null && selDisplay.w > 1 && selDisplay.h > 1 ? (0, react.createElement)("div", {
+				!immediate && selDisplay !== null && selDisplay.w > 1 && selDisplay.h > 1 ? (0, react.createElement)("div", {
 					key: "sel",
 					className: "ssd3ov-sel",
 					style: {
@@ -663,7 +675,7 @@ window.__ModuleLoader__.load({
 						height: selDisplay.h
 					}
 				}) : null,
-				selDisplay !== null && selDisplay.w > 1 && selDisplay.h > 1 ? (0, react.createElement)("div", {
+				!immediate && selDisplay !== null && selDisplay.w > 1 && selDisplay.h > 1 ? (0, react.createElement)("div", {
 					key: "size",
 					className: "ssd3ov-size",
 					style: { display: "block" }
@@ -697,6 +709,8 @@ window.__ModuleLoader__.load({
 					onKeyDown: (e) => {
 						if (e.key === "Enter") commitText(textEdit.value);
 						else if (e.key === "Escape") setTextEdit(null);
+						if (typeof e.nativeEvent.stopPropagation === "function") e.nativeEvent.stopPropagation();
+						else e.stopPropagation();
 					},
 					onBlur: () => commitText(textEdit.value)
 				}) : null,
@@ -802,12 +816,12 @@ window.__ModuleLoader__.load({
 			".ssd3-toast[data-error=true] span{color:var(--dsw-alias-state-error-primary)}",
 			"@keyframes ssd3-fade{from{opacity:0;transform:translate(-50%,4px)}to{opacity:1;transform:translate(-50%,0)}}"
 		].join("");
-		const STYLE_ID$1 = "@max-null/dsh-capture/button.css";
+		const STYLE_ID$2 = "@max-null/dsh-capture/button.css";
 		if (typeof document !== "undefined") {
-			document.querySelector(`style[data-plugin-css="${STYLE_ID$1}"]`)?.remove();
+			document.querySelector(`style[data-plugin-css="${STYLE_ID$2}"]`)?.remove();
 			const tag = document.createElement("style");
 			tag.dataset.plugin = "dsh-capture";
-			tag.dataset.pluginCss = STYLE_ID$1;
+			tag.dataset.pluginCss = STYLE_ID$2;
 			tag.textContent = CSS$1;
 			document.head.appendChild(tag);
 		}
@@ -1020,11 +1034,11 @@ window.__ModuleLoader__.load({
 			".ssd3r-switch .knob{display:block;width:16px;height:16px;border-radius:8px;background:#fff;margin-left:2px;transition:margin-left .15s}",
 			".ssd3r-switch.on .knob{margin-left:22px}"
 		].join("");
-		const STYLE_ID = "@max-null/dsh-capture/settings.css";
-		if (typeof document !== "undefined" && document.querySelector(`style[data-plugin-css="${STYLE_ID}"]`) === null) {
+		const STYLE_ID$1 = "@max-null/dsh-capture/settings.css";
+		if (typeof document !== "undefined" && document.querySelector(`style[data-plugin-css="${STYLE_ID$1}"]`) === null) {
 			const tag = document.createElement("style");
 			tag.dataset.plugin = "dsh-capture";
-			tag.dataset.pluginCss = STYLE_ID;
+			tag.dataset.pluginCss = STYLE_ID$1;
 			tag.textContent = CSS;
 			document.head.appendChild(tag);
 		}
@@ -1187,7 +1201,147 @@ window.__ModuleLoader__.load({
 			});
 		}
 		//#endregion
+		//#region src/client/ImagePreviewEdit.tsx
+		/**
+		* ImagePreviewEdit: 官方「原图预览」(ImageLightbox) 的编辑入口。
+		*
+		* MutationObserver 发现预览 dialog（role=dialog + aria-label 原图预览 /
+		* Original image preview —— 官方文案，不依赖 CSS hash，草稿附件预览与
+		* 消息图片预览共用同一个 ImageLightbox）→ 注入「编辑」按钮 → 点击打开
+		* CaptureOverlay 整图模式（immediate：跳过框选直接标注）→ 完成时：
+		*   - 有标注：投递一张编辑图到输入框（原图已在对话里，不再投原图）；
+		*   - 无标注：视为未修改，直接关闭不投递（2026-08-24 用户决定）。
+		* Escape / 取消逐级回退到底 = 放弃编辑回到原预览。
+		*/
+		const PREVIEW_LABELS = /^(原图预览|Original image preview)$/;
+		const EDIT_BTN_CSS = [".dsh-img-edit-btn{position:fixed;top:20px;right:64px;z-index:1;display:grid;place-items:center;width:36px;height:36px;border:1px solid var(--dsw-alias-border-l2-darkmode-thin,rgba(255,255,255,.14));border-radius:999px;background:var(--dsw-specific-input-major,rgba(20,24,32,.92));color:var(--dsw-alias-label-primary,#e8eaed);cursor:pointer;padding:0}", ".dsh-img-edit-btn:hover{border-color:var(--dsw-alias-brand-primary,#4f8cff);color:var(--dsw-alias-brand-primary,#4f8cff)}"].join("");
+		const STYLE_ID = "@max-null/dsh-capture/image-edit.css";
+		function ensureStyle() {
+			if (typeof document === "undefined") return;
+			if (document.querySelector(`style[data-plugin-css="${STYLE_ID}"]`) !== null) return;
+			const tag = document.createElement("style");
+			tag.dataset.plugin = "dsh-capture";
+			tag.dataset.pluginCss = STYLE_ID;
+			tag.textContent = EDIT_BTN_CSS;
+			document.head.appendChild(tag);
+		}
+		/** 常驻注入宿主：观察预览对话框并注入编辑按钮；零视觉输出（null portal）。 */
+		function ImagePreviewEditHost() {
+			const [edit, setEdit] = (0, react.useState)(null);
+			const [error, setError] = (0, react.useState)(null);
+			const busyRef = (0, react.useRef)(false);
+			const editRef = (0, react.useRef)(edit);
+			editRef.current = edit;
+			(0, react.useEffect)(() => {
+				ensureStyle();
+				const openEdit = (src) => {
+					if (busyRef.current || editRef.current !== null) return;
+					busyRef.current = true;
+					const probe = new Image();
+					probe.onload = () => {
+						busyRef.current = false;
+						setEdit({
+							src,
+							width: probe.naturalWidth,
+							height: probe.naturalHeight
+						});
+					};
+					probe.onerror = () => {
+						busyRef.current = false;
+						setError("图片加载失败，无法编辑");
+					};
+					probe.src = src;
+				};
+				const injectInto = (dialog, img) => {
+					if (dialog.querySelector("[data-dsh-image-edit]") !== null) return false;
+					const btn = document.createElement("button");
+					btn.type = "button";
+					btn.dataset.dshImageEdit = "1";
+					btn.className = "dsh-img-edit-btn";
+					btn.setAttribute("aria-label", "编辑图片");
+					btn.title = "标注编辑这张图片";
+					btn.innerHTML = "✎";
+					btn.addEventListener("click", (event) => {
+						event.stopPropagation();
+						openEdit(img.src);
+					});
+					dialog.appendChild(btn);
+					return true;
+				};
+				const scan = () => {
+					for (const dialog of Array.from(document.querySelectorAll("[role=\"dialog\"]"))) {
+						if (!PREVIEW_LABELS.test(dialog.getAttribute("aria-label") ?? "")) continue;
+						const img = dialog.querySelector("img");
+						if (img !== null) injectInto(dialog, img);
+					}
+				};
+				const observer = new MutationObserver(scan);
+				if (document.body !== null) {
+					observer.observe(document.body, {
+						childList: true,
+						subtree: true
+					});
+					scan();
+				}
+				return () => observer.disconnect();
+			}, []);
+			(0, react.useEffect)(() => {
+				if (error !== null) {
+					const timer = window.setTimeout(() => setError(null), 2500);
+					return () => window.clearTimeout(timer);
+				}
+			}, [error]);
+			if (edit === null) return null;
+			const onDone = (result) => {
+				setEdit(null);
+				if (result.annotated === void 0) return;
+				deliverToComposer(result.annotated, "image-edit-annotated.png").catch((err) => {
+					console.warn(`[ssid-screenshot] image edit delivery failed: ${err instanceof Error ? err.message : String(err)}`);
+				});
+			};
+			const overlay = (0, react.createElement)(CaptureOverlay, {
+				key: "image-edit",
+				dataUrl: edit.src,
+				width: edit.width,
+				height: edit.height,
+				immediate: true,
+				onDone,
+				onCancel: () => setEdit(null)
+			});
+			return (0, react_dom.createPortal)(/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", { children: [overlay, error !== null ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+				className: "dsh-img-edit-error",
+				style: {
+					position: "fixed",
+					bottom: 80,
+					left: "50%",
+					transform: "translateX(-50%)",
+					zIndex: 2147483647,
+					padding: "6px 14px",
+					borderRadius: 8,
+					background: "var(--dsw-alias-interactive-bg-hover-solid,rgba(30,36,46,.95))",
+					color: "var(--dsw-alias-state-error-primary,#ff6b6b)",
+					font: "13px/20px sans-serif"
+				},
+				children: error
+			}) : null] }), document.body);
+		}
+		//#endregion
 		//#region src/client/index.ts
+		/**
+		* @max-null/dsh-capture — browser half.
+		*
+		* 三层职责：
+		*  1. 投递（壳层 → 输入框）：监听 `ssid:screenshot` CustomEvent（detail =
+		*     裁剪结果 `data:image/png;base64,…`，由 shell/main.mjs 经
+		*     mainView.webContents.executeJavaScript 派发），把 PNG 送进当前会话
+		*     输入框草稿——合成 drop 走 DSH 官方 composer 图片 intake
+		*     （ui-attachment 的 document 级 drop 处理器，只认
+		*     `dataTransfer.types.includes('Files')`，量/类型/大小限制与真实拖拽一致）。
+		*  2. 截图按钮：注册 `conversation.input.right`（润色按钮同一座位），点击
+		*     调 /ssid/api/screenshot/trigger 让壳层开浮层。
+		*  3. 设置行：注册两个 `settings.general.item`（通用设置）：隐藏窗口开关
+		*     + 全局快捷键编辑，即改即存。
+		*/
 		const inject = ["slots"];
 		/** 事件名（与 shell/main.mjs 派发一致）。 */
 		const SCREENSHOT_EVENT = "ssid:screenshot";
@@ -1234,6 +1388,15 @@ window.__ModuleLoader__.load({
 				window.addEventListener(SCREENSHOT_EVENT, onScreenshot);
 				return () => window.removeEventListener(SCREENSHOT_EVENT, onScreenshot);
 			}, "dsh-capture: screenshot delivery");
+			const host = document.createElement("div");
+			host.dataset.dshImagePreviewEdit = "1";
+			document.body.appendChild(host);
+			const root = (0, react_dom_client.createRoot)(host);
+			root.render((0, react.createElement)(ImagePreviewEditHost));
+			ctx.effect(() => () => {
+				root.unmount();
+				host.remove();
+			}, "dsh-capture: image edit preview host");
 			ctx.slots.inject("conversation.input.right", () => ctx.slots.register({
 				name: "conversation.input.right",
 				id: "ssid-screenshot",
