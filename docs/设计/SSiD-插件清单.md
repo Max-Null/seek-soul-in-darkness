@@ -50,6 +50,14 @@
 | 上下文压缩保护 | `dsh-compaction-shield`（用户已装） | ✅ 建议预制 |
 | 皮肤/主题 | `dsh-skin` / `dsh-web-ui` 参考，自研 `ssid-skin` | 🔲 用自研 |
 
+### 2.4 第三方预制（2026-08-26 起，开箱即用）
+
+| 插件 | 作用 | 来源 | 备注 |
+|---|---|---|---|
+| `dsh-context` | 上下文可视化：组成/趋势/事件/消息/浏览器 + `/context` 命令 | npm `^0.32.0` | 2026-08-26 预制 |
+| `@changfenhuang/dsh-genui` | 回复内交互 UI（`dsh-ui` fence、判卷/面板/图表/事件回传） | vendor（含面板样式修复，PR [omdsh-dev/dsh-genui#58](https://github.com/omdsh-dev/dsh-genui/pull/58)） | 2026-08-26 预制；`genui` skill 教学随包 |
+| `dsh-context-doctor` | 上下文注入审计：`context_audit` 工具 + composer 圆环面板（溯源见 [issue #8](https://github.com/Zhenyu98/dsh-context-doctor/issues/8)） | vendor（git 产物，无 npm 发布） | 2026-08-26 预制 |
+
 ## 三、对应 fractal 预置体系（溯源）
 
 fractal 的「预置配置体系」（D15/D10）＝ oc-plus 全家桶：

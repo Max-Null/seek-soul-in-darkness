@@ -1,0 +1,4 @@
+# context-doctor bundle patch：把插件挂进 profile
+- insert:
+    - id: context-doctor
+      name: 'dsh-context-doctor'
