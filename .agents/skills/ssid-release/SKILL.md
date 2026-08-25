@@ -60,7 +60,21 @@ tar -xzf dsh-runtime.tar.gz -C dsh-runtime   # 注意必须 -C 解到独立目�
 1. `npm run bundle-kernel` + `npm run pack`（electron-builder NSIS）：
    - 日志 `[after-pack] dsh-runtime.tar.gz OK (185.0 MB)` = 归档已内嵌；
    - 产物 `dist-electron/思灵 Setup <ver>.exe`（签名 + blockmap）。
-2. 本机 dev 验证：重启思灵 → 日志 `runtime deploy needed (archive=<ver> proxy=<old>)` → deploy 成功 → boot 正常，抽查关键插件版本。
+2. **本机自动冒烟（推荐，替代人工开思灵核对）**——`.agents/skills/ssid-release/smoke-ui.cjs`：
+   ```powershell
+   # 存在性检查（骨架 / Context Doctor / 输入框），自动发现思灵 web 端口
+   node .agents/skills/ssid-release/smoke-ui.cjs
+   # 检查会话内 dsh-context 标签（对话/轨迹/上下文）
+   node .agents/skills/ssid-release/smoke-ui.cjs --session "会话标题"
+   # 全链路：发消息触发 genui fence/面板 + 宽度对齐断言（消耗一次模型调用）
+   node .agents/skills/ssid-release/smoke-ui.cjs --send "把面板里的仪表盘换成线图并更新会话面板（panel:true）"
+   ```
+   - 依赖：ssid profile 的 playwright（`@playwright/mcp` 自带 chromium）；思灵已启动。
+   - 端口自动发现：遍历 `ssid-shell` 路径进程找监听者（多进程拓扑；`--port <n>` 可覆盖）。
+   - 断言：composerSeat / 输入框 / Context Doctor（hero+会话）/ 会话标签 / genui 面板出现 / **面板宽 ≤800 且 < 座椅宽（非全宽）**。
+   - 交互障碍：模型弹提问卡片时自动选首选项/跳过，然后继续等待面板。
+   - 产物：`<outdir>/1-base.png`、`2-conversation.png`、`3-final.png` + PASS/FAIL 清单（人工核实截图后决定放行）。
+   - 手动兜底：重启思灵 → 日志 `runtime deploy needed (archive=<ver> proxy=<old>)` → deploy 成功 → boot 正常。
 3. GitHub 交付：
    ```powershell
    git add -A; git commit -m "release: vX.Y.Z ..."; git push
