@@ -214,8 +214,15 @@ function applyPendingPluginUpdates(profileDir: string): void {
   if (!Array.isArray(parsed) || parsed.length === 0) return
   // 壳内捆绑 pnpm（SSID_PNPM，与归档 store 布局同 major）最优先——重启消费
   // pending 清单时避免用户机器全局 pnpm 版本不一致（2026-08-23 鸡生蛋防护）。
+  // 注意：SSID_PNPM 是 pnpm.cjs（node 脚本），Windows 下直接 spawn 会被 cmd 按
+  // 文件关联假执行（ShellExecute 立刻 exit 0、node 从未运行，2026-08-25 插件
+  // 中心假成功实锤）——.cjs 必须以 node 显式执行（与 dsh-plugin-center 修复同构）。
+  const ssidPnpm = process.env.SSID_PNPM
+  const pnpmNode = process.env.SSID_MCP_NODE ?? 'node'
   const candidates = [
-    ...(process.env.SSID_PNPM !== undefined && process.env.SSID_PNPM !== '' ? [process.env.SSID_PNPM] : []),
+    ...(ssidPnpm !== undefined && ssidPnpm !== ''
+      ? [/\.(cjs|mjs|js)$/i.test(ssidPnpm) ? `"${pnpmNode}" "${ssidPnpm}"` : ssidPnpm]
+      : []),
     'pnpm', 'pnpm.cmd',
   ]
   const remaining: Array<Record<string, unknown>> = []

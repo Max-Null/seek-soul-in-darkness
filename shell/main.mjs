@@ -318,10 +318,23 @@ async function start() {
   })
   /** pnpm 候选命令：壳内捆绑（SSID_PNPM，与归档 store 布局同 major）最优先，
    *  其次 GUI 进程 PATH/用户级 npm 全局目录（2026-08-23 自更新鸡生蛋防护：
-   *  重启消费 pending 清单用捆绑 pnpm，避免用户机器全局版本不一致）。 */
+   *  重启消费 pending 清单用捆绑 pnpm，避免用户机器全局版本不一致）。
+   *  注意：SSID_PNPM 是 pnpm.cjs（node 脚本），Windows 下直接 spawn 会被 cmd
+   *  按文件关联假执行（ShellExecute 立刻 exit 0、node 未运行，2026-08-25 插件
+   *  中心假成功实锤）——.cjs 必须以 node 显式执行（同 kernel.ts / 插件中心修复）。 */
   const pnpmCandidates = () => {
     const commands = []
-    if (process.env.SSID_PNPM !== undefined && process.env.SSID_PNPM !== '') commands.push(process.env.SSID_PNPM)
+    const bundled = process.env.SSID_PNPM
+    if (bundled !== undefined && bundled !== '') {
+      if (/\.(cjs|mjs|js)$/i.test(bundled)) {
+        const nodes = []
+        if (process.env.NVM_HOME) nodes.push(join(process.env.NVM_HOME, 'v22.22.2', 'node.exe'))
+        nodes.push('node.exe', 'node')
+        for (const node of nodes) commands.push(`"${node}" "${bundled}"`)
+      } else {
+        commands.push(bundled)
+      }
+    }
     commands.push('pnpm', 'pnpm.cmd')
     const userNpm = join(homedir(), 'AppData', 'Roaming', 'npm')
     for (const name of ['pnpm.cmd', 'pnpm.exe', 'pnpm']) {
