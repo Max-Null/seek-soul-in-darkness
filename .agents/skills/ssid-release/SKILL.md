@@ -74,6 +74,13 @@ tar -xzf dsh-runtime.tar.gz -C dsh-runtime   # 注意必须 -C 解到独立目�
    - 断言：composerSeat / 输入框 / Context Doctor（hero+会话）/ 会话标签 / genui 面板出现 / **面板宽 ≤800 且 < 座椅宽（非全宽）**。
    - 交互障碍：模型弹提问卡片时自动选首选项/跳过，然后继续等待面板。
    - 产物：`<outdir>/1-base.png`、`2-conversation.png`、`3-final.png` + PASS/FAIL 清单（人工核实截图后决定放行）。
+   - **发布完成后清理验证产物**（会话 = 归档；DSH 无删除入口，只有"归档会话"菜单项）：
+     ```powershell
+     # 归档验证会话（逗号分隔标题；归档后从主列表消失，可在归档里恢复）
+     node .agents/skills/ssid-release/smoke-ui.cjs --clean-sessions "验证会话A,验证会话B"
+     # 删除本次冒烟截图目录
+     node .agents/skills/ssid-release/smoke-ui.cjs --clean --outdir H:/MaxNull/WorkStation/.dsh-tmp/ssid-smoke/<时间戳>
+     ```
    - 手动兜底：重启思灵 → 日志 `runtime deploy needed (archive=<ver> proxy=<old>)` → deploy 成功 → boot 正常。
 3. GitHub 交付：
    ```powershell

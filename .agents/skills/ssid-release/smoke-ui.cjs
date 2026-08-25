@@ -22,6 +22,8 @@ const getArg = (name, fallback) => {
 const PORT = getArg('--port', null)
 const SEND = getArg('--send', null)
 const SESSION = getArg('--session', null)
+const CLEAN_SESSIONS = getArg('--clean-sessions', null) // 逗号分隔会话标题（归档，DSH 无删除入口）
+const CLEAN = args.includes('--clean') // 删除本次/指定 outdir 截图
 const OUTDIR = getArg('--outdir', null)
 const PLAYWRIGHT = process.env.PLAYWRIGHT_PATH
   || 'C:/Users/MaxNull/.dsh/profiles/ssid/node_modules/playwright'
@@ -39,6 +41,31 @@ function findSsidPort() {
     if (/^\d+$/.test(raw)) return raw
   } catch { /* fall through */ }
   throw new Error('无法自动发现思灵端口：请确认思灵已启动，或用 --port <n> 指定')
+}
+
+// ---- 会话清理（DSH 仅支持"归档"，无删除入口）----
+async function archiveSession(page, title) {
+  try {
+    const row = page.getByText(title, { exact: false }).first()
+    const box = await row.boundingBox({ timeout: 5000 }).catch(() => null)
+    if (!box) return { title, ok: false, why: 'row not found' }
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+    await page.waitForTimeout(400)
+    const btn = page.locator(`button[aria-label*="${title}"]`).first()
+    await btn.click({ timeout: 5000 })
+    await page.waitForTimeout(600)
+    const item = page.locator('[role="menuitem"]').getByText(/归档会话/, { exact: false }).first()
+    await item.click({ timeout: 5000 })
+    await page.waitForTimeout(800)
+    // 可能的确认弹窗（按钮文本含"归档"）
+    const confirm = page.getByText(/^归档$|归档会话$/, { exact: false }).last()
+    if (await confirm.isVisible({ timeout: 1500 }).catch(() => false)) await confirm.click()
+    await page.waitForTimeout(1200)
+    const gone = await page.getByText(title, { exact: false }).count() === 0
+    return { title, ok: gone, why: gone ? 'archived' : 'still present (maybe confirm needed)' }
+  } catch (e) {
+    return { title, ok: false, why: String(e).split('\n')[0].slice(0, 120) }
+  }
 }
 
 // ---- 主流程 ----
@@ -158,5 +185,22 @@ function findSsidPort() {
   console.log(JSON.stringify({ url, base, conv, panel, outdir }, null, 2))
   const allPass = Object.values(checks).every(Boolean)
   console.log(allPass ? '[smoke] ALL PASS' : '[smoke] FAILURES PRESENT — 人工核实 screenshot 后决定是否放行')
+
+  // 会话清理（发布通过后归档验证会话）
+  if (CLEAN_SESSIONS) {
+    const titles = CLEAN_SESSIONS.split(',').map(s => s.trim()).filter(Boolean)
+    console.log(`[smoke] archiving ${titles.length} verification session(s)…`)
+    for (const t of titles) console.log('[smoke] archive:', JSON.stringify(await archiveSession(page, t)))
+  }
   await browser.close()
+
+  // 截图清理
+  if (CLEAN) {
+    try {
+      fs.rmSync(outdir, { recursive: true, force: true })
+      console.log('[smoke] screenshots removed:', outdir)
+    } catch (e) {
+      console.log('[smoke] clean failed:', e.message)
+    }
+  }
 })().catch(e => { console.error('FATAL', e); process.exit(1) })
