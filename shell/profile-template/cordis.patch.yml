@@ -19,5 +19,3 @@
         args:
           - !!js 'process.env.SSID_MCP_PW_CLI'
           - '--headless'
-- insert:
-    - name: dsh-web-preview-panel

@@ -22,7 +22,6 @@
     "dsh-video-preview": "^0.1.1",
     "open-sea-skin": "file:./vendor/open-sea-skin-1.2.1.tgz",
     "@max-null/dsh-capture": "file:./vendor/dsh-capture",
-    "dsh-web-preview-panel": "^0.2.4",
     "@playwright/mcp": "0.0.79"
   },
   "dsh": {
