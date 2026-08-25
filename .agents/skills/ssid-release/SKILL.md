@@ -1,6 +1,6 @@
 ---
 name: ssid-release
-description: "SSiD（思灵）发版流程：版本决策、内置插件对齐（vendor/npm/pin 陷阱）、release notes、版本号四处同步、prepare-runtime 归档重建（3-5 分钟）、归档抽查清单、NSIS 打包、本机 dev 验证、GitHub tag/Release 交付。用户说“发版/发布思灵/SSiD 版本升级收尾”时使用。依据 docs/发版流程规范.md（v0.1.12 复盘），实操细节见本文档末尾的已验证经验。"
+description: "SSiD（思灵）发版流程：版本决策、内置插件对齐（vendor/npm/pin 陷阱）、release notes、版本号四处同步、prepare-runtime 归档重建（3-5 分钟）、归档抽查清单、NSIS 打包、本机 dev 验证、GitHub tag/Release 交付。触发词：用户说『发版/发布思灵/SSiD 发版/ssid 收尾/SSiD 版本升级收尾/思灵打包/发布安装包』或提到 vX.Y.Z 版本发布时使用。依据 docs/发版流程规范.md（v0.1.12 复盘），实操细节见本文档末尾的已验证经验。"
 ---
 
 # SSiD 发版流程（v0.1.12 起固化）
