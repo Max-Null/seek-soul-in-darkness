@@ -25,7 +25,8 @@
     "dsh-video-preview": "^0.1.1",
     "open-sea-skin": "file:./vendor/open-sea-skin-1.2.1.tgz",
     "@max-null/dsh-capture": "file:./vendor/dsh-capture",
-    "@playwright/mcp": "0.0.79"
+    "@playwright/mcp": "0.0.79",
+    "@max-null/dsh-achievements": "^0.1.0"
   },
   "dsh": {
     "profile": {
@@ -54,7 +55,8 @@
         "@huanlin/dsh-plugin-better-sidebar-plugin-office",
         "dsh-video-preview",
         "dsh-excel-panel",
-        "dsh-sidebar-qa"
+        "dsh-sidebar-qa",
+        "@max-null/dsh-achievements"
       ]
     }
   }
