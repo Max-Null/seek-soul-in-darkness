@@ -1,34 +1,34 @@
-# v0.1.13 发布说明（2026-08-26）
+# v0.1.14 发布说明（2026-08-27）
 
 ## 内置升级
 
-- **dsh-memory 0.5.2（跨会话记忆）**：注入预算治理（记忆常驻注入受预算约束）、中文 2-gram 检索（比 word 切分更准）、记忆生命周期、可插拔语义检索、存储文件名迁移；记忆面板布局优化（工具栏与 namespace tab 固定顶部）
-- **dsh-plugin-center 0.2.13（插件中心）**：0.2.11 更新检测区分热更新（纯前端提示已热生效无需重启）→ 0.2.12 pnpm 静默 no-op 识破（exit 0 但版本未变报真实错误）→ 0.2.13 捆绑 pnpm 假执行修复（pnpm 是 .cjs 须 node 显式执行）+ 禁用失效修复（无稳定 id 条目按 name 寻址）
-- **dsh-better-sidebar 0.16.1**：VSCode 式右侧栏（explorer/editor/terminal/git/browser）小版本修复
-- **dsh-dream-skin 0.4.14**：换肤（iOS/Linear 清冷主题 + 壁纸 + 智能背景 + 主题包分享）主题与稳定性增强
-- **Office 文件预览 0.1.2**：better-sidebar 编辑器 docx/xlsx/pptx 文件查看器小版本修复
+- **dsh-memory 0.6.0（提示词模板库）**：新增模板库机制——md 文件即模板（`~/.dsh/prompt-library/` 全局、`<workspace>/.dsh/prompt-library/` 随工作区），`prompt_search / prompt_get / prompt_list / prompt_add` 四个工具 + 记忆面板「模板」tab（列表/预览/插入/新增/删除）；模板存在即生效、永不注入 system prompt
+- **dsh-genui 0.9.5 定制版**：合并上游 #60/#64/#65/#61（quiz 字符串选项、plot 滚轮锁、grade 窄布局、CI 发布守卫）+ 本地上游面板 dock 对齐；新增**模板中心**（面板 header「模板」按钮：11 个分类示例、内嵌预览、试用插入输入框/复制）与**探索成就**（「成就」按钮：12 个成就含隐藏传说彩蛋，解锁 toast + dsh-ui 自渲染成就页）
+- **dsh-capture 0.2.1**：修复设置页「截图时隐藏窗口/全局快捷键」两行在壳不可用二次渲染时的 React #300 崩溃（hooks 顺序）
+- **dsh-ssid-panels 0.1.7**：模板库首启种子（6 个内置模板：代码审查/周报/翻译/Bug 排查/会议纪要/PPT）+ **补入 11 条 GenUI 模板**（与 genui 面板模板中心同源指令）；升级补种机制（`.seed-version` 标记，老用户升版自动补齐，标记后永不复写）
 
 ## 新增预置
 
-- **dsh-context 0.32.0**：上下文可视化「1 号位」——Context 标签页（组成/趋势/事件/消息/浏览器）+ `/context` 斜杠命令，悬停趋势柱即预览该 step 的上下文构成
-- **dsh-genui 0.9.2（SSiD 定制）**：回复内交互 UI（`dsh-ui` fence：仪表盘/表格/曲线/判卷/常驻面板/事件回传），安装版 **自带上游 PR #58 的面板样式修复**——会话面板 dock 对齐宿主导航/输入区宽度轴、标题栏分隔线、徽标间距、宿主图标折叠箭头（上游合并后自动切换官方版）
-- **dsh-context-doctor 0.6.1**：上下文注入审计——指令链/技能目录/工具 schema/MCP 四项 token 成本、跨文件重复与同名遮蔽检测、composer 圆环面板 + `context_audit` 模型工具
-- **genui 教学技能**：`genui` skill 随预置技能包安装，模型无需提示即会输出 `dsh-ui` 界面
+- **@max-null/dsh-achievements 0.1.0（SSiD 全家桶成就）**：19 成就 7 类别（启程/记忆/审计/GenUI/工具/行为/隐藏），监听 session/tool 事件计数（只读叶级标量，绝不读正文/文件）；`$DSH_HOME/achievements/state.json` 持久化；设置页「成就」面板（进度/稀有度/解锁态、**奖杯图标**、成就持续增加中提示卡、成就归属插件标签、未装插件置灰）+ 解锁 toast + `list_achievements` 模型工具；GenUI 类别与 genui 插件计数融合（全景同源）
+- **dsh-pocket 1.14.5**（精确 pin）：本地口袋/剪藏，待使用中验证
+- **ds-harness-remote ^0.3.0**：远程会话/控制，待使用中验证
 
 ## 调整
 
-- **移出 dsh-web-preview-panel 预制**：该插件禁用失效（根因 + 修复方案已落档 dsh-plugin-center 仓库），不再随安装版分发
-- **移除 dsh-ssid-screenshot 源码残留**：源码已于 8-23 迁至独立仓库（`Max-Null/dsh-ssid-screenshot`），截图能力由 dsh-capture（重命名收尾）承担；本轮清理残留目录
+- **启动弹「思灵已更新」**：dsh-ssid-panels 内置更新日志弹窗（每版本一次）+ 关于页「更新日志」离线展示
+- **在线增量更新**：electron-updater + NSIS blockmap 差分——「检查更新」增量下载变化块；全程诊断日志（`~/.ssid/updater.log`）
+- genui 抽屉内「模板|成就」重复切换移除（面板 header 按钮为唯一切换）
 
 ## 修复
 
-- **SSID_PNPM 假执行**：捆绑的 pnpm .cjs 必须用 node 显式执行（同插件中心 v0.2.13 修复），否则插件中心「发起更新」可能显示成功但未实际安装
+- dsh-capture 设置页两行 React #300 崩溃（hooks 顺序：`setHidden(true)` 二次渲染跳过 useCallback）
+- 更新器 dev/unavailable 状态与错误翻译；事件流/install 守卫单测
 
 ## 流程
 
-- 新增[发版流程规范](发版流程规范.md)（v0.1.12 复盘）与 agent skill（`.agents/skills/ssid-release/`），后续发版按此走
+- 发版守卫入 skill：更新器纯逻辑 + 更新日志解析测试（§3.5）；smoke-ui 支持 `--clean-sessions`/`--clean`（发布后验证会话归档与产物清理）
 
 ## 更新说明
 
-- 老用户安装 v0.1.13：启动时版本指纹不一致 → 自动重部署运行环境（约 30 秒，可跳过；重部署后 profile 与本版预置一致）
+- 老用户安装 v0.1.14：启动时版本指纹不一致 → 自动重部署运行环境（约 30 秒，可跳过；重部署后 profile 与本版预置一致）
 - 全新安装：首启自动部署（进度条），全程无需 Node.js / pnpm
