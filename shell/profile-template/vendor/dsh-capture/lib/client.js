@@ -1089,7 +1089,6 @@ window.__ModuleLoader__.load({
 					cancelled = true;
 				};
 			}, [t]);
-			if (hidden) return null;
 			const toggle = (0, react.useCallback)(() => {
 				const next = !value;
 				setValue(next);
@@ -1105,6 +1104,7 @@ window.__ModuleLoader__.load({
 					});
 				});
 			}, [value, t]);
+			if (hidden) return null;
 			return (0, react.createElement)(Row, {
 				title: t.hideTitle,
 				desc: t.hideDesc,
@@ -1146,7 +1146,6 @@ window.__ModuleLoader__.load({
 				};
 			}, [t]);
 			(0, react.useEffect)(() => () => window.clearTimeout(timer.current), []);
-			if (hidden) return null;
 			const save = (0, react.useCallback)((raw) => {
 				window.clearTimeout(timer.current);
 				const hotkey = raw.trim();
@@ -1178,6 +1177,7 @@ window.__ModuleLoader__.load({
 				window.clearTimeout(timer.current);
 				timer.current = window.setTimeout(() => save(raw), 300);
 			}, [save]);
+			if (hidden) return null;
 			return (0, react.createElement)(Row, {
 				title: t.hotkeyTitle,
 				desc: t.hotkeyDesc,
