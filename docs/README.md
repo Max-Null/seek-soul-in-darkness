@@ -32,3 +32,7 @@
 - `skills/` — 14 个技能（8 mxy + 6 omo）迁为 DSH skill 格式
 - `agents/` — 6 个 agent 定义 + 迁移映射表（见 `agents/README.md`）
 - `presets/ssid-double-star/` — 双星主 agent preset（工具集 + persona）
+
+## 工具
+
+- [GenUI 使用手册](genui-使用手册.md) — DSH 生成式 UI（dsh-ui 围栏 / render_ui 工具 / 面板 dock）完整使用与渲染机制说明
