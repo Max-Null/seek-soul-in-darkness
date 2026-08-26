@@ -26,6 +26,14 @@ description: "SSiD（思灵）发版流程：版本决策、内置插件对齐�
 
 - `docs/release-notes-vX.Y.Z.md`，格式沿用惯例（内置升级 / 新增 / 调整 / 修复 / 更新说明）。
 - 分组依据 `git log --oneline v上版本..HEAD` 提炼，不凭记忆。
+- **同步内置弹窗资源**（启动更新日志弹窗用）：
+  ```powershell
+  Copy-Item docs/release-notes-vX.Y.Z.md shell/release-notes.md -Force
+  # 守卫校验（首行 # vX.Y.Z 必须 == shell/package.json version；不一致启动弹窗不显示）
+  node -e "const {extractVersion}=await import('./release-notes.mjs'); ..."  # 或手动核对
+  ```
+  - 弹窗规则（shell/release-notes.mjs + main.mjs maybeShowReleaseNotes）：每版本只弹一次（~/.ssid/changelog-seen.json）；条目版本 ≠ app 版本不弹（守卫）。
+  - 单测：`node --test release-notes.test.mjs`（shell/ 目录）。
 
 ## 3. 版本号同步（四处）
 
@@ -53,6 +61,7 @@ tar -xzf dsh-runtime.tar.gz -C dsh-runtime   # 注意必须 -C 解到独立目�
 # 5) @max-null/dsh-capture/lib/client.js 含最新功能标记
 # 6) package.json dependencies 含本轮新增（逐项核对本版本 release notes）
 # 7) vendor 包 package.json 版本号与源仓库一致
+# 8) release-notes.md 首行 `# vX.Y.Z` == 归档 ssid 版本（启动更新日志弹窗守卫）
 ```
 
 ## 6. 打包与发布
