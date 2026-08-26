@@ -1,6 +1,6 @@
 {
   "name": "@max-null/dsh-ssid-panels",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "SSiD (思灵) panels for dsh-better-sidebar: memory / guardian state / habit candidates / API balances as sidebar tabs",
   "type": "module",
   "main": "lib/index.mjs",
