@@ -25,7 +25,6 @@ import { appendFileSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSy
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { shouldShow, renderNotes } from './release-notes.mjs'
 
 // ── stderr/stdout 管道防护 ───────────────────────────────────────────────
 // GUI 启动时 stderr 可能挂在一个已关闭的管道上（启动终端关闭 / 双击 exe）：
@@ -1010,102 +1009,6 @@ async function start() {
   void syncTitlebarTheme()
   setInterval(() => { void syncTitlebarTheme() }, 5000)
 
-  // ── 启动更新日志弹窗（2026-08-26，设计参照 fractal ChangelogDialog）──
-  // 规则：每个版本只弹一次——seen（~/.ssid/changelog-seen.json）记录已看版本；
-  // 内置 release-notes.md（extraResources）首行版本必须 == app 版本才弹（守卫，
-  // 防发版漏同步弹错版本）；首次安装（无 seen）也弹一次（介绍当前版本）。
-  const SEEN_PATH = join(homedir(), '.ssid', 'changelog-seen.json')
-  const readSeenVersion = () => {
-    try {
-      const parsed = JSON.parse(readFileSync(SEEN_PATH, 'utf8'))
-      return typeof parsed?.version === 'string' ? parsed.version : ''
-    } catch {
-      return ''
-    }
-  }
-  const writeSeenVersion = (version) => {
-    try {
-      mkdirSync(join(homedir(), '.ssid'), { recursive: true })
-      writeFileSync(SEEN_PATH, JSON.stringify({ version }))
-    } catch (error) {
-      safeLog(`[release-notes] write seen failed: ${error instanceof Error ? error.message : String(error)}\n`)
-    }
-  }
-  const readReleaseNotes = () => {
-    const candidates = [
-      typeof process.resourcesPath === 'string' ? join(process.resourcesPath, 'release-notes.md') : null,
-      fileURLToPath(new URL('./release-notes.md', import.meta.url)), // dev / 仓库裸跑
-    ].filter(Boolean)
-    for (const p of candidates) {
-      try {
-        if (existsSync(p)) return readFileSync(p, 'utf8')
-      } catch { /* 换下一个候选 */ }
-    }
-    return ''
-  }
-  const showReleaseNotes = (notesText, version) => {
-    const parts = renderNotes(notesText)
-    if (!parts.title) return
-    const dateLine = parts.date ? `<div class="date">${parts.date}</div>` : ''
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>更新日志</title><style>
-      :root { color-scheme: dark; }
-      * { box-sizing: border-box; margin: 0; }
-      body { background: #0f141d; color: #d6dbe8; font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif; }
-      .card { display: flex; flex-direction: column; height: 100vh; }
-      .head { -webkit-app-region: drag; display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid #232b3a; }
-      .head .icon { font-size: 20px; }
-      .head .t { font-size: 16px; font-weight: 700; color: #fff; }
-      .head .ver { font-size: 12px; color: #8b93a7; margin-left: auto; }
-      .body { flex: 1; overflow-y: auto; padding: 14px 18px 4px; }
-      .date { color: #8b93a7; font-size: 12px; margin-bottom: 10px; }
-      section { margin-bottom: 14px; }
-      section h3 { font-size: 13px; font-weight: 700; color: #e8ecf7; margin-bottom: 6px; }
-      section ul { list-style: none; padding-left: 2px; }
-      section li { display: flex; gap: 8px; font-size: 13px; line-height: 1.7; color: #b7c0d4; margin-bottom: 4px; }
-      section li span { flex: none; width: 6px; height: 6px; border-radius: 50%; background: #4f8ef7; margin-top: 7px; }
-      strong { color: #e8ecf7; }
-      .foot { padding: 12px 18px; border-top: 1px solid #232b3a; text-align: right; }
-      button { -webkit-app-region: no-drag; padding: 7px 22px; font-size: 13px; font-weight: 600; border: 0; border-radius: 8px; background: #4f8ef7; color: #fff; cursor: pointer; }
-      button:hover { background: #6aa2ff; }
-    </style></head><body>
-      <div class="card">
-        <div class="head"><span class="icon">🎉</span><span class="t">思灵已更新</span><span class="ver">v${version}</span></div>
-        <div class="body">${dateLine}${parts.sectionsHtml}</div>
-        <div class="foot"><button id="ok">知道了</button></div>
-      </div>
-      <script>document.getElementById('ok').onclick = () => window.close()</script>
-    </body></html>`
-    const rn = new BrowserWindow({
-      width: 620,
-      height: 560,
-      minWidth: 420,
-      minHeight: 320,
-      center: true,
-      frame: false,
-      resizable: true,
-      show: false,
-      backgroundColor: '#0f141d',
-      title: '更新日志',
-      webPreferences: { sandbox: true, contextIsolation: true },
-    })
-    rn.on('closed', () => writeSeenVersion(version)) // 关窗即视为已读：每版本只弹一次
-    void rn.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).then(() => rn.show()).catch(() => rn.destroy())
-  }
-  const maybeShowReleaseNotes = () => {
-    try {
-      const appVersion = typeof app.getVersion === 'function' ? app.getVersion() : ''
-      const notes = readReleaseNotes()
-      if (!shouldShow(notes, appVersion, readSeenVersion())) {
-        safeLog(`[release-notes] skip (ver=${appVersion} seen=${readSeenVersion()})\n`)
-        return
-      }
-      showReleaseNotes(notes, appVersion)
-      safeLog(`[release-notes] show v${appVersion}\n`)
-    } catch (error) {
-      safeLog(`[release-notes] failed: ${error instanceof Error ? error.stack : String(error)}\n`)
-    }
-  }
-
   // ── 通知体系（2026-08-18）：窗口失焦时 Windows 通知 + 音效，配置驱动 ────
   // 配置 ~/.ssid/notify.json：{ enabled, replyDone, question, approval }；
   // 文件不存在 = 默认全开。场景：
@@ -1440,8 +1343,6 @@ async function start() {
 
   splashStep(STARTUP_STEPS.length)
   win.show()
-  // 启动后 2 秒检查更新日志弹窗（不阻塞启动；每版本只弹一次）
-  setTimeout(() => { maybeShowReleaseNotes() }, 2000)
   safeLog('ssid: phase start() completed\n')
 }
 

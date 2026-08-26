@@ -40,10 +40,6 @@
       {
         "from": "dsh-runtime.tar.gz",
         "to": "dsh-runtime.tar.gz"
-      },
-      {
-        "from": "release-notes.md",
-        "to": "release-notes.md"
       }
     ],
     "electronLanguages": [

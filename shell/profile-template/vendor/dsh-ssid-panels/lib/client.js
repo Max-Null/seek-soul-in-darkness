@@ -6,6 +6,7 @@ window.__ModuleLoader__.load({
 		Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 		let react = require("react");
 		let react_dom = require("react-dom");
+		let react_dom_client = require("react-dom/client");
 		//#region src/client/icon-data.ts
 		/**
 		* SSiD 应用图标（shell/assets/icon.png 96px 缩放）内联 data-URL。
@@ -127,6 +128,11 @@ window.__ModuleLoader__.load({
 				checkFailed: "更新检查失败",
 				apiFailed: "检查失败（HTTP {status}）",
 				changelog: "更新日志",
+				changelogCurrent: "当前版本（内置）",
+				changelogOnline: "历史版本（在线）",
+				changelogEmpty: "（暂无更新日志）",
+				modalTitle: "思灵已更新",
+				modalGotIt: "知道了",
 				none: "（无）",
 				presetPlugins: "预制插件",
 				notifyTitle: "通知设置",
@@ -202,6 +208,11 @@ window.__ModuleLoader__.load({
 				checkFailed: "Update check failed",
 				apiFailed: "Check failed (HTTP {status})",
 				changelog: "Changelog",
+				changelogCurrent: "Current version (bundled)",
+				changelogOnline: "Release history (online)",
+				changelogEmpty: "(no changelog yet)",
+				modalTitle: "SSiD has been updated",
+				modalGotIt: "Got it",
 				none: "(none)",
 				presetPlugins: "Bundled plugins",
 				notifyTitle: "Notifications",
@@ -858,6 +869,7 @@ window.__ModuleLoader__.load({
 			const [about, setAbout] = (0, react.useState)(null);
 			const [update, setUpdate] = (0, react.useState)(null);
 			const [checking, setChecking] = (0, react.useState)(false);
+			const [notes, setNotes] = (0, react.useState)(null);
 			const check = async () => {
 				setChecking(true);
 				try {
@@ -878,6 +890,7 @@ window.__ModuleLoader__.load({
 				}).catch((error) => {
 					console.error("[ssid-about] about failed:", error instanceof Error ? error.message : String(error));
 				});
+				api("release-notes").then((value) => setNotes(value)).catch(() => setNotes(null));
 			}, []);
 			const latest = update?.latest ?? null;
 			const newer = latest !== null && latest.tag !== "" && latest.tag !== `v${update?.currentVersion ?? ""}`;
@@ -921,18 +934,59 @@ window.__ModuleLoader__.load({
 					check();
 				},
 				disabled: checking
-			}, checking ? t("checking") : t("checkNow"))), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("changelog"))), (update?.releases ?? []).length === 0 ? (0, react.createElement)("div", { style: ssid.muted }, t("none")) : (update?.releases ?? []).map((release) => (0, react.createElement)("div", {
+			}, checking ? t("checking") : t("checkNow"))), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("changelog"))), notes === null || notes.version == null ? (0, react.createElement)("div", { style: ssid.muted }, t("changelogEmpty")) : (0, react.createElement)("div", null, (0, react.createElement)("div", { style: {
+				...ssid.text,
+				fontWeight: 600,
+				marginBottom: 6
+			} }, `${t("changelogCurrent")}：v${notes.version}${notes.date !== null ? ` · ${notes.date}` : ""}`), notes.sections.map((section) => (0, react.createElement)("div", {
+				key: section.heading,
+				style: { marginBottom: 8 }
+			}, (0, react.createElement)("div", { style: {
+				fontSize: 12,
+				fontWeight: 600,
+				color: "var(--dsw-alias-label-primary, #d8e0ea)",
+				marginBottom: 3
+			} }, section.heading), (0, react.createElement)("ul", { style: {
+				margin: 0,
+				paddingLeft: 2,
+				listStyle: "none"
+			} }, section.items.map((item, index) => (0, react.createElement)("li", {
+				key: index,
+				style: {
+					display: "flex",
+					gap: 6,
+					fontSize: 12,
+					lineHeight: 1.7,
+					color: "var(--dsw-alias-label-tertiary, #8a95a8)"
+				}
+			}, (0, react.createElement)("span", { style: {
+				flex: "none",
+				width: 6,
+				height: 6,
+				borderRadius: "50%",
+				background: ssid.accent,
+				marginTop: 7
+			} }), (0, react.createElement)("span", null, item)))))), update !== null && (update.releases ?? []).length > 0 ? (0, react.createElement)("div", { style: {
+				marginTop: 12,
+				borderTop: "1px solid var(--dsw-alias-border-l2, #1e2836)",
+				paddingTop: 8
+			} }, (0, react.createElement)("div", { style: {
+				...ssid.muted,
+				fontSize: 11,
+				marginBottom: 6
+			} }, t("changelogOnline")), (update?.releases ?? []).map((release) => (0, react.createElement)("div", {
 				key: release.tag,
 				style: { marginBottom: 10 }
 			}, (0, react.createElement)("div", { style: {
 				...ssid.text,
-				fontWeight: 600
+				fontWeight: 600,
+				fontSize: 12
 			} }, `${release.name}（${release.tag}）· ${release.publishedAt.slice(0, 10)}`), (0, react.createElement)("pre", { style: {
 				...ssid.muted,
 				whiteSpace: "pre-wrap",
 				margin: "4px 0 0",
 				fontSize: 12
-			} }, release.body)))), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("presetPlugins"))), (about?.plugins ?? []).length === 0 ? (0, react.createElement)("div", { style: ssid.muted }, t("none")) : (about?.plugins ?? []).map((plugin) => (0, react.createElement)("div", {
+			} }, release.body)))) : null)), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("presetPlugins"))), (about?.plugins ?? []).length === 0 ? (0, react.createElement)("div", { style: ssid.muted }, t("none")) : (about?.plugins ?? []).map((plugin) => (0, react.createElement)("div", {
 				key: plugin.id,
 				style: {
 					padding: "5px 0",
@@ -958,6 +1012,134 @@ window.__ModuleLoader__.load({
 				marginTop: 2
 			} }, descOf(plugin)) : null))));
 		}
+		const CHANGELOG_SEEN_KEY = "ssid-changelog-seen";
+		const readSeen = () => {
+			try {
+				return localStorage.getItem(CHANGELOG_SEEN_KEY) ?? "";
+			} catch {
+				return "";
+			}
+		};
+		const writeSeen = (version) => {
+			try {
+				localStorage.setItem(CHANGELOG_SEEN_KEY, version);
+			} catch {}
+		};
+		function ChangelogGate() {
+			const t = useT();
+			const [data, setData] = (0, react.useState)(null);
+			const [shellVersion, setShellVersion] = (0, react.useState)(null);
+			const [show, setShow] = (0, react.useState)(false);
+			(0, react.useEffect)(() => {
+				const timer = setTimeout(() => {
+					Promise.all([api("about"), api("release-notes")]).then(([aboutValue, notesValue]) => {
+						const sv = aboutValue?.shellVersion ?? null;
+						const parsed = notesValue;
+						setData(parsed);
+						setShellVersion(sv);
+						if (parsed.version === null) return;
+						if (sv !== null && parsed.version !== sv) return;
+						if (readSeen() !== parsed.version) setShow(true);
+					}).catch(() => {});
+				}, 2e3);
+				return () => {
+					clearTimeout(timer);
+				};
+			}, []);
+			if (!show || data === null || data.version === null) return null;
+			const close = () => {
+				if (data.version !== null) writeSeen(data.version);
+				setShow(false);
+			};
+			return (0, react_dom.createPortal)((0, react.createElement)("div", { style: {
+				position: "fixed",
+				inset: 0,
+				zIndex: 1e4,
+				display: "flex",
+				alignItems: "center",
+				justifyContent: "center",
+				background: "rgba(0, 0, 0, 0.55)",
+				fontFamily: "inherit"
+			} }, (0, react.createElement)("div", { style: {
+				width: 620,
+				maxWidth: "92vw",
+				maxHeight: "72vh",
+				display: "flex",
+				flexDirection: "column",
+				background: "var(--dsw-alias-bg-layer-2, #161d2b)",
+				border: "1px solid var(--dsw-alias-border-l2, #1e2836)",
+				borderRadius: 14,
+				boxShadow: "0 12px 48px rgba(0, 0, 0, 0.5)",
+				overflow: "hidden"
+			} }, (0, react.createElement)("div", { style: {
+				display: "flex",
+				alignItems: "center",
+				gap: 10,
+				padding: "14px 18px",
+				borderBottom: "1px solid var(--dsw-alias-border-l2, #1e2836)"
+			} }, (0, react.createElement)("span", { style: { fontSize: 20 } }, "🎉"), (0, react.createElement)("span", { style: {
+				fontSize: 16,
+				fontWeight: 700,
+				color: "var(--dsw-alias-label-primary, #d8e0ea)"
+			} }, t("modalTitle")), (0, react.createElement)("span", { style: {
+				marginLeft: "auto",
+				fontSize: 12,
+				color: "var(--dsw-alias-label-tertiary, #8a95a8)"
+			} }, `v${shellVersion ?? data.version}`)), (0, react.createElement)("div", { style: {
+				flex: 1,
+				overflowY: "auto",
+				padding: "14px 18px 6px"
+			} }, data.date !== null ? (0, react.createElement)("div", { style: {
+				fontSize: 12,
+				color: "var(--dsw-alias-label-tertiary, #8a95a8)",
+				marginBottom: 10
+			} }, data.date) : null, data.sections.map((section) => (0, react.createElement)("div", {
+				key: section.heading,
+				style: { marginBottom: 14 }
+			}, (0, react.createElement)("h4", { style: {
+				fontSize: 13,
+				fontWeight: 700,
+				color: "var(--dsw-alias-label-primary, #d8e0ea)",
+				margin: "0 0 6px"
+			} }, section.heading), (0, react.createElement)("ul", { style: {
+				margin: 0,
+				paddingLeft: 2,
+				listStyle: "none"
+			} }, section.items.map((item, index) => (0, react.createElement)("li", {
+				key: index,
+				style: {
+					display: "flex",
+					gap: 8,
+					fontSize: 13,
+					lineHeight: 1.7,
+					color: "var(--dsw-alias-label-secondary, #aab4c6)"
+				}
+			}, (0, react.createElement)("span", { style: {
+				flex: "none",
+				width: 6,
+				height: 6,
+				borderRadius: "50%",
+				background: "#4f8ef7",
+				marginTop: 7
+			} }), (0, react.createElement)("span", null, item))))))), (0, react.createElement)("div", { style: {
+				padding: "12px 18px",
+				borderTop: "1px solid var(--dsw-alias-border-l2, #1e2836)",
+				textAlign: "right"
+			} }, (0, react.createElement)("button", {
+				style: {
+					padding: "7px 24px",
+					fontSize: 13,
+					fontWeight: 600,
+					border: 0,
+					borderRadius: 8,
+					background: "#4f8ef7",
+					color: "#fff",
+					cursor: "pointer",
+					fontFamily: "inherit"
+				},
+				onClick: close
+			}, t("modalGotIt"))))), document.body);
+		}
 		/** Plugin body: settings about section (unconditional) + sidebar tabs (optional peer). */
 		function apply(ctx) {
 			const face = ctx;
@@ -967,6 +1149,16 @@ window.__ModuleLoader__.load({
 				adoptLocale(snap?.active);
 			});
 			ctx.effect(() => registerSettingsNavIcon(() => STRINGS[localeId].about));
+			ctx.effect(() => {
+				const host = document.createElement("div");
+				document.body.appendChild(host);
+				const root = (0, react_dom_client.createRoot)(host);
+				root.render((0, react.createElement)(ChangelogGate));
+				return () => {
+					root.unmount();
+					host.remove();
+				};
+			});
 			ctx.slots.inject("settings.section", () => ctx.slots.register({
 				name: "settings.section",
 				id: "ssid-about",

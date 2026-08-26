@@ -2,8 +2,57 @@ import { createRequire } from "node:module";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { zstdDecompressSync } from "node:zlib";
 import { interruptedTurnClosers } from "@deepseek-ai/dsh-session";
+//#region src/release-notes.ts
+/** 从 release-notes 文本提取版本号（首行 `# vX.Y.Z`）。无匹配返回 null。 */
+function extractVersion(notes) {
+	if (typeof notes !== "string") return null;
+	const m = /^#\s*v?(\d+\.\d+\.\d+(?:[-+][\S]+)?)/m.exec(notes.trim());
+	return m !== null ? m[1] : null;
+}
+/** 解析标题/日期/分节（覆盖 release notes 实际语法：`# `、`## `、`- `、标题内日期）。 */
+function parseReleaseNotes(notes) {
+	if (typeof notes !== "string") return {
+		version: null,
+		title: null,
+		date: null,
+		sections: []
+	};
+	let title = null;
+	let date = null;
+	const sections = [];
+	let current = null;
+	for (const raw of String(notes).split("\n")) {
+		const line = raw.trimEnd();
+		const h1 = /^#\s+(.+)$/.exec(line);
+		const h2 = /^##\s+(.+)$/.exec(line);
+		const li = /^-\s+(.+)$/.exec(line);
+		if (h1 !== null) {
+			title = h1[1];
+			const d = /[（(](20\d{2}-\d{2}-\d{2})[)）]/.exec(h1[1]);
+			if (d !== null) date = d[1];
+			continue;
+		}
+		if (h2 !== null) {
+			current = {
+				heading: h2[1],
+				items: []
+			};
+			sections.push(current);
+			continue;
+		}
+		if (li !== null && current !== null) current.items.push(li[1]);
+	}
+	return {
+		version: extractVersion(notes),
+		title,
+		date,
+		sections: sections.filter((s) => s.items.length > 0)
+	};
+}
+//#endregion
 //#region src/index.ts
 const require = createRequire(import.meta.url);
 /** 预制插件中文简介（未知插件回退包内 description）。 */
@@ -527,6 +576,20 @@ function apply(ctx) {
 					releases: [],
 					code: "api-failed",
 					message: error instanceof Error ? error.message : String(error)
+				};
+			}
+		},
+		"release-notes": () => {
+			try {
+				const path = join(dirname(fileURLToPath(import.meta.url)), "..", "release-notes.md");
+				return parseReleaseNotes(readFileSync(path, "utf8"));
+			} catch (error) {
+				return {
+					version: null,
+					title: null,
+					date: null,
+					sections: [],
+					error: error instanceof Error ? error.message : String(error)
 				};
 			}
 		},

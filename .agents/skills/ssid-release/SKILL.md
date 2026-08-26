@@ -26,14 +26,16 @@ description: "SSiD（思灵）发版流程：版本决策、内置插件对齐�
 
 - `docs/release-notes-vX.Y.Z.md`，格式沿用惯例（内置升级 / 新增 / 调整 / 修复 / 更新说明）。
 - 分组依据 `git log --oneline v上版本..HEAD` 提炼，不凭记忆。
-- **同步内置弹窗资源**（启动更新日志弹窗用）：
+- **同步内置弹窗/关于页资源**（更新日志功能在 dsh-ssid-panels 插件内：启动弹窗 + 关于 SSiD「更新日志」区共用）：
   ```powershell
-  Copy-Item docs/release-notes-vX.Y.Z.md shell/release-notes.md -Force
-  # 守卫校验（首行 # vX.Y.Z 必须 == shell/package.json version；不一致启动弹窗不显示）
-  node -e "const {extractVersion}=await import('./release-notes.mjs'); ..."  # 或手动核对
+  Copy-Item docs/release-notes-vX.Y.Z.md plugins/dsh-ssid-panels/release-notes.md -Force
+  # 守卫校验：首行 # vX.Y.Z 必须 == shell/package.json version（不一致不弹不显示）
+  node --import tsx/esm --test plugins/dsh-ssid-panels/tests/release-notes.test.ts
+  # 构建 + vendor 同步（发版链 1.1 的 vendor 步骤含本插件的 lib/src/release-notes.md）
+  pnpm --dir plugins/dsh-ssid-panels exec tsdown
   ```
-  - 弹窗规则（shell/release-notes.mjs + main.mjs maybeShowReleaseNotes）：每版本只弹一次（~/.ssid/changelog-seen.json）；条目版本 ≠ app 版本不弹（守卫）。
-  - 单测：`node --test release-notes.test.mjs`（shell/ 目录）。
+  - 弹窗规则：每版本只弹一次（localStorage `ssid-changelog-seen`）；条目版本 ≠ 壳版本不弹（守卫，防发版漏同步弹错）。
+  - 关于 SSiD「更新日志」区离线展示当前版本（包内文件），「检查更新」仅补充在线历史版本。
 
 ## 3. 版本号同步（四处）
 

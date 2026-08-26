@@ -11,7 +11,8 @@
   },
   "files": [
     "lib",
-    "cordis.patch.yml"
+    "cordis.patch.yml",
+    "release-notes.md"
   ],
   "dsh": {
     "bundle": {

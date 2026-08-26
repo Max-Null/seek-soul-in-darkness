@@ -10,6 +10,7 @@
  */
 import { createElement, Fragment, useEffect, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { createRoot } from 'react-dom/client'
 import type {} from 'dsh-better-sidebar'
 import type { Context } from 'cordis'
 
@@ -125,6 +126,11 @@ const STRINGS = {
     checkFailed: '更新检查失败',
     apiFailed: '检查失败（HTTP {status}）',
     changelog: '更新日志',
+    changelogCurrent: '当前版本（内置）',
+    changelogOnline: '历史版本（在线）',
+    changelogEmpty: '（暂无更新日志）',
+    modalTitle: '思灵已更新',
+    modalGotIt: '知道了',
     none: '（无）',
     presetPlugins: '预制插件',
     notifyTitle: '通知设置',
@@ -200,6 +206,11 @@ const STRINGS = {
     checkFailed: 'Update check failed',
     apiFailed: 'Check failed (HTTP {status})',
     changelog: 'Changelog',
+    changelogCurrent: 'Current version (bundled)',
+    changelogOnline: 'Release history (online)',
+    changelogEmpty: '(no changelog yet)',
+    modalTitle: 'SSiD has been updated',
+    modalGotIt: 'Got it',
     none: '(none)',
     presetPlugins: 'Bundled plugins',
     notifyTitle: 'Notifications',
@@ -733,11 +744,15 @@ interface UpdateInfo {  currentVersion: string
 }
 interface AboutInfo { shellVersion: string, plugins: Array<{ id: string, name: string, version?: string, descriptionZh?: string, descriptionEn?: string }> }
 
+/** 离线更新日志数据（host /ssid/api/release-notes 返回）。 */
+interface RnsData { version: string | null, title: string | null, date: string | null, sections: Array<{ heading: string, items: string[] }>, error?: string }
+
 function SsidAboutSection(): ReactNode {
   const t = useT()
   const [about, setAbout] = useState<AboutInfo | null>(null)
   const [update, setUpdate] = useState<UpdateInfo | null>(null)
   const [checking, setChecking] = useState(false)
+  const [notes, setNotes] = useState<RnsData | null>(null)
   const check = async (): Promise<void> => {
     setChecking(true)
     try {
@@ -755,6 +770,8 @@ function SsidAboutSection(): ReactNode {
     }).catch((error: unknown) => {
       console.error('[ssid-about] about failed:', error instanceof Error ? error.message : String(error))
     })
+    // 离线更新日志：包内内置，不依赖检查更新/网络（2026-08-26）
+    void api('release-notes').then((value) => setNotes(value as RnsData)).catch(() => setNotes(null))
   }, [])
   const latest = update?.latest ?? null
   const newer = latest !== null && latest.tag !== '' && latest.tag !== `v${update?.currentVersion ?? ''}`
@@ -795,12 +812,30 @@ function SsidAboutSection(): ReactNode {
     ),
     createElement('div', { style: ssid.card },
       createElement('div', { style: ssid.title }, createElement('span', null, t('changelog'))),
-      (update?.releases ?? []).length === 0
-        ? createElement('div', { style: ssid.muted }, t('none'))
-        : (update?.releases ?? []).map(release => createElement('div', { key: release.tag, style: { marginBottom: 10 } },
-          createElement('div', { style: { ...ssid.text, fontWeight: 600 } }, `${release.name}（${release.tag}）· ${release.publishedAt.slice(0, 10)}`),
-          createElement('pre', { style: { ...ssid.muted, whiteSpace: 'pre-wrap', margin: '4px 0 0', fontSize: 12 } }, release.body),
-        )),
+      // 当前版本更新日志：离线内置（包内 release-notes.md），开箱即有内容。
+      notes === null || notes.version == null
+        ? createElement('div', { style: ssid.muted }, t('changelogEmpty'))
+        : createElement('div', null,
+          createElement('div', { style: { ...ssid.text, fontWeight: 600, marginBottom: 6 } },
+            `${t('changelogCurrent')}：v${notes.version}${notes.date !== null ? ` · ${notes.date}` : ''}`),
+          notes.sections.map(section => createElement('div', { key: section.heading, style: { marginBottom: 8 } },
+            createElement('div', { style: { fontSize: 12, fontWeight: 600, color: 'var(--dsw-alias-label-primary, #d8e0ea)', marginBottom: 3 } }, section.heading),
+            createElement('ul', { style: { margin: 0, paddingLeft: 2, listStyle: 'none' } },
+              section.items.map((item, index) => createElement('li', { key: index, style: { display: 'flex', gap: 6, fontSize: 12, lineHeight: 1.7, color: 'var(--dsw-alias-label-tertiary, #8a95a8)' } },
+                createElement('span', { style: { flex: 'none', width: 6, height: 6, borderRadius: '50%', background: ssid.accent, marginTop: 7 } }),
+                createElement('span', null, item)))),
+          )),
+          // 在线历史版本（点击检查更新后才有；离线不显示为空）
+          update !== null && (update.releases ?? []).length > 0
+            ? createElement('div', { style: { marginTop: 12, borderTop: '1px solid var(--dsw-alias-border-l2, #1e2836)', paddingTop: 8 } },
+              createElement('div', { style: { ...ssid.muted, fontSize: 11, marginBottom: 6 } }, t('changelogOnline')),
+              (update?.releases ?? []).map(release => createElement('div', { key: release.tag, style: { marginBottom: 10 } },
+                createElement('div', { style: { ...ssid.text, fontWeight: 600, fontSize: 12 } }, `${release.name}（${release.tag}）· ${release.publishedAt.slice(0, 10)}`),
+                createElement('pre', { style: { ...ssid.muted, whiteSpace: 'pre-wrap', margin: '4px 0 0', fontSize: 12 } }, release.body),
+              )),
+            )
+            : null,
+        ),
     ),
     createElement('div', { style: ssid.card },
       createElement('div', { style: ssid.title }, createElement('span', null, t('presetPlugins'))),
@@ -829,6 +864,86 @@ interface LocaleAwareContext {
   on?: (event: string, handler: (payload: unknown) => void) => void
 }
 
+// ── 启动更新日志弹窗（2026-08-26，设计参照 fractal ChangelogDialog）──────
+// 规则：每版本只弹一次——localStorage(ssid-changelog-seen) 记录已看版本；
+// host 返回的条目版本必须 == 壳版本（守卫，防发版漏同步弹错）；关窗即视为已读。
+const CHANGELOG_SEEN_KEY = 'ssid-changelog-seen'
+const readSeen = (): string => {
+  try { return localStorage.getItem(CHANGELOG_SEEN_KEY) ?? '' } catch { return '' }
+}
+const writeSeen = (version: string): void => {
+  try { localStorage.setItem(CHANGELOG_SEEN_KEY, version) } catch { /* 忽略 */ }
+}
+
+function ChangelogGate(): ReactNode {
+  const t = useT()
+  const [data, setData] = useState<RnsData | null>(null)
+  const [shellVersion, setShellVersion] = useState<string | null>(null)
+  const [show, setShow] = useState(false)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void Promise.all([api('about'), api('release-notes')])
+        .then(([aboutValue, notesValue]) => {
+          const sv = (aboutValue as AboutInfo)?.shellVersion ?? null
+          const parsed = notesValue as RnsData
+          setData(parsed)
+          setShellVersion(sv)
+          if (parsed.version === null) return
+          // 守卫：条目版本与壳版本不一致（发版漏同步）不弹
+          if (sv !== null && parsed.version !== sv) return
+          if (readSeen() !== parsed.version) setShow(true)
+        })
+        .catch(() => { /* 数据拿不到就不弹 */ })
+    }, 2000)
+    return () => { clearTimeout(timer) }
+  }, [])
+  if (!show || data === null || data.version === null) return null
+  const close = (): void => {
+    if (data.version !== null) writeSeen(data.version)
+    setShow(false)
+  }
+  const modalStyle: React.CSSProperties = {
+    position: 'fixed', inset: 0, zIndex: 10000, display: 'flex',
+    alignItems: 'center', justifyContent: 'center',
+    background: 'rgba(0, 0, 0, 0.55)', fontFamily: 'inherit',
+  }
+  const cardStyle: React.CSSProperties = {
+    width: 620, maxWidth: '92vw', maxHeight: '72vh', display: 'flex', flexDirection: 'column',
+    background: 'var(--dsw-alias-bg-layer-2, #161d2b)',
+    border: '1px solid var(--dsw-alias-border-l2, #1e2836)', borderRadius: 14,
+    boxShadow: '0 12px 48px rgba(0, 0, 0, 0.5)', overflow: 'hidden',
+  }
+  return createPortal(
+    createElement('div', { style: modalStyle }, createElement('div', { style: cardStyle },
+      createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, padding: '14px 18px', borderBottom: '1px solid var(--dsw-alias-border-l2, #1e2836)' } },
+        createElement('span', { style: { fontSize: 20 } }, '🎉'),
+        createElement('span', { style: { fontSize: 16, fontWeight: 700, color: 'var(--dsw-alias-label-primary, #d8e0ea)' } }, t('modalTitle')),
+        createElement('span', { style: { marginLeft: 'auto', fontSize: 12, color: 'var(--dsw-alias-label-tertiary, #8a95a8)' } },
+          `v${shellVersion ?? data.version}`),
+      ),
+      createElement('div', { style: { flex: 1, overflowY: 'auto', padding: '14px 18px 6px' } },
+        data.date !== null
+          ? createElement('div', { style: { fontSize: 12, color: 'var(--dsw-alias-label-tertiary, #8a95a8)', marginBottom: 10 } }, data.date)
+          : null,
+        data.sections.map(section => createElement('div', { key: section.heading, style: { marginBottom: 14 } },
+          createElement('h4', { style: { fontSize: 13, fontWeight: 700, color: 'var(--dsw-alias-label-primary, #d8e0ea)', margin: '0 0 6px' } }, section.heading),
+          createElement('ul', { style: { margin: 0, paddingLeft: 2, listStyle: 'none' } },
+            section.items.map((item, index) => createElement('li', { key: index, style: { display: 'flex', gap: 8, fontSize: 13, lineHeight: 1.7, color: 'var(--dsw-alias-label-secondary, #aab4c6)' } },
+              createElement('span', { style: { flex: 'none', width: 6, height: 6, borderRadius: '50%', background: '#4f8ef7', marginTop: 7 } }),
+              createElement('span', null, item)))),
+        )),
+      ),
+      createElement('div', { style: { padding: '12px 18px', borderTop: '1px solid var(--dsw-alias-border-l2, #1e2836)', textAlign: 'right' } },
+        createElement('button', {
+          style: { padding: '7px 24px', fontSize: 13, fontWeight: 600, border: 0, borderRadius: 8, background: '#4f8ef7', color: '#fff', cursor: 'pointer', fontFamily: 'inherit' },
+          onClick: close,
+        }, t('modalGotIt')),
+      ),
+    )),
+    document.body,
+  )
+}
+
 /** Plugin body: settings about section (unconditional) + sidebar tabs (optional peer). */
 export function apply(ctx: Context): void {
   // 双语：初始快照 + locale/change 事件（DSH 语言切换时组件经 useT 重渲染）。
@@ -841,6 +956,18 @@ export function apply(ctx: Context): void {
 
   // 设置导航图标：标记本插件行后由 CSS 把默认齿轮替换为 info（HMR-safe）。
   ctx.effect(() => registerSettingsNavIcon(() => STRINGS[localeId].about))
+
+  // 启动更新日志弹窗（2026-08-26）：自挂 body root；每版本只弹一次（localStorage seen）。
+  ctx.effect(() => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    root.render(createElement(ChangelogGate))
+    return () => {
+      root.unmount()
+      host.remove()
+    }
+  })
 
   // 设置页「关于 SSiD」：settings.section 顶级条目。
   ctx.slots.inject('settings.section', () => ctx.slots.register({

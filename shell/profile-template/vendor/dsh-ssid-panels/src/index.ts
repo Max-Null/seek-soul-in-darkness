@@ -9,8 +9,10 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpat
 import { homedir } from 'node:os'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { zstdDecompressSync } from 'node:zlib'
 import { interruptedTurnClosers, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { parseReleaseNotes } from './release-notes.ts'
 
 const require = createRequire(import.meta.url)
 
@@ -566,6 +568,18 @@ export function apply(ctx: Context): void {
         return { currentVersion: SHELL_VERSION, latest: list[0] ?? null, releases: list }
       } catch (error) {
         return { currentVersion: SHELL_VERSION, latest: null, releases: [], code: 'api-failed', message: error instanceof Error ? error.message : String(error) }
+      }
+    },
+    // 离线更新日志（2026-08-26）：读插件包内 release-notes.md（发版时同步），
+    // 不依赖检查更新/网络——关于 SSiD「更新日志」区与启动弹窗共用。
+    'release-notes': () => {
+      try {
+        const path = join(dirname(fileURLToPath(import.meta.url)), '..', 'release-notes.md')
+        const text = readFileSync(path, 'utf8')
+        const parsed = parseReleaseNotes(text)
+        return parsed
+      } catch (error) {
+        return { version: null, title: null, date: null, sections: [], error: error instanceof Error ? error.message : String(error) }
       }
     },
     'guardian.snapshot': () => {
