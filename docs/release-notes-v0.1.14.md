@@ -21,6 +21,7 @@
 
 ## 修复
 
+- **启动崩溃（在线更新绑定）**：electron-updater autoUpdater 绑定层曾用对象展开导致 EventEmitter 原型方法（on）丢失——打包版首启即 `autoUpdater.on is not a function`，已改为 Proxy 委托（原型保留 + 注入 NSIS /S 静默安装器），并新增回归守卫测试（spread 丢原型 vs Proxy 保留）。
 - dsh-capture 设置页两行 React #300 崩溃（hooks 顺序：`setHidden(true)` 二次渲染跳过 useCallback）
 - 更新器 dev/unavailable 状态与错误翻译；事件流/install 守卫单测
 
