@@ -26,7 +26,9 @@
     "open-sea-skin": "file:./vendor/open-sea-skin-1.2.1.tgz",
     "@max-null/dsh-capture": "file:./vendor/dsh-capture",
     "@playwright/mcp": "0.0.79",
-    "@max-null/dsh-achievements": "^0.1.0"
+    "@max-null/dsh-achievements": "^0.1.0",
+    "dsh-pocket": "1.14.5",
+    "ds-harness-remote": "^0.3.0"
   },
   "dsh": {
     "profile": {
@@ -56,7 +58,9 @@
         "dsh-video-preview",
         "dsh-excel-panel",
         "dsh-sidebar-qa",
-        "@max-null/dsh-achievements"
+        "@max-null/dsh-achievements",
+        "dsh-pocket",
+        "ds-harness-remote"
       ]
     }
   }
