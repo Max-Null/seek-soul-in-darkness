@@ -94,3 +94,28 @@ test('extractNotes：string 透传 / Note[] 归一 / 其他回退', () => {
   assert.deepEqual(extractNotes([{ note: 'a' }, {}, { note: 'b' }]), 'a\nb')
   assert.equal(extractNotes(null), '')
 })
+
+test('日志：关键链路全部有记录（供终端诊断）', async () => {
+  const au = fakeAutoUpdater({ downloadedFile: 'C:/cache/setup.exe' })
+  const logs = []
+  const core = createShellUpdaterCore({
+    isPackaged: true,
+    autoUpdater: au,
+    app: { quit() {} },
+    log: (line) => logs.push(line),
+  })
+  await core.check()
+  au.fire('update-available', { version: '0.1.14' })
+  await core.download()
+  au.fire('update-downloaded', { version: '0.1.14' })
+  await core.install()
+  assert.ok(logs.some((l) => l.includes('check: start')))
+  assert.ok(logs.some((l) => l.includes('event: available')))
+  assert.ok(logs.some((l) => l.includes('download: done')))
+  assert.ok(logs.some((l) => l.includes('event: downloaded')))
+  assert.ok(logs.some((l) => l.includes('install: spawn')))
+  // dev 分支也要有日志
+  const devLogs = []
+  createShellUpdaterCore({ isPackaged: false, autoUpdater: fakeAutoUpdater(), app: { quit() {} }, log: (l) => devLogs.push(l) })
+  assert.ok(devLogs.some((l) => l.includes('event: unavailable')))
+})

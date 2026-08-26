@@ -595,11 +595,16 @@ function apply(ctx) {
 		},
 		"update.check": async () => {
 			const bridge = ctx.get("ssid.shell.update");
-			if (bridge === void 0) return {
-				state: "unavailable",
-				message: "更新桥未注入（手动 dsh web / 裸跑）"
-			};
-			return await bridge.check();
+			if (bridge === void 0) {
+				ctx.logger.info("[ssid-update] check: bridge unavailable");
+				return {
+					state: "unavailable",
+					message: "更新桥未注入（手动 dsh web / 裸跑）"
+				};
+			}
+			const result = await bridge.check();
+			ctx.logger.info(`[ssid-update] check -> ${JSON.stringify(result)}`);
+			return result;
 		},
 		"update.download": async () => {
 			const bridge = ctx.get("ssid.shell.update");
@@ -607,7 +612,9 @@ function apply(ctx) {
 				ok: false,
 				error: "更新桥未注入"
 			};
-			return await bridge.download();
+			const result = await bridge.download();
+			ctx.logger.info(`[ssid-update] download -> ${JSON.stringify(result)}`);
+			return result;
 		},
 		"update.install": async () => {
 			const bridge = ctx.get("ssid.shell.update");
@@ -615,7 +622,9 @@ function apply(ctx) {
 				ok: false,
 				error: "更新桥未注入"
 			};
-			return await bridge.install();
+			const result = await bridge.install();
+			ctx.logger.info(`[ssid-update] install -> ${JSON.stringify(result)}`);
+			return result;
 		},
 		"update.status": () => {
 			const bridge = ctx.get("ssid.shell.update");

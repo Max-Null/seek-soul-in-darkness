@@ -587,18 +587,27 @@ export function apply(ctx: Context): void {
     // download/install 是动作；status 供客户端轮询（下载进度/pct）。
     'update.check': async () => {
       const bridge = ctx.get('ssid.shell.update') as { check: () => Promise<Record<string, unknown>> } | undefined
-      if (bridge === undefined) return { state: 'unavailable', message: '更新桥未注入（手动 dsh web / 裸跑）' }
-      return await bridge.check()
+      if (bridge === undefined) {
+        ctx.logger.info('[ssid-update] check: bridge unavailable')
+        return { state: 'unavailable', message: '更新桥未注入（手动 dsh web / 裸跑）' }
+      }
+      const result = await bridge.check()
+      ctx.logger.info(`[ssid-update] check -> ${JSON.stringify(result)}`)
+      return result
     },
     'update.download': async () => {
       const bridge = ctx.get('ssid.shell.update') as { download: () => Promise<Record<string, unknown>> } | undefined
       if (bridge === undefined) return { ok: false, error: '更新桥未注入' }
-      return await bridge.download()
+      const result = await bridge.download()
+      ctx.logger.info(`[ssid-update] download -> ${JSON.stringify(result)}`)
+      return result
     },
     'update.install': async () => {
       const bridge = ctx.get('ssid.shell.update') as { install: () => Promise<Record<string, unknown>> } | undefined
       if (bridge === undefined) return { ok: false, error: '更新桥未注入' }
-      return await bridge.install()
+      const result = await bridge.install()
+      ctx.logger.info(`[ssid-update] install -> ${JSON.stringify(result)}`)
+      return result
     },
     'update.status': () => {
       const bridge = ctx.get('ssid.shell.update') as { onStatus: (cb: (s: Record<string, unknown>) => void) => () => void } | undefined

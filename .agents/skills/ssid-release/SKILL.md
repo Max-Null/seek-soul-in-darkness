@@ -114,6 +114,11 @@ tar -xzf dsh-runtime.tar.gz -C dsh-runtime   # 注意必须 -C 解到独立目�
    ```
    - latest.yml 由 electron-builder 生成（build.publish: github provider 已配置）；上传后老用户点「检查更新」即可增量下载（只下变化块）。
    - 更新链路：electron-updater（shell/updater.mjs）→ dsh-ssid-panels 关于页「检查更新/下载/安装并重启」（/ssid/api/update.* 桥）；dev（未打包）全部返回 unavailable。
+   - **在线更新诊断信息**（实测失败时收集，用户可提供）：
+     - `~/.ssid/updater.log` —— 主进程更新器全程日志（init/状态事件/check/download/installer spawn+exit 码/错误堆栈，同步落盘）
+     - `~/.ssid/ssid.log` —— 壳层日志（启动/阶段）
+     - 思灵 devtools console —— 插件侧 `[ssid-update]` 日志（状态流/API 响应/异常）
+     - DSH 日志（`~/.dsh/logs/`）—— 插件 host `[ssid-update]` 桥接口记录
 
 ## 常见坑（累积）
 

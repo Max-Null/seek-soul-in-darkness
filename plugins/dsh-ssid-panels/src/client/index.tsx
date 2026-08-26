@@ -786,26 +786,42 @@ function SsidAboutSection(): ReactNode {
   // ── 在线增量更新状态流（electron-updater；host update.* 桥轮询）──────
   const [upd, setUpd] = useState<Record<string, unknown>>({ state: 'idle' })
   const pollUpd = async (): Promise<void> => {
-    try { setUpd(await api('update.status') as Record<string, unknown>) } catch { /* 桥不可用时保持现状 */ }
+    try {
+      const next = await api('update.status') as Record<string, unknown>
+      console.info('[ssid-update] status:', JSON.stringify(next))
+      setUpd(next)
+    } catch { /* 桥不可用时保持现状 */ }
   }
   const doUpdCheck = async (): Promise<void> => {
+    console.info('[ssid-update] manual check start')
     setUpd({ state: 'checking' })
     try {
-      setUpd(await api('update.check') as Record<string, unknown>)
+      const next = await api('update.check') as Record<string, unknown>
+      console.info('[ssid-update] check result:', JSON.stringify(next))
+      setUpd(next)
     } catch (error: unknown) {
+      console.error('[ssid-update] check failed:', error)
       setUpd({ state: 'error', message: error instanceof Error ? error.message : String(error) })
     }
   }
   const doUpdDownload = (): void => {
+    console.info('[ssid-update] download start')
     setUpd({ state: 'downloading', percent: 0 })
     void api('update.download').catch((error: unknown) => {
+      console.error('[ssid-update] download failed:', error)
       setUpd({ state: 'error', message: error instanceof Error ? error.message : String(error) })
     })
     const timer = setInterval(() => { void pollUpd() }, 1000)
     setTimeout(() => { clearInterval(timer) }, 10 * 60 * 1000) // 10 分钟兜底停轮询
   }
   const doUpdInstall = async (): Promise<void> => {
-    try { await api('update.install') } catch { /* 失败由状态流展示 */ }
+    console.info('[ssid-update] install start')
+    try {
+      const result = await api('update.install') as Record<string, unknown>
+      console.info('[ssid-update] install result:', JSON.stringify(result))
+    } catch (error: unknown) {
+      console.error('[ssid-update] install failed:', error)
+    }
   }
   useEffect(() => { void pollUpd() }, [])
   const updBlock = ((): ReactNode => {

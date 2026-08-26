@@ -31,11 +31,12 @@ export function extractNotes(notes) {
   return ''
 }
 
-export function createShellUpdaterCore({ isPackaged, autoUpdater, app }) {
+export function createShellUpdaterCore({ isPackaged, autoUpdater, app, log = () => {} }) {
   const listeners = new Set()
   let status = { state: 'idle' }
   const emit = (event) => {
     status = { ...status, ...event }
+    log(`event: ${status.state} ${JSON.stringify(status)}`)
     for (const callback of listeners) {
       try { callback(status) } catch { /* 单个订阅者异常不影响后续 */ }
     }
@@ -60,14 +61,18 @@ export function createShellUpdaterCore({ isPackaged, autoUpdater, app }) {
     autoUpdater.on('error', (err) => emit({ state: 'error', message: translateError(err) }))
   } else {
     status = { state: 'unavailable', message: '开发模式（未打包）：在线更新不可用' }
+    log(`event: unavailable ${status.message}`)
   }
 
   return {
     check: async () => {
       if (!isPackaged) return status
       try {
+        log('check: start')
         await autoUpdater.checkForUpdates()
+        log(`check: done state=${status.state}`)
       } catch (err) {
+        log(`check: error ${err instanceof Error ? err.stack : String(err)}`)
         emit({ state: 'error', message: translateError(err) })
       }
       return status
@@ -75,9 +80,12 @@ export function createShellUpdaterCore({ isPackaged, autoUpdater, app }) {
     download: async () => {
       if (!isPackaged) return { ok: false, error: status.message }
       try {
+        log('download: start')
         await autoUpdater.downloadUpdate()
+        log(`download: done state=${status.state}`)
         return { ok: status.state === 'downloaded' }
       } catch (err) {
+        log(`download: error ${err instanceof Error ? err.stack : String(err)}`)
         return { ok: false, error: translateError(err) }
       }
     },
@@ -85,14 +93,16 @@ export function createShellUpdaterCore({ isPackaged, autoUpdater, app }) {
       if (!isPackaged) return { ok: false, error: status.message }
       const installer = autoUpdater.downloadedUpdateHelper?.file
       if (status.state !== 'downloaded' || typeof installer !== 'string' || installer === '') {
+        log(`install: rejected (state=${status.state} installer=${String(installer)})`)
         return { ok: false, error: '尚未完成下载' }
       }
       try {
-        // assisted 安装器静默升级（保留安装路径/配置；数据在 %APPDATA% 与 ~/.dsh 不受影响）
+        log(`install: spawn ${installer} /S`)
         autoUpdater.spawnInstaller(installer)
         setTimeout(() => { app.quit() }, 500)
         return { ok: true }
       } catch (err) {
+        log(`install: error ${err instanceof Error ? err.stack : String(err)}`)
         return { ok: false, error: String(err instanceof Error ? err.message : err) }
       }
     },

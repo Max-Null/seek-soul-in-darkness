@@ -905,14 +905,20 @@ window.__ModuleLoader__.load({
 			const [upd, setUpd] = (0, react.useState)({ state: "idle" });
 			const pollUpd = async () => {
 				try {
-					setUpd(await api("update.status"));
+					const next = await api("update.status");
+					console.info("[ssid-update] status:", JSON.stringify(next));
+					setUpd(next);
 				} catch {}
 			};
 			const doUpdCheck = async () => {
+				console.info("[ssid-update] manual check start");
 				setUpd({ state: "checking" });
 				try {
-					setUpd(await api("update.check"));
+					const next = await api("update.check");
+					console.info("[ssid-update] check result:", JSON.stringify(next));
+					setUpd(next);
 				} catch (error) {
+					console.error("[ssid-update] check failed:", error);
 					setUpd({
 						state: "error",
 						message: error instanceof Error ? error.message : String(error)
@@ -920,11 +926,13 @@ window.__ModuleLoader__.load({
 				}
 			};
 			const doUpdDownload = () => {
+				console.info("[ssid-update] download start");
 				setUpd({
 					state: "downloading",
 					percent: 0
 				});
 				api("update.download").catch((error) => {
+					console.error("[ssid-update] download failed:", error);
 					setUpd({
 						state: "error",
 						message: error instanceof Error ? error.message : String(error)
@@ -938,9 +946,13 @@ window.__ModuleLoader__.load({
 				}, 6e5);
 			};
 			const doUpdInstall = async () => {
+				console.info("[ssid-update] install start");
 				try {
-					await api("update.install");
-				} catch {}
+					const result = await api("update.install");
+					console.info("[ssid-update] install result:", JSON.stringify(result));
+				} catch (error) {
+					console.error("[ssid-update] install failed:", error);
+				}
 			};
 			(0, react.useEffect)(() => {
 				pollUpd();
