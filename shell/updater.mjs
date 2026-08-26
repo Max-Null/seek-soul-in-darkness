@@ -13,7 +13,26 @@ import { spawn } from 'node:child_process'
 import electronUpdater from 'electron-updater'
 import { createShellUpdaterCore } from './updater-core.mjs'
 
-const { autoUpdater } = electronUpdater
+const { autoUpdater: rawAutoUpdater } = electronUpdater
+
+/**
+ * 注入 spawnInstaller（NSIS /S 静默拉起）但不展开对象：
+ * `{...autoUpdater}` 会丢失 EventEmitter 原型方法（on/checkForUpdates…），
+ * packaged 首启即 `autoUpdater.on is not a function`。Proxy 委托保留原型，
+ * 仅拦截 spawnInstaller 一个键。
+ */
+const spawnInstaller = (installer) => {
+  const child = spawn(installer, ['/S'], { detached: true, stdio: 'ignore' })
+  child.on('error', (err) => updaterLog(`installer: spawn error ${err.message}`))
+  child.on('exit', (code, signal) => updaterLog(`installer: exit code=${code} signal=${signal ?? 'none'}`))
+  child.unref()
+}
+const autoUpdater = new Proxy(rawAutoUpdater, {
+  get(target, prop, receiver) {
+    if (prop === 'spawnInstaller') return spawnInstaller
+    return Reflect.get(target, prop, receiver)
+  },
+})
 
 const UPDATER_LOG = join(homedir(), '.ssid', 'updater.log')
 const updaterLog = (message) => {
@@ -31,17 +50,8 @@ export function createShellUpdater() {
   try {
     return createShellUpdaterCore({
       isPackaged: app.isPackaged,
-      autoUpdater: {
-        ...autoUpdater,
-        // install 静默拉起安装器（assisted NSIS /S）；detached 后主进程退出接管；
-        // 子进程 exit/error 记日志（诊断安装器失败）。
-        spawnInstaller: (installer) => {
-          const child = spawn(installer, ['/S'], { detached: true, stdio: 'ignore' })
-          child.on('error', (err) => log(`installer: spawn error ${err.message}`))
-          child.on('exit', (code, signal) => log(`installer: exit code=${code} signal=${signal ?? 'none'}`))
-          child.unref()
-        },
-      },
+      // 直接传 autoUpdater（原型保留）；spawnInstaller 走 Proxy 注入
+      autoUpdater,
       app,
       log,
     })
