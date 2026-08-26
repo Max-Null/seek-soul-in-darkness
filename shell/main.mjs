@@ -92,6 +92,8 @@ const workerScript = process.argv.find((arg) => arg.endsWith('worker.cjs'))
 // bootKernel 提升到模块顶层：worker 分支上移后原 `const { bootKernel }` 落在
 // else 块内（块级作用域），start() 在模块顶层定义、608 行访问 bootKernel 会
 // 抛 `bootKernel is not defined`（安装版启动报错，2026-08-19 实测）。
+import { createShellUpdater } from './updater.mjs'
+
 let bootKernel
 if (workerScript !== undefined) {
   runWorkerMode(workerScript)
@@ -795,6 +797,8 @@ async function start() {
     kernel = await bootKernel(undefined, {
       preferBundled: app.isPackaged,
       restart: restartDsh,
+      // 在线增量更新桥（electron-updater；dev 下桥内部自报不可用）
+      update: createShellUpdater(),
       screenshot: {
         trigger: () => { void startScreenshotCapture() },
         apply: () => applyScreenshotHotkey(),

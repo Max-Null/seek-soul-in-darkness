@@ -99,7 +99,12 @@ tar -xzf dsh-runtime.tar.gz -C dsh-runtime   # 注意必须 -C 解到独立目�
    git tag vX.Y.Z; git push origin vX.Y.Z
    gh release create vX.Y.Z -R Max-Null/seek-soul-in-darkness --title "思灵 vX.Y.Z：..." --notes-file docs/release-notes-vX.Y.Z.md --latest
    gh release upload vX.Y.Z "shell/dist-electron/思灵 Setup X.Y.Z.exe" -R Max-Null/seek-soul-in-darkness
+   # 在线增量更新（electron-updater）必须的元数据与差分：
+   gh release upload vX.Y.Z "shell/dist-electron/latest.yml" -R Max-Null/seek-soul-in-darkness
+   gh release upload vX.Y.Z "shell/dist-electron/思灵 Setup X.Y.Z.exe.blockmap" -R Max-Null/seek-soul-in-darkness
    ```
+   - latest.yml 由 electron-builder 生成（build.publish: github provider 已配置）；上传后老用户点「检查更新」即可增量下载（只下变化块）。
+   - 更新链路：electron-updater（shell/updater.mjs）→ dsh-ssid-panels 关于页「检查更新/下载/安装并重启」（/ssid/api/update.* 桥）；dev（未打包）全部返回 unavailable。
 
 ## 常见坑（累积）
 

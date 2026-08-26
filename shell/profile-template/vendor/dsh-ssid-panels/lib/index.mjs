@@ -593,6 +593,42 @@ function apply(ctx) {
 				};
 			}
 		},
+		"update.check": async () => {
+			const bridge = ctx.get("ssid.shell.update");
+			if (bridge === void 0) return {
+				state: "unavailable",
+				message: "更新桥未注入（手动 dsh web / 裸跑）"
+			};
+			return await bridge.check();
+		},
+		"update.download": async () => {
+			const bridge = ctx.get("ssid.shell.update");
+			if (bridge === void 0) return {
+				ok: false,
+				error: "更新桥未注入"
+			};
+			return await bridge.download();
+		},
+		"update.install": async () => {
+			const bridge = ctx.get("ssid.shell.update");
+			if (bridge === void 0) return {
+				ok: false,
+				error: "更新桥未注入"
+			};
+			return await bridge.install();
+		},
+		"update.status": () => {
+			const bridge = ctx.get("ssid.shell.update");
+			if (bridge === void 0) return {
+				state: "unavailable",
+				message: "更新桥未注入"
+			};
+			const holder = {};
+			bridge.onStatus((status) => {
+				holder.current = status;
+			})();
+			return holder.current ?? { state: "idle" };
+		},
 		"guardian.snapshot": () => {
 			return required(ctx.get("guardian"), "guardian").snapshot?.() ?? {
 				session: null,

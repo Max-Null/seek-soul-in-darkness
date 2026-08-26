@@ -12,7 +12,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { zstdDecompressSync } from 'node:zlib'
 import { interruptedTurnClosers, type SessionEvent } from '@deepseek-ai/dsh-session'
-import { parseReleaseNotes } from './release-notes.ts'
+import { parseReleaseNotes } from './release-notes'
 
 const require = createRequire(import.meta.url)
 
@@ -581,6 +581,32 @@ export function apply(ctx: Context): void {
       } catch (error) {
         return { version: null, title: null, date: null, sections: [], error: error instanceof Error ? error.message : String(error) }
       }
+    },
+    // 在线增量更新（2026-08-26）：桥接壳层 electron-updater
+    // （服务键 ssid.shell.update，main.mjs 经 bootKernel opts.update 注入）。
+    // download/install 是动作；status 供客户端轮询（下载进度/pct）。
+    'update.check': async () => {
+      const bridge = ctx.get('ssid.shell.update') as { check: () => Promise<Record<string, unknown>> } | undefined
+      if (bridge === undefined) return { state: 'unavailable', message: '更新桥未注入（手动 dsh web / 裸跑）' }
+      return await bridge.check()
+    },
+    'update.download': async () => {
+      const bridge = ctx.get('ssid.shell.update') as { download: () => Promise<Record<string, unknown>> } | undefined
+      if (bridge === undefined) return { ok: false, error: '更新桥未注入' }
+      return await bridge.download()
+    },
+    'update.install': async () => {
+      const bridge = ctx.get('ssid.shell.update') as { install: () => Promise<Record<string, unknown>> } | undefined
+      if (bridge === undefined) return { ok: false, error: '更新桥未注入' }
+      return await bridge.install()
+    },
+    'update.status': () => {
+      const bridge = ctx.get('ssid.shell.update') as { onStatus: (cb: (s: Record<string, unknown>) => void) => () => void } | undefined
+      if (bridge === undefined) return { state: 'unavailable', message: '更新桥未注入' }
+      const holder: { current?: Record<string, unknown> } = {}
+      const disposer = bridge.onStatus((status) => { holder.current = status })
+      disposer()
+      return holder.current ?? { state: 'idle' }
     },
     'guardian.snapshot': () => {
       const guardian = required(ctx.get('guardian'), 'guardian')

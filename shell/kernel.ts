@@ -59,6 +59,10 @@ const TELEMETRY_ROW_ID = 'session-telemetry-otel'
  * 裸跑/测试未注入时该服务不存在，插件返回 restart-unavailable。
  */
 export const SSID_SHELL_RESTART_KEY = 'ssid.shell.restart'
+/** 壳层「在线增量更新」能力（electron-updater：check/download/install + 状态订阅），
+ * dsh-ssid-panels 关于页经 ctx.get(SSID_SHELL_UPDATE_KEY) 调用；
+ * bootKernel 未传 update 时（裸跑/测试）不提供。 */
+export const SSID_SHELL_UPDATE_KEY = 'ssid.shell.update'
 
 /** 壳层「快捷截图」能力（main.mjs 的 startScreenshotCapture 与
  *  applyScreenshotHotkey），经服务键注入内核，供 dsh-ssid-screenshot 的
@@ -283,6 +287,14 @@ export async function bootKernel(
     /** 壳层「重启 DSH」回调（app.relaunch + kernel.shutdown），经服务键
      *  `SSID_SHELL_RESTART_KEY` 注入内核，供 dsh-ssid-panels 设置页调用。 */
     restart?: () => void
+    /** 壳层「在线增量更新」能力（electron-updater），经服务键
+     *  `SSID_SHELL_UPDATE_KEY` 注入；dev/未打包时 update 桥自身返回不可用。 */
+    update?: {
+      check: () => Promise<{ state: string, version?: string, releaseNotes?: string, error?: string }>
+      download: () => Promise<{ ok: boolean, error?: string }>
+      install: () => Promise<{ ok: boolean, error?: string }>
+      onStatus: (callback: (event: Record<string, unknown>) => void) => () => void
+    }
     /** 壳层「快捷截图」能力（触发浮层 / 重注册快捷键），经服务键
      *  `SSID_SHELL_SCREENSHOT_KEY` 注入，供 dsh-ssid-screenshot 调用。 */
     screenshot?: {
@@ -452,6 +464,7 @@ export async function bootKernel(
       // kernel.shutdown），dsh-ssid-panels 设置页经 ctx.get(SSID_SHELL_RESTART_KEY)
       // 调用；bootKernel 未传 restart 时（裸跑/测试）不提供。
       if (opts.restart !== undefined) hostCtx.provide(SSID_SHELL_RESTART_KEY, opts.restart)
+      if (opts.update !== undefined) hostCtx.provide(SSID_SHELL_UPDATE_KEY, opts.update)
       if (opts.screenshot !== undefined) hostCtx.provide(SSID_SHELL_SCREENSHOT_KEY, opts.screenshot)
       provideCmdline(hostCtx, {
         // rc.8 起 dsh web 默认打开浏览器（openBrowser 默认 true）；壳内嵌场景

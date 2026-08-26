@@ -59,11 +59,18 @@
       "target": "nsis",
       "icon": "assets/icon.png",
       "signAndEditExecutable": true
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "Max-Null",
+      "repo": "seek-soul-in-darkness",
+      "releaseType": "release"
     }
   },
   "dependencies": {
-    "tsx": "^4.0.0",
-    "pnpm": "11.21.0"
+    "electron-updater": "^6.8.9",
+    "pnpm": "11.21.0",
+    "tsx": "^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^26.0.0",

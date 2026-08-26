@@ -125,6 +125,15 @@ const STRINGS = {
     checkNow: '立即检查',
     checkFailed: '更新检查失败',
     apiFailed: '检查失败（HTTP {status}）',
+    updSilent: '（启动后已静默检查更新；下方可手动检查）',
+    updChecking: '更新检查中…',
+    updAvailable: '发现新版本 v{v}，点击下载',
+    updDownload: '下载更新',
+    updDownloading: '下载中… {p}%',
+    updDownloaded: '下载完成，可安装',
+    updInstall: '安装并重启',
+    updError: '更新失败：{m}',
+    updUnavailable: '在线增量更新不可用（{m}）',
     changelog: '更新日志',
     changelogCurrent: '当前版本（内置）',
     changelogOnline: '历史版本（在线）',
@@ -205,6 +214,15 @@ const STRINGS = {
     checkNow: 'Check now',
     checkFailed: 'Update check failed',
     apiFailed: 'Check failed (HTTP {status})',
+    updSilent: '(a silent check runs at startup; manual check below)',
+    updChecking: 'Checking for updates…',
+    updAvailable: 'New version v{v} available — download now',
+    updDownload: 'Download update',
+    updDownloading: 'Downloading… {p}%',
+    updDownloaded: 'Download complete — ready to install',
+    updInstall: 'Install & restart',
+    updError: 'Update failed: {m}',
+    updUnavailable: 'Online incremental update unavailable ({m})',
     changelog: 'Changelog',
     changelogCurrent: 'Current version (bundled)',
     changelogOnline: 'Release history (online)',
@@ -762,7 +780,58 @@ function SsidAboutSection(): ReactNode {
     } finally {
       setChecking(false)
     }
+    // 在线增量更新检查（electron-updater 桥；dev 下返回 unavailable）
+    void doUpdCheck()
   }
+  // ── 在线增量更新状态流（electron-updater；host update.* 桥轮询）──────
+  const [upd, setUpd] = useState<Record<string, unknown>>({ state: 'idle' })
+  const pollUpd = async (): Promise<void> => {
+    try { setUpd(await api('update.status') as Record<string, unknown>) } catch { /* 桥不可用时保持现状 */ }
+  }
+  const doUpdCheck = async (): Promise<void> => {
+    setUpd({ state: 'checking' })
+    try {
+      setUpd(await api('update.check') as Record<string, unknown>)
+    } catch (error: unknown) {
+      setUpd({ state: 'error', message: error instanceof Error ? error.message : String(error) })
+    }
+  }
+  const doUpdDownload = (): void => {
+    setUpd({ state: 'downloading', percent: 0 })
+    void api('update.download').catch((error: unknown) => {
+      setUpd({ state: 'error', message: error instanceof Error ? error.message : String(error) })
+    })
+    const timer = setInterval(() => { void pollUpd() }, 1000)
+    setTimeout(() => { clearInterval(timer) }, 10 * 60 * 1000) // 10 分钟兜底停轮询
+  }
+  const doUpdInstall = async (): Promise<void> => {
+    try { await api('update.install') } catch { /* 失败由状态流展示 */ }
+  }
+  useEffect(() => { void pollUpd() }, [])
+  const updBlock = ((): ReactNode => {
+    const state = String(upd.state ?? 'idle')
+    const pct = upd.percent !== undefined && upd.percent !== null ? String(upd.percent) : '0'
+    switch (state) {
+      case 'available':
+        return createElement('div', { style: { marginTop: 6 } },
+          createElement('div', { style: { ...ssid.text, color: ssid.accent } }, t('updAvailable', { v: String(upd.version ?? '?') })),
+          createElement('button', { style: { ...ssid.btn, marginTop: 6 }, onClick: () => { doUpdDownload() } }, t('updDownload')))
+      case 'checking':
+        return createElement('div', { style: { ...ssid.muted, marginTop: 6 } }, t('updChecking'))
+      case 'downloading':
+        return createElement('div', { style: { ...ssid.muted, marginTop: 6 } }, t('updDownloading', { p: pct }))
+      case 'downloaded':
+        return createElement('div', { style: { marginTop: 6 } },
+          createElement('div', { style: { ...ssid.text, color: ssid.accent } }, t('updDownloaded')),
+          createElement('button', { style: { ...ssid.btn, marginTop: 6 }, onClick: () => { void doUpdInstall() } }, t('updInstall')))
+      case 'error':
+        return createElement('div', { style: { ...ssid.muted, marginTop: 6, color: '#f76f4f' } }, t('updError', { m: String(upd.message ?? '?') }))
+      case 'unavailable':
+        return createElement('div', { style: { ...ssid.muted, marginTop: 6 } }, t('updUnavailable', { m: String(upd.message ?? '') }))
+      default:
+        return createElement('div', { style: { ...ssid.muted, marginTop: 6 } }, t('updSilent'))
+    }
+  })()
   useEffect(() => {
     void api('about').then((value) => {
       console.log('[ssid-about] about loaded:', JSON.stringify(value))
@@ -809,6 +878,7 @@ function SsidAboutSection(): ReactNode {
           ? createElement('div', { style: { ...ssid.text, color: ssid.accent } }, t('newVersion', { name: latest.name, tag: latest.tag, date: latest.publishedAt.slice(0, 10) }))
           : createElement('div', { style: ssid.text }, t('latestVersion', { name: latest.name, tag: latest.tag })),
       createElement('button', { style: { ...ssid.btn, marginTop: 8 }, onClick: () => { void check() }, disabled: checking }, checking ? t('checking') : t('checkNow')),
+      updBlock,
     ),
     createElement('div', { style: ssid.card },
       createElement('div', { style: ssid.title }, createElement('span', null, t('changelog'))),

@@ -127,6 +127,15 @@ window.__ModuleLoader__.load({
 				checkNow: "立即检查",
 				checkFailed: "更新检查失败",
 				apiFailed: "检查失败（HTTP {status}）",
+				updSilent: "（启动后已静默检查更新；下方可手动检查）",
+				updChecking: "更新检查中…",
+				updAvailable: "发现新版本 v{v}，点击下载",
+				updDownload: "下载更新",
+				updDownloading: "下载中… {p}%",
+				updDownloaded: "下载完成，可安装",
+				updInstall: "安装并重启",
+				updError: "更新失败：{m}",
+				updUnavailable: "在线增量更新不可用（{m}）",
 				changelog: "更新日志",
 				changelogCurrent: "当前版本（内置）",
 				changelogOnline: "历史版本（在线）",
@@ -207,6 +216,15 @@ window.__ModuleLoader__.load({
 				checkNow: "Check now",
 				checkFailed: "Update check failed",
 				apiFailed: "Check failed (HTTP {status})",
+				updSilent: "(a silent check runs at startup; manual check below)",
+				updChecking: "Checking for updates…",
+				updAvailable: "New version v{v} available — download now",
+				updDownload: "Download update",
+				updDownloading: "Downloading… {p}%",
+				updDownloaded: "Download complete — ready to install",
+				updInstall: "Install & restart",
+				updError: "Update failed: {m}",
+				updUnavailable: "Online incremental update unavailable ({m})",
 				changelog: "Changelog",
 				changelogCurrent: "Current version (bundled)",
 				changelogOnline: "Release history (online)",
@@ -882,7 +900,102 @@ window.__ModuleLoader__.load({
 				} finally {
 					setChecking(false);
 				}
+				doUpdCheck();
 			};
+			const [upd, setUpd] = (0, react.useState)({ state: "idle" });
+			const pollUpd = async () => {
+				try {
+					setUpd(await api("update.status"));
+				} catch {}
+			};
+			const doUpdCheck = async () => {
+				setUpd({ state: "checking" });
+				try {
+					setUpd(await api("update.check"));
+				} catch (error) {
+					setUpd({
+						state: "error",
+						message: error instanceof Error ? error.message : String(error)
+					});
+				}
+			};
+			const doUpdDownload = () => {
+				setUpd({
+					state: "downloading",
+					percent: 0
+				});
+				api("update.download").catch((error) => {
+					setUpd({
+						state: "error",
+						message: error instanceof Error ? error.message : String(error)
+					});
+				});
+				const timer = setInterval(() => {
+					pollUpd();
+				}, 1e3);
+				setTimeout(() => {
+					clearInterval(timer);
+				}, 6e5);
+			};
+			const doUpdInstall = async () => {
+				try {
+					await api("update.install");
+				} catch {}
+			};
+			(0, react.useEffect)(() => {
+				pollUpd();
+			}, []);
+			const updBlock = (() => {
+				const state = String(upd.state ?? "idle");
+				const pct = upd.percent !== void 0 && upd.percent !== null ? String(upd.percent) : "0";
+				switch (state) {
+					case "available": return (0, react.createElement)("div", { style: { marginTop: 6 } }, (0, react.createElement)("div", { style: {
+						...ssid.text,
+						color: ssid.accent
+					} }, t("updAvailable", { v: String(upd.version ?? "?") })), (0, react.createElement)("button", {
+						style: {
+							...ssid.btn,
+							marginTop: 6
+						},
+						onClick: () => {
+							doUpdDownload();
+						}
+					}, t("updDownload")));
+					case "checking": return (0, react.createElement)("div", { style: {
+						...ssid.muted,
+						marginTop: 6
+					} }, t("updChecking"));
+					case "downloading": return (0, react.createElement)("div", { style: {
+						...ssid.muted,
+						marginTop: 6
+					} }, t("updDownloading", { p: pct }));
+					case "downloaded": return (0, react.createElement)("div", { style: { marginTop: 6 } }, (0, react.createElement)("div", { style: {
+						...ssid.text,
+						color: ssid.accent
+					} }, t("updDownloaded")), (0, react.createElement)("button", {
+						style: {
+							...ssid.btn,
+							marginTop: 6
+						},
+						onClick: () => {
+							doUpdInstall();
+						}
+					}, t("updInstall")));
+					case "error": return (0, react.createElement)("div", { style: {
+						...ssid.muted,
+						marginTop: 6,
+						color: "#f76f4f"
+					} }, t("updError", { m: String(upd.message ?? "?") }));
+					case "unavailable": return (0, react.createElement)("div", { style: {
+						...ssid.muted,
+						marginTop: 6
+					} }, t("updUnavailable", { m: String(upd.message ?? "") }));
+					default: return (0, react.createElement)("div", { style: {
+						...ssid.muted,
+						marginTop: 6
+					} }, t("updSilent"));
+				}
+			})();
 			(0, react.useEffect)(() => {
 				api("about").then((value) => {
 					console.log("[ssid-about] about loaded:", JSON.stringify(value));
@@ -934,7 +1047,7 @@ window.__ModuleLoader__.load({
 					check();
 				},
 				disabled: checking
-			}, checking ? t("checking") : t("checkNow"))), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("changelog"))), notes === null || notes.version == null ? (0, react.createElement)("div", { style: ssid.muted }, t("changelogEmpty")) : (0, react.createElement)("div", null, (0, react.createElement)("div", { style: {
+			}, checking ? t("checking") : t("checkNow")), updBlock), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("changelog"))), notes === null || notes.version == null ? (0, react.createElement)("div", { style: ssid.muted }, t("changelogEmpty")) : (0, react.createElement)("div", null, (0, react.createElement)("div", { style: {
 				...ssid.text,
 				fontWeight: 600,
 				marginBottom: 6
