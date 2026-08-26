@@ -41,6 +41,15 @@ description: "SSiD（思灵）发版流程：版本决策、内置插件对齐�
 
 `shell/package.json` version（bump，prepare-runtime 的 ssidVer 来源）· `.runtime-version`（归档内，自动生成勿手改）· profile 内 `.runtime-version`（deploy 自动对齐）· GitHub tag `vX.Y.Z`（与 package.json 严格一致）。
 
+## 3.5 发版前守卫（单测冒烟，必须全绿的轻量环）
+
+```powershell
+# 更新器纯逻辑（dev unavailable / 事件流 / install 守卫 / 错误翻译）
+node --test shell/updater-core.test.mjs
+# 更新日志解析（版本守卫 / 分节解析）
+node --import tsx/esm --test plugins/dsh-ssid-panels/tests/release-notes.test.ts
+```
+
 ## 4. 归档重建
 
 ```powershell
