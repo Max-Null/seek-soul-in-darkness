@@ -7,7 +7,7 @@
  * 记忆面板「模板」tab 生效；本模块只在「目录无任何 .md」时种一次，之后
  * 永不重复写入（用户清空模板库后也不会复活，避免「删不掉」陷阱）。
  */
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -48,26 +48,66 @@ function renderSeed(seed: PromptSeed, seq: number, createdAt: string): string {
   return `${lines.join('\n')}\n\n${seed.body.trim()}\n`
 }
 
+/** 种子版本标记文件（`<root>/.seed-version`）：避免「目录空才种」语义挡住
+ *  升级补种——v1 用户（已有基础 6 条）在升到含 GenUI 种子的版本时按名补缺。 */
+const SEED_VERSION = '2'
+
+function readSeedVersion(dir: string): string | null {
+  try {
+    return readFileSync(join(dir, '.seed-version'), 'utf8').trim()
+  } catch {
+    return null
+  }
+}
+
+function writeSeedVersion(dir: string): void {
+  try {
+    writeFileSync(join(dir, '.seed-version'), SEED_VERSION, 'utf8')
+  } catch {
+    // 非致命：仅影响下次补种判断
+  }
+}
+
 /**
- * 种入内置模板：目录不存在 → 创建；已有任意 .md → 跳过（幂等）。
- * @returns 本次写入的模板数（0 = 已存在或未写入）。
+ * 种入内置模板。
+ * - 目录没有任何 md → 全量写入（首启）；写入 `.seed-version` 标记。
+ * - 已有 md 且无标记（v1 老用户）→ 按名补缺（补 GenUI 条目），写标记，此后不再补。
+ * - 有标记 → 跳过（用户此后自由增删，预置条目永不复活）。
+ * @returns 本次写入的模板数（0 = 无需写入）。
  */
 export function seedPromptLibrary(): number {
   const root = join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'prompt-library')
+  const version = readSeedVersion(root)
+  if (version === SEED_VERSION) return 0
+  const existingMd: string[] = []
   try {
-    if (readdirSync(root).some(entry => entry.toLowerCase().endsWith('.md'))) return 0
+    for (const entry of readdirSync(root)) {
+      if (entry.toLowerCase().endsWith('.md')) existingMd.push(entry)
+    }
   } catch { /* 目录不存在，正常首启 */ }
   mkdirSync(root, { recursive: true })
   const createdAt = new Date().toISOString().slice(0, 10)
   let seq = Math.max(1, nextSeq(root))
   let written = 0
-  for (const seed of PROMPT_SEEDS) {
+  const writeSeed = (seed: PromptSeed): void => {
     // 文件名也带序号（目录扫描约定 `序号_名称.md`），每份独立分配以满足并发追加
     const path = join(root, `${seq}_${sanitizeFileName(seed.name)}.md`)
     writeFileSync(path, renderSeed(seed, seq, createdAt), 'utf8')
     seq += 1
     written += 1
   }
+  if (existingMd.length === 0) {
+    for (const seed of PROMPT_SEEDS) writeSeed(seed)
+  } else {
+    // 增量补种：按「sanitize 名 + .md」判断是否已存在（序号前缀无关）
+    const existingNames = new Set(existingMd.map(entry => entry.replace(/^\d+_/, '')))
+    for (const seed of PROMPT_SEEDS) {
+      if (existingNames.has(`${sanitizeFileName(seed.name)}.md`)) continue
+      writeSeed(seed)
+      existingNames.add(`${sanitizeFileName(seed.name)}.md`)
+    }
+  }
+  writeSeedVersion(root)
   return written
 }
 
@@ -226,5 +266,117 @@ export const PROMPT_SEEDS: readonly PromptSeed[] = [
 备注（讲稿一句话）：…
 \`\`\`
 最后附：可能的提问与应答预演（3-5 条）。`,
+  },
+  // ── GenUI 模板（0.1.7）：模板库与 genui 面板模板中心双入口 ──
+  // instruction 与 genui 插件 src/client/templates.ts 同源；维度统一 "GenUI"。
+  {
+    name: 'GenUI-项目仪表盘',
+    dimension: 'GenUI',
+    difficulty: 'L1',
+    tags: ['genui', 'dsh-ui', '仪表盘'],
+    body: `请用 dsh-ui 给当前项目做一个仪表盘：4 个关键指标的 stat 卡片（带环比 delta）、整体进度 progress 条、今天的 3 件待办 list。标题用「项目仪表盘」。
+
+## 背景
+一张卡片汇总核心指标：数字 + 环比 + 进度条，决策一眼可见。`,
+  },
+  {
+    name: 'GenUI-方案对比表',
+    dimension: 'GenUI',
+    difficulty: 'L1',
+    tags: ['genui', 'dsh-ui', '对比'],
+    body: `请用 dsh-ui 把以下方案的对比做成一张 table：方案 A/B/C × 维度（成本/复杂度/风险/收益），列首高亮推荐项；顶部加一行 callout 说明结论。
+
+## 背景
+多方案逐维度对照，表格直接可读，争议点一目了然。`,
+  },
+  {
+    name: 'GenUI-五步上手流程',
+    dimension: 'GenUI',
+    difficulty: 'L1',
+    tags: ['genui', 'dsh-ui', '教程'],
+    body: `请用 dsh-ui 把操作步骤做成 steps 教程：5 步（按实际流程），每步标题 + 一两句要点，顶部用 badge 标出预计耗时。
+
+## 背景
+关键步骤排成时间线，每步一句要点，适合教程/交接/发布流程。`,
+  },
+  {
+    name: 'GenUI-随堂测验',
+    dimension: 'GenUI',
+    difficulty: 'L2',
+    tags: ['genui', 'dsh-ui', '测验'],
+    body: `请用 dsh-ui 出 3 道随堂测验（quiz 组件：question + options，其中一项 correct，附 explanation），标题「随堂测验」，每题即选即评。
+
+## 背景
+一题一答即时判卷：选中即知对错，附讲解，适合培训问答。`,
+  },
+  {
+    name: 'GenUI-关键值与进度',
+    dimension: 'GenUI',
+    difficulty: 'L1',
+    tags: ['genui', 'dsh-ui', '周报'],
+    body: `请用 dsh-ui 总结本周关键数据：keyvalue 列 3 组关键值、两根 progress 进度（计划 vs 实际）、timeline 放 3 个里程碑，标题「周报速览」。
+
+## 背景
+一次交付：数值、进度、里程碑三件套，周报/复盘通用。`,
+  },
+  {
+    name: 'GenUI-趋势柱状图',
+    dimension: 'GenUI',
+    difficulty: 'L1',
+    tags: ['genui', 'dsh-ui', '图表'],
+    body: `请用 dsh-ui 把下列数据画成 chart（bars，多序列）：近 6 周完成量 vs 计划量；图表上方给一句趋势结论。
+
+## 背景
+数据直接画成柱状图，多序列对比，走势一眼看清。`,
+  },
+  {
+    name: 'GenUI-分标签页',
+    dimension: 'GenUI',
+    difficulty: 'L1',
+    tags: ['genui', 'dsh-ui', 'tabs'],
+    body: `请用 dsh-ui 把内容分成 tabs 三个标签：概览/明细/FAQ，每个标签 3 条以内要点；标题「功能速览」。
+
+## 背景
+一大块内容拆成标签页，锚点清晰；面板不挤、消息不刷屏。`,
+  },
+  {
+    name: 'GenUI-交付检查清单',
+    dimension: 'GenUI',
+    difficulty: 'L1',
+    tags: ['genui', 'dsh-ui', '清单'],
+    body: `请用 dsh-ui 做一张交付检查清单：6 项（测试/文档/发布/回滚/监控/公告），checkbox 可勾选，顶部 badge 提示「全部勾选再合并」。
+
+## 背景
+提交前逐项打勾：清单即流程，漏项看得见。`,
+  },
+  {
+    name: 'GenUI-FAQ手风琴',
+    dimension: 'GenUI',
+    difficulty: 'L1',
+    tags: ['genui', 'dsh-ui', 'FAQ'],
+    body: `请用 dsh-ui 做 FAQ 手风琴（accordion）：5 个高频问题，标题栏就是问题、展开一条给答案；第一问默认展开。
+
+## 背景
+一问一答收在折叠面板里，长文档变短，回答不吓人。`,
+  },
+  {
+    name: 'GenUI-系统架构图',
+    dimension: 'GenUI',
+    difficulty: 'L2',
+    tags: ['genui', 'dsh-ui', '架构图'],
+    body: `请用 dsh-ui 画一幅架构图（diagram）：描述当前系统的 5 个节点与连接（kind: architecture 或 flowchart），包含一个安全区 zone。
+
+## 背景
+框架图画成 SVG：节点分层、连接线、分区标注，比截图清楚。`,
+  },
+  {
+    name: 'GenUI-3D场景',
+    dimension: 'GenUI',
+    difficulty: 'L2',
+    tags: ['genui', 'dsh-ui', '3D'],
+    body: `请用 dsh-ui 渲染一个 3D 场景（scene3d）：一个立方体 + 一个球体，标题「示例场景」，附一句使用场景说明。
+
+## 背景
+一个可旋转的 3D 场景（three.js 约 700KB 懒加载）：产品演示/空间示意用得上。`,
   },
 ]
