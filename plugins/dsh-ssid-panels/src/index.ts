@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { zstdDecompressSync } from 'node:zlib'
 import { interruptedTurnClosers, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { parseReleaseNotes } from './release-notes'
+import { seedPromptLibrary } from './prompt-seeds'
 
 const require = createRequire(import.meta.url)
 
@@ -423,6 +424,13 @@ function required<T>(service: T | undefined, label: string): T {
  * @param ctx - host plugin context (webServer, webRuntime).
  */
 export function apply(ctx: Context): void {
+  // 首启模板库种子（0.1.6）：全局 prompt-library 为空时写入内置模板；幂等、失败不阻断。
+  try {
+    const seeded = seedPromptLibrary()
+    if (seeded > 0) ctx.logger.info(`[dsh-ssid-panels] prompt library seeded: ${seeded} template(s)`)
+  } catch (error) {
+    ctx.logger.warn(`[dsh-ssid-panels] prompt seed skipped: ${error instanceof Error ? error.message : String(error)}`)
+  }
   const api: Record<string, ApiMethod> = {
     'notify.get': () => readNotifyConfig(),
     'notify.set': (payload) => {
