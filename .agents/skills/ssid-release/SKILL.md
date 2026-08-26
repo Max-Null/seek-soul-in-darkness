@@ -137,3 +137,8 @@ tar -xzf dsh-runtime.tar.gz -C dsh-runtime   # 注意必须 -C 解到独立目�
 - 面板修复类 vendor 固化（dsh-genui 0.9.2 + PR #58 修复）在上游合并并 npm 发布后，应切回 npm 声明并删除 vendor 与临时补丁脚本。
 - 发版前置检查：`git status` 干净 + `git log v上版本..HEAD` 分组 + 安装目录归档备份（替换前 `.bak`）。
 - dev profile（`~/.dsh/profiles/ssid`）与发布模板两处同步（依赖/bundles/vendor）；git 只提交模板侧。
+
+## 已验证经验（2026-08-27 v0.1.14 收货）
+
+- **gh release upload 中文文件名坑**：默认上传带中文/空格本地文件名会被 GitHub 规范化（「思灵 Setup x.y.z.exe」→「Setup.x.y.z.exe」），而 latest.yml 的 url: 引用 electron-builder 的 artifactName（如 ssid-shell-setup-x.y.z.exe）——不一致 = 增量更新 404。规避：打包后复制英文名副本（ssid-shell-setup-<ver>.exe + .blockmap）再上传，上传后 gh release view --json assets 核对资产名与 latest.yml 完全一致。
+- prepare-runtime 输出 200 MB 级归档（0.1.14 为 200.2 MB，新预置增多属正常）；抽查 vendor 路径区分 @max-null（capture/panels）与 @changfenhuang（genui）。
