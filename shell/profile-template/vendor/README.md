@@ -35,7 +35,7 @@ Max-Null 自有 @max-null/* 插件的源码目录（`file:./vendor/<name>` 引�
 SSiD 集成版本直接随归档发布，不依赖 npm 发布节奏。更新方式为替换目录内容
 后重建归档。
 
-### dsh-genui（@changfenhuang/dsh-genui）
+### dsh-genui（来源仓库 omdsh-dev/dsh-genui；npm 发布名 @changfenhuang/dsh-genui）
 
 第三方 genui 的 vendor 固化（`file:./vendor/dsh-genui`）。基线 = 上游
 v0.9.2 + **SSiD 面板样式修复**：会话面板 dock 对齐宿主 composer 宽度轴、
