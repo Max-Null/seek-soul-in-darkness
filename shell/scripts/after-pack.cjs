@@ -10,18 +10,25 @@ const { join, resolve } = require('node:path')
 
 /** @param {import('electron-builder').AfterPackContext} context */
 module.exports = async function afterPack(context) {
+  // 应用 Resources 目录：win/linux = appOutDir/resources；mac =
+  // appOutDir/Electron.app/Contents/Resources（2026-08-27 macos runner
+  // 实测——原写死 appOutDir/resources 在 mac 上找不到归档致 afterPack 失败）
+  const isMac = context.packager.platform.name === 'mac'
+  const appResourcesDir = isMac
+    ? join(context.appOutDir, 'Electron.app', 'Contents', 'Resources')
+    : join(context.appOutDir, 'resources')
   // 归档完整性校验：extraResources 复制失败时立刻失败，避免交付残缺安装包
-  const archive = join(context.appOutDir, 'resources/dsh-runtime.tar.gz')
+  const archive = join(appResourcesDir, 'dsh-runtime.tar.gz')
   if (!existsSync(archive)) {
-    throw new Error(`[after-pack] 缺少 resources/dsh-runtime.tar.gz（请先运行 node scripts/prepare-runtime.mjs）`)
+    throw new Error(`[after-pack] 缺少 ${archive}（请先运行 node scripts/prepare-runtime.mjs）`)
   }
   console.log(`[after-pack] dsh-runtime.tar.gz OK (${(statSync(archive).size / 1024 / 1024).toFixed(1)} MB)`)
 
-  injectBundledNode(context)
+  injectBundledNode(context, appResourcesDir)
 }
 
 /**
- * 内置纯 Node 运行时，注入 resources/node/<nodeName>：
+ * 内置纯 Node 运行时，注入 <appResourcesDir>/node/<nodeName>：
  *  - win32：DSH 目录选择器 worker 用 koffi.view 读 COM 内存，Electron 进程
  *    （V8 memory cage 启用）禁止 external buffers，任何 koffi 版本在
  *    Electron 内调用 view 都会 FATAL 崩溃（koffi.dev 文档明确注明）。
@@ -32,7 +39,7 @@ module.exports = async function afterPack(context) {
  *    （ABI 不匹配）。候选：Homebrew 双路径 → PATH（which 解析，覆盖 macos
  *    runner 的 hostedtoolcache 布局）。
  */
-function injectBundledNode(context) {
+function injectBundledNode(context, appResourcesDir) {
   const isWin = process.platform === 'win32'
   const name = isWin ? 'node.exe' : 'node'
   const candidates = []
@@ -54,7 +61,7 @@ function injectBundledNode(context) {
   candidates.push(name)
   for (const cand of candidates) {
     if (cand !== '' && existsSync(cand)) {
-      const nodeDest = join(context.appOutDir, 'resources', 'node', name)
+      const nodeDest = join(appResourcesDir, 'node', name)
       cpSync(cand, nodeDest, { force: true })
       console.log(`[after-pack] ${name} (${cand}) -> ${nodeDest}`)
       return
