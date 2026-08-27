@@ -40,14 +40,18 @@ jobs:
       - name: 检出 SSiD
         uses: actions/checkout@v4
 
-      - name: 检出 DSH 源码（只读版本号；与构建机 DSH_CHECKOUT 同源）
-        env:
-          DSH_CHECKOUT: ${{ runner.temp }}/deepseek-harness
+      - name: 检出 DSH 源码（tsconfig paths 同源；位置=shell/../.. 相对路径）
         run: |
-          git clone --depth 1 --filter=blob:none --sparse \
-            https://github.com/deepseek-ai/deepseek-harness "$DSH_CHECKOUT"
-          git -C "$DSH_CHECKOUT" sparse-checkout set apps/cli
-          echo "DSH_CHECKOUT=$DSH_CHECKOUT" >> "$GITHUB_ENV"
+          # bundle-kernel 的 esbuild 按 shell/tsconfig.json paths 解析
+          # @deepseek-ai/dsh-*（映射 ../../deepseek-harness/...），源码必须落在
+          # $GITHUB_WORKSPACE/../..（= shell/../../）；完整浅克隆（sparse 会缺
+          # paths 引用目录导致 resolve 失败——2026-08-27 实测）。
+          # 版本钉 dsh-v0.1.1-rc.2：与归档/发版链的 @deepseek-ai/dsh 版本一致
+          # （clone main 会随上游漂移导致 mac 归档与 Windows 发版不同步）。
+          git clone --depth 1 --branch dsh-v0.1.1-rc.2 \
+            https://github.com/deepseek-ai/deepseek-harness \
+            "$GITHUB_WORKSPACE/../../deepseek-harness"
+          echo "DSH_CHECKOUT=$GITHUB_WORKSPACE/../../deepseek-harness" >> "$GITHUB_ENV"
 
       - name: Node 22 + pnpm 11
         uses: actions/setup-node@v4
