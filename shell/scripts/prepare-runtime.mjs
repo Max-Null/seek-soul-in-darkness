@@ -103,6 +103,10 @@ function main() {
   const vendorRoot = join(runtimeDir, 'vendor')
   if (existsSync(vendorRoot)) {
     for (const entry of readdirSafe(vendorRoot)) {
+      // 只处理目录：vendor/README.md 等文件跳过（darwin 上对
+      // '文件/node_modules' 的 rmSync 会抛 ENOTDIR——Windows 静默跳过、
+      // mac 直接崩溃，2026-08-27 macos runner 首跑实测）
+      if (!entry.isDirectory()) continue
       rmSync(join(vendorRoot, entry.name, 'node_modules'), { recursive: true, force: true })
     }
   }
