@@ -147,3 +147,13 @@ tar -xzf dsh-runtime.tar.gz -C dsh-runtime   # 注意必须 -C 解到独立目�
 
 - **不可 spread 有原型的宿主对象**：对象展开只拷贝自身可枚举属性——EventEmitter 实例的 on/checkForUpdates 在原型上，展开后会丢，packaged 首启即崩（v0.1.14 启动失败根因）。绑定注入用 Proxy 委托（get 拦截注入自定义方法，其余 Reflect.get）。此坑同样适用事件/拦截器类对象的绑定。
 - **发版前「打包版自检」缺口**：dev 模式跑不到 packaged 分支（isPackaged=false 跳过）——凡有 isPackaged 分支的代码，发布前必须用打包产物（win-unpacked）实际跑一遍启动；发版守卫应加「打包产物启动」环节。
+
+## 已验证经验（2026-08-28 v0.1.15 收货）
+
+- **第三方升级规则（用户拍板）**：第三方插件更新到 npm 最新；本地版本超前 NPM 则以本地为准（vendor/魔改优先）。大跳版本（如 dream-skin 0.4.14→8.28.0）先核实 author/发布时间/peer 范围，pnpm install 实测无 ERR_PNPM 即安全；普通跳级（0.1.1→0.1.4）直接升。
+- **vendor 定制被作者采纳的判定法（genui 案例）**：本地 vendor 魔改（模板中心/成就/dock 对齐）是否已入上游 npm 版——下载 npm tarball（npm pack → tar -xzf），对比定制标记（搜「模板中心/探索成就/面板/dock」）+ `lib/index.js` 字节一致 + `client.js` 仅 minifier 微调（byte-level diff 定位）→ 判定采纳，可切回 `^x.y.z` 并（保留 vendor 作参考即可，不必删除）。
+- **版本决策时核查「未 bump 的源码 commit」**：`git log v上版本..HEAD -- <插件>` 与插件 package.json 版本比对——若源码有改动但版本没 bump（panels 0.1.8 后 3 个优化 commit 未升版），发版前补 bump（否则安装版首启误报/插件中心版本混乱）。
+- **发版变更一次收齐再跑归档**：本次同批含 session-manager 新增 + panels 补版本 + 第三方升级 + genui 切 npm，若分批改动每批都跑一遍 prepare-runtime 耗时大——列出全部变更→一次改完→跑一次归档（改 plan 前先确认变更全集，避免 kill 重跑）。
+- **git log v上版本..HEAD 分组要含非插件 commit**：CI 流程（如 build-mac workflow）、文档/临时脚本删除、skill 更新也计入 release notes 分组（用户惯例：改了就升、变动即说明）。
+- **打包版自检的「单实例锁」误判**：打包版自检时若已有实例运行，新进程会 `single-instance lock FAILED -> quit`（正常退出非崩溃）——判断标准看 `~/.ssid/ssid.log` 的 `phase start() completed` 与 bootKernel ok，而非进程存活。
+- **release-notes 单测的 cwd**：`node --import tsx/esm --test plugins/dsh-ssid-panels/tests/release-notes.test.ts` 必须在仓库根或有本地 tsx 的目录跑，绝对路径 + 错误 cwd 会 ERR_MODULE_NOT_FOUND（tsx 从 cwd 解析）——在 panels 目录内跑即可。
