@@ -171,14 +171,23 @@ function main() {
 
   const runPnpm = (label, args) => {
     console.log(`      → ${label}`)
+    // 执行方式按扩展名判定（2026-08-27 macos runner 实测）：
+    //   - .cjs/.mjs/.js：真实 Node 脚本 → node 执行（Windows 本机习惯；
+    //     且 .cjs 直接 spawn 会被 cmd 按文件关联假执行，必须 node）
+    //   - 其他（如 pnpm/action-setup 的 .bin/pnpm bash shim）→ 直接
+    //     spawn，让 shim 自带的解释器（#!/bin/sh）接管；node 解析 bash
+    //     会 SyntaxError（macos runner 实测）
+    const useNode = /\.(cjs|mjs|js)$/i.test(pnpm)
+    const cmd = useNode ? node : pnpm
+    const cmdArgs = useNode ? [pnpm, ...args] : args
     // timeout 防止 ERESOLVE 类解析死循环挂住（实测 npm --force 卡死数十分钟）
-    const r = spawnSync(node, [pnpm, ...args], {
+    const r = spawnSync(cmd, cmdArgs, {
       cwd: runtimeDir,
       stdio: 'inherit',
       timeout: 30 * 60 * 1000,
       env: {
         ...process.env,
-        PATH: dirname(node) + ';' + process.env.PATH,
+        PATH: dirname(node) + (isWin ? ';' : ':') + process.env.PATH,
       },
     })
     if (r.error) {
