@@ -17,10 +17,20 @@ module.exports = async function afterPack(context) {
   const appResourcesDir = isMac
     ? join(context.appOutDir, 'Electron.app', 'Contents', 'Resources')
     : join(context.appOutDir, 'resources')
-  // 归档完整性校验：extraResources 复制失败时立刻失败，避免交付残缺安装包
+  // 归档完整性校验：extraResources 复制失败时立刻失败，避免交付残缺安装包。
+  // 兜底复制（2026-08-27 macos runner 实测：electron-builder 26 mac 上
+  // extraResources 未把归档复制进 .app，afterPack 时缺失）——若缺失但
+  // 项目根存在归档，afterPack 内补拷（Win 上已在位则跳过，行为不变）；
+  // 再缺失才抛错。
   const archive = join(appResourcesDir, 'dsh-runtime.tar.gz')
   if (!existsSync(archive)) {
-    throw new Error(`[after-pack] 缺少 ${archive}（请先运行 node scripts/prepare-runtime.mjs）`)
+    const archiveSrc = join(context.packager.projectDir, 'dsh-runtime.tar.gz')
+    if (existsSync(archiveSrc)) {
+      cpSync(archiveSrc, archive, { force: true })
+      console.log(`[after-pack] 归档经 afterPack 兜底复制 -> ${archive}`)
+    } else {
+      throw new Error(`[after-pack] 缺少 ${archive} 且项目根无 dsh-runtime.tar.gz（请先运行 node scripts/prepare-runtime.mjs）`)
+    }
   }
   console.log(`[after-pack] dsh-runtime.tar.gz OK (${(statSync(archive).size / 1024 / 1024).toFixed(1)} MB)`)
 
