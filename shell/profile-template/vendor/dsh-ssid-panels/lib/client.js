@@ -1164,7 +1164,10 @@ window.__ModuleLoader__.load({
 						setShellVersion(sv);
 						if (parsed.version === null) return;
 						if (sv !== null && parsed.version !== sv) return;
-						if (readSeen() !== parsed.version) setShow(true);
+						if (readSeen() !== parsed.version) {
+							writeSeen(parsed.version);
+							setShow(true);
+						}
 					}).catch(() => {});
 				}, 2e3);
 				return () => {

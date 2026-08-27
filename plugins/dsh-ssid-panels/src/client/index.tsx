@@ -977,7 +977,12 @@ function ChangelogGate(): ReactNode {
           if (parsed.version === null) return
           // 守卫：条目版本与壳版本不一致（发版漏同步）不弹
           if (sv !== null && parsed.version !== sv) return
-          if (readSeen() !== parsed.version) setShow(true)
+          // 展示即标记（2026-08-27）：modal 全屏覆盖，用户必见；未点关闭直接退出/重启
+          // 也不会在下次启动重复弹（旧逻辑只在 close 时写，被用户感知为「重启后还弹」）。
+          if (readSeen() !== parsed.version) {
+            writeSeen(parsed.version)
+            setShow(true)
+          }
         })
         .catch(() => { /* 数据拿不到就不弹 */ })
     }, 2000)
