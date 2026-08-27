@@ -83,6 +83,21 @@ jobs:
         # 由 artifact / Release 步骤显式控制——2026-08-27 实测 CI detection）
         run: npm run pack:mac -- --publish never
 
+      - name: 诊断签名状态（打包步骤后 always 跑，供后续修复定位）
+        if: always()
+        working-directory: shell/dist-electron
+        run: |
+          echo "=== Contents 结构 ==="
+          ls -la "mac-arm64/Electron.app/Contents/" 2>&1 | head -15
+          echo "=== Info.plist ==="
+          ls -la "mac-arm64/Electron.app/Contents/Info.plist" 2>&1
+          echo "=== MacOS 可执行 ==="
+          ls -la "mac-arm64/Electron.app/Contents/MacOS/" 2>&1
+          echo "=== codesign 详查 ==="
+          codesign -dv "mac-arm64/Electron.app" 2>&1 | head -10
+          echo "=== 重签尝试（不 --deep 先试，看报错差异）==="
+          codesign --force --sign - "mac-arm64/Electron.app" 2>&1 | tail -5
+
       - name: 上传构建产物（Actions artifact，无需 Release）
         uses: actions/upload-artifact@v4
         with:
