@@ -63,7 +63,12 @@ jobs:
 
       - name: 安装 shell 依赖（darwin 原生二进制随平台下载）
         working-directory: shell
-        run: pnpm install --frozen-lockfile
+        run: |
+          pnpm install --frozen-lockfile
+          # pnpm 10+ 默认禁止依赖 build scripts（shell 无 allowBuilds 配置），
+          # electron postinstall 未跑 → dist 缺失（2026-08-27 实测报
+          # electronDist does not exist）；显式执行 install.js 下载 darwin 包
+          node node_modules/electron/install.js
 
       - name: 重建运行时归档（mac 平台原生二进制 + DSH 版本读取）
         working-directory: shell
@@ -74,7 +79,9 @@ jobs:
 
       - name: 打包（bundle-kernel + electron-builder --mac dmg/zip）
         working-directory: shell
-        run: npm run pack:mac
+        # --publish never：CI 环境下 electron-builder 自动 publish（释放前
+        # 由 artifact / Release 步骤显式控制——2026-08-27 实测 CI detection）
+        run: npm run pack:mac -- --publish never
 
       - name: 上传构建产物（Actions artifact，无需 Release）
         uses: actions/upload-artifact@v4
