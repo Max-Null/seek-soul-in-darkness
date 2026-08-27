@@ -1137,19 +1137,17 @@ window.__ModuleLoader__.load({
 				marginTop: 2
 			} }, descOf(plugin)) : null))));
 		}
-		const CHANGELOG_SEEN_KEY = "ssid-changelog-seen";
-		const readSeen = () => {
+		async function hostReadSeen() {
 			try {
-				return localStorage.getItem(CHANGELOG_SEEN_KEY) ?? "";
+				const value = await api("changelogSeen.get");
+				return typeof value?.version === "string" ? value.version : "";
 			} catch {
 				return "";
 			}
-		};
-		const writeSeen = (version) => {
-			try {
-				localStorage.setItem(CHANGELOG_SEEN_KEY, version);
-			} catch {}
-		};
+		}
+		function hostWriteSeen(version) {
+			api("changelogSeen.set", { version }).catch(() => {});
+		}
 		function ChangelogGate() {
 			const t = useT();
 			const [data, setData] = (0, react.useState)(null);
@@ -1157,15 +1155,15 @@ window.__ModuleLoader__.load({
 			const [show, setShow] = (0, react.useState)(false);
 			(0, react.useEffect)(() => {
 				const timer = setTimeout(() => {
-					Promise.all([api("about"), api("release-notes")]).then(([aboutValue, notesValue]) => {
+					Promise.all([api("about"), api("release-notes")]).then(async ([aboutValue, notesValue]) => {
 						const sv = aboutValue?.shellVersion ?? null;
 						const parsed = notesValue;
 						setData(parsed);
 						setShellVersion(sv);
 						if (parsed.version === null) return;
 						if (sv !== null && parsed.version !== sv) return;
-						if (readSeen() !== parsed.version) {
-							writeSeen(parsed.version);
+						if (await hostReadSeen() !== parsed.version) {
+							hostWriteSeen(parsed.version);
 							setShow(true);
 						}
 					}).catch(() => {});
@@ -1176,7 +1174,7 @@ window.__ModuleLoader__.load({
 			}, []);
 			if (!show || data === null || data.version === null) return null;
 			const close = () => {
-				if (data.version !== null) writeSeen(data.version);
+				if (data.version !== null) hostWriteSeen(data.version);
 				setShow(false);
 			};
 			return (0, react_dom.createPortal)((0, react.createElement)("div", { style: {

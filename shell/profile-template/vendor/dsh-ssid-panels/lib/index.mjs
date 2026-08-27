@@ -648,6 +648,24 @@ function readNotifyConfig() {
 		return { ...NOTIFY_DEFAULTS };
 	}
 }
+const CHANGELOG_SEEN_PATH = join(homedir(), ".ssid", "changelog-seen.json");
+function readChangelogSeen() {
+	try {
+		const parsed = JSON.parse(readFileSync(CHANGELOG_SEEN_PATH, "utf8"));
+		return typeof parsed === "object" && parsed !== null && typeof parsed.version === "string" ? parsed.version : "";
+	} catch {
+		return "";
+	}
+}
+function writeChangelogSeen(version) {
+	try {
+		mkdirSync(dirname(CHANGELOG_SEEN_PATH), { recursive: true });
+		writeFileSync(CHANGELOG_SEEN_PATH, JSON.stringify({
+			version,
+			at: (/* @__PURE__ */ new Date()).toISOString()
+		}), "utf8");
+	} catch {}
+}
 const SESSION_ROOT_CONFIG_PATH = join(homedir(), ".ssid", "session-root.json");
 /** B 方案（2026-08-23）：已载入会话清单——「移除已载入会话」只删清单内，
 *  隔离后新建的会话不受影响。 */
@@ -871,6 +889,12 @@ function apply(ctx) {
 	}
 	const api = {
 		"notify.get": () => readNotifyConfig(),
+		"changelogSeen.get": () => ({ version: readChangelogSeen() }),
+		"changelogSeen.set": (payload) => {
+			const version = payload?.["version"];
+			if (typeof version === "string" && version !== "") writeChangelogSeen(version);
+			return { ok: true };
+		},
 		"notify.set": (payload) => {
 			const record = payload;
 			const next = readNotifyConfig();

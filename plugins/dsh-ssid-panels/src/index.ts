@@ -198,6 +198,31 @@ function readNotifyConfig(): NotifyConfig {
   }
 }
 
+// ── 更新日志弹窗 seen（2026-08-27）：host 侧文件（~/.ssid/changelog-seen.json）。
+// 不做 localStorage——思灵 DSH web 端口每次启动随机，origin（host:port）变化会让
+// localStorage 标记丢失（用户反馈：每次重启都弹「思灵已更新」）。文件侧与端口无关。
+const CHANGELOG_SEEN_PATH = join(homedir(), '.ssid', 'changelog-seen.json')
+
+function readChangelogSeen(): string {
+  try {
+    const parsed = JSON.parse(readFileSync(CHANGELOG_SEEN_PATH, 'utf8')) as unknown
+    return typeof parsed === 'object' && parsed !== null && typeof (parsed as { version?: unknown }).version === 'string'
+      ? (parsed as { version: string }).version
+      : ''
+  } catch {
+    return ''
+  }
+}
+
+function writeChangelogSeen(version: string): void {
+  try {
+    mkdirSync(dirname(CHANGELOG_SEEN_PATH), { recursive: true })
+    writeFileSync(CHANGELOG_SEEN_PATH, JSON.stringify({ version, at: new Date().toISOString() }), 'utf8')
+  } catch {
+    // 非致命：下次仍会弹（尽力而为）
+  }
+}
+
 // ── 会话存储隔离开关（2026-08-22）：独立 root 与共享 root 的切换 + 载入 ───
 // 开关状态存 ~/.ssid/session-root.json：isolated（设置页开关）+ applied（本次
 // boot 实际生效值，shell/kernel.ts 回写）。两个根路径由 kernel.ts 启动时经
@@ -433,6 +458,12 @@ export function apply(ctx: Context): void {
   }
   const api: Record<string, ApiMethod> = {
     'notify.get': () => readNotifyConfig(),
+    'changelogSeen.get': () => ({ version: readChangelogSeen() }),
+    'changelogSeen.set': (payload) => {
+      const version = (payload as Record<string, unknown> | null)?.['version']
+      if (typeof version === 'string' && version !== '') writeChangelogSeen(version)
+      return { ok: true }
+    },
     'notify.set': (payload) => {
       const record = payload as Record<string, unknown> | null
       const next = readNotifyConfig()

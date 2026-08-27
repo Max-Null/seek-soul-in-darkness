@@ -951,14 +951,20 @@ interface LocaleAwareContext {
 }
 
 // ── 启动更新日志弹窗（2026-08-26，设计参照 fractal ChangelogDialog）──────
-// 规则：每版本只弹一次——localStorage(ssid-changelog-seen) 记录已看版本；
-// host 返回的条目版本必须 == 壳版本（守卫，防发版漏同步弹错）；关窗即视为已读。
-const CHANGELOG_SEEN_KEY = 'ssid-changelog-seen'
-const readSeen = (): string => {
-  try { return localStorage.getItem(CHANGELOG_SEEN_KEY) ?? '' } catch { return '' }
+// 规则：每版本只弹一次——已看版本由 host 侧文件记录（~/.ssid/changelog-seen.json）：
+// 思灵 DSH web 端口每次启动随机，localStorage 按 origin(host:port) 隔离会丢标记
+// （用户反馈「每次重启都弹」）；host 文件与端口无关。守卫不变：条目版本必须 ==
+// 壳版本（防发版漏同步弹错）；展示即标记（未点关闭直接退出/重启不重复弹）。
+async function hostReadSeen(): Promise<string> {
+  try {
+    const value = await api('changelogSeen.get') as { version?: string } | null
+    return typeof value?.version === 'string' ? value.version : ''
+  } catch {
+    return ''
+  }
 }
-const writeSeen = (version: string): void => {
-  try { localStorage.setItem(CHANGELOG_SEEN_KEY, version) } catch { /* 忽略 */ }
+function hostWriteSeen(version: string): void {
+  void api('changelogSeen.set', { version }).catch(() => { /* 尽力而为 */ })
 }
 
 function ChangelogGate(): ReactNode {
@@ -969,7 +975,7 @@ function ChangelogGate(): ReactNode {
   useEffect(() => {
     const timer = setTimeout(() => {
       void Promise.all([api('about'), api('release-notes')])
-        .then(([aboutValue, notesValue]) => {
+        .then(async ([aboutValue, notesValue]) => {
           const sv = (aboutValue as AboutInfo)?.shellVersion ?? null
           const parsed = notesValue as RnsData
           setData(parsed)
@@ -977,10 +983,9 @@ function ChangelogGate(): ReactNode {
           if (parsed.version === null) return
           // 守卫：条目版本与壳版本不一致（发版漏同步）不弹
           if (sv !== null && parsed.version !== sv) return
-          // 展示即标记（2026-08-27）：modal 全屏覆盖，用户必见；未点关闭直接退出/重启
-          // 也不会在下次启动重复弹（旧逻辑只在 close 时写，被用户感知为「重启后还弹」）。
-          if (readSeen() !== parsed.version) {
-            writeSeen(parsed.version)
+          // 展示即标记：host 侧（跨端口一致）；未点关闭直接退出/重启不重复弹
+          if ((await hostReadSeen()) !== parsed.version) {
+            hostWriteSeen(parsed.version)
             setShow(true)
           }
         })
@@ -990,7 +995,7 @@ function ChangelogGate(): ReactNode {
   }, [])
   if (!show || data === null || data.version === null) return null
   const close = (): void => {
-    if (data.version !== null) writeSeen(data.version)
+    if (data.version !== null) hostWriteSeen(data.version)
     setShow(false)
   }
   const modalStyle: React.CSSProperties = {
