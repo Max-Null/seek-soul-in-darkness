@@ -92,8 +92,13 @@ jobs:
       - name: 校验并重签 app（adhoc，复刻 Mac 手动成功路径）
         working-directory: shell
         run: |
-          APP="dist-electron/mac-arm64/Electron.app"
-          echo "=== Contents 结构 ==="
+          echo "=== mac-arm64 顶层（找真实 .app）==="
+          ls -la dist-electron/mac-arm64/ 2>&1
+          echo "=== Info.plist 探测 ==="
+          find dist-electron/mac-arm64 -maxdepth 3 -name "Info.plist" 2>/dev/null | head
+          APP=$(ls -d dist-electron/mac-arm64/*.app 2>/dev/null | head -1 || true)
+          [ -z "$APP" ] && APP="dist-electron/mac-arm64/Electron.app"
+          echo "=== 使用 app: $APP ==="
           ls "$APP/Contents/" 2>&1
           test -f "$APP/Contents/Info.plist" || { echo "ERROR: Info.plist 缺失，app 未完整组装"; exit 1; }
           test -d "$APP/Contents/MacOS" || { echo "ERROR: MacOS 目录缺失"; exit 1; }
