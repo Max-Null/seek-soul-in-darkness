@@ -35,6 +35,24 @@ module.exports = async function afterPack(context) {
   console.log(`[after-pack] dsh-runtime.tar.gz OK (${(statSync(archive).size / 1024 / 1024).toFixed(1)} MB)`)
 
   injectBundledNode(context, appResourcesDir)
+  adhocResignMac(context, isMac)
+}
+
+/**
+ * mac 重签（2026-08-27 根治「已损坏，无法打开」）：identity: null 时
+ * electron-builder 跳过签名，但 Electron.app 自带上游 adhoc 签名；本轮
+ * 向 Resources 写入归档/node 后旧签名与内容不匹配 → macOS 判定损坏
+ * （codesign: no resources but signature indicates they must be present）。
+ * 以 --sign -（adhoc）深度重签使签名与内容一致；无 Apple 证书即可运行
+ * （浏览下载仍可能需右键-打开绕过 quarantine，但那与签名无关）。
+ */
+function adhocResignMac(context, isMac) {
+  if (!isMac) return
+  const appPath = join(context.appOutDir, 'Electron.app')
+  const r = execFileSync('codesign', ['--force', '--deep', '--sign', '-', appPath], {
+    encoding: 'utf8', timeout: 120_000,
+  })
+  console.log(`[after-pack] adhoc resigned ${appPath}`)
 }
 
 /**
