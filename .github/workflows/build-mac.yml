@@ -77,26 +77,28 @@ jobs:
           export PNPM_CMD="$(which pnpm)"
           node scripts/prepare-runtime.mjs
 
-      - name: 打包（bundle-kernel + electron-builder --mac dmg/zip）
+      # 三步打包（2026-08-27 实测定型）：
+      #   1. --mac dir：只产出 stage（Electron.app + 归档/node 注入，afterPack
+      #      不做重签——该时刻 app 未组装完成，codesign 报 unrecognized）
+      #   2. 完整 app 上 codesign --force --deep --sign -（与 Mac 手动成功
+      #      命令一致；修复 identity:null + Resources 改动致旧 adhoc 签名失效）
+      #   3. --prepackaged：基于已签好的 app 制作 dmg/zip + blockmap
+      - name: 打包 stage（electron-builder --mac dir）
         working-directory: shell
-        # --publish never：CI 环境下 electron-builder 自动 publish（释放前
-        # 由 artifact / Release 步骤显式控制——2026-08-27 实测 CI detection）
-        run: npm run pack:mac -- --publish never
+        run: npm run bundle-kernel && npx electron-builder --mac dir --publish never
 
-      - name: 诊断签名状态（打包步骤后 always 跑，供后续修复定位）
-        if: always()
-        working-directory: shell/dist-electron
+      - name: 校验并重签 app（adhoc，复刻 Mac 手动成功路径）
+        working-directory: shell
         run: |
-          echo "=== Contents 结构 ==="
-          ls -la "mac-arm64/Electron.app/Contents/" 2>&1 | head -15
-          echo "=== Info.plist ==="
-          ls -la "mac-arm64/Electron.app/Contents/Info.plist" 2>&1
-          echo "=== MacOS 可执行 ==="
-          ls -la "mac-arm64/Electron.app/Contents/MacOS/" 2>&1
-          echo "=== codesign 详查 ==="
-          codesign -dv "mac-arm64/Electron.app" 2>&1 | head -10
-          echo "=== 重签尝试（不 --deep 先试，看报错差异）==="
-          codesign --force --sign - "mac-arm64/Electron.app" 2>&1 | tail -5
+          APP="dist-electron/mac-arm64/Electron.app"
+          test -f "$APP/Contents/Info.plist" || { echo "ERROR: Info.plist 缺失，app 未完整组装"; exit 1; }
+          test -d "$APP/Contents/MacOS" || { echo "ERROR: MacOS 目录缺失"; exit 1; }
+          codesign --force --deep --sign - "$APP"
+          codesign -dv "$APP" 2>&1 | head -4
+
+      - name: 打包 dmg/zip（基于已重签 app）
+        working-directory: shell
+        run: npx electron-builder --mac dmg zip --publish never --prepackaged dist-electron/mac-arm64
 
       - name: 上传构建产物（Actions artifact，无需 Release）
         uses: actions/upload-artifact@v4
