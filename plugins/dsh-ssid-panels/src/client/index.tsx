@@ -889,6 +889,17 @@ function SsidAboutSection(): ReactNode {
           disabled: checking,
         }, checking ? t('checking') : t('checkNow')),
       ),
+      // 检查结果跟随按钮（2026-08-27：结果/状态流与按钮同卡）
+      latest === null
+        ? update?.code === 'api-failed'
+          ? createElement('div', { style: { ...ssid.muted, marginTop: 8 } }, t('apiFailed', { status: update.status ?? '?' }))
+          : update?.code === 'check-failed'
+            ? createElement('div', { style: { ...ssid.muted, marginTop: 8 } }, t('checkFailed'))
+            : createElement('div', { style: { ...ssid.muted, marginTop: 8 } }, t('noRelease'))
+        : newer
+          ? createElement('div', { style: { ...ssid.text, color: ssid.accent, marginTop: 8 } }, t('newVersion', { name: latest.name, tag: latest.tag, date: latest.publishedAt.slice(0, 10) }))
+          : createElement('div', { style: { ...ssid.text, marginTop: 8 } }, t('latestVersion', { name: latest.name, tag: latest.tag })),
+      updBlock,
     ),
     createElement('div', { style: ssid.card },
       createElement('div', { style: ssid.title }, createElement('span', null, t('notifyTitle'))),
@@ -897,18 +908,6 @@ function SsidAboutSection(): ReactNode {
     createElement('div', { style: ssid.card },
       createElement('div', { style: ssid.title }, createElement('span', null, t('sessionRootTitle'))),
       createElement(SessionRootSettings),
-    ),
-    createElement('div', { style: ssid.card },
-      createElement('div', { style: ssid.title }, createElement('span', null, t('checkUpdates'))),      latest === null
-        ? update?.code === 'api-failed'
-          ? createElement('div', { style: ssid.muted }, t('apiFailed', { status: update.status ?? '?' }))
-          : update?.code === 'check-failed'
-            ? createElement('div', { style: ssid.muted }, t('checkFailed'))
-            : createElement('div', { style: ssid.muted }, t('noRelease'))
-        : newer
-          ? createElement('div', { style: { ...ssid.text, color: ssid.accent } }, t('newVersion', { name: latest.name, tag: latest.tag, date: latest.publishedAt.slice(0, 10) }))
-          : createElement('div', { style: ssid.text }, t('latestVersion', { name: latest.name, tag: latest.tag })),
-      updBlock,
     ),
     createElement('div', { style: ssid.card },
       createElement('div', { style: ssid.title }, createElement('span', null, t('changelog'))),

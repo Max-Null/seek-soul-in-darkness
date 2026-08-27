@@ -1079,17 +1079,30 @@ window.__ModuleLoader__.load({
 					check();
 				},
 				disabled: checking
-			}, checking ? t("checking") : t("checkNow")))), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("notifyTitle"))), (0, react.createElement)(NotifySettings)), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("sessionRootTitle"))), (0, react.createElement)(SessionRootSettings)), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("checkUpdates"))), latest === null ? update?.code === "api-failed" ? (0, react.createElement)("div", { style: ssid.muted }, t("apiFailed", { status: update.status ?? "?" })) : update?.code === "check-failed" ? (0, react.createElement)("div", { style: ssid.muted }, t("checkFailed")) : (0, react.createElement)("div", { style: ssid.muted }, t("noRelease")) : newer ? (0, react.createElement)("div", { style: {
+			}, checking ? t("checking") : t("checkNow"))), latest === null ? update?.code === "api-failed" ? (0, react.createElement)("div", { style: {
+				...ssid.muted,
+				marginTop: 8
+			} }, t("apiFailed", { status: update.status ?? "?" })) : update?.code === "check-failed" ? (0, react.createElement)("div", { style: {
+				...ssid.muted,
+				marginTop: 8
+			} }, t("checkFailed")) : (0, react.createElement)("div", { style: {
+				...ssid.muted,
+				marginTop: 8
+			} }, t("noRelease")) : newer ? (0, react.createElement)("div", { style: {
 				...ssid.text,
-				color: ssid.accent
+				color: ssid.accent,
+				marginTop: 8
 			} }, t("newVersion", {
 				name: latest.name,
 				tag: latest.tag,
 				date: latest.publishedAt.slice(0, 10)
-			})) : (0, react.createElement)("div", { style: ssid.text }, t("latestVersion", {
+			})) : (0, react.createElement)("div", { style: {
+				...ssid.text,
+				marginTop: 8
+			} }, t("latestVersion", {
 				name: latest.name,
 				tag: latest.tag
-			})), updBlock), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("changelog"))), notes === null || notes.version == null ? (0, react.createElement)("div", { style: ssid.muted }, t("changelogEmpty")) : (0, react.createElement)("div", null, (0, react.createElement)("div", { style: {
+			})), updBlock), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("notifyTitle"))), (0, react.createElement)(NotifySettings)), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("sessionRootTitle"))), (0, react.createElement)(SessionRootSettings)), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("changelog"))), notes === null || notes.version == null ? (0, react.createElement)("div", { style: ssid.muted }, t("changelogEmpty")) : (0, react.createElement)("div", null, (0, react.createElement)("div", { style: {
 				...ssid.text,
 				fontWeight: 600,
 				marginBottom: 6
