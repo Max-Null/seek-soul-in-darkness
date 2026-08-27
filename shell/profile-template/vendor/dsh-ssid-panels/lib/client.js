@@ -119,6 +119,7 @@ window.__ModuleLoader__.load({
 				httpFailed: "查询失败（HTTP {status}）",
 				title: "思灵 (SSiD)",
 				slogan: "于黑暗中，探寻灵魂。",
+				starMe: "给我个星吧",
 				checkUpdates: "检查更新",
 				noRelease: "暂无发布版本",
 				newVersion: "新版本可用：{name}（{tag}，{date}）",
@@ -208,6 +209,7 @@ window.__ModuleLoader__.load({
 				httpFailed: "Query failed (HTTP {status})",
 				title: "SSiD",
 				slogan: "Seek the soul in the dark.",
+				starMe: "Give us a star",
 				checkUpdates: "Check for updates",
 				noRelease: "No published release",
 				newVersion: "New version: {name} ({tag}, {date})",
@@ -1036,11 +1038,48 @@ window.__ModuleLoader__.load({
 				fontSize: 13,
 				lineHeight: "20px",
 				color: "var(--dsw-alias-label-tertiary)"
-			} }, t("slogan"))), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("title"))), (0, react.createElement)("div", { style: {
+			} }, t("slogan"))), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: {
+				display: "flex",
+				alignItems: "center",
+				gap: 12
+			} }, (0, react.createElement)("div", { style: {
+				flex: 1,
+				minWidth: 0
+			} }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("title"))), (0, react.createElement)("div", { style: {
 				fontSize: 22,
 				fontWeight: 700,
 				color: "var(--dsw-alias-label-primary, #d8e0ea)"
-			} }, `v${about?.shellVersion ?? "…"}`)), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("notifyTitle"))), (0, react.createElement)(NotifySettings)), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("sessionRootTitle"))), (0, react.createElement)(SessionRootSettings)), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("checkUpdates"))), latest === null ? update?.code === "api-failed" ? (0, react.createElement)("div", { style: ssid.muted }, t("apiFailed", { status: update.status ?? "?" })) : update?.code === "check-failed" ? (0, react.createElement)("div", { style: ssid.muted }, t("checkFailed")) : (0, react.createElement)("div", { style: ssid.muted }, t("noRelease")) : newer ? (0, react.createElement)("div", { style: {
+			} }, `v${about?.shellVersion ?? "…"}`)), (0, react.createElement)("a", {
+				href: "https://github.com/Max-Null/seek-soul-in-darkness",
+				target: "_blank",
+				rel: "noopener noreferrer",
+				style: {
+					flex: "none",
+					display: "inline-flex",
+					alignItems: "center",
+					gap: 5,
+					fontSize: 12,
+					lineHeight: "16px",
+					color: "var(--dsw-alias-state-business-primary, #4f8ef7)",
+					textDecoration: "none",
+					border: "1px solid color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 35%, transparent)",
+					borderRadius: 999,
+					padding: "4px 11px"
+				}
+			}, (0, react.createElement)("span", { style: {
+				fontSize: 13,
+				lineHeight: 1
+			} }, "⭐"), (0, react.createElement)("span", null, t("starMe"))), (0, react.createElement)("button", {
+				style: {
+					...ssid.btn,
+					flex: "none",
+					marginTop: 0
+				},
+				onClick: () => {
+					check();
+				},
+				disabled: checking
+			}, checking ? t("checking") : t("checkNow")))), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("notifyTitle"))), (0, react.createElement)(NotifySettings)), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("sessionRootTitle"))), (0, react.createElement)(SessionRootSettings)), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("checkUpdates"))), latest === null ? update?.code === "api-failed" ? (0, react.createElement)("div", { style: ssid.muted }, t("apiFailed", { status: update.status ?? "?" })) : update?.code === "check-failed" ? (0, react.createElement)("div", { style: ssid.muted }, t("checkFailed")) : (0, react.createElement)("div", { style: ssid.muted }, t("noRelease")) : newer ? (0, react.createElement)("div", { style: {
 				...ssid.text,
 				color: ssid.accent
 			} }, t("newVersion", {
@@ -1050,16 +1089,7 @@ window.__ModuleLoader__.load({
 			})) : (0, react.createElement)("div", { style: ssid.text }, t("latestVersion", {
 				name: latest.name,
 				tag: latest.tag
-			})), (0, react.createElement)("button", {
-				style: {
-					...ssid.btn,
-					marginTop: 8
-				},
-				onClick: () => {
-					check();
-				},
-				disabled: checking
-			}, checking ? t("checking") : t("checkNow")), updBlock), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("changelog"))), notes === null || notes.version == null ? (0, react.createElement)("div", { style: ssid.muted }, t("changelogEmpty")) : (0, react.createElement)("div", null, (0, react.createElement)("div", { style: {
+			})), updBlock), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("changelog"))), notes === null || notes.version == null ? (0, react.createElement)("div", { style: ssid.muted }, t("changelogEmpty")) : (0, react.createElement)("div", null, (0, react.createElement)("div", { style: {
 				...ssid.text,
 				fontWeight: 600,
 				marginBottom: 6
