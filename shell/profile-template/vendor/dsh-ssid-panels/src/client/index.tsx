@@ -117,6 +117,7 @@ const STRINGS = {
     httpFailed: '查询失败（HTTP {status}）',
     title: '思灵 (SSiD)',
     slogan: '于黑暗中，探寻灵魂。',
+    starMe: '给我个星吧',
     checkUpdates: '检查更新',
     noRelease: '暂无发布版本',
     newVersion: '新版本可用：{name}（{tag}，{date}）',
@@ -206,6 +207,7 @@ const STRINGS = {
     httpFailed: 'Query failed (HTTP {status})',
     title: 'SSiD',
     slogan: 'Seek the soul in the dark.',
+    starMe: 'Give us a star',
     checkUpdates: 'Check for updates',
     noRelease: 'No published release',
     newVersion: 'New version: {name} ({tag}, {date})',
@@ -871,9 +873,33 @@ function SsidAboutSection(): ReactNode {
       createElement('p', { style: { margin: 0, fontSize: 13, lineHeight: '20px', color: 'var(--dsw-alias-label-tertiary)' } }, t('slogan')),
     ),
     createElement('div', { style: ssid.card },
-      createElement('div', { style: ssid.title }, createElement('span', null, t('title'))),
-      createElement('div', { style: { fontSize: 22, fontWeight: 700, color: 'var(--dsw-alias-label-primary, #d8e0ea)' } },
-        `v${about?.shellVersion ?? '…'}`),
+      createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
+        createElement('div', { style: { flex: 1, minWidth: 0 } },
+          createElement('div', { style: ssid.title }, createElement('span', null, t('title'))),
+          createElement('div', { style: { fontSize: 22, fontWeight: 700, color: 'var(--dsw-alias-label-primary, #d8e0ea)' } },
+            `v${about?.shellVersion ?? '…'}`)),
+        createElement('a', {
+          href: 'https://github.com/Max-Null/seek-soul-in-darkness',
+          target: '_blank', rel: 'noopener noreferrer',
+          style: { flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, lineHeight: '16px', color: 'var(--dsw-alias-state-business-primary, #4f8ef7)', textDecoration: 'none', border: '1px solid color-mix(in srgb, var(--dsw-alias-state-business-primary, #4f8ef7) 35%, transparent)', borderRadius: 999, padding: '4px 11px' },
+        }, createElement('span', { style: { fontSize: 13, lineHeight: 1 } }, '⭐'), createElement('span', null, t('starMe'))),
+        createElement('button', {
+          style: { ...ssid.btn, flex: 'none', marginTop: 0 },
+          onClick: () => { void check() },
+          disabled: checking,
+        }, checking ? t('checking') : t('checkNow')),
+      ),
+      // 检查结果跟随按钮（2026-08-27：结果/状态流与按钮同卡）
+      latest === null
+        ? update?.code === 'api-failed'
+          ? createElement('div', { style: { ...ssid.muted, marginTop: 8 } }, t('apiFailed', { status: update.status ?? '?' }))
+          : update?.code === 'check-failed'
+            ? createElement('div', { style: { ...ssid.muted, marginTop: 8 } }, t('checkFailed'))
+            : createElement('div', { style: { ...ssid.muted, marginTop: 8 } }, t('noRelease'))
+        : newer
+          ? createElement('div', { style: { ...ssid.text, color: ssid.accent, marginTop: 8 } }, t('newVersion', { name: latest.name, tag: latest.tag, date: latest.publishedAt.slice(0, 10) }))
+          : createElement('div', { style: { ...ssid.text, marginTop: 8 } }, t('latestVersion', { name: latest.name, tag: latest.tag })),
+      updBlock,
     ),
     createElement('div', { style: ssid.card },
       createElement('div', { style: ssid.title }, createElement('span', null, t('notifyTitle'))),
@@ -882,19 +908,6 @@ function SsidAboutSection(): ReactNode {
     createElement('div', { style: ssid.card },
       createElement('div', { style: ssid.title }, createElement('span', null, t('sessionRootTitle'))),
       createElement(SessionRootSettings),
-    ),
-    createElement('div', { style: ssid.card },
-      createElement('div', { style: ssid.title }, createElement('span', null, t('checkUpdates'))),      latest === null
-        ? update?.code === 'api-failed'
-          ? createElement('div', { style: ssid.muted }, t('apiFailed', { status: update.status ?? '?' }))
-          : update?.code === 'check-failed'
-            ? createElement('div', { style: ssid.muted }, t('checkFailed'))
-            : createElement('div', { style: ssid.muted }, t('noRelease'))
-        : newer
-          ? createElement('div', { style: { ...ssid.text, color: ssid.accent } }, t('newVersion', { name: latest.name, tag: latest.tag, date: latest.publishedAt.slice(0, 10) }))
-          : createElement('div', { style: ssid.text }, t('latestVersion', { name: latest.name, tag: latest.tag })),
-      createElement('button', { style: { ...ssid.btn, marginTop: 8 }, onClick: () => { void check() }, disabled: checking }, checking ? t('checking') : t('checkNow')),
-      updBlock,
     ),
     createElement('div', { style: ssid.card },
       createElement('div', { style: ssid.title }, createElement('span', null, t('changelog'))),
@@ -951,14 +964,20 @@ interface LocaleAwareContext {
 }
 
 // ── 启动更新日志弹窗（2026-08-26，设计参照 fractal ChangelogDialog）──────
-// 规则：每版本只弹一次——localStorage(ssid-changelog-seen) 记录已看版本；
-// host 返回的条目版本必须 == 壳版本（守卫，防发版漏同步弹错）；关窗即视为已读。
-const CHANGELOG_SEEN_KEY = 'ssid-changelog-seen'
-const readSeen = (): string => {
-  try { return localStorage.getItem(CHANGELOG_SEEN_KEY) ?? '' } catch { return '' }
+// 规则：每版本只弹一次——已看版本由 host 侧文件记录（~/.ssid/changelog-seen.json）：
+// 思灵 DSH web 端口每次启动随机，localStorage 按 origin(host:port) 隔离会丢标记
+// （用户反馈「每次重启都弹」）；host 文件与端口无关。守卫不变：条目版本必须 ==
+// 壳版本（防发版漏同步弹错）；展示即标记（未点关闭直接退出/重启不重复弹）。
+async function hostReadSeen(): Promise<string> {
+  try {
+    const value = await api('changelogSeen.get') as { version?: string } | null
+    return typeof value?.version === 'string' ? value.version : ''
+  } catch {
+    return ''
+  }
 }
-const writeSeen = (version: string): void => {
-  try { localStorage.setItem(CHANGELOG_SEEN_KEY, version) } catch { /* 忽略 */ }
+function hostWriteSeen(version: string): void {
+  void api('changelogSeen.set', { version }).catch(() => { /* 尽力而为 */ })
 }
 
 function ChangelogGate(): ReactNode {
@@ -969,7 +988,7 @@ function ChangelogGate(): ReactNode {
   useEffect(() => {
     const timer = setTimeout(() => {
       void Promise.all([api('about'), api('release-notes')])
-        .then(([aboutValue, notesValue]) => {
+        .then(async ([aboutValue, notesValue]) => {
           const sv = (aboutValue as AboutInfo)?.shellVersion ?? null
           const parsed = notesValue as RnsData
           setData(parsed)
@@ -977,7 +996,11 @@ function ChangelogGate(): ReactNode {
           if (parsed.version === null) return
           // 守卫：条目版本与壳版本不一致（发版漏同步）不弹
           if (sv !== null && parsed.version !== sv) return
-          if (readSeen() !== parsed.version) setShow(true)
+          // 展示即标记：host 侧（跨端口一致）；未点关闭直接退出/重启不重复弹
+          if ((await hostReadSeen()) !== parsed.version) {
+            hostWriteSeen(parsed.version)
+            setShow(true)
+          }
         })
         .catch(() => { /* 数据拿不到就不弹 */ })
     }, 2000)
@@ -985,7 +1008,7 @@ function ChangelogGate(): ReactNode {
   }, [])
   if (!show || data === null || data.version === null) return null
   const close = (): void => {
-    if (data.version !== null) writeSeen(data.version)
+    if (data.version !== null) hostWriteSeen(data.version)
     setShow(false)
   }
   const modalStyle: React.CSSProperties = {

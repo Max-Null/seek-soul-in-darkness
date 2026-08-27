@@ -3,8 +3,8 @@
   "private": true,
   "dependencies": {
     "@huanlin/dsh-plugin-better-sidebar-plugin-office": "^0.1.2",
-    "@changfenhuang/dsh-genui": "file:./vendor/dsh-genui",
-    "@max-null/dsh-chat-rail": "^0.3.1",
+    "@changfenhuang/dsh-genui": "^0.9.6",
+    "@max-null/dsh-chat-rail": "^0.4.0",
     "@max-null/dsh-chinese-thinking": "^0.3.0",
     "@max-null/dsh-draft-polish": "^0.2.1",
     "@max-null/dsh-guardian": "^0.2.0",
@@ -17,18 +17,19 @@
     "@max-null/dsh-ssid-panels": "file:./vendor/dsh-ssid-panels",
     "@max-null/dsh-ssid-zh-ui": "file:./vendor/dsh-ssid-zh-ui",
     "dsh-better-sidebar": "^0.16.1",
-    "dsh-context": "^0.32.0",
+    "dsh-context": "^0.34.1",
     "dsh-context-doctor": "file:./vendor/dsh-context-doctor",
-    "dsh-dream-skin": "^0.4.14",
+    "dsh-dream-skin": "^8.28.0",
     "dsh-excel-panel": "^0.6.1",
     "dsh-sidebar-qa": "^0.4.0",
-    "dsh-video-preview": "^0.1.1",
+    "dsh-video-preview": "^0.1.4",
     "open-sea-skin": "file:./vendor/open-sea-skin-1.2.1.tgz",
     "@max-null/dsh-capture": "file:./vendor/dsh-capture",
     "@playwright/mcp": "0.0.79",
     "@max-null/dsh-achievements": "^0.1.0",
     "dsh-pocket": "1.14.5",
-    "ds-harness-remote": "^0.3.0"
+    "ds-harness-remote": "^0.3.36",
+    "dsh-session-manager": "file:./vendor/dsh-session-manager-0.2.2.tgz"
   },
   "dsh": {
     "profile": {
@@ -60,7 +61,8 @@
         "dsh-sidebar-qa",
         "@max-null/dsh-achievements",
         "dsh-pocket",
-        "ds-harness-remote"
+        "ds-harness-remote",
+        "dsh-session-manager"
       ]
     }
   }

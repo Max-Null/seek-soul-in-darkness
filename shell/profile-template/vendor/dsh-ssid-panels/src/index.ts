@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { zstdDecompressSync } from 'node:zlib'
 import { interruptedTurnClosers, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { parseReleaseNotes } from './release-notes'
+import { seedPromptLibrary } from './prompt-seeds'
 
 const require = createRequire(import.meta.url)
 
@@ -194,6 +195,31 @@ function readNotifyConfig(): NotifyConfig {
     return { ...NOTIFY_DEFAULTS, ...(typeof parsed === 'object' && parsed !== null ? parsed : {}) }
   } catch {
     return { ...NOTIFY_DEFAULTS }
+  }
+}
+
+// ── 更新日志弹窗 seen（2026-08-27）：host 侧文件（~/.ssid/changelog-seen.json）。
+// 不做 localStorage——思灵 DSH web 端口每次启动随机，origin（host:port）变化会让
+// localStorage 标记丢失（用户反馈：每次重启都弹「思灵已更新」）。文件侧与端口无关。
+const CHANGELOG_SEEN_PATH = join(homedir(), '.ssid', 'changelog-seen.json')
+
+function readChangelogSeen(): string {
+  try {
+    const parsed = JSON.parse(readFileSync(CHANGELOG_SEEN_PATH, 'utf8')) as unknown
+    return typeof parsed === 'object' && parsed !== null && typeof (parsed as { version?: unknown }).version === 'string'
+      ? (parsed as { version: string }).version
+      : ''
+  } catch {
+    return ''
+  }
+}
+
+function writeChangelogSeen(version: string): void {
+  try {
+    mkdirSync(dirname(CHANGELOG_SEEN_PATH), { recursive: true })
+    writeFileSync(CHANGELOG_SEEN_PATH, JSON.stringify({ version, at: new Date().toISOString() }), 'utf8')
+  } catch {
+    // 非致命：下次仍会弹（尽力而为）
   }
 }
 
@@ -423,8 +449,21 @@ function required<T>(service: T | undefined, label: string): T {
  * @param ctx - host plugin context (webServer, webRuntime).
  */
 export function apply(ctx: Context): void {
+  // 首启模板库种子（0.1.6）：全局 prompt-library 为空时写入内置模板；幂等、失败不阻断。
+  try {
+    const seeded = seedPromptLibrary()
+    if (seeded > 0) ctx.logger.info(`[dsh-ssid-panels] prompt library seeded: ${seeded} template(s)`)
+  } catch (error) {
+    ctx.logger.warn(`[dsh-ssid-panels] prompt seed skipped: ${error instanceof Error ? error.message : String(error)}`)
+  }
   const api: Record<string, ApiMethod> = {
     'notify.get': () => readNotifyConfig(),
+    'changelogSeen.get': () => ({ version: readChangelogSeen() }),
+    'changelogSeen.set': (payload) => {
+      const version = (payload as Record<string, unknown> | null)?.['version']
+      if (typeof version === 'string' && version !== '') writeChangelogSeen(version)
+      return { ok: true }
+    },
     'notify.set': (payload) => {
       const record = payload as Record<string, unknown> | null
       const next = readNotifyConfig()
