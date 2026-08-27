@@ -130,13 +130,19 @@ function main() {
   writeFileSync(join(runtimeDir, '.npmrc'), 'node-linker=hoisted\n')
   console.log('[3.5/5] 已写入 .npmrc（node-linker=hoisted）')
 
-  // 4. pnpm install + 补 peer
+  // 4. pnpm install + 补 peer（2026-08-27 跨平台：win32 找 node.exe/NVM/APPDATA；
+  // darwin 找 /opt/homebrew 与 /usr/local/Homebrew 节点与全局 pnpm）
+  const isWin = process.platform === 'win32'
+  const nodeName = isWin ? 'node.exe' : 'node'
   const nodeCandidates = [
     process.env.DSH_NODE,
-    'D:\\Program Files\\nvm\\v22.22.2\\node.exe',
-    // PATH 上的 node.exe（nvm 路径漂移后仍可用——2026-08-22 D 盘 nvm
-    // 目录消失导致「缺少 Node」失败，构建机 Node ≥22.13 即可）
-    process.env.PATH?.split(';').map(p => join(p, 'node.exe')).find(p => existsSync(p)),
+    isWin ? 'D:\\Program Files\\nvm\\v22.22.2\\node.exe' : '',
+    // nvm 路径漂移后仍可用——2026-08-22 D 盘 nvm 目录消失导致「缺少 Node」
+    // 失败；构建机 Node ≥22.13 即可（macos runner 预装 node 于
+    // /opt/homebrew/bin 或 /usr/local/bin，或经 actions/setup-node 入 PATH）
+    !isWin ? '/opt/homebrew/bin/node' : '',
+    !isWin ? '/usr/local/bin/node' : '',
+    process.env.PATH?.split(isWin ? ';' : ':').map(p => join(p, nodeName)).find(p => existsSync(p)),
   ].filter(Boolean)
   const node = nodeCandidates.find((c) => existsSync(c))
   if (!node) {
@@ -146,9 +152,11 @@ function main() {
   const pnpmCandidates = [
     process.env.PNPM_CMD,
     join(dirname(node), 'node_modules', 'pnpm', 'bin', 'pnpm.cjs'),
-    // 用户级 npm 全局（nvm 目录消失后 node 用系统安装，pnpm 全局在
-    // %APPDATA%\npm——2026-08-22 实测 D 盘 nvm 移除后此处是唯一来源）
-    join(process.env.APPDATA ?? '', 'npm', 'node_modules', 'pnpm', 'bin', 'pnpm.cjs'),
+    // 用户级 npm 全局（win32：%APPDATA%\npm；darwin：/usr/local 或
+    // /opt/homebrew 下的 lib/node_modules——homebrew 安装 npm 的默认位置）
+    isWin ? join(process.env.APPDATA ?? '', 'npm', 'node_modules', 'pnpm', 'bin', 'pnpm.cjs') : '',
+    !isWin ? '/usr/local/lib/node_modules/pnpm/bin/pnpm.cjs' : '',
+    !isWin ? '/opt/homebrew/lib/node_modules/pnpm/bin/pnpm.cjs' : '',
   ].filter(Boolean)
   const pnpm = pnpmCandidates.find((p) => existsSync(p)) || null
   if (!pnpm) {

@@ -1,0 +1,95 @@
+# SSiD macOS 打包——GitHub Actions 云端 Mac 构建（本仓库 Windows 侧无需 macOS）
+#
+# 设计（见 docs/决策/2026-08-27-macOS支持与云端打包-实施.md）：
+#   - macOS runner（macos-latest）自带 Xcode/Homebrew；公共仓库 Actions 免费。
+#   - 归档（dsh-runtime.tar.gz）内含 per-platform 原生二进制（esbuild/koffi/node-pty 等），
+#     因此 mac 包必须在 macOS 上重跑 prepare-runtime.mjs（与 Windows 本机同源逻辑）。
+#   - DSH 版本来源与构建机一致：sparse clone deepseek-harness 并设 DSH_CHECKOUT
+#     （读取 apps/cli/package.json 的 version；与本地 H: 盘 checkout 同源）。
+#   - 产物：dmg（分发）+ zip（electron-updater mac 增量更新用）+ latest-mac.yml/blockmap。
+#   - 签名：当前 identity: null（未签名，用户首次打开需右键-打开绕过 Gatekeeper）；
+#     后续 Developer ID 签名 + notarize 见实施文档 §后续。
+#
+# 触发：
+#   - workflow_dispatch 手动（开发验证：默认不上传 Release，产物存 Actions artifact）
+#   - push tag v0.1.* 自动（与 Windows 发版链对齐，上传 GitHub Release 资产）
+#
+# 用法：GitHub 仓库 → Actions → build-mac → Run workflow（选分支 feat/macos-packaging
+#      或 main 推送 tag 自动触发）。产物在 Actions run 页 Artifacts 或 Release 资产。
+name: build-mac
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: '上传至 GitHub Release（仅当 workflow 运行在 tag 上时有意义）'
+        type: boolean
+        default: false
+  push:
+    tags:
+      - 'v0.1.*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-mac:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - name: 检出 SSiD
+        uses: actions/checkout@v4
+
+      - name: 检出 DSH 源码（只读版本号；与构建机 DSH_CHECKOUT 同源）
+        env:
+          DSH_CHECKOUT: ${{ runner.temp }}/deepseek-harness
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse \
+            https://github.com/deepseek-ai/deepseek-harness "$DSH_CHECKOUT"
+          git -C "$DSH_CHECKOUT" sparse-checkout set apps/cli
+          echo "DSH_CHECKOUT=$DSH_CHECKOUT" >> "$GITHUB_ENV"
+
+      - name: Node 22 + pnpm 11
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: 安装 shell 依赖（darwin 原生二进制随平台下载）
+        working-directory: shell
+        run: pnpm install --frozen-lockfile
+
+      - name: 重建运行时归档（mac 平台原生二进制 + DSH 版本读取）
+        working-directory: shell
+        run: |
+          export DSH_NODE="$(which node)"
+          export PNPM_CMD="$(which pnpm)"
+          node scripts/prepare-runtime.mjs
+
+      - name: 打包（bundle-kernel + electron-builder --mac dmg/zip）
+        working-directory: shell
+        run: npm run pack:mac
+
+      - name: 上传构建产物（Actions artifact，无需 Release）
+        uses: actions/upload-artifact@v4
+        with:
+          name: ssid-mac-dist
+          path: |
+            shell/dist-electron/*.dmg
+            shell/dist-electron/*.zip
+            shell/dist-electron/latest-mac.yml
+            shell/dist-electron/*.blockmap
+          if-no-files-found: error
+
+      - name: 上传 GitHub Release（tag 触发或手动勾选 publish）
+        if: github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.publish)
+        uses: softprops/action-gh-release@v2
+        with:
+          fail_on_unmatched_files: false
+          files: |
+            shell/dist-electron/*.dmg
+            shell/dist-electron/*.zip
+            shell/dist-electron/latest-mac.yml
+            shell/dist-electron/*.blockmap

@@ -86,6 +86,28 @@ const safeLog = (text) => {
 const PRODUCT_NAME = 'SSiD'
 const WINDOW_TITLE = '思灵 (SSiD)'
 
+// ── 跨平台 node 可执行定位（2026-08-27 macOS 支持）──────────────
+// win32：node.exe；darwin/linux：无扩展名 node（复制时的目标文件名同）。
+// 候选链 = 打包内置 resources/node/<nodeName>（afterPack 注入，见
+// scripts/after-pack.cjs）→ NVM v22.22.2（win32 开发机）→ Homebrew
+// （darwin：/opt/homebrew ARM / /usr/local Intel）→ PATH 上的 node
+// （交给 spawn 按 PATH 解析）。刻意不用 process.execPath：Electron 与
+// 纯 node 的 ABI 不同，worker / tsx 用 electron 跑必崩。
+const platformNodeName = () => (process.platform === 'win32' ? 'node.exe' : 'node')
+const nodeCandidates = (extra = []) => [
+  process.resourcesPath ? join(process.resourcesPath, 'node', platformNodeName()) : '',
+  process.env.NVM_HOME ? join(process.env.NVM_HOME, 'v22.22.2', 'node.exe') : '',
+  process.platform === 'darwin' ? '/opt/homebrew/bin/node' : '',
+  process.platform === 'darwin' ? '/usr/local/bin/node' : '',
+  platformNodeName(),
+  ...extra,
+].filter((c) => c !== '')
+/** 取第一个真实存在的候选；全不存在时回退平台默认名（spawn 按 PATH 解析）。 */
+const resolveNode = (extra = []) => {
+  const found = nodeCandidates(extra).find((c) => existsSync(c))
+  return found ?? platformNodeName()
+}
+
 const asset = (name) => fileURLToPath(new URL(`./assets/${name}`, import.meta.url))
 
 const workerScript = process.argv.find((arg) => arg.endsWith('worker.cjs'))
@@ -131,20 +153,16 @@ if (workerScript !== undefined) {
 //  - 无 IPC 通道时记录丢弃的消息，便于定位 host 收不到结果的场景。
 function runWorkerMode(workerScript) {
   safeLog(`[worker] script=${workerScript}\n`)
-  // node 候选链：打包版内置 node.exe（afterPack 注入）→ NVM v22.22.2
-  // （开发机）→ PATH 上的 node.exe（交给 spawn 解析，开发裸跑兜底）。
-  // 刻意不放 process.execPath：electron 跑 worker 必崩（ABI 不匹配）。
-  const candidates = [
-    process.resourcesPath ? join(process.resourcesPath, 'node', 'node.exe') : '',
-    process.env.NVM_HOME ? join(process.env.NVM_HOME, 'v22.22.2', 'node.exe') : '',
-    'node.exe',
-  ]
-  const nodeExe = candidates.find((c) => c !== '' && existsSync(c)) ?? 'node.exe'
-  const nodeResolved = nodeExe === 'node.exe' || existsSync(nodeExe)
+  // node 候选链（跨平台，2026-08-27）：打包内置 node（afterPack 注入）→
+  // NVM v22.22.2（win32 开发机）→ Homebrew（darwin）→ PATH 上的 node
+  // （交给 spawn 解析，开发裸跑兜底）。刻意不放 process.execPath：
+  // electron 跑 worker 必崩（ABI 不匹配）。
+  const nodeExe = resolveNode()
+  const nodeResolved = nodeExe !== platformNodeName() || existsSync(nodeExe)
   safeLog(`[worker] node=${nodeExe}\n`)
   if (!nodeResolved) {
     // node 不可用：向 host 发真实原因，让用户看到可行动的报错。
-    const message = `directory picker worker needs a node.exe but none found (candidates: ${candidates.filter(Boolean).join(', ')})`
+    const message = `directory picker worker needs a ${platformNodeName()} but none found (candidates: ${nodeCandidates().join(', ')})`
     if (typeof process.send === 'function') process.send({ kind: 'error', message })
     safeLog(`[worker] FAIL ${message}\n`)
     process.exit(1)
@@ -338,10 +356,17 @@ async function start() {
       }
     }
     commands.push('pnpm', 'pnpm.cmd')
-    const userNpm = join(homedir(), 'AppData', 'Roaming', 'npm')
-    for (const name of ['pnpm.cmd', 'pnpm.exe', 'pnpm']) {
-      const candidate = join(userNpm, name)
-      if (existsSync(candidate)) commands.push(candidate)
+    // 用户级 npm 全局 shim 目录（2026-08-27 跨平台）：win32 为 %APPDATA%\npm；
+    // darwin 为 /usr/local/lib/node_modules（Intel）或 /opt/homebrew/lib/node_modules（ARM）。
+    const shimNames = process.platform === 'win32' ? ['pnpm.cmd', 'pnpm.exe', 'pnpm'] : ['pnpm']
+    const userNpmDirs = process.platform === 'win32'
+      ? [join(homedir(), 'AppData', 'Roaming', 'npm')]
+      : ['/usr/local/lib/node_modules', '/opt/homebrew/lib/node_modules']
+    for (const dir of userNpmDirs) {
+      for (const name of shimNames) {
+        const candidate = join(dir, name)
+        if (existsSync(candidate)) commands.push(candidate)
+      }
     }
     return commands
   }
@@ -769,18 +794,13 @@ async function start() {
     }
     // 预制 Playwright MCP 运行时定位（v0.2.0）：profile 的 mcp-playwright
     // 条目（profile-template/cordis.patch.yml）通过 !!js 读取这两个 env：
-    //   SSID_MCP_NODE   —— 执行 @playwright/mcp/cli.js 的 node.exe
+    //   SSID_MCP_NODE   —— 执行 @playwright/mcp/cli.js 的 node
     //   SSID_MCP_PW_CLI —— 本 profile 内 pin 依赖的 cli.js 绝对路径
-    // node 候选链与 worker 分支一致：打包内置 node.exe（afterPack 注入）→
-    // NVM v22.22.2 → PATH 上的 node.exe。刻意不用 process.execPath（electron
-    // ABI 不匹配）。浏览器二进制不随安装包发布，首次使用需
-    // `playwright install chromium`（见 docs/决策/2026-08-24-Playwright-MCP-预制-实施方案.md）。
-    const mcpNodeCandidates = [
-      process.resourcesPath ? join(process.resourcesPath, 'node', 'node.exe') : '',
-      process.env.NVM_HOME ? join(process.env.NVM_HOME, 'v22.22.2', 'node.exe') : '',
-      'node.exe',
-    ]
-    const mcpNodeExe = mcpNodeCandidates.find((c) => c !== '' && existsSync(c))
+    // node 候选链与 worker 分支同一 helper（跨平台，2026-08-27）：打包内置
+    // → NVM v22.22.2（win32）→ Homebrew（darwin）→ PATH 上的 node。刻意不用
+    // process.execPath（Electron ABI 不匹配）。浏览器二进制不随安装包发布，
+    // 首次使用需 `playwright install chromium`（见 docs/决策/2026-08-24-Playwright-MCP-预制-实施方案.md）。
+    const mcpNodeExe = resolveNode()
     if (mcpNodeExe) {
       process.env.SSID_MCP_NODE = mcpNodeExe
       safeLog(`ssid: prefab mcp node=${mcpNodeExe}\n`)
@@ -1031,10 +1051,17 @@ async function start() {
   }
   const playNotificationSound = () => {
     try {
-      spawn('powershell', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', '[System.Media.SystemSounds]::Asterisk.Play()'], {
-        windowsHide: true,
-        stdio: 'ignore',
-      })
+      if (process.platform === 'win32') {
+        // win32：PowerShell 系统音（SystemSounds.Asterisk）。
+        spawn('powershell', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', '[System.Media.SystemSounds]::Asterisk.Play()'], {
+          windowsHide: true,
+          stdio: 'ignore',
+        })
+      } else if (process.platform === 'darwin') {
+        // darwin：afplay 系统提示音（macOS 出厂内置资源）。
+        spawn('afplay', ['/System/Library/Sounds/Glass.aiff'], { stdio: 'ignore' })
+      }
+      // 其他平台：不给静默 Notification 配音效（无跨平台零依赖方案）
     } catch {
       // 音效失败不影响通知
     }
