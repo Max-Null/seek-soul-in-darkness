@@ -654,9 +654,15 @@ async function start() {
       const archiveVer = readArchiveVersion(archive)
       const profileVer = readProfileVersion()
       const hasModules = profileReady()
+      const versionMismatch = archiveVer !== null && profileVer !== archiveVer
+      // 开发裸跑（app.isPackaged=false）且 profile 已就绪:尊重本地部署/手工
+      // 修改,永不自动覆盖——否则本地测试未发布插件(如 dsh-plugin-center
+      // 0.2.14)每次启动都被归档(0.2.13)回滚,无法在 publish 前验证(2026-08-29)。
+      // 如需强制重新部署:设 SSID_DEV_DEPLOY=1,或删除 profile 目录。
+      const devSkipDeploy = !app.isPackaged && hasModules && process.env.SSID_DEV_DEPLOY !== '1'
       // 版本对得上且模块在 → 跳过；否则（首启/老版本/模块丢失）重新部署。
       // archiveVer 为 null（异常归档）也部署：部署后版本文件落位，下次可对比。
-      const deployNeeded = !hasModules || (archiveVer !== null && profileVer !== archiveVer)
+      const deployNeeded = !hasModules || (versionMismatch && !devSkipDeploy)
       if (!deployNeeded) return 'skipped'
       safeLog(
         `ssid: runtime deploy needed (archive=${archiveVer ?? '?'} profile=${profileVer ?? '?'} hasModules=${hasModules})\n`,
