@@ -77,37 +77,16 @@ jobs:
           export PNPM_CMD="$(which pnpm)"
           node scripts/prepare-runtime.mjs
 
-      # 三步打包（2026-08-27 实测定型 v2）：
-      #   - dir target 在 mac 上产物不完整（Contents 仅 Resources，无
-      #     Info.plist/MacOS——上轮实测），改用它验证过的完整打包：
-      #   1. --mac dmg zip：先出完整 app 与首版产物（app 完整性已被
-      #      用户实装启动证实；afterPack 只做归档+node 注入，不重签）
-      #   2. 完整 app 上 codesign --force --deep --sign -（与 Mac 手动成功
-      #      命令一致；修复 identity:null + Resources 改动致旧 adhoc 签名失效）
-      #   3. --prepackaged 基于已签好的 app 重打 dmg/zip + blockmap（覆盖）
-      - name: 打包（electron-builder --mac dmg zip，完整 stage）
+      # 打包（2026-08-27 终局定型）：mac.identity: "-"（官方 ad-hoc 签名，
+      # electron-builder 在 afterPack 完成、app 组装完整后自行 codesign
+      # --sign -（官方文档 Code Signing for macOS Mac 节）。此前 identity:null
+      # 跳签 + 手工重签/--prepackaged 重打的多个坑（骨架/重签未进包）全部
+      # 绕开——单步出包，产物即签名一致的可运行 app。
+      - name: 打包（bundle-kernel + electron-builder --mac dmg/zip，官方 adhoc 签名）
         working-directory: shell
-        run: npm run bundle-kernel && npx electron-builder --mac dmg zip --publish never
-
-      - name: 校验并重签 app（adhoc，复刻 Mac 手动成功路径）
-        working-directory: shell
-        run: |
-          echo "=== mac-arm64 顶层（找真实 .app）==="
-          ls -la dist-electron/mac-arm64/ 2>&1
-          echo "=== Info.plist 探测 ==="
-          find dist-electron/mac-arm64 -maxdepth 3 -name "Info.plist" 2>/dev/null | head
-          APP=$(ls -d dist-electron/mac-arm64/*.app 2>/dev/null | head -1 || true)
-          [ -z "$APP" ] && APP="dist-electron/mac-arm64/Electron.app"
-          echo "=== 使用 app: $APP ==="
-          ls "$APP/Contents/" 2>&1
-          test -f "$APP/Contents/Info.plist" || { echo "ERROR: Info.plist 缺失，app 未完整组装"; exit 1; }
-          test -d "$APP/Contents/MacOS" || { echo "ERROR: MacOS 目录缺失"; exit 1; }
-          codesign --force --deep --sign - "$APP"
-          codesign -dv "$APP" 2>&1 | head -4
-
-      - name: 重打 dmg/zip（基于已重签 app，覆盖首版）
-        working-directory: shell
-        run: npx electron-builder --mac dmg zip --publish never --prepackaged dist-electron/mac-arm64
+        # --publish never：CI 环境下 electron-builder 自动 publish（释放前
+        # 由 artifact / Release 步骤显式控制——2026-08-27 实测 CI detection）
+        run: npm run pack:mac -- --publish never
 
       - name: 上传构建产物（Actions artifact，无需 Release）
         uses: actions/upload-artifact@v4
