@@ -68,6 +68,17 @@
       "darkModeSupport": true,
       "identity": "-"
     },
+    "dmg": {
+      "window": {
+        "width": 540,
+        "height": 400
+      },
+      "contents": [
+        { "x": 130, "y": 230 },
+        { "x": 410, "y": 230, "type": "link", "path": "/Applications" },
+        { "x": 130, "y": 320, "type": "file", "path": "ssid-mac-launcher.command", "name": "打开思灵.command" }
+      ]
+    },
     "publish": {
       "provider": "github",
       "owner": "Max-Null",

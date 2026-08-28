@@ -36,11 +36,19 @@ RESULT="${RESULT}系统: macOS $MAC_VER, 芯片 $CHIP ($CPU_BRAND)\n"
 echo ""
 echo "════════ 2. 定位思灵.app ════════"
 APP=""
+# 优先：脚本所在目录（dmg 挂载卷，小白双击启动器时 app 就在旁边）
+SELF_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
 for name in "${APP_NAMES[@]}"; do
-  for dir in "/Applications" "${HOME}/Applications" "${HOME}/Desktop" "${HOME}/Downloads" "${HOME}/Documents" "${HOME}/tmp"; do
-    if [ -d "${dir}/${name}" ]; then APP="${dir}/${name}"; break 2; fi
-  done
+  if [ -d "${SELF_DIR}/${name}" ]; then APP="${SELF_DIR}/${name}"; break; fi
 done
+# 其次：已安装位置
+if [ -z "$APP" ]; then
+  for name in "${APP_NAMES[@]}"; do
+    for dir in "/Applications" "${HOME}/Applications" "${HOME}/Desktop" "${HOME}/Downloads" "${HOME}/Documents" "${HOME}/tmp"; do
+      if [ -d "${dir}/${name}" ]; then APP="${dir}/${name}"; break 2; fi
+    done
+  done
+fi
 if [ -z "$APP" ]; then
   warn "未找到 思灵.app —— 请先把 app 拖入「应用程序」文件夹后重试"
   RESULT="${RESULT}[WARN] 未找到 app（检查了 /Applications、~/Applications、桌面、下载）\n"
