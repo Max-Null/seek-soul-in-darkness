@@ -1,21 +1,15 @@
 # SSiD macOS 打包——GitHub Actions 云端 Mac 构建（本仓库 Windows 侧无需 macOS）
 #
 # 设计（见 docs/决策/2026-08-27-macOS支持与云端打包-实施.md）：
-#   - macOS runner（macos-latest）自带 Xcode/Homebrew；公共仓库 Actions 免费。
-#   - 归档（dsh-runtime.tar.gz）内含 per-platform 原生二进制（esbuild/koffi/node-pty 等），
-#     因此 mac 包必须在 macOS 上重跑 prepare-runtime.mjs（与 Windows 本机同源逻辑）。
-#   - DSH 版本来源与构建机一致：sparse clone deepseek-harness 并设 DSH_CHECKOUT
-#     （读取 apps/cli/package.json 的 version；与本地 H: 盘 checkout 同源）。
-#   - 产物：dmg（分发）+ zip（electron-updater mac 增量更新用）+ latest-mac.yml/blockmap。
-#   - 签名：当前 identity: null（未签名，用户首次打开需右键-打开绕过 Gatekeeper）；
-#     后续 Developer ID 签名 + notarize 见实施文档 §后续。
+#   - arm64（macos-latest，M 系列）+ x64（macos-13 Intel）双 job——归档内含
+#     per-platform 原生二进制，各架构必须独立重建归档（universal 单包不可行）。
+#   - DSH 版本来源：完整 clone + 钉 dsh-v0.1.1-rc.2，落位 $GITHUB_WORKSPACE/..
+#     （= shell/tsconfig.json paths 的 ../../deepseek-harness）。
+#   - 图标：多尺度 icns（Dock 16-64 = 白线三层断口原子；128+ = 原彩色硅原子
+#     logo），由 iconutil 从 shell/assets/mac-icon-iconset 生成。
+#   - 签名：官方 ad-hoc（mac.identity: "-"，e-b 组装完成后自行 codesign）。
 #
-# 触发：
-#   - workflow_dispatch 手动（开发验证：默认不上传 Release，产物存 Actions artifact）
-#   - push tag v0.1.* 自动（与 Windows 发版链对齐，上传 GitHub Release 资产）
-#
-# 用法：GitHub 仓库 → Actions → build-mac → Run workflow（选分支 feat/macos-packaging
-#      或 main 推送 tag 自动触发）。产物在 Actions run 页 Artifacts 或 Release 资产。
+# 触发：workflow_dispatch 手动（默认只出 artifact）+ push tag v0.1.*（发布）。
 name: build-mac
 
 on:
@@ -33,7 +27,7 @@ permissions:
   contents: write
 
 jobs:
-  build-mac:
+  build-mac-arm64:
     runs-on: macos-latest
     timeout-minutes: 90
     steps:
@@ -42,12 +36,6 @@ jobs:
 
       - name: 检出 DSH 源码（tsconfig paths 同源；位置=shell/../.. 相对路径）
         run: |
-          # bundle-kernel 的 esbuild 按 shell/tsconfig.json paths 解析
-          # @deepseek-ai/dsh-*（映射 ../../deepseek-harness/...）。相对路径基准 =
-          # tsconfig 所在目录（<WS>/shell），../../ = $GITHUB_WORKSPACE/.. 一层
-          # （= /Users/runner/work/<repo>/）——2026-08-27 实测放错一层仍失败。
-          # 完整浅克隆（sparse 缺 paths 引用目录）；版本钉 dsh-v0.1.1-rc.2
-          # （与归档/发版链的 @deepseek-ai/dsh 版本一致，防 main 漂移）。
           git clone --depth 1 --branch dsh-v0.1.1-rc.2 \
             https://github.com/deepseek-ai/deepseek-harness \
             "$GITHUB_WORKSPACE/../deepseek-harness"
@@ -65,9 +53,6 @@ jobs:
         working-directory: shell
         run: |
           pnpm install --frozen-lockfile
-          # pnpm 10+ 默认禁止依赖 build scripts（shell 无 allowBuilds 配置），
-          # electron postinstall 未跑 → dist 缺失（2026-08-27 实测报
-          # electronDist does not exist）；显式执行 install.js 下载 darwin 包
           node node_modules/electron/install.js
 
       - name: 重建运行时归档（mac 平台原生二进制 + DSH 版本读取）
@@ -77,21 +62,87 @@ jobs:
           export PNPM_CMD="$(which pnpm)"
           node scripts/prepare-runtime.mjs
 
-      # 打包（2026-08-27 终局定型）：mac.identity: "-"（官方 ad-hoc 签名，
-      # electron-builder 在 afterPack 完成、app 组装完整后自行 codesign
-      # --sign -（官方文档 Code Signing for macOS Mac 节）。此前 identity:null
-      # 跳签 + 手工重签/--prepackaged 重打的多个坑（骨架/重签未进包）全部
-      # 绕开——单步出包，产物即签名一致的可运行 app。
+      - name: 生成多尺度 icns（Dock 白线三层 / 大图彩色原 logo）
+        working-directory: shell
+        run: |
+          iconutil -c icns assets/mac-icon-iconset -o assets/icon.icns
+          ls -la assets/icon.icns
+
       - name: 打包（bundle-kernel + electron-builder --mac dmg/zip，官方 adhoc 签名）
         working-directory: shell
-        # --publish never：CI 环境下 electron-builder 自动 publish（释放前
-        # 由 artifact / Release 步骤显式控制——2026-08-27 实测 CI detection）
         run: npm run pack:mac -- --publish never
 
-      - name: 上传构建产物（Actions artifact，无需 Release）
+      - name: 上传构建产物（Actions artifact）
         uses: actions/upload-artifact@v4
         with:
-          name: ssid-mac-dist
+          name: ssid-mac-dist-arm64
+          path: |
+            shell/dist-electron/*.dmg
+            shell/dist-electron/*.zip
+            shell/dist-electron/latest-mac.yml
+            shell/dist-electron/*.blockmap
+          if-no-files-found: error
+
+      - name: 上传 GitHub Release（tag 触发或手动勾选 publish）
+        if: github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.publish)
+        uses: softprops/action-gh-release@v2
+        with:
+          fail_on_unmatched_files: false
+          files: |
+            shell/dist-electron/*.dmg
+            shell/dist-electron/*.zip
+            shell/dist-electron/latest-mac.yml
+            shell/dist-electron/*.blockmap
+
+  build-mac-x64:
+    runs-on: macos-13
+    timeout-minutes: 90
+    steps:
+      - name: 检出 SSiD
+        uses: actions/checkout@v4
+
+      - name: 检出 DSH 源码（tsconfig paths 同源；位置=shell/../.. 相对路径）
+        run: |
+          git clone --depth 1 --branch dsh-v0.1.1-rc.2 \
+            https://github.com/deepseek-ai/deepseek-harness \
+            "$GITHUB_WORKSPACE/../deepseek-harness"
+          echo "DSH_CHECKOUT=$GITHUB_WORKSPACE/../deepseek-harness" >> "$GITHUB_ENV"
+
+      - name: Node 22 + pnpm 11
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: 安装 shell 依赖（darwin 原生二进制随平台下载）
+        working-directory: shell
+        run: |
+          pnpm install --frozen-lockfile
+          node node_modules/electron/install.js
+
+      - name: 重建运行时归档（x64 平台原生二进制 + DSH 版本读取）
+        working-directory: shell
+        run: |
+          export DSH_NODE="$(which node)"
+          export PNPM_CMD="$(which pnpm)"
+          node scripts/prepare-runtime.mjs
+
+      - name: 生成多尺度 icns（Dock 白线三层 / 大图彩色原 logo）
+        working-directory: shell
+        run: |
+          iconutil -c icns assets/mac-icon-iconset -o assets/icon.icns
+          ls -la assets/icon.icns
+
+      - name: 打包（bundle-kernel + electron-builder --mac dmg/zip，官方 adhoc 签名）
+        working-directory: shell
+        run: npm run pack:mac -- --publish never
+
+      - name: 上传构建产物（Actions artifact）
+        uses: actions/upload-artifact@v4
+        with:
+          name: ssid-mac-dist-x64
           path: |
             shell/dist-electron/*.dmg
             shell/dist-electron/*.zip

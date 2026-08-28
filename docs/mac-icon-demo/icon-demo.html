@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; padding: 28px; background: #1c1c1e; font-family: -apple-system, "Segoe UI", sans-serif; }
+  h2 { color: #8e8e93; font-size: 13px; font-weight: 600; margin: 0 0 14px; letter-spacing: .5px; }
+  .row { display: flex; gap: 22px; margin-bottom: 30px; flex-wrap: wrap; }
+  .cell { text-align: center; }
+  .cap { color: #8e8e93; font-size: 12px; margin-top: 8px; }
+  .board { background: #2c2c2e; border-radius: 22px; padding: 20px; display: inline-block; }
+  .board2 { background: #f2f2f4; border-radius: 22px; padding: 20px; display: inline-block; }
+  .dock-dark { background: #000; border-radius: 18px; padding: 14px 20px; display: flex; gap: 16px; align-items: flex-end; }
+  .dock-light { background: #e8e8ea; border-radius: 18px; padding: 14px 20px; display: flex; gap: 16px; align-items: flex-end; }
+  .tiny { font-size: 10px; }
+  svg { display: block; }
+</style>
+</head>
+<body>
+
+<h2>方案一「经典星环」— 忠实复刻原 logo 的简笔版（两圈轨道 + 电子 + 眼睛核）</h2>
+<div class="row">
+  <div class="cell">
+    <span class="board">
+      <svg width="180" height="180" viewBox="0 0 128 128">
+        <circle cx="64" cy="64" r="56" stroke="#fff" stroke-width="3" fill="none" opacity=".85"/>
+        <circle cx="64" cy="64" r="40" stroke="#fff" stroke-width="3" fill="none" opacity=".55"/>
+        <g fill="#fff">
+          <circle cx="64" cy="8"  r="4"/><circle cx="118" cy="48" r="4"/><circle cx="98" cy="116" r="4"/>
+          <circle cx="24" cy="110" r="4"/><circle cx="10" cy="44" r="4"/>
+          <circle cx="88" cy="28" r="3"/><circle cx="34" cy="30" r="3"/><circle cx="104" cy="88" r="3"/><circle cx="30" cy="92" r="3"/>
+        </g>
+        <circle cx="64" cy="64" r="19" stroke="#fff" stroke-width="3.5" fill="none"/>
+        <circle cx="64" cy="64" r="9.5" fill="#fff"/>
+        <circle cx="69" cy="60" r="3.5" fill="#1c1c1e"/>
+      </svg>
+    </span>
+    <div class="cap">一 · 经典星环</div>
+  </div>
+  <div class="cell">
+    <span class="board">
+      <svg width="180" height="180" viewBox="0 0 128 128">
+        <circle cx="64" cy="64" r="56" stroke="#fff" stroke-width="3" fill="none" opacity=".9"/>
+        <g stroke="#fff" stroke-width="3" fill="none" opacity=".7">
+          <path d="M28 28 A 40 40 0 0 0 28 100" stroke-dasharray="8 7"/>
+          <path d="M100 28 A 40 40 0 0 1 100 100" stroke-dasharray="8 7"/>
+        </g>
+        <g fill="#fff">
+          <circle cx="64" cy="8" r="4"/><circle cx="120" cy="52" r="4"/><circle cx="96" cy="116" r="4"/>
+          <circle cx="22" cy="108" r="4"/><circle cx="8" cy="44" r="4"/>
+        </g>
+        <circle cx="64" cy="64" r="19" stroke="#fff" stroke-width="3.5" fill="none"/>
+        <path d="M50 64 A 14 14 0 1 1 78 64" stroke="#fff" stroke-width="5" fill="none" stroke-linecap="round" transform="rotate(-20 64 64)"/>
+        <circle cx="64" cy="64" r="5" fill="#1c1c1e"/>
+      </svg>
+    </span>
+    <div class="cap">二 · 星环断线（轻盈）</div>
+  </div>
+</div>
+
+<h2>方案三「光点脉冲」— 用点替代眼睛高光，更装置化</h2>
+<div class="row">
+  <div class="cell">
+    <span class="board">
+      <svg width="180" height="180" viewBox="0 0 128 128">
+        <circle cx="64" cy="64" r="56" stroke="#fff" stroke-width="3" fill="none" opacity=".8"/>
+        <circle cx="64" cy="64" r="42" stroke="#fff" stroke-width="1.5" fill="none" opacity=".35"/>
+        <g fill="#fff">
+          <circle cx="64" cy="8" r="5"/><circle cx="117" cy="50" r="3.5"/><circle cx="78" cy="118" r="4"/>
+          <circle cx="20" cy="96" r="3.5"/><circle cx="18" cy="36" r="3"/>
+        </g>
+        <circle cx="64" cy="64" r="20" fill="#fff"/>
+        <circle cx="64" cy="64" r="10" fill="#1c1c1e"/>
+        <circle cx="69" cy="59" r="3.5" fill="#fff"/>
+      </svg>
+    </span>
+    <div class="cap">三 · 实心核眼（密度更高）</div>
+  </div>
+  <div class="cell">
+    <span class="board">
+      <svg width="180" height="180" viewBox="0 0 128 128">
+        <circle cx="64" cy="64" r="57" stroke="#fff" stroke-width="3" fill="none"/>
+        <circle cx="64" cy="64" r="38" stroke="#fff" stroke-width="1.5" fill="none" opacity=".45"/>
+        <circle cx="64" cy="64" r="17" stroke="#fff" stroke-width="4" fill="none"/>
+        <g fill="#fff">
+          <circle cx="64" cy="7" r="4"/><circle cx="121" cy="64" r="4"/><circle cx="64" cy="121" r="4"/><circle cx="7" cy="64" r="4"/>
+        </g>
+      </svg>
+    </span>
+    <div class="cap">四 · 十字轨道（极简几何）</div>
+  </div>
+</div>
+
+<h2>Dock 效果模拟（28px / 无底色纯白线 vs 深底）</h2>
+<div class="dock-dark">
+  <span>
+    <svg width="30" height="30" viewBox="0 0 128 128"><circle cx="64" cy="64" r="56" stroke="#fff" stroke-width="8" fill="none"/><circle cx="64" cy="64" r="40" stroke="#fff" stroke-width="8" fill="none" opacity=".45"/><g fill="#fff"><circle cx="64" cy="8" r="11"/><circle cx="118" cy="48" r="11"/><circle cx="98" cy="116" r="11"/><circle cx="24" cy="110" r="11"/><circle cx="10" cy="44" r="11"/></g><circle cx="64" cy="64" r="17" stroke="#fff" stroke-width="9" fill="none"/><circle cx="64" cy="64" r="8" fill="#fff"/></svg>
+    <div class="cap tiny">一</div>
+  </span>
+  <span>
+    <svg width="30" height="30" viewBox="0 0 128 128"><circle cx="64" cy="64" r="56" stroke="#fff" stroke-width="8" fill="none" opacity=".85"/><path d="M28 28 A 40 40 0 0 0 28 100" stroke="#fff" stroke-width="8" fill="none" opacity=".5" stroke-dasharray="22 20"/><path d="M100 28 A 40 40 0 0 1 100 100" stroke="#fff" stroke-width="8" fill="none" opacity=".5" stroke-dasharray="22 20"/><g fill="#fff"><circle cx="64" cy="8" r="11"/><circle cx="120" cy="52" r="11"/><circle cx="96" cy="116" r="11"/><circle cx="22" cy="108" r="11"/><circle cx="8" cy="44" r="11"/></g><circle cx="64" cy="64" r="17" stroke="#fff" stroke-width="9" fill="none"/><circle cx="64" cy="64" r="7" fill="#fff"/></svg>
+    <div class="cap tiny">二</div>
+  </span>
+  <span>
+    <svg width="30" height="30" viewBox="0 0 128 128"><rect width="128" height="128" rx="26" fill="#0b0f14"/><circle cx="64" cy="64" r="56" stroke="#fff" stroke-width="8" fill="none"/><circle cx="64" cy="64" r="40" stroke="#fff" stroke-width="8" fill="none" opacity=".45"/><g fill="#fff"><circle cx="64" cy="8" r="11"/><circle cx="118" cy="48" r="11"/><circle cx="98" cy="116" r="11"/><circle cx="24" cy="110" r="11"/><circle cx="10" cy="44" r="11"/></g><circle cx="64" cy="64" r="17" stroke="#fff" stroke-width="9" fill="none"/><circle cx="64" cy="64" r="8" fill="#fff"/></svg>
+    <div class="cap tiny">深底版</div>
+  </span>
+  <span style="align-self:flex-end;color:#3a3a3c;font-size:22px;padding:0 2px 6px;">▪️</span>
+</div>
+
+<div class="dock-light" style="margin-top:14px;">
+  <span>
+    <svg width="30" height="30" viewBox="0 0 128 128"><circle cx="64" cy="64" r="56" stroke="#333" stroke-width="8" fill="none"/><circle cx="64" cy="64" r="40" stroke="#333" stroke-width="8" fill="none" opacity=".4"/><g fill="#333"><circle cx="64" cy="8" r="11"/><circle cx="118" cy="48" r="11"/><circle cx="98" cy="116" r="11"/><circle cx="24" cy="110" r="11"/><circle cx="10" cy="44" r="11"/></g><circle cx="64" cy="64" r="17" stroke="#333" stroke-width="9" fill="none"/><circle cx="64" cy="64" r="8" fill="#3a3a3c"/></svg>
+    <div class="cap tiny">浅色底 → 线条转深灰</div>
+  </span>
+</div>
+
+</body>
+</html>
