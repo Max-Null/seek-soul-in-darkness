@@ -65,7 +65,7 @@ jobs:
       - name: 生成多尺度 icns（Dock 白线三层 / 大图彩色原 logo）
         working-directory: shell
         run: |
-          iconutil -c icns assets/mac-icon-iconset -o assets/icon.icns
+          iconutil -c icns assets/mac-icon.iconset -o assets/icon.icns
           ls -la assets/icon.icns
 
       - name: 打包（bundle-kernel + electron-builder --mac dmg/zip，官方 adhoc 签名）
@@ -95,7 +95,9 @@ jobs:
             shell/dist-electron/*.blockmap
 
   build-mac-x64:
-    runs-on: macos-13
+    # macos-13（Intel）runner 已退役（GitHub 2026 移除实证），x64 改走交叉构建：
+    # 同一 arm64 runner 上 npm_config_arch=x64 装 x64 原生二进制 + --x64 打包。
+    runs-on: macos-latest
     timeout-minutes: 90
     steps:
       - name: 检出 SSiD
@@ -116,15 +118,19 @@ jobs:
         with:
           version: 11
 
-      - name: 安装 shell 依赖（darwin 原生二进制随平台下载）
+      - name: 安装 shell 依赖（x64 原生二进制交叉下载）
         working-directory: shell
         run: |
+          export npm_config_arch=x64
+          export npm_config_platform=darwin
           pnpm install --frozen-lockfile
           node node_modules/electron/install.js
 
-      - name: 重建运行时归档（x64 平台原生二进制 + DSH 版本读取）
+      - name: 重建运行时归档（x64 原生二进制 + DSH 版本读取）
         working-directory: shell
         run: |
+          export npm_config_arch=x64
+          export npm_config_platform=darwin
           export DSH_NODE="$(which node)"
           export PNPM_CMD="$(which pnpm)"
           node scripts/prepare-runtime.mjs
@@ -132,12 +138,12 @@ jobs:
       - name: 生成多尺度 icns（Dock 白线三层 / 大图彩色原 logo）
         working-directory: shell
         run: |
-          iconutil -c icns assets/mac-icon-iconset -o assets/icon.icns
+          iconutil -c icns assets/mac-icon.iconset -o assets/icon.icns
           ls -la assets/icon.icns
 
-      - name: 打包（bundle-kernel + electron-builder --mac dmg/zip，官方 adhoc 签名）
+      - name: 打包（bundle-kernel + electron-builder --mac --x64，官方 adhoc 签名）
         working-directory: shell
-        run: npm run pack:mac -- --publish never
+        run: npm run pack:mac -- --x64 --publish never
 
       - name: 上传构建产物（Actions artifact）
         uses: actions/upload-artifact@v4
