@@ -147,3 +147,15 @@ tar -xzf dsh-runtime.tar.gz -C dsh-runtime   # 注意必须 -C 解到独立目�
 
 - **不可 spread 有原型的宿主对象**：对象展开只拷贝自身可枚举属性——EventEmitter 实例的 on/checkForUpdates 在原型上，展开后会丢，packaged 首启即崩（v0.1.14 启动失败根因）。绑定注入用 Proxy 委托（get 拦截注入自定义方法，其余 Reflect.get）。此坑同样适用事件/拦截器类对象的绑定。
 - **发版前「打包版自检」缺口**：dev 模式跑不到 packaged 分支（isPackaged=false 跳过）——凡有 isPackaged 分支的代码，发布前必须用打包产物（win-unpacked）实际跑一遍启动；发版守卫应加「打包产物启动」环节。
+
+## 已验证经验（2026-08-28 macOS 首验收货）
+
+> mac 包由 **GitHub Actions 云端构建**（`.github/workflows/build-mac.yml`，分支 `feat/macos-packaging`，详见 `docs/决策/2026-08-27-macOS支持与云端打包-实施.md`）——本地 Windows 无需任何 mac 工具链。
+
+- **mac 发版流程**：push 分支 → Actions「build-mac → Run workflow」（branch 选 feat/macos-packaging）→ 约 3-4 分钟 → Artifacts 下载 dmg（含「打开思灵.command」诊断启动器，双击即自检+自动修复+启动+出诊断报告）。
+- **归档必须 mac 上重建**（per-platform 原生二进制）；DSH 版本钉约定 tag（`--branch dsh-v0.1.1-rc.2`）；shell/tsconfig.json paths 相对解析要求 clone 落位于 `$GITHUB_WORKSPACE/..`。
+- **mac 签名用官方 `mac.identity: "-"`（ad-hoc）**——e-b 在 app 组装完整后自行签名（日志 `signing file=…/思灵.app`）。**不要**手工 codesign/`identity: null`/`--prepackaged` 重打：mac 最终 app 名是「思灵.app」，`Electron.app` 是中间骨架（Contents 仅 Resources）；null 跳签后旧签名失效 → 用户报「已损坏」；prepackaged 会产出目录级坏包（报「不完整」）。
+- **pnpm 10+ 默认禁依赖 build scripts**：mac runner 上 electron dist 需 `node node_modules/electron/install.js` 显式下载，否则 `electronDist does not exist`。
+- 其余平台差异（rmSync ENOTDIR / bash shim 被 node 执行 / esbuild 显式声明 / CI 自动 publish / mac Resources 路径）见实施文档 §9 踩坑表。
+- 正式对外分发仍需 Apple Developer ID 签名 + 公证（adhoc 首次打开需右键放行）。
+
