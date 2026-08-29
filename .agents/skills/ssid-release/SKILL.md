@@ -157,3 +157,10 @@ tar -xzf dsh-runtime.tar.gz -C dsh-runtime   # 注意必须 -C 解到独立目�
 - **git log v上版本..HEAD 分组要含非插件 commit**：CI 流程（如 build-mac workflow）、文档/临时脚本删除、skill 更新也计入 release notes 分组（用户惯例：改了就升、变动即说明）。
 - **打包版自检的「单实例锁」误判**：打包版自检时若已有实例运行，新进程会 `single-instance lock FAILED -> quit`（正常退出非崩溃）——判断标准看 `~/.ssid/ssid.log` 的 `phase start() completed` 与 bootKernel ok，而非进程存活。
 - **release-notes 单测的 cwd**：`node --import tsx/esm --test plugins/dsh-ssid-panels/tests/release-notes.test.ts` 必须在仓库根或有本地 tsx 的目录跑，绝对路径 + 错误 cwd 会 ERR_MODULE_NOT_FOUND（tsx 从 cwd 解析）——在 panels 目录内跑即可。
+
+## 已验证经验（2026-08-30 v0.1.16 收货）
+
+- **master 内核 web 认证 → 冒烟脚本裸 URL 失效**：0.1.2-alpha.1 起 web 服务带 token（`kernel.url` = authenticatedUrl，仅存在壳进程内存）。smoke-ui.cjs 裸 `http://127.0.0.1:<port>/` 拿到认证页 → 骨架断言全 FAIL（非产品问题）。**解法：打包版带 `--remote-debugging-port=9334` 启动 → Playwright `connectOverCDP` → 找 `http://127.0.0.1:<port>/` 主视图页（自带 token）**，在真实页面上跑骨架断言（composerSeat/textarea/Context Doctor，v0.1.16 实测 PASS）。smoke-ui.cjs 的裸 URL 路径与端口自动发现（按 `*ssid-shell*` 进程匹配）同样对打包版（win-unpacked 路径）失效——CDP 方案两者兼得。
+- **@deepseek-ai/dsh-* 未上 npm → 归档用 SSID_REGISTRY 私有源**：`0.1.2-alpha.1` 是 master 源码版，npm 各子包 E404（dsh-bash-local 等）。本地已搭 verdaccio（127.0.0.1:4873，本地存储 + 代理 npmjs）+ `pnpm -r publish` 253 包（见 2026-08-29 执行记录 L1 节）→ `SSID_REGISTRY=http://127.0.0.1:4873 node scripts/prepare-runtime.mjs`。官方 npm 发布后去掉 SSID_REGISTRY 即切官方源。
+- **归档 vendor 残留 tgz 混入**：profile-template/vendor 的旧物料（dsh-session-manager-0.2.2.tgz，v0.1.15 时代声明残留）会被 vendor 修复循环（4.5 步）当 vendor 条目复制进闭包 node_modules——发版前核对 vendor 目录只含当前声明条目，残留删除后重跑归档（指纹变化确认）。
+- **prepare-runtime 会删除 dsh-runtime 源目录**（[7/7]）——归档抽查前先 `New-Item -ItemType Directory dsh-runtime` 再 `tar -xzf dsh-runtime.tar.gz -C dsh-runtime`（-C 目标不存在即失败）。
