@@ -86,6 +86,19 @@ const MISSING_PEERS = [
   // @huanlin / dsh-ssid-panels 声明 cordis 本体（官方闭包用 @deepseek-ai/cordis fork，双实例共存）
   '@deepseek-ai/cordis-plugin-group@1.0.1',
   'cordis@4.0.0-rc.8',
+  // master 0.1.2-alpha.1 的 peer-only 服务定义包：消费方全部以 peerDependencies
+  // 声明、树内无任何包以 dependencies 引用（pnpm autoInstallPeers=false 不自动装，
+  // rc.2 闭包含这些包而 master 树中缺失——2026-08-29 自测 boot 失败实测：
+  // ds-harness-remote 缺 @deepseek-ai/dsh-settings。必须显式注入。
+  // 注：@deepseek-ai/dsh-client-runtime 与 @deepseek-ai/dsh-host-apiproxy 已在
+  // master 移除（rc.2 旧包，不注入——注入会 404）。
+  `@deepseek-ai/dsh-attachment@${DSH_VERSION}`,
+  `@deepseek-ai/dsh-brand@${DSH_VERSION}`,
+  `@deepseek-ai/dsh-credentials@${DSH_VERSION}`,
+  `@deepseek-ai/dsh-jobs@${DSH_VERSION}`,
+  `@deepseek-ai/dsh-session-persistence@${DSH_VERSION}`,
+  `@deepseek-ai/dsh-session-query@${DSH_VERSION}`,
+  `@deepseek-ai/dsh-settings@${DSH_VERSION}`,
 ]
 
 function main() {
@@ -127,8 +140,14 @@ function main() {
   console.log(`[3/5] 已注入 @deepseek-ai/dsh ${DSH_VERSION} + ${MISSING_PEERS.length} 个缺失 peer（精确 pin）`)
 
   // 3.5 扁平布局（electron-builder 26 不复制 pnpm symlink 节点，必须 hoisted）
-  writeFileSync(join(runtimeDir, '.npmrc'), 'node-linker=hoisted\n')
-  console.log('[3.5/5] 已写入 .npmrc（node-linker=hoisted）')
+  //     可选 SSID_REGISTRY：本地发布场景（@deepseek-ai/dsh 尚未上 npm 时
+  //     用私有 registry 重建归档）；不设则保持官方 registry（默认发版路径）。
+  const ssidRegistry = process.env.SSID_REGISTRY?.trim()
+  writeFileSync(
+    join(runtimeDir, '.npmrc'),
+    `node-linker=hoisted\n${ssidRegistry !== undefined && ssidRegistry !== '' ? `registry=${ssidRegistry}\n` : ''}`,
+  )
+  console.log(`[3.5/5] 已写入 .npmrc（node-linker=hoisted${ssidRegistry ? `, registry=${ssidRegistry}` : ''}）`)
 
   // 4. pnpm install + 补 peer
   const nodeCandidates = [

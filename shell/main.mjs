@@ -871,9 +871,19 @@ async function start() {
   win.addBrowserView(mainView)
   safeLog(`ssid: mainView webContentsId=${mainView.webContents.id} (main window contentId=${win.webContents.id})\n`)
 
+  // 壳环境标志：DSH 内执行的 dsh-quick-toolbar（原 dsh-header-unify）据
+  // `window.__SSID_SHELL__` 区分「壳环境（隐藏插件中心/侧栏原按钮，由标题栏按钮组接管）」与
+  // 「无壳 web（保留原按钮）」——无壳 web 若也隐藏会切断入口（2026-08-29
+  // web/master 上实测暴露）。dom-ready 后再注入，避免页面替换丢失。
+  mainView.webContents.once('dom-ready', () => {
+    void mainView.webContents.executeJavaScript('window.__SSID_SHELL__ = true').catch((error) => {
+      safeLog(`[shell-flag] inject __SSID_SHELL__ failed: ${error instanceof Error ? error.message : String(error)}\n`)
+    })
+  })
+
   // ── SSiD 标题栏统一按钮组：动作转发 ────────────────────────────────────
   // 标题栏按钮（插件中心/侧栏/底栏）→ IPC → 在 DSH UI（mainView）内派发
-  // `ssid:titlebar` CustomEvent，由内置插件 @max-null/dsh-header-unify 监听
+  // `ssid:titlebar` CustomEvent，由内置插件 @max-null/dsh-quick-toolbar 监听
   // 执行（hero 页无 session header，标题栏按钮是唯一常驻入口）。
   ipcMain.handle('ssid:title:action', (_event, action) => {
     if (typeof action !== 'string' || action === '') return
@@ -911,7 +921,9 @@ async function start() {
       mainView.webContents.toggleDevTools()
     }
   })
-  await mainView.webContents.loadURL(`http://127.0.0.1:${kernel.port}/`)
+  // master 内核 web 服务带浏览器认证 token：用 kernel.url（authenticatedUrl），
+  // 裸 http://127.0.0.1:port/ 会 401（2026-08-29 splash 不替换实测定案）。
+  await mainView.webContents.loadURL(kernel.url)
   safeLog('ssid: phase loadURL ok\n')
   splashStep(4)
   // ── 侧边栏自动诊断：探测 toggle 按钮 + 模拟点击 + 对比面板 class 变化 ──

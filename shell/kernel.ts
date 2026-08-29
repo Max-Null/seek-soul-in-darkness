@@ -142,6 +142,9 @@ export function resolveDshRuntime(): DshRuntime {
 export interface Kernel {
   /** 官方 UI 实际监听端口。 */
   port: number
+  /** 带浏览器认证 token 的 UI 入口 URL（master 内核 web 服务要求
+   *  token：connection.authenticatedUrl；该服务缺失时回退裸 URL）。 */
+  url: string
   /** DSH 运行时版本（读 installAnchor 的 package.json version；官方
    *  host.describe 通道目前是占位符 '0.0.1'，壳层自读真实值）。 */
   dshVersion: string
@@ -359,7 +362,9 @@ export async function bootKernel(
   // 必须先 heal：installProfilePackageResolver 的 loader 前缀从
   // ~/.dsh/profiles/node_modules 平面 symlink 解析，新机（空 profile）下
   // 没 heal 会解析失败。
-  healProfilesModuleFallback(installAnchor, home)
+  // master 内核 API：healProfilesModuleFallback 改为 options 对象 + async
+  // （0.1.2-alpha.1；旧双参签名会在 options.installAnchor 上取到 undefined）。
+  await healProfilesModuleFallback({ installAnchor, home })
   // loader 的 bare specifier 从这个锚点向上找 node_modules：profile 自己的
   // node_modules（第三方插件）→ ~/.dsh/profiles/node_modules（heal 建立的
   // 平面 symlink，覆盖所有 @deepseek-ai/dsh-*）。必须在 boot 之前装好。
@@ -479,8 +484,18 @@ export async function bootKernel(
       throw new Error('ssid: booted tree has no webServer service')
     }
 
+    // master 内核（0.1.2-alpha.1）web 服务带浏览器认证 token：不带 token 的
+    // 请求返回 401，BrowserView 必须用 connection.authenticatedUrl 的完整 URL
+    // （2026-08-29 实测：无 token loadURL 后 splash 不替换，网页停在认证页）。
+    const baseUrl = `http://127.0.0.1:${String(webServer.port)}/`
+    const connection = ctx.get('connection') as { authenticatedUrl?: (baseUrl: string) => string } | undefined
+    const url = typeof connection?.authenticatedUrl === 'function'
+      ? connection.authenticatedUrl(baseUrl)
+      : baseUrl
+
     return {
       port: webServer.port,
+      url,
       dshVersion,
       ctx,
       get: name => ctx.get(name),
