@@ -28,7 +28,8 @@
       "!dist-electron/**",
       "!dist-electron-016/**",
       "!boot-smoke.ts",
-      "!tsconfig.json"
+      "!tsconfig.json",
+      "!*.tar.gz"
     ],
     "asarUnpack": [
       "node_modules/tsx/**",
