@@ -1,4 +1,0 @@
-User-agent: *
-Allow: /
-
-Sitemap: https://d-dev0101.github.io/open-sea-skin/sitemap.xml

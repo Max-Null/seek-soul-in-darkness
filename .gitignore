@@ -20,3 +20,9 @@ kernel.bundle.mjs
 exe-stderr.log
 exe-stdout.log
 shell/dsh-runtime.tar.gz
+
+# 会话临时产物（截图/备份/工具目录，不入库）
+shell/*.png
+shell/dsh-runtime.rc2-backup-*.tar.gz
+shell/*.pre-master-*.bak
+shell/.playwright-mcp/
