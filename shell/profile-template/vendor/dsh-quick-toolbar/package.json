@@ -1,6 +1,6 @@
 {
   "name": "@max-null/dsh-quick-toolbar",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "description": "插件按钮聚合器（高度可扩展）：把三方插件散乱按钮聚合到统一入口——SSiD 标题栏 / web 悬浮球；载体+驻场 LLM 范式——任何人都能把自己环境里任何插件的按钮动态聚合（LLM 一键注册、右键删除=注销，纯数据零代码，不动插件源码）",
   "type": "module",
   "main": "lib/index.js",
