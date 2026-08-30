@@ -11,7 +11,20 @@ document.getElementById('btn-session-manager').addEventListener('click', () => {
 document.getElementById('btn-plugins').addEventListener('click', () => { void window.ssidTitle.action('plugin-center') })
 document.getElementById('btn-sidebar').addEventListener('click', () => { void window.ssidTitle.action('sidebar') })
 document.getElementById('btn-bottom').addEventListener('click', () => { void window.ssidTitle.action('bottom') })
-document.getElementById('btn-qt-float').addEventListener('click', () => { void window.ssidTitle.action('quick-toolbar-toggle') })
+
+// ── 悬浮球开关（圆圈+圆点：开启有点 / 关闭空圈；乐观切换 + 主进程初始同步）──
+const floatBtn = document.getElementById('btn-qt-float')
+const setFloatState = (on) => {
+  floatBtn.classList.toggle('float-on', on === true)
+  floatBtn.title = on === true ? '悬浮球（开）' : '悬浮球（关）'
+}
+floatBtn.addEventListener('click', () => {
+  const on = !floatBtn.classList.contains('float-on')
+  setFloatState(on) // 图标即时反馈（DSH 侧 toggle 由 quick-toolbar 执行）
+  void window.ssidTitle.action('quick-toolbar-toggle')
+})
+// 初始状态同步（主进程从 DSH 页面 localStorage 读取后下发——跨重启保持一致）
+window.ssidTitle.onFloatState((on) => setFloatState(on))
 
 const iconMax = document.getElementById('icon-max')
 const iconRestore = document.getElementById('icon-restore')

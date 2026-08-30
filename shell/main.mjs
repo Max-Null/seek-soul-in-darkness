@@ -926,6 +926,17 @@ async function start() {
   await mainView.webContents.loadURL(kernel.url)
   safeLog('ssid: phase loadURL ok\n')
   splashStep(4)
+  // ── 悬浮球开关初始状态同步 ──────────────────────────────────────────────
+  // 标题栏按钮图标（圆圈+圆点）需与 DSH 页面 localStorage 一致（跨重启记忆）；
+  // 主进程读页面状态 → 下发 titlebar 渲染（预置灯点亮/空圈）。
+  try {
+    const floatOn = await mainView.webContents.executeJavaScript(
+      "localStorage.getItem('ssid-toolbar-shell-visible')==='1'",
+    )
+    titleBar.webContents.send('ssid:title:float-state', floatOn === true)
+  } catch (error) {
+    safeLog(`[title-float] state sync failed: ${error instanceof Error ? error.message : String(error)}\n`)
+  }
   // ── 侧边栏自动诊断：探测 toggle 按钮 + 模拟点击 + 对比面板 class 变化 ──
   // better-sidebar 的 toggleCluster 固定在视口右上角；面板 hidden 态有
   // nArs4W_panelHidden class。点击前后 class 变化 = store 正常响应。

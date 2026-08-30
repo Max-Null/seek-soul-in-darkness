@@ -74,6 +74,18 @@
   }
   .actions button:hover { background: rgba(128, 148, 168, .14); }
   .actions svg { width: 15px; height: 15px; }
+  /* 悬浮球开关：圆圈+圆点——开启=圆点点亮（accent），关闭=空圈；
+     圆点 scale+淡入回弹过渡（2026-08-30 用户拍板交互效果） */
+  .actions button .float-dot {
+    fill: var(--accent);
+    opacity: 0;
+    transform: scale(.3);
+    transform-origin: center;
+    transition: opacity .18s ease, transform .22s cubic-bezier(.34, 1.56, .64, 1);
+  }
+  .actions button.float-on .float-dot { opacity: 1; transform: scale(1); }
+  .actions button.float-on { color: var(--accent); }
+  .actions button.float-on:hover { background: rgba(79, 195, 247, .12); }
   .controls {
     display: flex;
     height: 100%;
@@ -125,9 +137,12 @@
       </button>
       <!-- 悬浮球开关（2026-08-30 用户拍板：悬浮球挺好用 → 标题栏可开关；
            detail=quick-toolbar-toggle 由 dsh-quick-toolbar 处理——壳中
-           默认隐藏，开启后持久化显示） -->
+           默认隐藏，开启后持久化显示；图标=圆圈+圆点，开启有点/关闭空圈） -->
       <button id="btn-qt-float" title="悬浮球">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6"/><path d="M8 5.5v5M5.5 8h5" stroke-linecap="round"/></svg>
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="8" cy="8" r="5.6"/>
+          <circle class="float-dot" cx="8" cy="8" r="2.4" stroke="none"/>
+        </svg>
       </button>
     </div>
     <div class="controls">

@@ -9,4 +9,7 @@ contextBridge.exposeInMainWorld('ssidTitle', {
   onMaximized: (callback) => {
     ipcRenderer.on('ssid:title:maximized', (_event, maximized) => callback(maximized))
   },
+  onFloatState: (callback) => {
+    ipcRenderer.on('ssid:title:float-state', (_event, on) => callback(on === true))
+  },
 })
