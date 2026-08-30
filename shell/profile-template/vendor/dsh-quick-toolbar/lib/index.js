@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readFileSync } from "node:fs";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { z } from "zod";
 //#region src/schema.ts
 /**
@@ -16,12 +16,20 @@ const adapterSchema = z.object({
 	icon: z.discriminatedUnion("source", [z.object({ source: z.literal("from-button") }), z.object({
 		source: z.literal("custom"),
 		value: z.string().min(1)
-	})]),
+	})]).optional(),
 	label: z.string().optional(),
 	act: z.discriminatedUnion("kind", [
 		z.object({ kind: z.literal("click") }),
 		z.object({
 			kind: z.literal("toggle-panel"),
+			secondClick: z.union([
+				z.string().min(1),
+				z.object({ kind: z.literal("mask") }),
+				z.object({
+					kind: z.literal("click"),
+					selector: z.string().min(1)
+				})
+			]).optional(),
 			close: z.string().optional()
 		}),
 		z.object({
@@ -37,7 +45,7 @@ const adapterSchema = z.object({
 			kind: z.literal("command"),
 			name: z.string()
 		})
-	]),
+	]).optional(),
 	hide: z.boolean().optional(),
 	enabled: z.boolean().optional()
 });
@@ -85,39 +93,179 @@ const adaptersRouteDefinition = {
 	kind: "exact",
 	path: ROUTE_PATH,
 	handler: async (req, res) => {
-		if (req.method !== "GET") {
-			sendJson(res, 405, {
+		if (req.method === "GET") {
+			try {
+				const parsed = parseUserAdapters(readFileSync(ADAPTERS_PATH, "utf8"));
+				if (!parsed.ok) {
+					sendJson(res, 200, {
+						ok: false,
+						error: "invalid-schema",
+						detail: parsed.issues
+					});
+					return;
+				}
+				sendJson(res, 200, {
+					ok: true,
+					value: parsed.value
+				});
+			} catch {
+				sendJson(res, 200, {
+					ok: true,
+					value: { adapters: [] }
+				});
+			}
+			return;
+		}
+		if (req.method === "POST") {
+			let raw = "";
+			req.on?.("data", (chunk) => {
+				raw += chunk;
+			});
+			await new Promise((resolve) => req.on?.("end", () => {
+				resolve();
+			}));
+			try {
+				const parsed = parseUserAdapters(raw);
+				if (!parsed.ok) {
+					sendJson(res, 200, {
+						ok: false,
+						error: "invalid-schema",
+						detail: parsed.issues
+					});
+					return;
+				}
+				const tmp = ADAPTERS_PATH + ".tmp";
+				writeFileSync(tmp, raw, "utf8");
+				renameSync(tmp, ADAPTERS_PATH);
+				sendJson(res, 200, {
+					ok: true,
+					value: parsed.value
+				});
+			} catch {
+				sendJson(res, 200, {
+					ok: false,
+					error: "write-failed"
+				});
+			}
+			return;
+		}
+		sendJson(res, 405, {
+			ok: false,
+			error: "method-not-allowed"
+		});
+	}
+};
+const STATE_PATH = join(process.env.DSH_HOME ?? join(homedir(), ".dsh"), "quick-toolbar-state.json");
+const STATE_ROUTE = "/quick-toolbar/api/state";
+/** 默认状态（文件缺失/字段缺失时取默认，宽松向下兼容）。 */
+function defaultState() {
+	return {
+		pos: null,
+		collapsed: true,
+		pinned: false,
+		shellVisible: false
+	};
+}
+/** 归一化（防御非法文件：字段级回退默认，不因一条坏字段全丢）。 */
+function normalizeState(raw) {
+	const d = defaultState();
+	const s = raw !== null && typeof raw === "object" ? raw : {};
+	const pos = s.pos;
+	if (pos !== null && pos !== void 0 && typeof pos === "object" && pos !== null) {
+		const p = pos;
+		if (typeof p.x === "number" && typeof p.y === "number") d.pos = {
+			x: p.x,
+			y: p.y
+		};
+	}
+	if (typeof s.collapsed === "boolean") d.collapsed = s.collapsed;
+	if (typeof s.pinned === "boolean") d.pinned = s.pinned;
+	if (typeof s.shellVisible === "boolean") d.shellVisible = s.shellVisible;
+	return d;
+}
+/** 读状态文件（缺失/非法 → 默认；不抛）。 */
+function readStateFile() {
+	try {
+		return normalizeState(JSON.parse(readFileSync(STATE_PATH, "utf8")));
+	} catch {
+		return defaultState();
+	}
+}
+/** 原子写状态文件（tmp + rename，防中断半写）。 */
+function writeStateFile(state) {
+	const tmp = STATE_PATH + ".tmp";
+	writeFileSync(tmp, JSON.stringify(state));
+	renameSync(tmp, STATE_PATH);
+}
+const stateRouteDefinition = {
+	kind: "exact",
+	path: STATE_ROUTE,
+	handler: async (req, res) => {
+		if (req.method === "GET") {
+			sendJson(res, 200, {
+				ok: true,
+				state: readStateFile()
+			});
+			return;
+		}
+		if (req.method === "POST") {
+			let raw = "";
+			req.on("data", (chunk) => {
+				raw += chunk;
+			});
+			await new Promise((resolve) => req.on("end", () => {
+				resolve();
+			}));
+			try {
+				writeStateFile(normalizeState(JSON.parse(raw)));
+				sendJson(res, 200, { ok: true });
+			} catch {
+				sendJson(res, 200, {
+					ok: false,
+					error: "invalid-state"
+				});
+			}
+			return;
+		}
+		sendJson(res, 405, {
+			ok: false,
+			error: "method-not-allowed"
+		});
+	}
+};
+let wsSvc = null;
+const authUrlRouteDefinition = {
+	kind: "exact",
+	path: "/quick-toolbar/api/auth-url",
+	handler: async (_req, res) => {
+		const w = wsSvc;
+		if (w === null || w === void 0) {
+			sendJson(res, 200, {
 				ok: false,
-				error: "method-not-allowed"
+				error: "auth-url-unavailable"
 			});
 			return;
 		}
 		try {
-			const parsed = parseUserAdapters(readFileSync(ADAPTERS_PATH, "utf8"));
-			if (!parsed.ok) {
-				sendJson(res, 200, {
-					ok: false,
-					error: "invalid-schema",
-					detail: parsed.issues
-				});
-				return;
-			}
 			sendJson(res, 200, {
 				ok: true,
-				value: parsed.value
+				url: w.connection.authenticatedUrl("http://" + w.webServer.host + ":" + String(w.webServer.port) + "/")
 			});
 		} catch {
 			sendJson(res, 200, {
-				ok: true,
-				value: { adapters: [] }
+				ok: false,
+				error: "auth-url-unavailable"
 			});
 		}
 	}
 };
 function apply(ctx) {
-	ctx.inject(["webServer"], ((wsCtx) => {
+	ctx.inject(["webServer", "connection"], ((wsCtx) => {
+		wsSvc = wsCtx;
 		wsCtx.webServer.register(adaptersRouteDefinition);
+		wsCtx.webServer.register(stateRouteDefinition);
+		wsCtx.webServer.register(authUrlRouteDefinition);
 	}));
 }
 //#endregion
-export { apply, name };
+export { apply, defaultState, name, normalizeState, readStateFile, writeStateFile };

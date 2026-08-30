@@ -99,6 +99,13 @@ const MISSING_PEERS = [
   `@deepseek-ai/dsh-session-persistence@${DSH_VERSION}`,
   `@deepseek-ai/dsh-session-query@${DSH_VERSION}`,
   `@deepseek-ai/dsh-settings@${DSH_VERSION}`,
+  // 0.1.2-alpha.2 新增的 peer-only 服务定义/工具包（alpha.1 清单外）：
+  // 2026-08-30 源码模式 boot 实测缺包清单（scan-missing-peers 扫描得出）。
+  `@deepseek-ai/dsh-util-time@${DSH_VERSION}`,
+  `@deepseek-ai/dsh-util-workspace-path@${DSH_VERSION}`,
+  `@deepseek-ai/dsh-hook-protocol@${DSH_VERSION}`,
+  `@deepseek-ai/dsh-authorization@${DSH_VERSION}`,
+  `@deepseek-ai/dsh-sdk-protocol@${DSH_VERSION}`,
 ]
 
 function main() {

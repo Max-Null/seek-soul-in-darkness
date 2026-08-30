@@ -51,8 +51,279 @@ const BUILTIN_ADAPTERS = [
 			close: ".sm-modal .close"
 		},
 		hide: true
+	},
+	{
+		id: "dsh-settings",
+		button: "button[aria-label=\"设置\"], button[aria-label=\"Settings\"]",
+		icon: {
+			source: "custom",
+			value: "settings"
+		},
+		label: "设置",
+		act: { kind: "open-settings" },
+		hide: false
 	}
 ];
+//#endregion
+//#region src/behaviors.ts
+/**
+* 直接点击目标（定位失败/禁用 → 静默跳过；称「防御执行」）。
+*/
+function actClick(target) {
+	if (target === null || target === void 0 || target.disabled === true) return false;
+	target.click();
+	return true;
+}
+/**
+* 面板开/关（v0.8.0 探测语义——替代已废弃的面板容器协议 findPanel/#id-panel，
+* 该协议从未有环境实现：client 半 findPanel 恒 null，内置项走 toolbarAction 桥接，
+* 用户适配器因此死路——「添加按钮2」会话 LLM 源码实测发现）：
+* close 目标**可见** = 弹窗开着 → 点它关闭；**不可见/不存在** = 弹窗关着 → 点原按钮打开。
+* @param openTarget 原按钮（弹窗关着时点击它打开）
+* @param closeTarget 弹窗内关闭按钮（LLM 探测、随弹窗显隐）
+* @param probeVisible 可见性探测（DOM 环境 = rect/computedStyle；测试可 stub）
+*/
+function actTogglePanel(openTarget, closeTarget, probeVisible) {
+	if (closeTarget !== null && closeTarget !== void 0 && closeTarget.disabled !== true && probeVisible(closeTarget)) {
+		closeTarget.click();
+		return true;
+	}
+	if (openTarget === null || openTarget === void 0 || openTarget.disabled === true) return false;
+	openTarget.click();
+	return true;
+}
+/** 官方设置触发器锚点链（v2 调研点① 结论：DSH 面板 open 状态由 shell 私有，
+*  公开语义入口 = sidebar.settings 槽的触发按钮——SettingsRoot.tsx onClick
+*  setOpen(true)，footer 触发器类后缀 `_trigger`、无 aria。 */
+const SETTINGS_ANCHORS = [
+	"[class$=\"_trigger\"]",
+	"button[aria-label=\"设置\"]",
+	"button[aria-label=\"Settings\"]",
+	"[role=\"button\"][aria-label=\"设置\"]",
+	"[role=\"button\"][aria-label=\"Settings\"]",
+	"button[title=\"设置\"]",
+	"button[title=\"Settings\"]"
+];
+/** 官方设置关闭目标锚点链（面板开着时二次点击应关闭——trigger onClick 只
+*  setOpen(true) 原生不 toggle，2026-08-30 用户实测「再点关闭失败」）。 */
+const SETTINGS_CLOSE_ANCHORS = [
+	"button[class$=\"_close\"]",
+	"button[aria-label=\"关闭\"]",
+	"button[title=\"关闭\"]"
+];
+/** 设置面板打开判定（modal mask；SettingsRoot.tsx：mask div onClick=onClose）。 */
+const SETTINGS_MASK_SELECTOR = "[class$=\"_mask\"]";
+/** 打开/关闭官方设置面板：开着（mask 存在）→ 关闭（close 按钮 → mask 兜底）；
+*  关着 → 文本语义定位优先（footer trigger）→ 锚点链兜底。 */
+function actOpenSettings(env) {
+	const mask = env.find(SETTINGS_MASK_SELECTOR);
+	if (mask !== null && mask !== void 0) {
+		for (let i = 0; i < SETTINGS_CLOSE_ANCHORS.length; i++) {
+			const closeBtn = env.find(SETTINGS_CLOSE_ANCHORS[i]);
+			if (closeBtn !== null && closeBtn !== void 0 && closeBtn.disabled !== true) {
+				closeBtn.click();
+				return true;
+			}
+		}
+		mask.click();
+		return true;
+	}
+	if (env.findByText !== void 0) {
+		const byText = env.findByText(["设置", "Settings"]);
+		if (byText !== null && byText !== void 0 && byText.disabled !== true) {
+			byText.click();
+			return true;
+		}
+	}
+	for (let i = 0; i < SETTINGS_ANCHORS.length; i++) {
+		const target = env.find(SETTINGS_ANCHORS[i]);
+		if (target !== null && target !== void 0 && target.disabled !== true) {
+			target.click();
+			return true;
+		}
+	}
+	return false;
+}
+/** 触发 dsh-commands 文本命令（空白名防御；执行语义由环境实现——v2 调研点②）。 */
+function actCommand(env, name) {
+	if (name === void 0 || name === null || name.trim() === "") return false;
+	return env.execute(name.trim());
+}
+//#endregion
+//#region src/engine.ts
+/**
+* @max-null/dsh-quick-toolbar — 适配器执行器（DOM 绑定层）
+*
+* 引擎运行时：按适配器定位目标元素 → 调行为库 → 防御执行。
+* 行为库保持窄接口（可测）；本层唯一负责 DOM 绑定（browser 环境，
+* 不在 node:test 的范围里——DOM 交互留给 L2 环境验证）。
+*/
+/** 遮罩关闭候选链（第二次点击的 mask 通道——DSH 弹窗多为遮罩交互） */
+const MASK_CHAINS = [
+	"[class$=\"_backdrop\"]",
+	"[class*=\"backdrop\"]",
+	"[class$=\"_mask\"]",
+	"[class*=\"modal-mask\"]"
+];
+/**
+* 归一 secondClick 通道（v0.8.0「二次点击事件」）：secondClick 优先，close 旧字段
+* 兼容（字符串简写 = 点击关闭按钮）。
+*/
+function closeTargetOf(act, env) {
+	const spec = act.secondClick ?? act.close ?? null;
+	if (spec === null) return null;
+	if (typeof spec === "string") return env.find(spec);
+	if (spec.kind === "mask") {
+		const probe = env.isVisible ?? defaultIsVisible;
+		for (let i = 0; i < MASK_CHAINS.length; i++) {
+			const el = env.find(MASK_CHAINS[i]);
+			if (el !== null && probe(el)) return el;
+		}
+		return null;
+	}
+	return env.find(spec.selector);
+}
+/** 缺省可见性探测（DOM：offset 尺寸优先，computedStyle 兜底） */
+function defaultIsVisible(el) {
+	if (el === null || typeof el !== "object") return false;
+	const node = el;
+	if (typeof node.offsetWidth === "number") {
+		if (node.offsetWidth > 0 || node.offsetHeight > 0) return true;
+		return false;
+	}
+	if (typeof getComputedStyle === "function") try {
+		const style = getComputedStyle(node);
+		return style.display !== "none" && style.visibility !== "hidden";
+	} catch {
+		return false;
+	}
+	return false;
+}
+/** 按内置定义执行一条适配器（防御执行：定位失败/禁用 → false，绝不误伤）
+*  「换位置」缺省：act 未填 → click（点击原按钮）。 */
+function runAdapter(adapter, env) {
+	const act = adapter.act ?? { kind: "click" };
+	switch (act.kind) {
+		case "click": return actClick(env.find(adapter.button));
+		case "dispatch-event": return env.dispatch(act.event, act.detail);
+		case "toggle-panel": {
+			const closeEl = closeTargetOf(act, env);
+			return actTogglePanel(env.find(adapter.button), closeEl, env.isVisible ?? defaultIsVisible);
+		}
+		case "open-settings":
+			if (act.path !== void 0) console.warn(`quick-toolbar: open-settings path '${act.path}' 暂不支持（v2 深链待入）`);
+			return actOpenSettings({
+				find: env.find,
+				...env.findByText !== void 0 ? { findByText: env.findByText } : {}
+			});
+		case "command":
+			if (env.runCommand === void 0) {
+				console.warn("quick-toolbar: command 环境无 runCommand 通道（旧版 DSH/未注入）");
+				return false;
+			}
+			return actCommand({ execute: env.runCommand }, act.name);
+	}
+}
+//#endregion
+//#region src/register-brief.ts
+/**
+* 注册任务书（v0.5.1）——「➕ 按钮」注入的 prompt 文本。
+*
+* 设计（V2-9 载体哲学 + 安装教程闭环）：
+* 用户点击工具栏「➕」→ 首选经 sessions/workspaces/uiWorkspace 服务创建
+* 「添加按钮」会话并把本任务书以 queue 模式注入（自动执行）——同款机制 =
+* 插件中心 LLM 更新（ensureLlmUpdateSession，2026-08-30 实证修正：早期
+* inject=[] 令 apply 只见 {fiber}，「无会话通道」判断是错结论）；
+* 服务缺失/失败 → 降级为当前 composer 草稿注入（用户 Enter 发送）。
+* 任务书必须自包含（环境 LLM 不一定能访问本仓库文件）——协议要点全部内嵌。
+*
+* 同步纪律：字段与 src/adapters.ts / src/schema.ts 保持一致；
+* 漂移即教程失效（tests/register-brief.spec.ts 有锚点断言防退化）。
+*/
+const REGISTER_BRIEF = `# 任务：为「工具栏插件」迁移 / 新增一个按钮
+
+你是 DSH 环境的驻场工程师。用户想把某个按钮**迁移**到工具栏
+（@max-null/dsh-quick-toolbar：SSiD 标题栏按钮组 / web 悬浮球·聚合面板），
+或者**新增**一个自定义按钮。工具栏是「载体」——你注册的是**数据**
+（图标/文字/点击由载体从原按钮派生或按声明执行），不是代码。
+
+## 第一步（现在就要做）：先反问用户，不要猜
+
+用一句话向用户确认目标，等回答后再动手：
+
+- **迁移**：要迁移的是哪个按钮？它在哪个面板/页面/插件里，长什么样？
+- **新增**：要新增什么样的按钮？图标 / 文字 / 点击后应发生什么？
+
+## 第二步（确认目标后）：自主探查并验证
+
+- **探查通道**：经 ➕ 注入的本任务书开头附有「探查通道」段（当前 DSH 页面完整
+  URL，含认证 token）——用浏览器直接打开它即可访问用户环境；**不要裸访问
+  内核端口（会 401）**。手工粘贴本文件时若无附带 URL，向用户要页面地址。
+- 用你的浏览器 / 代码能力找到目标按钮元素（DOM 查询、截图、读源码都行），
+  **自己验证 CSS 选择器确实可用**——不要凭猜测写选择器，不要依赖用户给 DOM 快照。
+- 提示：场景无限，没有"完美脚本"能预适配所有环境——探查正是你在场的原因，
+  载体不内置扫描器，这个活由你做。
+
+## 第三步：注册（数据，不是代码）
+
+**最小注册（迁移——推荐起点）**：被整合的按钮自带图标/文字/点击事件，聚合就是
+"换个位置"，两条就够了：
+
+\`\`\`json
+{ "id": "dsh-some-plugin", "button": ".some-btn" }
+\`\`\`
+
+\`\`\`json
+{ "adapters": [ { "id": "dsh-some-plugin", "button": ".some-btn" } ] }
+\`\`\`
+
+- 图标 = 扣取原按钮视觉（svg/img/背景）；文字 = 扣取原按钮文案；
+  点击 = 点击原按钮（act 缺省 \`click\`）。
+- **原按钮自动隐藏**（换位置 = 双入口无意义；缺省隐藏，显式 \`"hide": false\` 才保留——
+  若原按钮被隐藏后其弹窗定位错位，改用 \`hide: false\`）。
+- **自定义按钮**（无原按钮可扣）才需要显式字段：
+  \`\`\`json
+  { "id": "my-btn", "button": "#app-shell", "icon": { "source": "custom", "value": "emoji 或 svg" },
+    "label": "文字", "act": { "kind": "click" }, "hide": false }
+  \`\`\`
+
+**行为枚举（只能选这些，禁止写代码）**：
+
+| kind | 语义 |
+|---|---|
+| \`click\` | 直接点击 |
+| \`toggle-panel\` | **二次点击事件**：弹窗开 → 按 \`secondClick\` 通道关闭；关 → 点原按钮打开。\`secondClick\` 推荐 \`{ "kind": "mask" }\`（点遮罩关闭——DSH 弹窗通用交互）；或点关闭按钮 \`{ "kind": "click", "selector": "验证过的关闭按钮" }\`（也可直接写选择器字符串） |
+| \`dispatch-event\` | 派发 CustomEvent（\`event\`、\`detail?\`） |
+| \`open-settings\` | 打开设置面板（引擎语义锚点定位，再点关闭） |
+| \`command\` | 向输入框注入斜杠命令草稿（\`name\`，不含 \`/\`） |
+
+## 探测闭环（注册前必须完成——别让用户点出"开得关不掉"）
+
+用你的浏览器能力实测原按钮行为，按结果选 act：
+
+1. 点击一次：开的是**弹窗/面板**还是普通页面？
+2. 弹窗/面板能**再点原按钮关闭**吗？**不能** → act 必须用 \`toggle-panel\` 并
+   探测弹窗内的「关闭」按钮（浏览弹窗 DOM，选准且唯一的选择器写 \`close\`）：
+   \`{\"act\": { \"kind\": \"toggle-panel\", \"close\": \".verified-close\" }}\`——
+   「再点关闭」是载体的基本承诺，\`click\` 只适用于天然可再点切换的按钮。
+3. 记录原按钮是否会在意「隐藏」（见第三步 hide 说明）。
+
+## 第四步：写入配置，让用户刷新
+
+把完整 JSON（含 \`adapters\` 数组）写入：
+\`~/.dsh/quick-toolbar-adapters.json\`（DSH 环境即 \`$DSH_HOME/quick-toolbar-adapters.json\`；
+重复 \`id\` = 覆盖既有注册）。写入后告知用户**刷新页面**，按钮即出现在工具栏；
+若未出现，修正选择器后重试。协议全文见仓库 \`adapters.prompt.md\`（如可访问请先读一遍）。
+
+## 注册后验证清单（刷新后逐项确认）
+
+① 按钮已出现在工具栏（图标/文字来自原按钮） ② 点击可开启 ③ 再点能关闭
+（toggle-panel 场景） ④ 原按钮已隐藏（或按 hide:false 保留）。任一项不满足 → 修正后重试。
+
+## 纪律
+
+- 只写数据，不提供函数/代码（schema 拒绝一切非枚举行为）。
+- 一次只注册 1–2 个按钮，验证后再扩展；定位失败无害（引擎静默跳过，绝不误点）。`;
 //#endregion
 //#region src/client.ts
 /**
@@ -162,6 +433,8 @@ window.__ModuleLoader__.load({
 			"tb.sidebar": ["侧栏", "Sidebar"],
 			"tb.bottom": ["底栏", "Bottom panel"],
 			"tb.sessions": ["会话管理", "Sessions"],
+			"tb.add": ["添加按钮", "Add button"],
+			"tb.addAria": ["添加/迁移按钮（让 LLM 来注册）", "Add / migrate a button (let the LLM register it)"],
 			"sm.open": ["会话管理", "Sessions"],
 			"sm.openTitle": ["打开会话管理面板", "Open session manager"]
 		};
@@ -258,9 +531,40 @@ window.__ModuleLoader__.load({
 			applyLocale();
 		}
 		var TOOLBAR_ID = "ssid-toolbar";
-		var TOOLBAR_POS_KEY = "ssid-toolbar-pos";
-		var TOOLBAR_COLLAPSED_KEY = "ssid-toolbar-collapsed";
-		var TOOLBAR_PINNED_KEY = "ssid-toolbar-pinned";
+		var qtState = {
+			pos: null,
+			collapsed: true,
+			pinned: false,
+			shellVisible: false
+		};
+		var loadState = function(done) {
+			fetch("/quick-toolbar/api/state").then(function(r) {
+				return r.json();
+			}).then(function(data) {
+				var s = data !== null && typeof data === "object" && data.ok === true ? data.state : void 0;
+				if (s !== void 0 && s !== null) {
+					if (s.pos !== null && s.pos !== void 0 && typeof s.pos.x === "number" && typeof s.pos.y === "number") qtState.pos = {
+						x: s.pos.x,
+						y: s.pos.y
+					};
+					if (typeof s.collapsed === "boolean") qtState.collapsed = s.collapsed;
+					if (typeof s.pinned === "boolean") qtState.pinned = s.pinned;
+					if (typeof s.shellVisible === "boolean") qtState.shellVisible = s.shellVisible;
+				}
+				done();
+			}).catch(function() {
+				done();
+			});
+		};
+		var saveState = function() {
+			try {
+				fetch("/quick-toolbar/api/state", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify(qtState)
+				}).catch(function() {});
+			} catch (_e) {}
+		};
 		var TOOLBAR_CSS = [
 			"#ssid-toolbar{position:fixed;z-index:9999;font-family:system-ui,\"Segoe UI\",sans-serif;user-select:none;-webkit-user-select:none;box-sizing:border-box;width:36px;height:36px;border-radius:18px;background:var(--dsw-alias-bg-layer-3,#10151f);border:1px solid var(--dsw-alias-border-l2,#1e2836);box-shadow:0 4px 16px rgba(0,0,0,.3);overflow:hidden;transition:width .28s cubic-bezier(.25,.8,.25,1),height .28s cubic-bezier(.25,.8,.25,1),left .28s cubic-bezier(.25,.8,.25,1),top .28s cubic-bezier(.25,.8,.25,1),border-radius .28s cubic-bezier(.25,.8,.25,1)}",
 			"#ssid-toolbar *{box-sizing:border-box}",
@@ -277,7 +581,15 @@ window.__ModuleLoader__.load({
 			"#ssid-toolbar .ssid-tb-pin svg{width:15px;height:15px}",
 			"#ssid-toolbar .ssid-tb-btn{border:0;background:transparent;color:var(--dsw-alias-label-primary,#d8e0ea);border-radius:8px;height:30px;display:flex;align-items:center;gap:8px;padding:0 10px;font-size:12px;line-height:18px;cursor:pointer;white-space:nowrap;text-align:left}",
 			"#ssid-toolbar .ssid-tb-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(128,148,168,.14))}",
-			"#ssid-toolbar .ssid-tb-btn svg{flex:none;width:15px;height:15px;color:var(--dsw-alias-label-secondary,#98a2b3)}"
+			"#ssid-toolbar .ssid-tb-btn svg{flex:none;width:15px;height:15px;color:var(--dsw-alias-label-secondary,#98a2b3)}",
+			"#ssid-toolbar .ssid-tb-add{border:1px dashed var(--dsw-alias-border-strong,rgba(128,148,168,.45));background:transparent;color:var(--dsw-alias-label-tertiary,#7b8494);border-radius:8px;height:30px;display:flex;align-items:center;gap:8px;padding:0 10px;font-size:12px;line-height:18px;cursor:pointer;white-space:nowrap;text-align:left;margin-top:2px;transition:color .15s,border-color .15s,background .15s}",
+			"#ssid-toolbar .ssid-tb-add:hover{color:var(--dsw-alias-label-primary,#d8e0ea);border-color:var(--dsw-alias-label-secondary,#98a2b3);background:var(--dsw-alias-interactive-bg-hover,rgba(128,148,168,.14))}",
+			"#ssid-toolbar .ssid-tb-add svg{flex:none;width:15px;height:15px;color:var(--dsw-alias-label-secondary,#98a2b3)}",
+			".ssid-tb-row{position:relative;overflow:hidden;border-radius:8px}",
+			".ssid-tb-slide{display:flex;position:relative;width:100%;transition:transform .2s ease}",
+			".ssid-tb-row .ssid-tb-btn{flex:1 1 auto;min-width:0;position:relative;z-index:1;box-sizing:border-box;background:transparent}",
+			".ssid-tb-row.ssid-tb-row-open .ssid-tb-slide{transform:translateX(-56px)}",
+			".ssid-tb-del{position:absolute;right:-56px;top:0;bottom:0;width:56px;border:0;background:var(--dsw-alias-state-error-primary,#e5484d);color:#fff;font-size:12px;cursor:pointer;font-weight:500;border-radius:8px 0 0 8px}"
 		].join("\n");
 		function toolbarIcon(name) {
 			var ICONS = {
@@ -288,9 +600,69 @@ window.__ModuleLoader__.load({
 				sessions: "<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\"><rect x=\"2\" y=\"3\" width=\"12\" height=\"10\" rx=\"1.5\"/><path d=\"M5 6.5h6M5 9.5h4\" stroke-linecap=\"round\"/></svg>",
 				collapse: "<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\"><path d=\"M3 5.5h10M6.5 8.5h3M8 11.5h1\" stroke-linecap=\"round\"/></svg>",
 				menu: "<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\"><path d=\"M3 5h10M3 8h10M3 11h10\" stroke-linecap=\"round\"/></svg>",
-				pin: "<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M9.8 2.2l4 4-2.6 1.4-1.8 1.8.4 2.6-1.4 1.4-2.6-3L3.9 13l-1-1 3-3.9-3-2.6 1.4-1.4 2.6.4 1.8-1.8z\"/></svg>"
+				pin: "<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M9.8 2.2l4 4-2.6 1.4-1.8 1.8.4 2.6-1.4 1.4-2.6-3L3.9 13l-1-1 3-3.9-3-2.6 1.4-1.4 2.6.4 1.8-1.8z\"/></svg>",
+				settings: "<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"8\" cy=\"8\" r=\"2.2\"/><path d=\"M8 1.8v2M8 12.2v2M1.8 8h2M12.2 8h2M3.6 3.6l1.4 1.4M11 11l1.4 1.4M12.4 3.6L11 5M5 11l-1.4 1.4\"/></svg>",
+				add: "<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\"><path d=\"M8 3.5v9M3.5 8h9\"/></svg>"
 			};
 			return ICONS[name] || ICONS.grid;
+		}
+		var toolbarEnv = function() {
+			return {
+				find: function(s) {
+					return document.querySelector(s);
+				},
+				isVisible: function(el) {
+					if (el === null || typeof el !== "object") return false;
+					var node = el;
+					if (typeof node.getBoundingClientRect === "function") {
+						var r = node.getBoundingClientRect();
+						if (r.width > 0 || r.height > 0) return true;
+					}
+					if (typeof getComputedStyle === "function") try {
+						var s = getComputedStyle(node);
+						return s.display !== "none" && s.visibility !== "hidden";
+					} catch (_e) {
+						return false;
+					}
+					return false;
+				},
+				dispatch: function(event, detail) {
+					window.dispatchEvent(new CustomEvent(event, { detail }));
+					return true;
+				},
+				findByText: function(texts) {
+					var buttons = document.querySelectorAll("button");
+					for (var bi = 0; bi < buttons.length; bi++) {
+						var label = (buttons[bi].textContent || "").trim();
+						for (var ti = 0; ti < texts.length; ti++) if (label === texts[ti]) return buttons[bi];
+					}
+					return null;
+				},
+				runCommand: function(name) {
+					return typeCommandIntoComposer(name);
+				}
+			};
+		};
+		function injectComposerDraft(text) {
+			var seat = document.querySelector("[data-composer-seat]");
+			var el = seat !== null && seat !== void 0 ? seat.querySelector("textarea, [contenteditable=\"true\"]") : document.querySelector("textarea, [contenteditable=\"true\"]");
+			if (el === null || el === void 0) return false;
+			if (el instanceof HTMLTextAreaElement) {
+				var setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value");
+				if (setter !== void 0 && setter.set !== void 0) setter.set.call(el, text);
+				else el.value = text;
+			} else if (el.isContentEditable) el.textContent = text;
+			else return false;
+			el.dispatchEvent(new InputEvent("input", {
+				bubbles: true,
+				inputType: "insertText",
+				data: text
+			}));
+			el.focus();
+			return true;
+		}
+		function typeCommandIntoComposer(name) {
+			return injectComposerDraft("/" + name);
 		}
 		function toolbarAction(kind) {
 			if (kind === "plugin") {
@@ -317,8 +689,9 @@ window.__ModuleLoader__.load({
 			}
 		}
 		function createToolbar() {
-			if (win.__SSID_SHELL__ === true) return;
+			if (win.__SSID_SHELL__ === true && !qtState.shellVisible) return;
 			if (document.getElementById(TOOLBAR_ID) !== null) return;
+			var addBtn = null;
 			var root = document.createElement("div");
 			root.id = TOOLBAR_ID;
 			var panel = document.createElement("div");
@@ -341,33 +714,184 @@ window.__ModuleLoader__.load({
 				"dsh-better-sidebar.bottom": "bottom",
 				"dsh-session-manager": "sessions"
 			};
-			var items = [];
-			for (var ai = 0; ai < BUILTIN_ADAPTERS.length; ai++) {
-				var adapter = BUILTIN_ADAPTERS[ai];
-				var kind = TOOLBAR_KIND_BY_ADAPTER[adapter.id];
-				if (kind === void 0) continue;
-				items.push({
-					kind,
-					adapter
-				});
-			}
-			for (var i = 0; i < items.length; i++) {
+			var adapterIconHtml = function(adapter, kind) {
+				if (adapter.icon !== void 0 && adapter.icon.source === "custom") {
+					var value = adapter.icon.value;
+					if (value.indexOf("<") === 0) return value;
+					return toolbarIcon(value);
+				}
+				try {
+					var el = document.querySelector(adapter.button);
+					if (el !== null) {
+						var svg = el.querySelector("svg");
+						if (svg !== null) return svg.outerHTML;
+						var img = el.querySelector("img");
+						if (img !== null) return img.outerHTML;
+						var bg = getComputedStyle(el).backgroundImage;
+						if (bg !== null && bg !== "none") return "<span style=\"display:inline-block;width:15px;height:15px;background:" + bg + ";background-size:contain;background-repeat:no-repeat\"></span>";
+					}
+				} catch (_e) {}
+				return kind !== null ? toolbarIcon(kind) : toolbarIcon("grid");
+			};
+			var adapterLabel = function(adapter) {
+				if (adapter.label !== void 0 && adapter.label !== "") return adapter.label;
+				try {
+					var el = document.querySelector(adapter.button);
+					if (el !== null && (el.textContent || "").trim() !== "") return (el.textContent || "").trim().slice(0, 12);
+				} catch (_e) {}
+				return adapter.id;
+			};
+			var renderButton = function(adapter, kind) {
 				var b = document.createElement("button");
 				b.type = "button";
 				b.className = "ssid-tb-btn";
-				b.innerHTML = toolbarIcon(items[i].kind) + "<span></span>";
-				b.setAttribute("aria-label", "");
-				b.title = "";
-				trackLocale(b, "tb." + items[i].kind, "text-span");
-				trackLocale(b, "tb." + items[i].kind, "aria");
-				trackLocale(b, "tb." + items[i].kind, "title");
-				(function(kind) {
-					b.addEventListener("click", function() {
+				b.setAttribute("data-adapter-id", adapter.id);
+				b.innerHTML = adapterIconHtml(adapter, kind) + "<span></span>";
+				if (kind !== null) {
+					b.setAttribute("aria-label", "");
+					b.title = "";
+					trackLocale(b, "tb." + kind, "text-span");
+					trackLocale(b, "tb." + kind, "aria");
+					trackLocale(b, "tb." + kind, "title");
+				} else {
+					var label = adapterLabel(adapter);
+					var textSpan = b.querySelector("span");
+					if (textSpan !== null) textSpan.textContent = label;
+					b.setAttribute("aria-label", label);
+					b.title = label;
+				}
+				b.addEventListener("click", function() {
+					if (kind !== null) {
 						toolbarAction(kind);
-					});
-				})(items[i].kind);
-				panel.appendChild(b);
+						return;
+					}
+					runAdapter(adapter, toolbarEnv());
+				});
+				if (addBtn !== null && addBtn.parentNode === panel) panel.insertBefore(b, addBtn);
+				else panel.appendChild(b);
+				if (adapter.hide !== false) try {
+					var origBtn = document.querySelector(adapter.button);
+					if (origBtn !== null) origBtn.style.display = "none";
+				} catch (_e) {}
+				return b;
+			};
+			for (var ai = 0; ai < BUILTIN_ADAPTERS.length; ai++) {
+				var adapter = BUILTIN_ADAPTERS[ai];
+				var kind = TOOLBAR_KIND_BY_ADAPTER[adapter.id];
+				renderButton(adapter, kind !== void 0 ? kind : null);
 			}
+			var slideCloseAll = function() {
+				var rows = panel.querySelectorAll(".ssid-tb-row.ssid-tb-row-open");
+				for (var ri = 0; ri < rows.length; ri++) rows[ri].classList.remove("ssid-tb-row-open");
+			};
+			document.addEventListener("mousedown", function(e) {
+				var t = e.target;
+				if (t === null) return;
+				if (!(t instanceof Element ? t.closest(".ssid-tb-row") !== null : false)) slideCloseAll();
+			});
+			function removeUserAdapter(ad) {
+				fetch("/quick-toolbar/api/adapters").then(function(r) {
+					return r.json();
+				}).then(function(data) {
+					var envelope = data !== null && typeof data === "object" ? data : void 0;
+					var rows = envelope !== void 0 && envelope.ok === true && envelope.value !== null && typeof envelope.value === "object" ? envelope.value.adapters : void 0;
+					if (!Array.isArray(rows)) return;
+					var next = rows.filter(function(a) {
+						return a.id !== ad.id;
+					});
+					return fetch("/quick-toolbar/api/adapters", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ adapters: next })
+					}).then(function(r) {
+						return r.json();
+					}).then(function(res) {
+						if (res === null || typeof res !== "object" || res.ok !== true) return;
+						try {
+							var btn = panel.querySelector("[data-adapter-id=\"" + ad.id.replace(/"/g, "\\\"") + "\"]");
+							var row = btn !== null && typeof btn.closest === "function" ? btn.closest(".ssid-tb-row") : null;
+							if (row !== null && row.parentNode === panel) panel.removeChild(row);
+						} catch (_e) {}
+						try {
+							var orig = document.querySelector(ad.button);
+							if (orig !== null) orig.style.display = "";
+						} catch (_e2) {}
+					});
+				}).catch(function() {});
+			}
+			function wrapAdapterRow(btn, ad) {
+				var row = document.createElement("div");
+				row.className = "ssid-tb-row";
+				var slide = document.createElement("div");
+				slide.className = "ssid-tb-slide";
+				if (btn.parentNode !== null) btn.parentNode.removeChild(btn);
+				slide.appendChild(btn);
+				var delBtn = document.createElement("button");
+				delBtn.type = "button";
+				delBtn.className = "ssid-tb-del";
+				delBtn.textContent = "删除";
+				delBtn.addEventListener("click", function() {
+					row.classList.remove("ssid-tb-row-open");
+					setTimeout(function() {
+						removeUserAdapter(ad);
+					}, 220);
+				});
+				slide.appendChild(delBtn);
+				row.appendChild(slide);
+				panel.insertBefore(row, addBtn);
+				btn.setAttribute("data-user-adapter", "1");
+				row.addEventListener("contextmenu", function(e) {
+					e.preventDefault();
+					e.stopPropagation();
+					if (row.classList.contains("ssid-tb-row-open")) {
+						row.classList.remove("ssid-tb-row-open");
+						return;
+					}
+					slideCloseAll();
+					row.classList.add("ssid-tb-row-open");
+				});
+				return row;
+			}
+			var fetchUserAdapters = function() {
+				fetch("/quick-toolbar/api/adapters").then(function(r) {
+					return r.json();
+				}).then(function(data) {
+					var envelope = data !== null && typeof data === "object" ? data : void 0;
+					var rows = envelope !== void 0 && envelope.ok === true && envelope.value !== null && typeof envelope.value === "object" ? envelope.value.adapters : void 0;
+					if (!Array.isArray(rows)) return;
+					for (var ui = 0; ui < rows.length; ui++) {
+						var user = rows[ui];
+						if (user === null || typeof user !== "object") continue;
+						var userKind = TOOLBAR_KIND_BY_ADAPTER[user.id];
+						try {
+							var old = panel.querySelector("[data-adapter-id=\"" + user.id.replace(/"/g, "\\\"") + "\"]");
+							var oldRow = old !== null && typeof old.closest === "function" ? old.closest(".ssid-tb-row") : null;
+							if (oldRow !== null && oldRow.parentNode === panel) panel.removeChild(oldRow);
+							else if (old !== null && old.parentNode === panel) panel.removeChild(old);
+						} catch (_e) {}
+						wrapAdapterRow(renderButton(user, userKind !== void 0 ? userKind : null), user);
+					}
+				}).catch(function() {});
+			};
+			addBtn = document.createElement("button");
+			addBtn.type = "button";
+			addBtn.className = "ssid-tb-add";
+			addBtn.setAttribute("aria-label", "添加/迁移按钮");
+			addBtn.title = "添加按钮";
+			addBtn.innerHTML = toolbarIcon("add") + "<span></span>";
+			trackLocale(addBtn, "tb.addAria", "aria");
+			trackLocale(addBtn, "tb.add", "title");
+			var addSpan = addBtn.querySelector("span");
+			if (addSpan !== null) addSpan.textContent = "添加按钮";
+			trackLocale(addBtn, "tb.add", "text-span");
+			addBtn.addEventListener("click", function() {
+				ensureRegisterSession().then(function(ok) {
+					if (!ok) registerBriefWithSessionUrl().then(function(brief) {
+						injectComposerDraft(brief);
+					});
+				});
+			});
+			panel.appendChild(addBtn);
 			var ball = document.createElement("button");
 			ball.type = "button";
 			ball.id = TOOLBAR_ID + "-ball";
@@ -384,13 +908,10 @@ window.__ModuleLoader__.load({
 			var BALL_R = 18;
 			var expanded = false;
 			var ballX = 0, ballY = 0;
-			try {
-				var savedPos = JSON.parse(String(localStorage.getItem(TOOLBAR_POS_KEY) || "null"));
-				if (savedPos !== null && typeof savedPos.x === "number" && typeof savedPos.y === "number") {
-					ballX = savedPos.x;
-					ballY = savedPos.y;
-				}
-			} catch (_e) {}
+			if (qtState.pos !== null) {
+				ballX = qtState.pos.x;
+				ballY = qtState.pos.y;
+			}
 			if (ballX === 0 && ballY === 0) {
 				ballX = window.innerWidth - BALL_SIZE - 16;
 				ballY = window.innerHeight - BALL_SIZE - 16;
@@ -475,14 +996,22 @@ window.__ModuleLoader__.load({
 				}
 				var kids = panel.children;
 				for (var ki = 0; ki < kids.length; ki++) kids[ki].style.transitionDelay = collapsed ? "0ms" : 40 + ki * 24 + "ms";
-				try {
-					localStorage.setItem(TOOLBAR_COLLAPSED_KEY, collapsed ? "1" : "0");
-				} catch (_e) {}
+				qtState.collapsed = collapsed;
+				saveState();
 			};
-			var pinned = false;
 			try {
-				pinned = localStorage.getItem(TOOLBAR_PINNED_KEY) === "1";
+				new ResizeObserver(function() {
+					if (!expanded) return;
+					var w2 = panel.offsetWidth + 2;
+					var h2 = panel.offsetHeight + 2;
+					if (root.offsetWidth !== w2 || root.offsetHeight !== h2) {
+						root.style.width = w2 + "px";
+						root.style.height = h2 + "px";
+					}
+				}).observe(panel);
 			} catch (_e) {}
+			var pinned = false;
+			pinned = qtState.pinned;
 			var applyPin = function() {
 				pinBtn.style.color = pinned ? "var(--dsw-alias-interactive-accent, #4d9fff)" : "";
 				pinBtn.style.opacity = pinned ? "1" : "";
@@ -500,11 +1029,11 @@ window.__ModuleLoader__.load({
 			setCollapsed(pinned ? false : true);
 			applyPin();
 			applyLocale();
+			fetchUserAdapters();
 			pinBtn.addEventListener("click", function() {
 				pinned = !pinned;
-				try {
-					localStorage.setItem(TOOLBAR_PINNED_KEY, pinned ? "1" : "0");
-				} catch (_e) {}
+				qtState.pinned = pinned;
+				saveState();
 				applyPin();
 				setCollapsed(pinned ? false : true);
 			});
@@ -575,21 +1104,81 @@ window.__ModuleLoader__.load({
 					ballY = Math.max(4, Math.min(Math.round(sp.by), vh - BALL_SIZE - 4));
 					ball.style.left = ballX + "px";
 					ball.style.top = ballY + "px";
-					try {
-						localStorage.setItem(TOOLBAR_POS_KEY, JSON.stringify({
-							x: ballX,
-							y: ballY
-						}));
-					} catch (_e) {}
+					qtState.pos = {
+						x: ballX,
+						y: ballY
+					};
+					saveState();
 				};
 				document.addEventListener("mousemove", onMove);
 				document.addEventListener("mouseup", onUp);
 			});
 		}
-		exports.inject = [];
+		exports.inject = [
+			"sessions",
+			"workspaces",
+			"uiWorkspace"
+		];
+		var sessionsSvc = null;
+		var workspacesSvc = null;
+		var uiWorkspaceSvc = null;
+		function buildRegisterBrief(url) {
+			return "## 探查通道（已为你的浏览器认证好）：\n- 用浏览器打开下面这个 URL 即可直达当前 DSH 页面（首次访问会换 cookie 并自动重定向到干净根路径；token 仅本会话使用，勿写入文件/回复）:\n" + url + "\n\n" + REGISTER_BRIEF;
+		}
+		function registerBriefWithSessionUrl() {
+			return fetch("/quick-toolbar/api/auth-url").then(function(r) {
+				return r.json();
+			}).then(function(d) {
+				return buildRegisterBrief(d !== null && typeof d === "object" && d.ok === true && typeof d.url === "string" ? d.url : "");
+			}).catch(function() {
+				return buildRegisterBrief("");
+			});
+		}
+		function ensureRegisterSession() {
+			var svc = sessionsSvc;
+			var wsvc = workspacesSvc;
+			var uws = uiWorkspaceSvc;
+			if (svc === null || wsvc === null || uws === null) return Promise.resolve(false);
+			if (typeof uws.connectWorkspace !== "function") return Promise.resolve(false);
+			var snapshot = wsvc.list !== void 0 && typeof wsvc.list.getSnapshot === "function" ? wsvc.list.getSnapshot() : void 0;
+			var items = snapshot !== void 0 && snapshot !== null && snapshot.items !== void 0 && snapshot.items !== null ? snapshot.items : [];
+			var wsId = items.length > 0 ? items[0].workspaceId : void 0;
+			if (wsId === void 0 || wsId === "") return Promise.resolve(false);
+			return uws.connectWorkspace(wsId).then(function(sid) {
+				if (typeof sid !== "string" || sid === "") return false;
+				var svc3 = svc;
+				if (svc3 === null || svc3 === void 0) return false;
+				var face = typeof svc3.binding === "function" ? svc3.binding(sid) : void 0;
+				var s = face !== void 0 && face !== null && face.session !== void 0 && face.session !== null ? face.session : void 0;
+				if (s === void 0 || s === null || typeof s.prompt !== "function") return false;
+				return registerBriefWithSessionUrl().then(function(brief) {
+					var sess2 = s;
+					if (sess2 === void 0 || sess2 === null || typeof sess2.prompt !== "function") return Promise.resolve({ ok: false });
+					return sess2.prompt([{
+						type: "text",
+						text: brief
+					}], "queue");
+				}).then(function(res) {
+					if (res === void 0 || res === null || res.ok !== true) return false;
+					var sess = s;
+					var svc2 = svc;
+					if (sess === void 0 || sess === null) return false;
+					if (svc2 === null || svc2 === void 0) return false;
+					if (typeof sess.rename === "function") sess.rename("添加按钮").catch(function() {});
+					if (typeof svc2.open === "function") svc2.open(sid);
+					return true;
+				});
+			}).catch(function() {
+				return false;
+			});
+		}
 		exports.apply = function(ctx) {
 			if (win.__dshQuickToolbarInstalled === true) return;
 			win.__dshQuickToolbarInstalled = true;
+			var svcCtx = ctx !== null && typeof ctx === "object" ? ctx : {};
+			sessionsSvc = svcCtx.sessions ?? null;
+			workspacesSvc = svcCtx.workspaces ?? null;
+			uiWorkspaceSvc = svcCtx.uiWorkspace ?? null;
 			var style = document.createElement("style");
 			style.setAttribute("data-dsh-quick-toolbar", "");
 			style.textContent = BASE_CSS + (SHELL_CSS.length > 0 && win.__SSID_SHELL__ === true ? "\n" + SHELL_CSS.join("\n") : "");
@@ -598,16 +1187,25 @@ window.__ModuleLoader__.load({
 			tbStyle.setAttribute("data-dsh-quick-toolbar-toolbar", "");
 			tbStyle.textContent = TOOLBAR_CSS;
 			document.head.appendChild(tbStyle);
-			createToolbar();
-			window.addEventListener("load", function() {
-				if (win.__SSID_SHELL__ !== true) return;
+			loadState(function() {
+				if (win.__SSID_SHELL__ === true && !qtState.shellVisible) return;
+				createToolbar();
+			});
+			var hideIfShell = function() {
+				if (win.__SSID_SHELL__ !== true) return false;
+				if (qtState.shellVisible) return false;
 				var tb = document.getElementById(TOOLBAR_ID);
 				if (tb !== null) tb.remove();
 				var tbBall = document.getElementById(TOOLBAR_ID + "-ball");
 				if (tbBall !== null) tbBall.remove();
-				var st = document.querySelector("style[data-dsh-quick-toolbar]");
-				if (st !== null) st.textContent = BASE_CSS + "\n" + SHELL_CSS.join("\n");
-			});
+				return true;
+			};
+			window.addEventListener("load", hideIfShell);
+			var shellTries = 0;
+			var shellTimer = setInterval(function() {
+				shellTries++;
+				if (hideIfShell() || shellTries >= 5) clearInterval(shellTimer);
+			}, 1500);
 			mountSmHeaderButton();
 			new MutationObserver(function() {
 				applyLocale();
@@ -621,6 +1219,19 @@ window.__ModuleLoader__.load({
 			});
 			window.addEventListener("ssid:titlebar", function(event) {
 				var detail = event !== null && typeof event === "object" ? event.detail : void 0;
+				if (detail === "quick-toolbar-toggle") {
+					var nextOn = !qtState.shellVisible;
+					qtState.shellVisible = nextOn;
+					saveState();
+					if (nextOn) createToolbar();
+					else {
+						var tbEl = document.getElementById(TOOLBAR_ID);
+						if (tbEl !== null) tbEl.remove();
+						var tbBallEl = document.getElementById(TOOLBAR_ID + "-ball");
+						if (tbBallEl !== null) tbBallEl.remove();
+					}
+					return;
+				}
 				if (detail === "session-manager") {
 					clickSmOpenButton();
 					return;
