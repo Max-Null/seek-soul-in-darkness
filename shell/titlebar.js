@@ -11,6 +11,7 @@ document.getElementById('btn-session-manager').addEventListener('click', () => {
 document.getElementById('btn-plugins').addEventListener('click', () => { void window.ssidTitle.action('plugin-center') })
 document.getElementById('btn-sidebar').addEventListener('click', () => { void window.ssidTitle.action('sidebar') })
 document.getElementById('btn-bottom').addEventListener('click', () => { void window.ssidTitle.action('bottom') })
+document.getElementById('btn-qt-float').addEventListener('click', () => { void window.ssidTitle.action('quick-toolbar-toggle') })
 
 const iconMax = document.getElementById('icon-max')
 const iconRestore = document.getElementById('icon-restore')
