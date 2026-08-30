@@ -1124,6 +1124,10 @@ async function start() {
     },
     { type: 'separator' },
     {
+      label: '刷新 web 页面',
+      click: () => { mainView.webContents.reload() },
+    },
+    {
       label: '重启',
       click: () => restartDsh(),
     },
