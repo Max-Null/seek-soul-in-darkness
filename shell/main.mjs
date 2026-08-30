@@ -927,15 +927,15 @@ async function start() {
   safeLog('ssid: phase loadURL ok\n')
   splashStep(4)
   // ── 悬浮球开关初始状态同步 ──────────────────────────────────────────────
-  // 标题栏按钮图标（圆圈+圆点）需与 DSH 页面 localStorage 一致（跨重启记忆）；
-  // 主进程读页面状态 → 下发 titlebar 渲染（预置灯点亮/空圈）。
+  // 标题栏按钮图标（圆圈+圆点）与持久状态一致（跨重启记忆；状态 host 化——
+  // 手册 §7.10：~/.dsh/quick-toolbar-state.json，主进程直接读文件）。
   try {
-    const floatOn = await mainView.webContents.executeJavaScript(
-      "localStorage.getItem('ssid-toolbar-shell-visible')==='1'",
-    )
-    titleBar.webContents.send('ssid:title:float-state', floatOn === true)
-  } catch (error) {
-    safeLog(`[title-float] state sync failed: ${error instanceof Error ? error.message : String(error)}\n`)
+    const statePath = join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'quick-toolbar-state.json')
+    const raw = readFileSync(statePath, 'utf8')
+    const state = JSON.parse(raw)
+    titleBar.webContents.send('ssid:title:float-state', state.shellVisible === true)
+  } catch {
+    titleBar.webContents.send('ssid:title:float-state', false)
   }
   // ── 侧边栏自动诊断：探测 toggle 按钮 + 模拟点击 + 对比面板 class 变化 ──
   // better-sidebar 的 toggleCluster 固定在视口右上角；面板 hidden 态有
