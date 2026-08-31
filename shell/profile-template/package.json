@@ -12,7 +12,7 @@
     "@max-null/dsh-guardian": "0.2.0",
     "@max-null/dsh-habit": "0.2.0",
     "@max-null/dsh-memory": "0.6.0",
-    "@max-null/dsh-node-appearance": "0.3.4",
+    "@max-null/dsh-node-appearance": "0.3.5",
     "@max-null/dsh-plugin-center": "0.2.16",
     "@max-null/dsh-skill-mcp-center": "0.4.2",
     "@max-null/dsh-ssid-panels": "file:./vendor/dsh-ssid-panels",
