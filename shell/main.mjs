@@ -923,6 +923,22 @@ async function start() {
   })
   // master 内核 web 服务带浏览器认证 token：用 kernel.url（authenticatedUrl），
   // 裸 http://127.0.0.1:port/ 会 401（2026-08-29 splash 不替换实测定案）。
+  // 清 dsh-auth-* 旧 cookie（2026-09-01 根源修复）：DSH browser-auth 每个
+  // 实例(端口) mint 一个 Max-Age=30 天的 cookie，cookie 名含 authority 哈希、
+  // 永不覆盖——SSiD 反复重启后累积几十个，combo 请求头超 Node 16KB 上限
+  // → 431「Failed to load plugins」（本次事故根因）。启动即清一次，页面
+  // 加载时会新 mint 一个，数量恒为 1，不会累积。注意：必须用当前窗口会话
+  // 清（mainView 默认 session）；旧 cookie 的 authority 同样是 127.0.0.1:*，
+  // 在 loadURL 前清除不影响后续认证（当前实例会重建自己的 cookie）。
+  try {
+    const sess = mainView.webContents.session
+    const cookies = await sess.cookies.get({})
+    const stale = cookies.filter((c) => typeof c.name === 'string' && c.name.startsWith('dsh-auth-'))
+    for (const c of stale) {
+      try { await sess.cookies.remove('http://127.0.0.1/', c.name) } catch { /* best-effort */ }
+    }
+    if (stale.length > 0) safeLog(`ssid: cleared ${stale.length} stale dsh-auth cookies\n`)
+  } catch { /* 清除失败不影响启动（下次实例继续累积） */ }
   await mainView.webContents.loadURL(kernel.url)
   safeLog('ssid: phase loadURL ok\n')
   splashStep(4)
