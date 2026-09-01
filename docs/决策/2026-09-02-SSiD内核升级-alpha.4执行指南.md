@@ -91,6 +91,18 @@
 - **回滚矩阵**（恢复 8/31 已验证组合）：@deepseek-ai/dsh 及子包 31 个 `alpha.4 → alpha.2`、
   `dsh-context 0.40.1 → 0.38.5`、`@max-null/dsh-node-appearance 0.3.5 → 0.3.4`
   （两处声明已同步；template 的 plugin-center 0.2.17 / chat-rail 0.5.1 保留——与内核无关）。
+- **关键坑（pnpm 11 版本漂移）**：只有 top-level 声明 pin 是不够的——官方 bundle 的
+  `workspace:^` 依赖在 npm 上解析为 `^0.1.2-alpha.x`，会把闭包内 183 个官方子包拉到
+  **npm 最新版（alpha.4）**，与 top-level α.2 混合 → boot 报
+  `@deepseek-ai/dsh-attachment does not provide an export named 'admitPromptContent'`
+  （混合不一致的经典症状）。8/31 正常是因为当时 npm 最新 = α.2（α.3 于 9/1 00:20 才发布）。
+  **修复**：以 8/31 归档（dsh-runtime.tar.gz，214 包全 α.2）为基准生成
+  `@deepseek-ai/dsh-*` 枚举 overrides（**pnpm 11 的 overrides 必须写在
+  `pnpm-workspace.yaml`，package.json 的 `pnpm.overrides` 已不生效**）→ install
+  后实体扫描 214/214 全 α.2 → boot 成功。
+- **执行结果**：SSiD boot ok / start() completed / 全插件挂载 / 0 error；
+  历史会话（插件更新批量，8/31）点开 12s 内 rows=37 完整渲染 ✅；
+  数据零丢失（sessions-ssid 会话目录完整）。
 - **执行**：SSiD 关闭后 `pnpm install`（ssid profile）→ 重启 → 用户验证历史会话恢复。
 - **α.4 后续**：本轮变更已沉淀为两份文档（本节 + 2026-09-02-DSH-alpha2到alpha4-上游变更清单）；
   根因（大历史会话重放/400）留待 alpha4 worktree 专项研究，SSiD 基线保持 α.2。
