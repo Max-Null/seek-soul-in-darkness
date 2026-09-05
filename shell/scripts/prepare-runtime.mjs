@@ -123,6 +123,10 @@ function main() {
   const vendorRoot = join(runtimeDir, 'vendor')
   if (existsSync(vendorRoot)) {
     for (const entry of readdirSafe(vendorRoot)) {
+      // 只清插件目录的 node_modules：vendor 根可能有 README.md 等非目录条目，
+      // 拼出 `README.md/node_modules` 在 macOS/POSIX 抛 ENOTDIR（Windows 靠
+      // 路径解析宽容静默——mac CI 构建必炸，v0.1.16+ build-mac 失败根因）。
+      if (!entry.isDirectory()) continue
       rmSync(join(vendorRoot, entry.name, 'node_modules'), { recursive: true, force: true })
     }
   }

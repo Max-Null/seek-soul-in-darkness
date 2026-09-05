@@ -27,7 +27,7 @@ on:
         default: false
   push:
     tags:
-      - 'v0.1.*'
+      - 'v*'
 
 permissions:
   contents: write
