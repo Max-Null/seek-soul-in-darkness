@@ -164,3 +164,12 @@ tar -xzf dsh-runtime.tar.gz -C dsh-runtime   # 注意必须 -C 解到独立目�
 - **@deepseek-ai/dsh-* 未上 npm → 归档用 SSID_REGISTRY 私有源**：`0.1.2-alpha.1` 是 master 源码版，npm 各子包 E404（dsh-bash-local 等）。本地已搭 verdaccio（127.0.0.1:4873，本地存储 + 代理 npmjs）+ `pnpm -r publish` 253 包（见 2026-08-29 执行记录 L1 节）→ `SSID_REGISTRY=http://127.0.0.1:4873 node scripts/prepare-runtime.mjs`。官方 npm 发布后去掉 SSID_REGISTRY 即切官方源。
 - **归档 vendor 残留 tgz 混入**：profile-template/vendor 的旧物料（dsh-session-manager-0.2.2.tgz，v0.1.15 时代声明残留）会被 vendor 修复循环（4.5 步）当 vendor 条目复制进闭包 node_modules——发版前核对 vendor 目录只含当前声明条目，残留删除后重跑归档（指纹变化确认）。
 - **prepare-runtime 会删除 dsh-runtime 源目录**（[7/7]）——归档抽查前先 `New-Item -ItemType Directory dsh-runtime` 再 `tar -xzf dsh-runtime.tar.gz -C dsh-runtime`（-C 目标不存在即失败）。
+
+## 已验证经验（2026-09-06 v0.2.0 收货）
+
+- **build-mac 全链落位与十轮排雷**：workflow 在 main（`build-mac.yml` 双 job→单 arm64）；关键修复：DSH clone 必须完整 checkout 到 `$GITHUB_WORKSPACE/../deepseek-harness`（tsconfig paths 编译期解析 dsh-* 源码，sparse/runner.temp 均失败）+ `--branch <dsh-tag>` 防漂移；prepare-runtime 的 pnpm 只收 `.cjs` 入口（CI shim 是 shell 脚本）；esbuild / resolve.exports 显式 devDep + `--alias`；mac artifactName 全英文（GH 中文剥离坑），zip 的 artifactName 放 mac 层（build.zip 非法）。
+- **大文件 gh 上传**：256MB+ 会挂死/404——`curl --proxy http://127.0.0.1:7897 -F "file=@..." https://uploads.github.com/repos/<o>/<r>/releases/<数字id>/assets?name=...`（release id 用 REST 数字 id，不是 node_id）；删除多余资产 `gh api -X DELETE .../releases/assets/<id>`。
+- **未分发合并重打**（v0.1.18 教训）：发布 <24h 无用户流量→删除 release+tag 合并重打（gh release delete --yes + push origin :refs/tags/<tag> + force tag 新 commit 触发 CI），不浪费版本号；本次升级直接进位 v0.2.0。
+- **插件更新不进 SSiD 版本**：插件作者新发布走插件中心一键更新；SSiD 模板 pin 同步（下次发版归档自然最新）；「刚归档却提示更新」= 归档是发版时刻 pin 快照，属正常。
+- **smoke-ui 已支持 `--cdp <port>` 模式**（connectOverCDP 找 http://127.0.0.1:<port>/ 主视图页，自带 token）。
+- **deploy EPERM**：杀实例后清理 profile 运行时残骸（node_modules 残骸/old/old2/.upgrade-backup）走首装路径即成功。
