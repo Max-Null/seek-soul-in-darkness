@@ -80,6 +80,7 @@
       "identity": "-"
     },
     "dmg": {
+      "artifactName": "ssid-shell-${version}-${arch}.${ext}",
       "window": {
         "width": 540,
         "height": 400
@@ -103,6 +104,9 @@
           "path": "/Applications"
         }
       ]
+    },
+    "zip": {
+      "artifactName": "ssid-shell-${version}-${arch}-mac.${ext}"
     }
   },
   "dependencies": {
