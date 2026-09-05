@@ -179,8 +179,12 @@ function main() {
     // 用户级 npm 全局（nvm 目录消失后 node 用系统安装，pnpm 全局在
     // %APPDATA%\npm——2026-08-22 实测 D 盘 nvm 移除后此处是唯一来源）
     join(process.env.APPDATA ?? '', 'npm', 'node_modules', 'pnpm', 'bin', 'pnpm.cjs'),
+    // 兜底：bundled pnpm（shell/package.json dependencies 固定 11.21.0，纯 JS
+    // 入口）。macOS CI 的 setup-pnpm 把 PNPM_CMD 指到 .bin/pnpm（shell shim，
+    // 无扩展名），runPnpm 用 node 执行它 → SyntaxError 必炸——只接受 JS 入口。
+    join(process.cwd(), 'node_modules', 'pnpm', 'bin', 'pnpm.cjs'),
   ].filter(Boolean)
-  const pnpm = pnpmCandidates.find((p) => existsSync(p)) || null
+  const pnpm = pnpmCandidates.find((p) => existsSync(p) && /\.(cjs|mjs|js)$/i.test(p)) || null
   if (!pnpm) {
     console.error('缺少 pnpm 11.x，可用环境变量 PNPM_CMD 指定')
     process.exit(1)

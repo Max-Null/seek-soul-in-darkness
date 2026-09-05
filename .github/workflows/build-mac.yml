@@ -40,11 +40,12 @@ jobs:
       - name: 检出 SSiD
         uses: actions/checkout@v4
 
-      - name: 检出 DSH 源码（只读版本号；与构建机 DSH_CHECKOUT 同源）
+      - name: 检出 DSH 源码（固定内核 tag；与构建机 DSH_CHECKOUT 同源）
         env:
           DSH_CHECKOUT: ${{ runner.temp }}/deepseek-harness
         run: |
           git clone --depth 1 --filter=blob:none --sparse \
+            --branch dsh-v0.1.2-rc.1 \
             https://github.com/deepseek-ai/deepseek-harness "$DSH_CHECKOUT"
           git -C "$DSH_CHECKOUT" sparse-checkout set apps/cli
           echo "DSH_CHECKOUT=$DSH_CHECKOUT" >> "$GITHUB_ENV"
