@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "smoke": "node --import tsx/esm boot-smoke.ts",
     "pack": "npm run bundle-kernel && electron-builder --win nsis",
-    "bundle-kernel": "esbuild kernel.ts --bundle --platform=node --format=esm --outfile=kernel.bundle.mjs --external:node:* --external:*.node",
+    "bundle-kernel": "esbuild kernel.ts --bundle --platform=node --format=esm --outfile=kernel.bundle.mjs --external:node:* --external:*.node --alias:resolve.exports=./node_modules/resolve.exports",
     "pack:mac": "npm run bundle-kernel && electron-builder --mac"
   },
   "main": "main.mjs",
@@ -115,6 +115,7 @@
     "electron": "44.2.0",
     "electron-builder": "^26.0.0",
     "typescript": "^6.0.3",
-    "esbuild": "^0.28.2"
+    "esbuild": "^0.28.2",
+    "resolve.exports": "^2.0.3"
   }
 }
