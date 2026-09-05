@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "smoke": "node --import tsx/esm boot-smoke.ts",
     "pack": "npm run bundle-kernel && electron-builder --win nsis",
-    "bundle-kernel": "esbuild kernel.ts --bundle --platform=node --format=esm --outfile=kernel.bundle.mjs --external:node:* --external:*.node"
+    "bundle-kernel": "esbuild kernel.ts --bundle --platform=node --format=esm --outfile=kernel.bundle.mjs --external:node:* --external:*.node",
+    "pack:mac": "npm run bundle-kernel && electron-builder --mac"
   },
   "main": "main.mjs",
   "author": "MaxNull",
@@ -67,6 +68,41 @@
       "owner": "Max-Null",
       "repo": "seek-soul-in-darkness",
       "releaseType": "release"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "assets/icon.icns",
+      "category": "public.app-category.productivity",
+      "darkModeSupport": true,
+      "identity": "-"
+    },
+    "dmg": {
+      "window": {
+        "width": 540,
+        "height": 400
+      },
+      "contents": [
+        {
+          "x": 130,
+          "y": 230
+        },
+        {
+          "x": 130,
+          "y": 320,
+          "type": "file",
+          "path": "ssid-mac-launcher.command",
+          "name": "打开思灵.command"
+        },
+        {
+          "x": 410,
+          "y": 230,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
     }
   },
   "dependencies": {

@@ -1,21 +1,22 @@
 # SSiD macOS 打包——GitHub Actions 云端 Mac 构建（本仓库 Windows 侧无需 macOS）
 #
 # 设计（见 docs/决策/2026-08-27-macOS支持与云端打包-实施.md）：
-#   - macOS runner（macos-latest）自带 Xcode/Homebrew；公共仓库 Actions 免费。
-#   - 归档（dsh-runtime.tar.gz）内含 per-platform 原生二进制（esbuild/koffi/node-pty 等），
-#     因此 mac 包必须在 macOS 上重跑 prepare-runtime.mjs（与 Windows 本机同源逻辑）。
-#   - DSH 版本来源与构建机一致：sparse clone deepseek-harness 并设 DSH_CHECKOUT
-#     （读取 apps/cli/package.json 的 version；与本地 H: 盘 checkout 同源）。
-#   - 产物：dmg（分发）+ zip（electron-updater mac 增量更新用）+ latest-mac.yml/blockmap。
-#   - 签名：当前 identity: null（未签名，用户首次打开需右键-打开绕过 Gatekeeper）；
-#     后续 Developer ID 签名 + notarize 见实施文档 §后续。
+#   - arm64（macos-latest，M 系列）+ x64 交叉构建（同一 runner 上
+#     npm_config_arch=x64 装 x64 原生二进制 + electron-builder --x64）双 job——
+#     归档内含 per-platform 原生二进制，各架构必须独立重建归档。
+#   - DSH 版本来源：sparse clone 钉 dsh-v0.1.2-rc.1（与 Windows 构建机
+#     同 tag；发版换内核时同步更新此处 branch）。
+#   - 图标：多尺度 icns 由 iconutil 从 shell/assets/mac-icon.iconset 生成
+#     （iconutil 要求目录以 .iconset 结尾）。
+#   - 签名：官方 ad-hoc（mac.identity: "-"，electron-builder 组装完成后
+#     自行 codesign）。
+#   - pnpm：CI 的 setup-pnpm 把 PNPM_CMD 指到 .bin/pnpm（shell shim），
+#     prepare-runtime 用 node 执行要求 JS 入口——已加 .cjs 校验 + bundled
+#     pnpm 兜底（scripts/prepare-runtime.mjs pnpmCandidates）。
 #
 # 触发：
-#   - workflow_dispatch 手动（开发验证：默认不上传 Release，产物存 Actions artifact）
-#   - push tag v0.1.* 自动（与 Windows 发版链对齐，上传 GitHub Release 资产）
-#
-# 用法：GitHub 仓库 → Actions → build-mac → Run workflow（选分支 feat/macos-packaging
-#      或 main 推送 tag 自动触发）。产物在 Actions run 页 Artifacts 或 Release 资产。
+#   - workflow_dispatch 手动（默认只出 artifact；勾选 publish 上传 Release）
+#   - push tag v* 自动（与 Windows 发版链对齐）
 name: build-mac
 
 on:
@@ -33,7 +34,7 @@ permissions:
   contents: write
 
 jobs:
-  build-mac:
+  build-mac-arm64:
     runs-on: macos-latest
     timeout-minutes: 90
     steps:
@@ -60,7 +61,9 @@ jobs:
 
       - name: 安装 shell 依赖（darwin 原生二进制随平台下载）
         working-directory: shell
-        run: pnpm install --frozen-lockfile
+        run: |
+          pnpm install --frozen-lockfile
+          node node_modules/electron/install.js
 
       - name: 重建运行时归档（mac 平台原生二进制 + DSH 版本读取）
         working-directory: shell
@@ -69,14 +72,96 @@ jobs:
           export PNPM_CMD="$(which pnpm)"
           node scripts/prepare-runtime.mjs
 
-      - name: 打包（bundle-kernel + electron-builder --mac dmg/zip）
+      - name: 生成多尺度 icns（iconutil 要求 .iconset 后缀）
         working-directory: shell
-        run: npm run pack:mac
+        run: |
+          iconutil -c icns assets/mac-icon.iconset -o assets/icon.icns
+          ls -la assets/icon.icns
 
-      - name: 上传构建产物（Actions artifact，无需 Release）
+      - name: 打包（bundle-kernel + electron-builder --mac dmg/zip，官方 adhoc 签名）
+        working-directory: shell
+        run: npm run pack:mac -- --publish never
+
+      - name: 上传构建产物（Actions artifact）
         uses: actions/upload-artifact@v4
         with:
-          name: ssid-mac-dist
+          name: ssid-mac-dist-arm64
+          path: |
+            shell/dist-electron/*.dmg
+            shell/dist-electron/*.zip
+            shell/dist-electron/latest-mac.yml
+            shell/dist-electron/*.blockmap
+          if-no-files-found: error
+
+      - name: 上传 GitHub Release（tag 触发或手动勾选 publish）
+        if: github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.publish)
+        uses: softprops/action-gh-release@v2
+        with:
+          fail_on_unmatched_files: false
+          files: |
+            shell/dist-electron/*.dmg
+            shell/dist-electron/*.zip
+            shell/dist-electron/latest-mac.yml
+            shell/dist-electron/*.blockmap
+
+  build-mac-x64:
+    # macos-13（Intel）runner 已退役（GitHub 2026 移除实证），x64 改走交叉构建：
+    # 同一 arm64 runner 上 npm_config_arch=x64 装 x64 原生二进制 + --x64 打包。
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - name: 检出 SSiD
+        uses: actions/checkout@v4
+
+      - name: 检出 DSH 源码（固定内核 tag；与构建机 DSH_CHECKOUT 同源）
+        env:
+          DSH_CHECKOUT: ${{ runner.temp }}/deepseek-harness
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse \
+            --branch dsh-v0.1.2-rc.1 \
+            https://github.com/deepseek-ai/deepseek-harness "$DSH_CHECKOUT"
+          git -C "$DSH_CHECKOUT" sparse-checkout set apps/cli
+          echo "DSH_CHECKOUT=$DSH_CHECKOUT" >> "$GITHUB_ENV"
+
+      - name: Node 22 + pnpm 11
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: 安装 shell 依赖（x64 原生二进制交叉下载）
+        working-directory: shell
+        run: |
+          export npm_config_arch=x64
+          export npm_config_platform=darwin
+          pnpm install --frozen-lockfile
+          node node_modules/electron/install.js
+
+      - name: 重建运行时归档（x64 原生二进制 + DSH 版本读取）
+        working-directory: shell
+        run: |
+          export npm_config_arch=x64
+          export npm_config_platform=darwin
+          export DSH_NODE="$(which node)"
+          export PNPM_CMD="$(which pnpm)"
+          node scripts/prepare-runtime.mjs
+
+      - name: 生成多尺度 icns（iconutil 要求 .iconset 后缀）
+        working-directory: shell
+        run: |
+          iconutil -c icns assets/mac-icon.iconset -o assets/icon.icns
+          ls -la assets/icon.icns
+
+      - name: 打包（bundle-kernel + electron-builder --mac --x64，官方 adhoc 签名）
+        working-directory: shell
+        run: npm run pack:mac -- --x64 --publish never
+
+      - name: 上传构建产物（Actions artifact）
+        uses: actions/upload-artifact@v4
+        with:
+          name: ssid-mac-dist-x64
           path: |
             shell/dist-electron/*.dmg
             shell/dist-electron/*.zip

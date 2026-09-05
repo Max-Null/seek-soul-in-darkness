@@ -787,14 +787,19 @@ async function start() {
     // 条目（profile-template/cordis.patch.yml）通过 !!js 读取这两个 env：
     //   SSID_MCP_NODE   —— 执行 @playwright/mcp/cli.js 的 node.exe
     //   SSID_MCP_PW_CLI —— 本 profile 内 pin 依赖的 cli.js 绝对路径
-    // node 候选链与 worker 分支一致：打包内置 node.exe（afterPack 注入）→
-    // NVM v22.22.2 → PATH 上的 node.exe。刻意不用 process.execPath（electron
-    // ABI 不匹配）。浏览器二进制不随安装包发布，首次使用需
-    // `playwright install chromium`（见 docs/决策/2026-08-24-Playwright-MCP-预制-实施方案.md）。
+    // node 候选链跨平台（v0.2.0 mac 支持）：打包内置 node（afterPack 注入，
+    // win 名为 node.exe、mac 无扩展名）→ Homebrew（darwin）→ NVM v22.22.2
+    // （win 开发机）→ PATH 上的裸名（spawn 解析兜底）。刻意不用
+    // process.execPath（electron ABI 不匹配）。浏览器二进制不随安装包发布，
+    // 首次使用需 `playwright install chromium`（见 docs/决策/2026-08-24-
+    // Playwright-MCP-预制-实施方案.md）。
+    const platformNodeName = () => (process.platform === 'win32' ? 'node.exe' : 'node')
     const mcpNodeCandidates = [
-      process.resourcesPath ? join(process.resourcesPath, 'node', 'node.exe') : '',
+      process.resourcesPath ? join(process.resourcesPath, 'node', platformNodeName()) : '',
+      process.platform === 'darwin' ? '/opt/homebrew/bin/node' : '',
+      process.platform === 'darwin' ? '/usr/local/bin/node' : '',
       process.env.NVM_HOME ? join(process.env.NVM_HOME, 'v22.22.2', 'node.exe') : '',
-      'node.exe',
+      platformNodeName(),
     ]
     const mcpNodeExe = mcpNodeCandidates.find((c) => c !== '' && existsSync(c))
     if (mcpNodeExe) {
