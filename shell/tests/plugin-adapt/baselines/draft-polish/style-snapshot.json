@@ -1,0 +1,53 @@
+[
+  {
+    "label": "截图",
+    "style": {
+      "font-size": "13.3333px",
+      "font-family": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+      "color": "rgb(110, 110, 115)",
+      "background-color": "rgba(0, 0, 0, 0)",
+      "border-radius": "999px",
+      "height": "28px",
+      "padding": "0px",
+      "display": "grid"
+    },
+    "box": {
+      "w": 28,
+      "h": 28
+    }
+  },
+  {
+    "label": "润色",
+    "style": {
+      "font-size": "13.3333px",
+      "font-family": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+      "color": "rgb(110, 110, 115)",
+      "background-color": "rgba(0, 0, 0, 0)",
+      "border-radius": "999px",
+      "height": "28px",
+      "padding": "0px",
+      "display": "grid"
+    },
+    "box": {
+      "w": 28,
+      "h": 28
+    }
+  },
+  {
+    "label": "Context Doctor",
+    "style": {
+      "font-size": "12px",
+      "font-family": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Helvetica Neue\", Helvetica, Arial, sans-serif",
+      "color": "rgb(28, 28, 30)",
+      "background-color": "rgb(255, 255, 255)",
+      "border-radius": "7px",
+      "height": "34px",
+      "padding": "4px 9px",
+      "display": "flex"
+    },
+    "box": {
+      "w": 136,
+      "h": 32
+    }
+  }
+]

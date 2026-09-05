@@ -990,6 +990,8 @@ window.__ModuleLoader__.load({
 		/** Product copy (zh/en via the document lang). */
 		const STRINGS = {
 			zh: {
+				cardName: "截图",
+				cardDesc: "截图行为设置——隐藏思灵窗口与全局快捷键",
 				hideTitle: "截图时隐藏思灵窗口",
 				hideDesc: "开：冻结帧不含思灵自身（引用其他应用）；关：冻结帧包含思灵（可框选对话内容）",
 				hotkeyTitle: "截图全局快捷键",
@@ -1001,6 +1003,8 @@ window.__ModuleLoader__.load({
 				loadFail: "加载失败"
 			},
 			en: {
+				cardName: "Capture",
+				cardDesc: "Capture behavior — hide the SSiD window and the global shortcut",
 				hideTitle: "Hide the SSiD window while capturing",
 				hideDesc: "On: frozen frame excludes SSiD (reference other apps); Off: includes SSiD (can box-select conversation content)",
 				hotkeyTitle: "Capture global shortcut",
@@ -1032,7 +1036,17 @@ window.__ModuleLoader__.load({
 			".ssd3r-switch{width:40px;height:22px;flex:none;border:none;border-radius:11px;cursor:pointer;padding:0;background:var(--dsw-alias-border-l4,rgba(0,0,0,.16));transition:background .15s}",
 			".ssd3r-switch.on{background:var(--dsw-alias-state-business-primary,#4FC3F7)}",
 			".ssd3r-switch .knob{display:block;width:16px;height:16px;border-radius:8px;background:#fff;margin-left:2px;transition:margin-left .15s}",
-			".ssd3r-switch.on .knob{margin-left:22px}"
+			".ssd3r-switch.on .knob{margin-left:22px}",
+			".ssd3Card{list-style:none;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-3);transition:border-color .16s,background .16s}",
+			".ssd3Card:hover{border-color:var(--dsw-alias-label-dimmed)}",
+			".ssd3CardOpen{background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-label-dimmed)}",
+			".ssd3CardHeader{width:100%;appearance:none;border:0;background:none;font:inherit;color:inherit;text-align:left;cursor:pointer;display:flex;align-items:center;gap:12px;padding:14px 16px;border-radius:12px}",
+			".ssd3CardHeadText{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}",
+			".ssd3CardName{font-size:15px;font-weight:600;line-height:1.4;color:var(--dsw-alias-label-primary)}",
+			".ssd3CardDesc{font-size:13px;line-height:1.5;color:var(--dsw-alias-label-tertiary)}",
+			".ssd3CardChevron{flex:none;color:var(--dsw-alias-label-tertiary);transition:transform .16s}",
+			".ssd3CardChevronOn{transform:rotate(180deg)}",
+			".ssd3CardBody{border-top:1px solid var(--dsw-alias-border-l2);margin:0 16px;padding-bottom:8px}"
 		].join("");
 		const STYLE_ID$1 = "@max-null/dsh-capture/settings.css";
 		if (typeof document !== "undefined" && document.querySelector(`style[data-plugin-css="${STYLE_ID$1}"]`) === null) {
@@ -1200,6 +1214,31 @@ window.__ModuleLoader__.load({
 				})
 			});
 		}
+		/** 设置——插件页卡片：截图行为（隐藏窗口开关 + 全局快捷键）——合并原两行通用设置。 */
+		function ScreenshotSettingsCard() {
+			const [open, setOpen] = (0, react.useState)(false);
+			const t = langStrings();
+			return (0, react.createElement)("li", { className: "ssd3Card" + (open ? " ssd3CardOpen" : "") }, (0, react.createElement)("button", {
+				type: "button",
+				className: "ssd3CardHeader",
+				"aria-expanded": open,
+				onClick: () => setOpen((v) => !v),
+				children: [(0, react.createElement)("span", { className: "ssd3CardHeadText" }, (0, react.createElement)("span", { className: "ssd3CardName" }, t.cardName), (0, react.createElement)("span", { className: "ssd3CardDesc" }, t.cardDesc)), (0, react.createElement)("svg", {
+					className: "ssd3CardChevron" + (open ? " ssd3CardChevronOn" : ""),
+					viewBox: "0 0 14 14",
+					width: 14,
+					height: 14,
+					fill: "none",
+					"aria-hidden": true
+				}, (0, react.createElement)("path", {
+					d: "M11.8486 5.5L11.4238 5.92383L8.69727 8.65137C8.44157 8.90706 8.21562 9.13382 8.01172 9.29785C7.79912 9.46883 7.55595 9.61756 7.25 9.66602C7.08435 9.69222 6.91565 9.69222 6.75 9.66602C6.44405 9.61756 6.20088 9.46883 5.98828 9.29785C5.78438 9.13382 5.55843 8.90706 5.30273 8.65137L2.57617 5.92383L2.15137 5.5L3 4.65137L3.42383 5.07617L6.15137 7.80273C6.42595 8.07732 6.59876 8.24849 6.74023 8.3623C6.87291 8.46904 6.92272 8.47813 6.9375 8.48047C6.97895 8.48703 7.02105 8.48703 7.0625 8.48047C7.07728 8.47813 7.12709 8.46904 7.25977 8.3623C7.40124 8.24849 7.57405 8.07732 7.84863 7.80273L10.5762 5.07617L11 4.65137L11.8486 5.5Z",
+					fill: "currentColor"
+				}))]
+			}), open ? (0, react.createElement)("div", {
+				className: "ssd3CardBody",
+				children: [(0, react.createElement)(ScreenshotHideRow, { key: "hide" }), (0, react.createElement)(ScreenshotHotkeyRow, { key: "hotkey" })]
+			}) : null);
+		}
 		//#endregion
 		//#region src/client/ImagePreviewEdit.tsx
 		/**
@@ -1351,8 +1390,8 @@ window.__ModuleLoader__.load({
 		*     `dataTransfer.types.includes('Files')`，量/类型/大小限制与真实拖拽一致）。
 		*  2. 截图按钮：注册 `conversation.input.right`（润色按钮同一座位），点击
 		*     调 /ssid/api/screenshot/trigger 让壳层开浮层。
-		*  3. 设置行：注册两个 `settings.general.item`（通用设置）：隐藏窗口开关
-		*     + 全局快捷键编辑，即改即存。
+		*  3. 设置：注册「设置——插件」页卡片（settings.plugin.item）：隐藏窗口开关
+		*     + 全局快捷键编辑，即改即存（2026-09-06 由通用设置两行迁入）。
 		*/
 		const inject = ["slots"];
 		/** 事件名（与 shell/main.mjs 派发一致）。 */
@@ -1414,21 +1453,14 @@ window.__ModuleLoader__.load({
 				id: "ssid-screenshot",
 				order: -10
 			}, ScreenshotButton));
-			ctx.slots.inject("settings.general.item", () => ctx.slots.register({
-				name: "settings.general.item",
-				id: "ssid-screenshot-hide",
-				order: 25
-			}, ScreenshotHideRow));
-			ctx.slots.inject("settings.general.item", () => ctx.slots.register({
-				name: "settings.general.item",
-				id: "ssid-screenshot-hotkey",
-				order: 26
-			}, ScreenshotHotkeyRow));
+			ctx.slots.inject("settings.plugin.item", () => ctx.slots.register({
+				name: "settings.plugin.item",
+				key: "dsh-capture"
+			}, ScreenshotSettingsCard));
 		}
 		//#endregion
 		exports.ScreenshotButton = ScreenshotButton;
-		exports.ScreenshotHideRow = ScreenshotHideRow;
-		exports.ScreenshotHotkeyRow = ScreenshotHotkeyRow;
+		exports.ScreenshotSettingsCard = ScreenshotSettingsCard;
 		exports.apply = apply;
 		exports.inject = inject;
 		return module.exports;

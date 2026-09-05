@@ -5,8 +5,9 @@
  * 日志：同步写 ~/.ssid/updater.log（诊断通道，不依赖主进程日志 flush；
  * 主进程退出前每次 appendFileSync 已落盘）+ console（命令行启动时可见）。
  */
-import { app } from 'electron'
+import { app, session } from 'electron'
 import { appendFileSync, mkdirSync } from 'node:fs'
+import { execSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
@@ -46,6 +47,35 @@ const updaterLog = (message) => {
 
 export function createShellUpdater() {
   updaterLog(`init: isPackaged=${app.isPackaged}`)
+  // 系统代理继承（v0.1.19 修复）：electron-updater 的 net 请求走专用 partition
+  // session，默认不读 Windows 系统代理（WinINET）——国内开代理（Clash 等）环境
+  // 直连 github.com 被断（ECONNRESET/TIMED_OUT），检查更新必失败。此处从注册表
+  // 读 ProxyServer 并显式 setProxy（`http://` 前缀语法，实测有效）。
+  // 每次更新器创建都应用（幂等：同 partition 重复 setProxy 无害）。
+  const sysInetProxy = (() => {
+    try {
+      const raw = execSync(
+        `powershell -NoProfile -Command "(Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings').ProxyServer"`,
+        { encoding: 'utf8', timeout: 10000, windowsHide: true },
+      ).trim()
+      if (!raw) return null
+      let host = raw
+      const seg = /(?:https|http)=([^\s;]+)/i.exec(raw)
+      if (seg) host = seg[1]
+      if (/^https?:\/\//i.test(host)) return host
+      return `http://${host}`
+    } catch {
+      return null
+    }
+  })()
+  if (sysInetProxy !== null) {
+    const updaterSession = session.fromPartition('electron-updater', { cache: false })
+    void updaterSession.setProxy({ proxyRules: sysInetProxy })
+      .then(() => updaterLog(`proxy: applied ${sysInetProxy}`))
+      .catch((err) => updaterLog(`proxy: set failed ${err instanceof Error ? err.message : String(err)}`))
+  } else {
+    updaterLog('proxy: no system proxy detected (direct connection)')
+  }
   const log = (message) => updaterLog(message)
   try {
     return createShellUpdaterCore({

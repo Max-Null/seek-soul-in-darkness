@@ -20,6 +20,7 @@ const getArg = (name, fallback) => {
   return i >= 0 ? args[i + 1] : fallback
 }
 const PORT = getArg('--port', null)
+const CDP = getArg('--cdp', null) // 打包版：--remote-debugging-port=<n> 启动后 connectOverCDP（v0.1.16 方案）
 const SEND = getArg('--send', null)
 const SESSION = getArg('--session', null)
 const CLEAN_SESSIONS = getArg('--clean-sessions', null) // 逗号分隔会话标题（归档，DSH 无删除入口）
@@ -70,17 +71,28 @@ async function archiveSession(page, title) {
 
 // ---- 主流程 ----
 ;(async () => {
-  const port = findSsidPort()
-  const url = `http://127.0.0.1:${port}/`
+  const { chromium } = require(PLAYWRIGHT)
+  let browser, page, url
+  if (CDP) {
+    // 打包版（v0.1.16 方案）：CDP 连接真实窗口页（自带 web token，裸 URL 会撞认证页）
+    browser = await chromium.connectOverCDP(`http://127.0.0.1:${CDP}`)
+    const pages = browser.contexts().flatMap(c => c.pages())
+    page = pages.find(p => /^http:\/\/127\.0\.0\.1:\d+\//.test(p.url()))
+      || pages.find(p => !p.url().startsWith('file:') && !p.url().includes('devtools'))
+    if (!page) throw new Error(`CDP 未找到主视图页（pages=${pages.map(p => p.url()).join(' | ')}）`)
+    url = page.url()
+    console.log(`[smoke] cdp=${CDP} url=${url} send=${SEND ? 'yes' : 'no'}`)
+  } else {
+    const port = findSsidPort()
+    url = `http://127.0.0.1:${port}/`
+    console.log(`[smoke] url=${url} send=${SEND ? 'yes' : 'no'}`)
+    browser = await chromium.launch({ headless: true })
+    page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
+    await page.goto(url, { waitUntil: 'networkidle', timeout: 45000 }).catch(() => {})
+    await page.waitForTimeout(3500)
+  }
   const outdir = OUTDIR || path.join('H:/MaxNull/WorkStation/.dsh-tmp', 'ssid-smoke', String(Date.now()))
   fs.mkdirSync(outdir, { recursive: true })
-  console.log(`[smoke] url=${url} send=${SEND ? 'yes' : 'no'}`)
-
-  const { chromium } = require(PLAYWRIGHT)
-  const browser = await chromium.launch({ headless: true })
-  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
-  await page.goto(url, { waitUntil: 'networkidle', timeout: 45000 }).catch(() => {})
-  await page.waitForTimeout(3500)
 
   const base = await page.evaluate(() => ({
     hasComposerSeat: !!document.querySelector('[data-composer-seat]'),

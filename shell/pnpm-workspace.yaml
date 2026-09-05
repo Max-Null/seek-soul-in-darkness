@@ -2,3 +2,7 @@ allowBuilds:
   electron: true
   electron-winstaller: true
   esbuild: true
+minimumReleaseAgeExclude:
+  - electron@44.2.0
+packages:
+  - tests/plugin-adapt

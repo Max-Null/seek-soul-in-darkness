@@ -1,0 +1,15 @@
+{
+  "name": "ssid-plugin-adapt-tests",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SSiD 插件实机适配回归测试（L1 boot / L2 界面契约 / L3 功能 / L4 视觉）",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "baseline": "node baseline.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}

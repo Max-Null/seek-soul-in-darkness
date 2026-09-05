@@ -201,6 +201,20 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 # .runtime-version 应变为归档指纹；端口 HTTP / 返回 401（auth required = 服务就绪）
 ```
 
+### 5.4 dev 源码模式构建正确姿势（2026-09-05 rc.1 适配实踩）
+
+- **dev 的 web 壳 serve 根 = 源码树 `apps/web/dist`**：`@deepseek-ai/dsh-web-app` 经 tsconfig paths 映射到
+  checkout 源码 → `require.resolve('@deepseek-ai/dsh-web-frontend/package.json')` 命中 monorepo workspace
+  链接 → `apps/web`。**改 profile 的 `dsh-web-frontend/dist` 无效**（不读它）。
+- **checkout 切换 tag 后必做 `pnpm run clean` 再全量 `pnpm run build`**：client 包 main 指向预编译 `lib/`，
+  单跑 apps/web 的 `vite build` 会复用旧 lib；且 tsc 增量缓存（tsbuildinfo）在 tag 切换后产出与 src
+  撕裂的 lib（报 `MISSING_EXPORT …`）。全量构建 ≈8 分钟。
+- **判缺陷先 SHA256 对齐 serve 根**：先确认「服务端实际服务的是哪份 dist」（页面同源 fetch 资产对比
+  磁盘 hash），再判 npm 包 / 源码树 / 构建链——不要先入为主（2026-09-05 曾误判 npm dist）。
+- **alpha.1（及相邻 alpha）常见**：`apps/web/dist` 产物缺函数级导出（`FISH_LOGO_VIEWBOX` 等 7 项，
+  seed.ts 静态表被 tree-shake）→ 页面 `#130 (sidebar.settings)` + `conversation: …reading 'height'`；
+  **rc.1 源码全量构建产物完整**（与 npm 包 hash 一致），遇此现象优先对齐版本（alpha→rc.1）。
+
 ## 6. 壳-内核兼容契约（master 升级后重点）
 
 | 契约点 | master（0.1.2-alpha.1）要求 | SSiD 侧实现 |
@@ -225,6 +239,7 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 8. **smoke 环境变量**：`SSID_MCP_NODE`/`SSID_MCP_PW_CLI` 缺失 → mcp-playwright 行 args=[null,…] 校验失败。
 9. **插件改名（五处联动）**：① 声明 `dependencies` 的**键和 file: 路径值都要改**（2026-08-30 实踩：只改键 → pnpm `ERR_PNPM_LINKED_PKG_DIR_NOT_FOUND`）② `bundles` 数组 ③ plugins 源 + 三处 vendor（目录+内容）④ main.mjs/kernel.ts 注释引用 ⑤ pnpm 状态文件（`pnpm-lock.yaml`/`node_modules/.modules.yaml`/`.package-map.json`）在 install 报旧路径时逐层替换，最后 `pnpm install` 重物化（否则下次 boot bundle 解析失败）。
 10. **DSH 页面状态持久化 = host 化，禁 localStorage**（2026-08-30 用户拍板规则）：思灵内核 web 端口**动态**（每次重启变化）→ 页面 localStorage 按 origin（host:port）隔离，**跨重启必丢**（quick-toolbar 位置/钉住/折叠/壳开关、panels 更新日志 seen 均踩过同坑，2026-08-30/2026-08-28 两次实踩）。**任何需要跨重启的状态一律 host 化**：存 `~/.dsh/<pkg>.json`（host 半读写 + 客户端 API 桥——panels seen 标记先例）；页面 localStorage 只允许会话瞬时态。
+11. **`#130 (sidebar.settings)` / `conversation: …reading 'height'`**（2026-09-05 rc.1 适配实踩）：**先对齐 serve 根与版本**——大概率是**源码树 `apps/web/dist` 的旧版本构建产物缺函数级导出**（alpha.1 树必现；rc.1 全量构建完整）。处置：`git -C deepseek-harness checkout dsh-v0.1.2-rc.1` → `pnpm run clean && pnpm run build` → 页面 reload。**不要**改 profile dist（serve 根不在 profile）。
 
 ## 8. 文档索引
 
@@ -304,6 +319,44 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 
 - 我们的插件与**侧边栏插件**（dsh-better-sidebar / dsh-sidebar-qa 等）**耦合度高**——**目前没有计划移除侧边栏插件**。
 - 插件开发**勿假设侧边栏会被移除**（不做「无侧边栏退化」设计）；耦合点（如依赖 better-sidebar 的挂载/布局）属于稳定依赖。
+
+### 插件设置卡片标准（「设置——插件」页，2026-09-06 定稿·开发标准）
+
+**适用判定**：
+- **参数少（单卡一屏能放下）→ 设置——插件页卡片**（本规范的默认做法，免自建独立设置页）；
+- **有独立管理界面/复杂交互**（插件中心、记忆管理、侧边卡片等）→ 独立页面，**不在此列**。
+- 先例：dsh-node-appearance（首个）；@max-null/dsh-chat-rail（对比模式开关）；dsh-capture（行为设置，迁移中）。
+
+**三件套**（缺一即卡片不显示/不生效）：
+
+1. **host**：`ctx.inject(['settings'])` → `settings.installSection(ctx, NS, Config, config, { setSource, onChange })`
+   - `NS` = 设置 namespace（如 `'dsh-capture'`）；`Config` 用 **schemastery `z`**（`z.object({...})` + 默认值=配置缺省）；
+   - `config` 传初值（host 现有配置读取）；`setSource` = 值落盘回调（**保持单一数据源**，如 screenshot.json）；
+     `onChange` = 应用回调（如热键重注册）；
+   - ⚠️ **installSection 是「served namespaces」的唯一声明**——缺失则列表不显示
+     （官方 tab-store 渲染 = Host served namespaces ∩ 注册卡片 key 的交集）。
+2. **client**：`settingsScope.bind<{...}>({ namespace: NS })`（官方 ui-settings 服务）+ 注册
+   **`settings.plugin.item` keyed 卡片**（key = NS）：`ctx.slots.inject('settings.plugin.item' as never,
+   () => ctx.slots.register({ name: 'settings.plugin.item', key: NS, inject: () => face }, Card))`；
+   卡片读 scope（`useSyncExternalStore(scope.subscribe, () => scope.getSnapshot())`）、写 `scope.set`
+   （持久化由官方 settings 服务处理——免自建 API）。
+3. **卡片视觉**（官方 PluginCard chrome token——对齐 node-appearance `card.module.css`）：
+   - 壳：`border:1px solid var(--dsw-alias-border-l2); border-radius:12px; background:var(--dsw-alias-bg-layer-3);`
+     hover `border-color:var(--dsw-alias-label-dimmed)`；
+   - header（button）：标题 15px/600 `--dsw-alias-label-primary` + 描述 13px 灰 `--dsw-alias-label-tertiary`
+     + **官方 chevron**（`IconChevronDownOutline14` 同款 fill path，viewBox `0 0 14 14`——**勿自绘 stroke 箭头**）；
+   - 展开态 `.xCardOpen`：`background:var(--dsw-alias-bg-layer-2); border-color:var(--dsw-alias-label-dimmed)`；
+   - body（`border-top` 分隔）：行 = rowLabel 13px/500 + hint 12px 灰 + 家族开关（40×22 胶囊，`.on` `#4FC3F7`）；
+   - 文案中英双语；只用 DSH token（无硬编码色值）。
+
+**依赖注意事项**：host peer `@deepseek-ai/dsh-settings`（**建议精确 pin `0.1.2-alpha.5`**——rc.1 的传递依赖
+`dsh-invariants@">=0.1.2 <0.2.0-0"` 无匹配（官方发布链 bug：0.1.2-x 全 prerelease；且 pnpm 11 单包
+`pnpm-workspace.yaml overrides` 不生效，只认多包 workspace root——chat-rail 以精确 peer pin 规避）；
+`@deepseek-ai/schemastery`（`z`；dependencies）。
+
+**排查清单**：卡片缺失 → ① host 有 installSection（served）？② 卡片 key 是否 = NS？③ console 有无
+slot 冲突/界面错误；切换不生效 → scope 绑定/namespace 拼写；显示为裸行/无卡片壳 → 未用官方卡片
+样式（检查上述视觉段）。
 
 ## 10. 内置专属插件规范（2026-08-30 定稿）
 

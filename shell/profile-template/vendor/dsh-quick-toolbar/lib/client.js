@@ -8,6 +8,7 @@ const BUILTIN_ADAPTERS = [
 	{
 		id: "dsh-plugin-center",
 		button: "[class*=\"pc-headerbtn\"]",
+		buttonTexts: ["插件中心", "Plugin center"],
 		icon: { source: "from-button" },
 		label: "插件中心",
 		act: {
@@ -61,6 +62,7 @@ const BUILTIN_ADAPTERS = [
 	{
 		id: "dsh-settings",
 		button: "button[aria-label=\"设置\"], button[aria-label=\"Settings\"]",
+		buttonTexts: ["设置", "Settings"],
 		icon: {
 			source: "custom",
 			value: "settings"
@@ -70,6 +72,28 @@ const BUILTIN_ADAPTERS = [
 		hide: false
 	}
 ];
+/**
+* 目标可用性探测：选择器命中优先；未命中且声明 buttonTexts 时按
+* aria-label/textContent 文本命中兜底（CSS module 哈希类变化后语义文本
+* 仍稳定）。任一命中 = 对应入口存在，悬浮球才渲染其聚合按钮。
+* @param a - 适配器。
+* @param root - 探测根（DOM 环境 = document；测试可注入 stub）。
+*/
+function adapterVisible(a, root) {
+	try {
+		if (root.querySelector(a.button) !== null) return true;
+	} catch {}
+	const wants = a.buttonTexts ?? [];
+	if (wants.length === 0) return false;
+	const nodes = root.querySelectorAll("button, [role=\"button\"], a");
+	for (let i = 0; i < nodes.length; i++) {
+		const el = nodes[i];
+		const label = (el.getAttribute("aria-label") ?? "").trim();
+		const text = (el.textContent ?? "").trim();
+		for (const want of wants) if (label === want || text === want) return true;
+	}
+	return false;
+}
 //#endregion
 //#region src/behaviors.ts
 /**
@@ -578,10 +602,10 @@ window.__ModuleLoader__.load({
 			} catch (_e) {}
 		};
 		var TOOLBAR_CSS = [
-			"#ssid-toolbar{position:fixed;z-index:9999;font-family:system-ui,\"Segoe UI\",sans-serif;user-select:none;-webkit-user-select:none;box-sizing:border-box;width:36px;height:36px;border-radius:18px;background:var(--dsw-alias-bg-layer-3,#10151f);border:1px solid var(--dsw-alias-border-l2,#1e2836);box-shadow:0 4px 16px rgba(0,0,0,.3);overflow:hidden;transition:width .28s cubic-bezier(.25,.8,.25,1),height .28s cubic-bezier(.25,.8,.25,1),left .28s cubic-bezier(.25,.8,.25,1),top .28s cubic-bezier(.25,.8,.25,1),border-radius .28s cubic-bezier(.25,.8,.25,1)}",
+			"#ssid-toolbar{position:fixed;z-index:9999;font-family:system-ui,\"Segoe UI\",sans-serif;user-select:none;-webkit-user-select:none;box-sizing:border-box;width:36px;height:36px;border-radius:18px;background:var(--dsw-alias-bg-layer-3,#10151f);border:1px solid var(--dsw-alias-border-l2,#1e2836);overflow:hidden;transition:width .28s cubic-bezier(.25,.8,.25,1),height .28s cubic-bezier(.25,.8,.25,1),left .28s cubic-bezier(.25,.8,.25,1),top .28s cubic-bezier(.25,.8,.25,1),border-radius .28s cubic-bezier(.25,.8,.25,1)}",
 			"#ssid-toolbar *{box-sizing:border-box}",
 			"#ssid-toolbar.ssid-tb-expanded{border-radius:12px}",
-			"#ssid-toolbar-ball{position:fixed;z-index:10000;width:36px;height:36px;margin:0;padding:0;border:0;background:transparent;box-shadow:none;appearance:none;-webkit-appearance:none;pointer-events:none;display:flex;align-items:center;justify-content:center;color:var(--dsw-alias-label-primary,#d8e0ea);opacity:.9;transition:opacity .18s ease}",
+			"#ssid-toolbar-ball{position:fixed;z-index:10000;width:36px;height:36px;margin:0;padding:0;border:0;background:transparent;box-shadow:none;appearance:none;-webkit-appearance:none;pointer-events:none;display:flex;align-items:center;justify-content:center;color:var(--dsw-alias-label-primary,#d8e0ea);opacity:.9;border-radius:50%;transition:opacity .18s ease,background .18s ease}",
 			"#ssid-toolbar-ball svg{width:16px;height:16px}",
 			"#ssid-toolbar .ssid-tb-panel{position:absolute;left:0;top:0;display:flex;flex-direction:column;gap:4px;padding:6px;color:var(--dsw-alias-label-primary,#d8e0ea)}",
 			"#ssid-toolbar .ssid-tb-panel>*{opacity:0;transform:translateY(4px);transition:opacity .16s ease,transform .16s ease}",
@@ -787,11 +811,41 @@ window.__ModuleLoader__.load({
 				} catch (_e) {}
 				return b;
 			};
-			for (var ai = 0; ai < BUILTIN_ADAPTERS.length; ai++) {
-				var adapter = BUILTIN_ADAPTERS[ai];
-				var kind = TOOLBAR_KIND_BY_ADAPTER[adapter.id];
-				renderButton(adapter, kind !== void 0 ? kind : null);
-			}
+			var ssidShellEnv = typeof window !== "undefined" && window.__SSID_SHELL__ === true;
+			var adapterIdSelector = function(adapterId) {
+				return "[data-adapter-id=\"" + adapterId.replace(/"/g, "\\\"") + "\"]";
+			};
+			var renderBuiltins = function() {
+				for (var ai = 0; ai < BUILTIN_ADAPTERS.length; ai++) {
+					var adapter = BUILTIN_ADAPTERS[ai];
+					if (!ssidShellEnv && !adapterVisible(adapter, document)) continue;
+					try {
+						if (panel.querySelector(adapterIdSelector(adapter.id)) !== null) continue;
+					} catch (_e) {}
+					var kind = TOOLBAR_KIND_BY_ADAPTER[adapter.id];
+					renderButton(adapter, kind !== void 0 ? kind : null);
+				}
+				applyLocale();
+			};
+			renderBuiltins();
+			var builtinRetries = 0;
+			var builtinRetryTimer = setInterval(function() {
+				if (builtinRetries++ >= 60) {
+					clearInterval(builtinRetryTimer);
+					return;
+				}
+				if (!BUILTIN_ADAPTERS.some(function(a) {
+					try {
+						return panel.querySelector(adapterIdSelector(a.id)) === null;
+					} catch (_e) {
+						return true;
+					}
+				})) {
+					clearInterval(builtinRetryTimer);
+					return;
+				}
+				renderBuiltins();
+			}, 1e3);
 			var slideCloseAll = function() {
 				var rows = panel.querySelectorAll(".ssid-tb-row.ssid-tb-row-open");
 				for (var ri = 0; ri < rows.length; ri++) rows[ri].classList.remove("ssid-tb-row-open");

@@ -261,7 +261,12 @@ async function start() {
   // 跑系统 pnpm install（约 430MB 依赖，几分钟）。缺失 pnpm 时提示引导。
   const dshHome = process.env.DSH_HOME ?? join(homedir(), '.dsh')
   const profileDir = join(dshHome, 'profiles', 'ssid')
-  const profileReady = () => existsSync(join(profileDir, 'node_modules', '@max-null', 'dsh-memory'))
+  // 隔离设计（2026-09-05）：profile 就绪信号 = 内核本体（@deepseek-ai/dsh）实体存在，
+  // 而非预设插件（@max-null/dsh-memory）——此前以预设插件为探针，导致"清插件的纯净
+  // 环境"触发归档自动回灌预设全家桶（清→依赖报错→npm→预设回来→报错 死循环）。
+  // 新语义：dev 裸跑下只要内核实体在 → devSkipDeploy 生效 → 自动部署永不触发（预设
+  // 可随意清、内核可独立升级）；打包版首启/升级部署逻辑不变（无实体→仍部署归档）。
+  const profileReady = () => existsSync(join(profileDir, 'node_modules', '@deepseek-ai', 'dsh'))
   const splashStatus = (text) => {
     void win.webContents.executeJavaScript(
       `(() => { const el = document.querySelector('.status'); if (el) el.textContent = ${JSON.stringify(text)} })()`,
@@ -648,6 +653,11 @@ async function start() {
     rmSync(join(profileDir, '.deploy.new'), { recursive: true, force: true })
     rmSync(join(profileDir, '.deploy.old'), { recursive: true, force: true })
     mkdirSync(profileDir, { recursive: true })
+    // 开发裸跑隔离（2026-09-05）：归档只服务安装版交付——dev 的 profile 由本地
+    // pnpm 独占维护（官方构建/源码模式），归档部署与预设全家桶绝不覆盖本地工作
+    // 区（此前 dev 也会被归档部署干扰：清预设 → 自动回灌 → 死循环）。
+    // dev 首次使用的 profile 由 kernel.ts initProfile 以官方最小集建立。
+    if (!app.isPackaged) return 'skipped'
     // 归档部署优先：首启（无 node_modules）或版本不一致（新安装包升级）
     const archive = runtimeArchivePath()
     if (archive !== null) {
