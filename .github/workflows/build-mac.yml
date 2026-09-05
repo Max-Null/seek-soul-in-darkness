@@ -4,8 +4,11 @@
 #   - arm64（macos-latest，M 系列）+ x64 交叉构建（同一 runner 上
 #     npm_config_arch=x64 装 x64 原生二进制 + electron-builder --x64）双 job——
 #     归档内含 per-platform 原生二进制，各架构必须独立重建归档。
-#   - DSH 版本来源：sparse clone 钉 dsh-v0.1.2-rc.1（与 Windows 构建机
-#     同 tag；发版换内核时同步更新此处 branch）。
+#   - DSH 版本来源：完整 clone 钉 dsh-v0.1.2-rc.1（与 Windows 构建机同 tag；
+#     发版换内核时同步更新此处 branch）。路径 $GITHUB_WORKSPACE/../deepseek-harness
+#     = shell/../../deepseek-harness——与 shell/tsconfig.json paths 精确同源
+#     （kernel.ts 的 @deepseek-ai/dsh-* 编译期经 esbuild + paths 解析源码；
+#     sparse/runner.temp 均会致解析失败——v0.2.0 mac CI 实测）。
 #   - 图标：多尺度 icns 由 iconutil 从 shell/assets/mac-icon.iconset 生成
 #     （iconutil 要求目录以 .iconset 结尾）。
 #   - 签名：官方 ad-hoc（mac.identity: "-"，electron-builder 组装完成后
@@ -13,6 +16,8 @@
 #   - pnpm：CI 的 setup-pnpm 把 PNPM_CMD 指到 .bin/pnpm（shell shim），
 #     prepare-runtime 用 node 执行要求 JS 入口——已加 .cjs 校验 + bundled
 #     pnpm 兜底（scripts/prepare-runtime.mjs pnpmCandidates）。
+#   - esbuild：bundle-kernel 命令已显式声明 devDependency（幽灵依赖在 mac
+#     严格布局下 127 command not found）。
 #
 # 触发：
 #   - workflow_dispatch 手动（默认只出 artifact；勾选 publish 上传 Release）
@@ -41,15 +46,12 @@ jobs:
       - name: 检出 SSiD
         uses: actions/checkout@v4
 
-      - name: 检出 DSH 源码（固定内核 tag；与构建机 DSH_CHECKOUT 同源）
-        env:
-          DSH_CHECKOUT: ${{ runner.temp }}/deepseek-harness
+      - name: 检出 DSH 源码（完整 checkout 与 tsconfig paths 同源；固定内核 tag）
         run: |
-          git clone --depth 1 --filter=blob:none --sparse \
-            --branch dsh-v0.1.2-rc.1 \
-            https://github.com/deepseek-ai/deepseek-harness "$DSH_CHECKOUT"
-          git -C "$DSH_CHECKOUT" sparse-checkout set apps/cli
-          echo "DSH_CHECKOUT=$DSH_CHECKOUT" >> "$GITHUB_ENV"
+          git clone --depth 1 --branch dsh-v0.1.2-rc.1 \
+            https://github.com/deepseek-ai/deepseek-harness \
+            "$GITHUB_WORKSPACE/../deepseek-harness"
+          echo "DSH_CHECKOUT=$GITHUB_WORKSPACE/../deepseek-harness" >> "$GITHUB_ENV"
 
       - name: Node 22 + pnpm 11
         uses: actions/setup-node@v4
@@ -113,15 +115,12 @@ jobs:
       - name: 检出 SSiD
         uses: actions/checkout@v4
 
-      - name: 检出 DSH 源码（固定内核 tag；与构建机 DSH_CHECKOUT 同源）
-        env:
-          DSH_CHECKOUT: ${{ runner.temp }}/deepseek-harness
+      - name: 检出 DSH 源码（完整 checkout 与 tsconfig paths 同源；固定内核 tag）
         run: |
-          git clone --depth 1 --filter=blob:none --sparse \
-            --branch dsh-v0.1.2-rc.1 \
-            https://github.com/deepseek-ai/deepseek-harness "$DSH_CHECKOUT"
-          git -C "$DSH_CHECKOUT" sparse-checkout set apps/cli
-          echo "DSH_CHECKOUT=$DSH_CHECKOUT" >> "$GITHUB_ENV"
+          git clone --depth 1 --branch dsh-v0.1.2-rc.1 \
+            https://github.com/deepseek-ai/deepseek-harness \
+            "$GITHUB_WORKSPACE/../deepseek-harness"
+          echo "DSH_CHECKOUT=$GITHUB_WORKSPACE/../deepseek-harness" >> "$GITHUB_ENV"
 
       - name: Node 22 + pnpm 11
         uses: actions/setup-node@v4
