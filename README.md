@@ -53,6 +53,8 @@ SSiD 是 fractal 的 **DSH 基座版**——基于 [DeepSeek Harness](https://gi
 
 ## 下载安装
 
+> **系统要求：Windows 10/11，64 位（x64）**。32 位 Windows 不支持——Shell 基于 Electron 44（官方已移除 32 位支持，见 Electron Breaking Changes），内置运行环境（DSH 内核 + 原生模块）也按 64 位预编译。
+
 - 安装包：[`思灵 Setup 0.1.6.exe`](https://github.com/Max-Null/seek-soul-in-darkness/releases/download/v0.1.6/Setup.0.1.6.exe)（约 253 MB，Windows x64）
 - 全部版本：[Releases](https://github.com/Max-Null/seek-soul-in-darkness/releases)
 - NSIS 向导安装：安装目录选择、桌面/开始菜单快捷方式
