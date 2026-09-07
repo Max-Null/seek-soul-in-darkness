@@ -36,6 +36,7 @@
 | 2026-08-30 | 本表 + 待办清单 | 文档工程化（变更记录/待办） | 协作模式升级 |
 | 2026-08-30 | §9 插件开发与测试规范 | 分级门槛 L1/L2/L3 + 反馈环纪律 | 用户提议（测试补齐后门槛化） |
 | 2026-08-30 | §7 坑速查 | 新增 #10「DSH 页面状态持久化 = host 化，禁 localStorage」（动态端口 origin 隔离坑——quick-toolbar 状态/panels seen 两次实踩）| 用户拍板（localStorage 问题多次出现）|
+| 2026-09-07 | §7 坑速查 / §2 | 新增 #12「部署零保留覆盖用户层」（用户插件/MCP 升级丢失 + pending 回滚雷；v0.2.1 修复：快照+patch 合并+升级报告+pending 护栏+失败兜底）| 用户报 0.2.0 重大 bug（见 `docs/决策/2026-09-07-升级部署覆盖用户层修复.md`）|
 
 ## 工作区规范（布局 + 放置规则，2026-08-29 整理定稿）
 
@@ -240,6 +241,7 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 9. **插件改名（五处联动）**：① 声明 `dependencies` 的**键和 file: 路径值都要改**（2026-08-30 实踩：只改键 → pnpm `ERR_PNPM_LINKED_PKG_DIR_NOT_FOUND`）② `bundles` 数组 ③ plugins 源 + 三处 vendor（目录+内容）④ main.mjs/kernel.ts 注释引用 ⑤ pnpm 状态文件（`pnpm-lock.yaml`/`node_modules/.modules.yaml`/`.package-map.json`）在 install 报旧路径时逐层替换，最后 `pnpm install` 重物化（否则下次 boot bundle 解析失败）。
 10. **DSH 页面状态持久化 = host 化，禁 localStorage**（2026-08-30 用户拍板规则）：思灵内核 web 端口**动态**（每次重启变化）→ 页面 localStorage 按 origin（host:port）隔离，**跨重启必丢**（quick-toolbar 位置/钉住/折叠/壳开关、panels 更新日志 seen 均踩过同坑，2026-08-30/2026-08-28 两次实踩）。**任何需要跨重启的状态一律 host 化**：存 `~/.dsh/<pkg>.json`（host 半读写 + 客户端 API 桥——panels seen 标记先例）；页面 localStorage 只允许会话瞬时态。
 11. **`#130 (sidebar.settings)` / `conversation: …reading 'height'`**（2026-09-05 rc.1 适配实踩）：**先对齐 serve 根与版本**——大概率是**源码树 `apps/web/dist` 的旧版本构建产物缺函数级导出**（alpha.1 树必现；rc.1 全量构建完整）。处置：`git -C deepseek-harness checkout dsh-v0.1.2-rc.1` → `pnpm run clean && pnpm run build` → 页面 reload。**不要**改 profile dist（serve 根不在 profile）。
+12. **部署零保留覆盖用户层（v0.2.0 重大事故，2026-09-07 修复）**：`deployRuntime` 部署 = 归档模板**整体覆盖** profile 根的 package.json / cordis.patch.yml / pnpm-lock.yaml / node_modules——用户**自装插件声明与自装 MCP 注册（cordis.patch.yml insert 条目）零保留**（dev 与安装版共用 `~/.dsh/profiles/ssid` 更放大了它）；叠加 `~/.ssid/pending-plugin-updates/index.json` 陈旧条目（如 dsh-sidebar-qa@0.4.2）会在每次 boot 前把兼容插件**回滚**到不兼容旧版 → `Failed to load plugins` 白屏「无法启动」；部署失败（EPERM .deploy.old）且旧环境无闭包锚点时走「无法定位 DeepSeek Harness 运行时」崩溃。**v0.2.1 修复链**：部署前快照用户配置（`~/.ssid/profile-backups/`）→ 部署后 patch 条目级合并回写（MCP 自动保留；插件只进升级报告不自动重装——旧版插件×新内核会白屏）→ pending 消费护栏（版本 < 当前声明/声明缺失/非 registry 一律丢弃）→ 失败或取消时无闭包锚点则 splash 阻断提示。相关：`docs/决策/2026-09-07-升级部署覆盖用户层修复.md`；**发版预演（L2）需覆盖「用户插件+MCP 预置后部署」场景**（SSID_DEV_DEPLOY=1 或真机）。
 
 ## 8. 文档索引
 

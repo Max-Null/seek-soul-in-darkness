@@ -40,6 +40,8 @@ import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { DSH_LAUNCH_ENVIRONMENT_KEY } from '@deepseek-ai/dsh-launch-environment'
 import { installProfilePackageResolver } from './module-resolution.ts'
+// 纯 ESM JS 工具（lib/profile-merge.mjs，无类型声明；noImplicitAny=false 容忍）
+import { shouldDropPending } from './lib/profile-merge.mjs'
 
 /** 诊断前缀。 */
 const BIN_NAME = 'ssid'
@@ -219,6 +221,22 @@ function applyPendingPluginUpdates(profileDir: string): void {
     return // 无待办更新（或目录不存在）：正常启动路径
   }
   if (!Array.isArray(parsed) || parsed.length === 0) return
+  // ── v0.2.1 回滚护栏：基线 = 当前 profile 声明（升级部署后即模板 pin）──
+  // 陈旧 pending（旧版本升级时入队、本次部署后仍残留）若低于声明版本，装回
+  // 会把插件回滚到与新版内核不兼容的旧版本 → Failed to load plugins 白屏
+  // （2026-09-07 0.2.0 事故：~/.ssid 里躺着 8 月的 dsh-sidebar-qa@0.4.2，
+  // 每次启动尝试把 0.5.0 降回 rc.1 不兼容的 0.4.2）。声明缺失（用户已卸载/
+  // 声明被模板重置）与非 registry 形态（file:/link:/workspace: vendor 包）
+  // 一律丢弃，绝不自动把「不在当前清单里」的东西装回来。
+  let declaredDeps: Record<string, string> = {}
+  try {
+    const manifest = JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>
+    }
+    declaredDeps = manifest.dependencies ?? {}
+  } catch {
+    // 声明不可读：无基线可比 → 保守丢弃全部 pending
+  }
   // 壳内捆绑 pnpm（SSID_PNPM，与归档 store 布局同 major）最优先——重启消费
   // pending 清单时避免用户机器全局 pnpm 版本不一致（2026-08-23 鸡生蛋防护）。
   // 注意：SSID_PNPM 是 pnpm.cjs（node 脚本），Windows 下直接 spawn 会被 cmd 按
@@ -237,6 +255,16 @@ function applyPendingPluginUpdates(profileDir: string): void {
     const entry = raw as { name?: unknown, version?: unknown, tgz?: unknown } | null
     if (entry === null || typeof entry.name !== 'string' || typeof entry.version !== 'string') continue
     const spec = `${entry.name}@${entry.version}`
+    const declared = declaredDeps[entry.name]
+    if (shouldDropPending(declared, entry.version)) {
+      if (typeof entry.tgz === 'string') {
+        try { rmSync(entry.tgz, { force: true }) } catch { /* tgz 清理失败不影响 */ }
+      }
+      console.log(
+        `ssid: pending plugin update dropped (declared=${declared ?? '(absent)'} pending=${entry.version}): ${entry.name}`,
+      )
+      continue
+    }
     let done = false
     let detail = 'no pnpm candidate found'
     for (const command of candidates) {

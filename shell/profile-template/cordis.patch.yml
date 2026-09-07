@@ -32,3 +32,6 @@
         command: !!js 'process.env.SSID_MCP_NODE || "node"'
         args:
           - !!js 'process.env.SSID_MCP_CG_CLI'
+        env:
+          # 匿名遥测默认开启（工具调用/启动/错误上报）——预制出厂必须关闭
+          CODEGRAPH_TELEMETRY: 'off'
