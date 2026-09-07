@@ -29,6 +29,7 @@
     "dsh-sidebar-qa": "0.5.0",
     "dsh-video-preview": "0.1.4",
     "dsh-wechat": "^0.9.1",
+    "@astudioplus/codegraph-mcp": "0.20.1",
     "@max-null/dsh-quick-toolbar": "file:./vendor/dsh-quick-toolbar"
   },
   "dsh": {

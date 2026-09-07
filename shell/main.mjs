@@ -23,8 +23,9 @@ import { app, BrowserView, BrowserWindow, desktopCapturer, globalShortcut, ipcMa
 import { spawn, spawnSync } from 'node:child_process'
 import { appendFileSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { buildUpgradeReport, mergeUserPatch, snapshotProfileConfigs } from './lib/profile-merge.mjs'
 
 // ── stderr/stdout 管道防护 ───────────────────────────────────────────────
 // GUI 启动时 stderr 可能挂在一个已关闭的管道上（启动终端关闭 / 双击 exe）：
@@ -381,6 +382,19 @@ async function start() {
       return null
     }
   }
+  /** 部署/启动兜底的运行时可用性：profile 闭包锚点存在即可 boot。 */
+  const runtimeAnchorAvailable = () =>
+    existsSync(join(profileDir, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'))
+  /** 容错读 manifest（快照/部署后对比用；损坏返回 null）。 */
+  const parseManifestOrNull = (path) => {
+    try {
+      const raw = readFileSync(path, 'utf8')
+      const parsed = JSON.parse(raw)
+      return parsed !== null && typeof parsed === 'object' ? parsed : null
+    } catch {
+      return null
+    }
+  }
   /**
    * 解压归档到 dst。bsdtar（Win10+ 自带）：-t 预统计条目总数做进度分母，
    * -x 流式读 stderr 逐行计数（每行一个条目）。返回 { done, total }。
@@ -497,6 +511,17 @@ async function start() {
    * - isUpgrade（有旧版可回退）时显示「取消更新」按钮；首启无旧版不可取消
    */
   const deployRuntime = async (archive, { isUpgrade }) => {
+    // ── v0.2.1 用户层快照：部署覆盖前备份 profile 根的用户配置文件 ──────
+    // 部署会把 package.json / cordis.patch.yml / pnpm-lock.yaml 等整体替换为
+    // 归档模板——此前用户自装插件声明与 MCP 注册条目零保留（2026-09-07
+    // 0.2.0 事故）。快照供「patch 合并回写 + 升级报告」使用；失败不阻断部署。
+    const profileVersion = readProfileVersion() ?? 'unknown'
+    const snapshotDir = join(
+      homedir(), '.ssid', 'profile-backups',
+      `${String(profileVersion).replace(/[^0-9A-Za-z._-]/g, '_')}-${Date.now()}`,
+    )
+    const snapshotFiles = snapshotProfileConfigs(profileDir, snapshotDir)
+    safeLog(`ssid: user-layer snapshot ${snapshotFiles.length} file(s) -> ${snapshotDir}\n`)
     // 归档顶层 = profile 根内容（node_modules/、package.json、.runtime-version、
     // vendor/…），所以解压到 profile 内的隐藏临时目录，交换时把各条目落位到
     // profileDir——直接解压到 node_modules.new 会嵌套错位（node_modules/node_modules）。
@@ -608,6 +633,42 @@ async function start() {
       // 部署到本机后不改写，pnpm 任何操作（含插件中心应用内更新）都报
       // ERR_PNPM_UNEXPECTED_STORE / _VIRTUAL_STORE——2026-08-18 跨盘部署实验确认。
       rewritePnpmMeta(profileDir)
+      // ── v0.2.1 用户层回写：合并用户 cordis.patch.yml 条目（MCP 注册等）──
+      // 模板 patch 为基线，升级前用户 patch 中不存在于模板的条目（按 id
+      // 判定）追加回写；失败仅记日志（最坏用户 MCP 需重装，绝不阻断部署）。
+      try {
+        const oldPatchPath = join(snapshotDir, 'cordis.patch.yml')
+        const newPatchPath = join(profileDir, 'cordis.patch.yml')
+        const merged = mergeUserPatch(
+          existsSync(oldPatchPath) ? readFileSync(oldPatchPath, 'utf8') : '',
+          existsSync(newPatchPath) ? readFileSync(newPatchPath, 'utf8') : '',
+        )
+        if (merged.merged > 0) {
+          writeFileSync(newPatchPath, merged.text, 'utf8')
+          safeLog(`ssid: merged ${merged.merged} user patch entries (ids=${merged.ids.join(',') || 'n/a'})\n`)
+        }
+        // 升级报告：用户插件丢失清单落盘 ~/.ssid（node 写 JSON = UTF-8 无 BOM）。
+        const toVersion = readProfileVersion() ?? 'latest'
+        const report = buildUpgradeReport({
+          fromRuntime: profileVersion,
+          toRuntime: toVersion,
+          snapshotDir,
+          oldManifest: parseManifestOrNull(join(snapshotDir, 'package.json')),
+          newManifest: parseManifestOrNull(join(profileDir, 'package.json')),
+          patchMerge: merged,
+        })
+        const reportPath = join(
+          homedir(), '.ssid',
+          `upgrade-report-${String(toVersion).replace(/[^0-9A-Za-z._-]/g, '_')}.json`,
+        )
+        mkdirSync(dirname(reportPath), { recursive: true })
+        writeFileSync(reportPath, JSON.stringify(report, null, 2) + '\n', 'utf8')
+        safeLog(
+          `ssid: upgrade report: lostPlugins=${report.userPluginsLost.length} mergedPatch=${report.patchMerged.count} (${reportPath})\n`,
+        )
+      } catch (cause) {
+        safeLog(`ssid: user-layer restore skipped: ${cause instanceof Error ? cause.message : String(cause)}\n`)
+      }
       safeLog(`ssid: runtime deployed (${readProfileVersion() ?? '?'}) to ${profileDir}\n`)
       return 'bundled'
     } catch (cause) {
@@ -615,8 +676,16 @@ async function start() {
         // 用户取消：升级回退旧版；首启（无旧版）只能挂起提示
         safeLog('ssid: runtime deploy canceled by user\n')
         if (isUpgrade) {
-          splashStatus('已取消更新，继续使用当前版本启动…')
-          return 'skipped'
+          // v0.2.1 兜底：取消后旧环境若已无闭包锚点，继续 boot 必然走到
+          // 「无法定位运行时」崩溃（2026-09-07 0.1.18 部署失败型事故）——
+          // 直接阻断并给可操作提示。
+          if (runtimeAnchorAvailable()) {
+            splashStatus('已取消更新，继续使用当前版本启动…')
+            return 'skipped'
+          }
+          splashError('已取消更新，且当前环境不完整，思灵无法启动。\n\n请重新打开思灵以继续更新；若反复失败，可重新安装思灵。')
+          await new Promise(() => {})
+          return 'failed'
         }
         splashError('内置运行环境首次部署已被取消，思灵无法启动。\n\n请重新打开思灵以继续部署。')
         await new Promise(() => {})
@@ -624,8 +693,19 @@ async function start() {
       }
       safeLog(`ssid: runtime deploy failed: ${cause instanceof Error ? cause.message : String(cause)}\n`)
       if (isUpgrade) {
-        splashStatus('更新失败，继续使用当前版本启动…')
-        return 'skipped'
+        // v0.2.1 兜底：部署失败但旧闭包仍在 → 正常回退；旧环境已不完整
+        // （无闭包锚点）→ 阻断，避免走到「无法定位 DeepSeek Harness 运行时」
+        // 的崩溃死胡同。
+        if (runtimeAnchorAvailable()) {
+          splashStatus('更新失败，继续使用当前版本启动…')
+          return 'skipped'
+        }
+        const hint = buildDeployFailHint(cause)
+        splashError(
+          `运行环境更新失败，且当前环境不完整，思灵无法启动。\n\n${cause instanceof Error ? cause.message : String(cause)}\n\n${hint}\n\n如仍无法解决，可重新安装思灵。`,
+        )
+        await new Promise(() => {})
+        return 'failed'
       }
       // 部署失败：检测常见占用进程，给出可操作提示（而非笼统"请重装"）。
       // 典型场景：其他程序（如用户自己跑的 node / 另一个思灵实例 / 杀软扫描）
@@ -649,9 +729,16 @@ async function start() {
    * - 'failed'：初始化失败（继续 boot 会在 splash 显示错误）
    */
   const ensureProfile = async () => {
-    // 上次部署残留（取消/崩溃/回滚失败）先清理
-    rmSync(join(profileDir, '.deploy.new'), { recursive: true, force: true })
-    rmSync(join(profileDir, '.deploy.old'), { recursive: true, force: true })
+    // 上次部署残留（取消/崩溃/回滚失败）先清理。尽力而为：目录被进程占用
+    // 时 rmSync 抛 EPERM（历史事故：未捕获异常直接崩在启动最早期），只记日志
+    // 不阻断——真正的部署 rename 阶段自带重试与回滚兜底。
+    for (const residual of ['.deploy.new', '.deploy.old']) {
+      try {
+        rmSync(join(profileDir, residual), { recursive: true, force: true })
+      } catch (cause) {
+        safeLog(`ssid: residual cleanup ${residual} failed: ${cause instanceof Error ? cause.message : String(cause)}\n`)
+      }
+    }
     mkdirSync(profileDir, { recursive: true })
     // 开发裸跑隔离（2026-09-05）：归档只服务安装版交付——dev 的 profile 由本地
     // pnpm 独占维护（官方构建/源码模式），归档部署与预设全家桶绝不覆盖本地工作
@@ -813,6 +900,17 @@ async function start() {
     } else {
       safeLog(`ssid: prefab mcp cli missing (profile not redeployed yet?): ${mcpPwCli}\n`)
     }
+    // 预制 CodeGraph MCP（v0.2.1）：索引目录默认用户主目录（可在 MCP 管理面板
+    // 改 cwd / 追加 --workspace 定制）；codegraph 引擎随包安装（依赖包自带
+    // fetch-engine，首次由 mcp 进程按需就绪）。
+    const mcpCgCli = join(profileDir, 'node_modules', '@astudioplus', 'codegraph-mcp', 'bin', 'codegraph-mcp.js')
+    if (existsSync(mcpCgCli)) {
+      process.env.SSID_MCP_CG_CLI = mcpCgCli
+      safeLog(`ssid: prefab mcp codegraph cli=${mcpCgCli}\n`)
+    } else {
+      safeLog(`ssid: prefab mcp codegraph cli missing (profile not redeployed yet?): ${mcpCgCli}\n`)
+    }
+    process.env.SSID_MCP_CG_WS = process.env.SSID_MCP_CG_WS || homedir()
     // preferBundled: 打包版强制用内置闭包（忽略用户环境的 DSH_CHECKOUT，
     // 避免标题栏版本与归档不一致——pitfalls #5 幽灵依赖的根治）。
     kernel = await bootKernel(undefined, {
