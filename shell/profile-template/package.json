@@ -3,6 +3,7 @@
   "private": true,
   "dependencies": {
     "@changfenhuang/dsh-genui": "0.9.8",
+    "@huanlin/dsh-plugin-better-sidebar-plugin-office": "0.2.0",
     "@max-null/dsh-achievements": "0.1.2",
     "@max-null/dsh-capture": "file:./vendor/dsh-capture",
     "@max-null/dsh-chat-rail": "0.6.1",
@@ -27,6 +28,7 @@
     "dsh-session-manager": "0.4.6",
     "dsh-sidebar-qa": "0.5.0",
     "dsh-video-preview": "0.1.4",
+    "dsh-wechat": "^0.9.1",
     "@max-null/dsh-quick-toolbar": "file:./vendor/dsh-quick-toolbar"
   },
   "dsh": {
@@ -55,10 +57,12 @@
         "dsh-video-preview",
         "dsh-excel-panel",
         "dsh-sidebar-qa",
+        "dsh-wechat",
         "@max-null/dsh-achievements",
         "dsh-pocket",
         "ds-harness-remote",
-        "dsh-session-manager"
+        "dsh-session-manager",
+        "@huanlin/dsh-plugin-better-sidebar-plugin-office"
       ],
       "patchReload": "live"
     }
