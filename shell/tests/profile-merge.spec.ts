@@ -106,6 +106,113 @@ test('mergeUserPatch：同类条目不保留（旧=模板 + 测试用例备份�
   assert.equal(merged, 0)
 })
 
+// 0.2.1 真实形态：模板 insert 块 = playwright + codegraph 两个子条目（同块）
+const TEMPLATE_PATCH_DUAL = TEMPLATE_PATCH + `    - id: mcp-codegraph
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: codegraph
+        transport: stdio
+        command: !!js 'process.env.SSID_MCP_NODE || "node"'
+        args:
+          - !!js 'process.env.SSID_MCP_CG_CLI'
+        env:
+          CODEGRAPH_TELEMETRY: 'off'
+`
+
+test('mergeUserPatch：用户 MCP 追加进既有 insert 列表（子条目级）——0.2.1 事故回归', () => {
+  // 面板/插件中心把新 MCP 追加成 `- insert:` 列表的第三个子条目（顶层条目
+  // 仍是同一个 insert 块）——顶层条目级对比会整块误判「模板已有」而丢弃。
+  const oldPatch = TEMPLATE_PATCH_DUAL + `    - id: mcp-user-custom
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: my-mcp
+        transport: stdio
+        command: 'node'
+        args: ['C:/tools/my-mcp/index.js']
+`
+  const { merged, ids, text } = mergeUserPatch(oldPatch, TEMPLATE_PATCH_DUAL)
+  assert.equal(merged, 1)
+  assert.deepEqual(ids, ['mcp-user-custom'])
+  assert.ok(text.includes('mcp-user-custom'), '用户 MCP 子条目必须保留')
+  assert.ok(text.includes('mcp-playwright'), '模板 playwright 保持')
+  assert.ok(text.includes('mcp-codegraph'), '模板 codegraph 保持')
+  assert.ok(text.includes('CODEGRAPH_TELEMETRY'), '模板 codegraph env 保持')
+  assert.equal(text.match(/^- /gm)?.length ?? 0, 1, '仍为单顶层 insert 块（合并进块内而非新块）')
+})
+
+test('mergeUserPatch：用户 MCP 追加 + 模板无 insert 块时独立成块', () => {
+  const userText = `- insert:
+    - id: mcp-only-user
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: only
+        transport: stdio
+        command: 'npx'
+`
+  const { merged, text } = mergeUserPatch(userText, '# no entries\n')
+  assert.equal(merged, 1)
+  assert.ok(text.includes('mcp-only-user'))
+  assert.ok(text.includes('- insert:'))
+})
+
+test('mergeUserPatch：BOM 开头 + 无头注释的旧 patch（编辑器写 BOM 场景）', () => {
+  // 旧 patch 第一行就是 - insert:（无 # 注释头）且文件带 UTF-8 BOM——
+  // BOM 若未剥离，`\uFEFF- insert:` 会被误判为非条目行，整个块（含用户
+  // MCP）被丢弃（对抗审查发现）。
+  const oldPatch = '\uFEFF' + TEMPLATE_PATCH + `    - id: mcp-bom-user
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: bom-mcp
+        transport: stdio
+        command: 'node'
+`
+  const { merged, text } = mergeUserPatch(oldPatch, TEMPLATE_PATCH)
+  assert.equal(merged, 1)
+  assert.ok(text.includes('mcp-bom-user'), 'BOM 场景用户 MCP 必须保留')
+  assert.equal(text.charCodeAt(0) === 0xFEFF, false, '输出无 BOM')
+})
+
+test('mergeUserPatch：多个用户 MCP 子条目全部保留且顺序保持', () => {
+  const oldPatch = TEMPLATE_PATCH_DUAL + `    - id: mcp-user-a
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: alpha
+        transport: stdio
+        command: 'node'
+    - id: mcp-user-b
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: beta
+        transport: stdio
+        command: 'npx'
+`
+  const { merged, ids, text } = mergeUserPatch(oldPatch, TEMPLATE_PATCH_DUAL)
+  assert.equal(merged, 2)
+  assert.deepEqual(ids, ['mcp-user-a', 'mcp-user-b'])
+  const aIdx = text.indexOf('mcp-user-a')
+  const bIdx = text.indexOf('mcp-user-b')
+  assert.ok(aIdx !== -1 && bIdx !== -1 && aIdx < bIdx, '用户子条目保持相对顺序')
+})
+
+test('mergeUserPatch：用户子条目内的 args !!js/字符串保持原样（不被误切/截断）', () => {
+  const oldPatch = TEMPLATE_PATCH + `    - id: mcp-args-user
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: custom
+        transport: stdio
+        command: !!js 'process.env.SSID_MCP_NODE || "node"'
+        args:
+          - !!js 'process.env.CUSTOM_CLI'
+          - '--flag'
+          - '--verbose'
+`
+  const { merged, text } = mergeUserPatch(oldPatch, TEMPLATE_PATCH)
+  assert.equal(merged, 1)
+  assert.ok(text.includes("process.env.CUSTOM_CLI"), '!!js 参数行完整保留')
+  assert.ok(text.includes("'--flag'"), '字符串参数行完整保留')
+  assert.ok(text.includes("'--verbose'"), '字符串参数行完整保留')
+})
+
 test('mergeUserPatch：空/损坏输入退回模板原文（绝不写坏 patch）', () => {
   assert.equal(mergeUserPatch('', TEMPLATE_PATCH).text, TEMPLATE_PATCH)
   assert.equal(mergeUserPatch(null, TEMPLATE_PATCH).text, TEMPLATE_PATCH)

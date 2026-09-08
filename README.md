@@ -49,24 +49,32 @@ SSiD 是 fractal 的 **DSH 基座版**——基于 [DeepSeek Harness](https://gi
 
 ## 现状
 
-**v0.1.6 已发布**（2026-08-20）：标题栏统一按钮组（插件中心/侧栏/底栏，内置 dsh-header-unify）+ 插件中心交互优化（toggle/互斥/遮罩关）+ 部署 EPERM 自愈 + skill-mcp-center 0.2.0（Skill 管理 UI 重构、MCP 状态修复）；v0.1.5 为预设技能包 14 技能出厂 + 预设插件更新 + 通知体系扩展；v0.1.4 为安装卡死修复（安装前自动关闭运行中的思灵）+ 安装/首启步骤清单可视化；v0.1.3 为内置运行环境归档与升级感知；v0.1.2 为一键安装（免 DSH_CHECKOUT）+ 首装进度条；v0.1.1 为 EPIPE 崩溃修复；v0.1.0（2026-08-16）起自研壳 + 侧栏生态 + SSiD 面板 + 预制插件 + NSIS 安装器齐备，详见 [v0.1.6 Release Notes](docs/release-notes-v0.1.6.md) / [v0.1.5 Release Notes](docs/release-notes-v0.1.5.md) / [v0.1.4 Release Notes](docs/release-notes-v0.1.4.md) / [v0.1.3 Release Notes](docs/release-notes-v0.1.3.md) / [v0.1.2 Release Notes](docs/release-notes-v0.1.2.md) / [v0.1.1 Release Notes](docs/release-notes-v0.1.1.md) / [v0.1.0 Release Notes](docs/release-notes-v0.1.0.md)。
+**最新版本：v0.2.1**（2026-09-07，[Release Notes](docs/release-notes-v0.2.1.md)）：预制微信桥（dsh-wechat 0.9.1，扫码绑定）+ CodeGraph MCP 0.20.1、免安装版（zip）交付形态（Win10 家庭版等安装器受阻场景的正解：解压即用）、升级部署「用户层保留」护栏（用户自装插件 / MCP 不再被升级覆盖）、归档构建修正。v0.2.0（[Notes](docs/release-notes-v0.2.0.md)，原 v0.1.18 未分发内容并入重打）为 **DSH rc.1 内核升级** + 插件基线升级 + 在线更新网络链修复。v0.1.x 系列演进（自研壳 + 侧栏生态 + 预制插件、标题栏统一按钮组、插件中心、预设技能包 14 技能、会话存储隔离等）见各版本 [Release Notes](docs/) 与 [Release 页面](https://github.com/Max-Null/seek-soul-in-darkness/releases)。
 
 ## 下载安装
 
 > **系统要求：Windows 10/11，64 位（x64）**。32 位 Windows 不支持——Shell 基于 Electron 44（官方已移除 32 位支持，见 Electron Breaking Changes），内置运行环境（DSH 内核 + 原生模块）也按 64 位预编译。
 
-> **关于签名**：本项目为开源免费软件，安装包**未做代码签名**（无费用）。Windows/杀软首次运行可能提示「未知发布者/已保护你的电脑」——属正常安全提示，按下方步骤放行即可；也可用文件 SHA256 校验包完整性（见 GitHub Release 资产说明）。
+> **关于签名**：本项目为开源免费软件，安装包**未做代码签名**（无费用）。Windows/杀软首次运行可能提示「未知发布者/已保护你的电脑」——属正常安全提示，按下方步骤放行即可；**或优先选用免安装版（zip）**——无需安装器，最常见的拦截/兼容场景直接绕过。
+
+> **推荐：免安装版（zip）**——解压即用，功能与安装版完全一致。NSIS 安装版若报「**不支持的 16 位应用程序**」等异常：大多为**下载文件损坏**（截断/下载器中断），非兼容问题——删除后重新下载，或改用免安装版。
+
+- **免安装版（zip，推荐）**：[`ssid-shell-0.2.1-win.zip`](https://github.com/Max-Null/seek-soul-in-darkness/releases/download/v0.2.1/ssid-shell-0.2.1-win.zip)（约 405 MB）→ 解压到任意目录 → 运行 `思灵.exe`
+- **安装版（NSIS）**：[`ssid-shell-setup-0.2.1.exe`](https://github.com/Max-Null/seek-soul-in-darkness/releases/download/v0.2.1/ssid-shell-setup-0.2.1.exe)（约 355 MB）
+- **校验文件完整性**（可选，先验后装）：
+  ```bat
+  certutil -hashfile "ssid-shell-setup-0.2.1.exe" SHA256
+  certutil -hashfile "ssid-shell-0.2.1-win.zip" SHA256
+  ```
+  各版本资产的 SHA256 见对应 [Releases](https://github.com/Max-Null/seek-soul-in-darkness/releases) 页的「下载与校验」节。
+- 全部历史版本：[Releases](https://github.com/Max-Null/seek-soul-in-darkness/releases)
+- **一键安装**：首次启动自动部署内置运行环境（DSH 内核 + 预制插件，约 600MB），无需安装 Node/pnpm、无需设置任何环境变量；安装完成后关闭窗口重新打开即用
+- **升级**：安装新版后启动时自动检测版本，不一致自动重部署运行环境（约 30 秒，可取消），旧版无损
 
 > **SmartScreen 放行三步**（首次安装遇到拦截图时）：
 > 1. 右键安装包 → 属性 → 若勾选「解除锁定」则打勾 → 确定；
 > 2. 仍被拦就在弹窗点「更多信息」→「仍要运行」；
 > 3. 或右键「以管理员身份运行」。
-
-- 安装包：[`思灵 Setup 0.1.6.exe`](https://github.com/Max-Null/seek-soul-in-darkness/releases/download/v0.1.6/Setup.0.1.6.exe)（约 253 MB，Windows x64）
-- 全部版本：[Releases](https://github.com/Max-Null/seek-soul-in-darkness/releases)
-- NSIS 向导安装：安装目录选择、桌面/开始菜单快捷方式
-- **一键安装**：首次启动自动部署内置运行环境（DSH 内核 + 预制插件，约 600MB），无需安装 Node/pnpm、无需设置任何环境变量；安装完成后关闭窗口重新打开即用
-- **升级**：安装新版后启动时自动检测版本，不一致自动重部署运行环境（约 30 秒，可取消），旧版无损
 
 ## 路线图
 

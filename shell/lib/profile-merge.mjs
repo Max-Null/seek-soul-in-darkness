@@ -139,37 +139,112 @@ export function patchEntryId(lines) {
   return null
 }
 
+/** 是不是 insert 型顶层条目（`- insert:` 开头的块）。 */
+function isInsertEntry(entry) {
+  const first = String(entry.text ?? '').split(/\r?\n/)[0] ?? ''
+  return /^-\s+insert:/.test(first)
+}
+
+/**
+ * 把一个 insert 块的子条目切分为 [{ id, text, index }]。
+ * 子条目判定 = 缩进 2+ 空格的 `- <key>:` 形态（`- id:` / `- disable:` 等），
+ * **排除** args/env 等块内的普通列表项（`- !!js`、`- '字符串'`——它们不是条目，
+ * 否则 args 会被误切并「保留」成伪用户条目，0.2.1 修复后实测虚高合并）。
+ * id 提取不到为 null（无 id 子条目按「用户新增」保留——见 mergeUserPatch 注释）。
+ */
+export function splitChildEntries(entryText) {
+  const lines = String(entryText ?? '').split(/\r?\n/)
+  const children = []
+  let cur = null
+  for (let i = 1; i < lines.length; i++) { // 跳过首行（顶层 - insert:）
+    const line = lines[i]
+    if (/^\s+-\s+[A-Za-z_-][\w-]*\s*:/.test(line)) {
+      if (cur !== null) children.push(cur)
+      cur = { lines: [line] }
+    } else if (cur !== null) {
+      cur.lines.push(line)
+    }
+  }
+  if (cur !== null) children.push(cur)
+  return children.map((c, idx) => {
+    const text = c.lines.join('\n') + '\n'
+    const m = /^\s+-\s+id:\s*([^\s#]+)/.exec(c.lines[0] ?? '')
+    return { id: m !== null ? m[1] : null, text, index: idx }
+  })
+}
+
 /**
  * 合并用户 patch 层：以 templateText 为基线（整体保留，含头注释），把
- * oldText（升级前用户 patch）中「模板里不存在同 id」的顶层条目追加到尾部。
- * - 无法解析（oldText 为空/非数组形态）→ 返回模板原文 + merged=0；
- * - 仅追加、绝不重排模板条目；条目原文按原样拼接（!!js 等原样保留）；
- * - 任何异常都退回模板原文，绝不写坏 profile 的 patch。
+ * oldText（升级前用户 patch）中的用户增量追加回写：
+ * - **insert 块子条目级**：模板 insert 块内不存在的子条目（用户追加进
+ *   `- insert:` 列表的 MCP 等）→ 并入模板的 insert 块（追加到块尾）。
+ *   这是 0.2.1 事故的根因——面板/插件中心把新 MCP 追加成既有
+ *   `- insert:` 列表的第三个子条目，顶层条目级对比会整块误判「模板已有」
+ *   而丢弃用户子条目（2026-09-07 用户在另一台电脑实证：MCP 仍全丢）。
+ * - **顶层条目级**：模板中不存在同 id 的顶层条目（disable/assign/set 等
+ *   insert 之外形态）→ 追加到文件末尾，原文按原样拼接（!!js 保留）。
+ * - 任何解析异常都退回模板原文，绝不写坏 profile 的 patch。
  * @returns {{ text: string, merged: number, ids: string[] }}
  */
 export function mergeUserPatch(oldText, templateText) {
-  const base = String(templateText ?? '')
+  // BOM 防御（P1）：用户机器上 patch 可能被编辑器写成带 BOM 的 UTF-8——若首行
+  // 就是 `- insert:`（无头注释），`\uFEFF- insert:` 会被条目切分误判为非条目行，
+  // 整块（含用户 MCP）被丢弃（审查发现，2026-09-07 深夜）。
+  const base = String(templateText ?? '').replace(/^\uFEFF/, '')
+  const old = String(oldText ?? '').replace(/^\uFEFF/, '')
   let oldEntries
+  let tmplEntries
   try {
-    oldEntries = splitPatchEntries(String(oldText ?? ''))
+    oldEntries = splitPatchEntries(old)
+    tmplEntries = splitPatchEntries(base)
   } catch {
     return { text: base, merged: 0, ids: [] }
   }
   if (oldEntries.length === 0) return { text: base, merged: 0, ids: [] }
-  let tmplIds = new Set()
-  try {
-    tmplIds = new Set(splitPatchEntries(base).map((e) => e.id).filter(Boolean))
-  } catch {
+  // 模板身份全集：顶层条目 id + 所有 insert 块内的子条目 id
+  const tmplTopIds = new Set(tmplEntries.map((e) => e.id).filter(Boolean))
+  const tmplChildIds = new Set()
+  for (const e of tmplEntries) {
+    for (const c of splitChildEntries(e.text)) {
+      if (c.id !== null) tmplChildIds.add(c.id)
+    }
+  }
+  // 用户增量：insert 块内的新子条目（子条目级）+ 非 insert 顶层条目的新条目
+  const extraChildren = []
+  const extraTops = []
+  for (const e of oldEntries) {
+    if (isInsertEntry(e)) {
+      for (const c of splitChildEntries(e.text)) {
+        if (c.id === null || !tmplChildIds.has(c.id)) extraChildren.push(c)
+      }
+    } else if (e.id === null || !tmplTopIds.has(e.id)) {
+      extraTops.push(e.text)
+    }
+  }
+  if (extraChildren.length === 0 && extraTops.length === 0) {
     return { text: base, merged: 0, ids: [] }
   }
-  const additions = oldEntries.filter((e) => e.id === null || !tmplIds.has(e.id))
-  if (additions.length === 0) return { text: base, merged: 0, ids: [] }
-  const text = base.replace(/\s+$/, '') + '\n' + additions.map((e) => e.text).join('')
-  return {
-    text,
-    merged: additions.length,
-    ids: additions.map((e) => e.id).filter(Boolean),
+  let text = base
+  if (extraChildren.length > 0) {
+    const tmplInsert = tmplEntries.filter(isInsertEntry).pop()
+    if (tmplInsert !== undefined) {
+      // 并入模板的 insert 块末尾（保持缩进=原样文本；模板块内子条目同缩进）
+      const lines = text.split(/\r?\n/)
+      lines.splice(tmplInsert.end + 1, 0, ...extraChildren.map((c) => c.text.replace(/\n$/, '')))
+      text = lines.join('\n')
+    } else {
+      // 模板无 insert 块（异常形态）：独立追加用户子条目块
+      text = text.replace(/\s+$/, '') + '\n- insert:\n' + extraChildren.map((c) => c.text).join('')
+    }
   }
+  if (extraTops.length > 0) {
+    text = text.replace(/\s+$/, '') + '\n' + extraTops.join('')
+  }
+  const ids = [
+    ...extraChildren.map((c) => c.id).filter(Boolean),
+    ...extraTops.map((t) => (splitPatchEntries(t)[0]?.id ?? null)).filter(Boolean),
+  ]
+  return { text, merged: extraChildren.length + extraTops.length, ids }
 }
 
 /** 轻量 semver 解析：主.次.补丁[-pre][+build]。无法解析 → null。 */
