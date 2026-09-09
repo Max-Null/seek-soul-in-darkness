@@ -1,6 +1,9 @@
 ---
 name: mxy-commit-review
-description: 代码审查 + 修复问题 + 二次审查 + 生成提交信息 + 提交并推送，完整的提交前工作流。自适应 Java/Python/Vue3/oc-plus 项目
+description: >
+  代码审查 + 修复问题 + 二次审查 + 生成提交信息 + 提交并推送，完整的提交前工作流。自适应 Java/Python/Vue3/oc-plus 项目。
+  当用户提到"提交""提交代码""帮我提交""提交并推送""代码审查""审查一下""review 一下""改完提交""提交前检查"时使用。
+  不适用于只查看 diff（用 git diff）、只跑测试，或只生成一条 commit message 的场景。
 ---
 
 请严格执行以下步骤，不得跳过任何一步。每步完成后简要告知用户当前进度。

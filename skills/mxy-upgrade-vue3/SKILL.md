@@ -379,33 +379,6 @@ grep -r "import.*函数名" src --glob "*.vue" --glob "*.ts"
 
 ❌ 失败 (N个)：
   - src/business/admin/legacy/index.vue  (data() 中使用了 this.$refs 循环引用，需人工审查)
-```
-
-**汇总规则**：
-
-- ✅ **已升级**：实际应用了转换的文件，列出具体转换内容
-- ⏭️ **已跳过**：无需升级的文件，注明原因
-- ❌ **失败**：转换过程中发现复杂依赖或非标准模式，无法安全自动转换，必须注明具体阻塞点
-
-## 步骤 5：汇总报告
-
-所有文件处理完成后，输出分类汇总报告：
-
-```
-📊 Vue3 语法升级完毕
-
-✅ 已升级 (N个)：
-  - src/business/common/ReceivePassiveForm/index.vue
-    (移除 getCurrentInstance → isMobile/ElMessage, 1处模板 proxy.$IS_MOBILE → isMobile())
-  - src/business/scbm/payPage/AdvancePaymentPay.vue
-    (合并双重脚本块, defineComponent → defineOptions)
-
-⏭️ 已跳过 (N个)：
-  - src/pages/payHistory/index.vue     (已是最新语法，无需升级)
-  - src/styles/theme.scss              (不是 .vue 文件)
-
-❌ 失败 (N个)：
-  - src/business/admin/legacy/index.vue  (data() 中使用了 this.$refs 循环引用，需人工审查)
 
 🔄 运行时验证：
   - Dev server 编译结果：通过 / 失败（N个错误）
