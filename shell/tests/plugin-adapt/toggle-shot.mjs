@@ -1,6 +1,6 @@
 import { chromium } from '@playwright/test';
 
-const b = await chromium.connectOverCDP('http://127.0.0.1:9222');
+const b = await chromium.connectOverCDP(process.env.SSID_CDP ?? 'http://127.0.0.1:9222');
 const pages = b.contexts()[0]?.pages() ?? [];
 const p = pages.find((x) => /^http/.test(x.url()) && !/file:/.test(x.url()));
 const sel = 'button[aria-label="收起侧边栏"], button[aria-label="折叠侧边栏"], .hHd-Xa_iconButton';

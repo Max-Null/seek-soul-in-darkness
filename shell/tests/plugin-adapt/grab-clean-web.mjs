@@ -1,8 +1,9 @@
 // 访问纯净 rc.1 web 并抓 UI 状态（设置按钮/布局）
+import { APP_URL } from './helpers/app-url.mjs'
 import { chromium } from '@playwright/test'
 const b = await chromium.launch({ headless: true })
 const p = await b.newPage()
-await p.goto('http://127.0.0.1:3083/?token=vU5K_2TREzaaWRSMAi-LOWMciB3QOOarlmbkCtwHNzQ', { waitUntil: 'domcontentloaded', timeout: 30000 })
+await p.goto(APP_URL, { waitUntil: 'domcontentloaded', timeout: 30000 })
 await p.waitForTimeout(3500)
 const r = await p.evaluate(() => {
   const btns = Array.from(document.querySelectorAll('button')).map((x) => x.getAttribute('aria-label')).filter(Boolean).slice(0, 24)

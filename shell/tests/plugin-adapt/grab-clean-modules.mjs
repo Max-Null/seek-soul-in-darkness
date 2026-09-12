@@ -1,8 +1,9 @@
 // 对照：rc1-clean（3083）聚合 bundle 的 id 列表（是否含 primitives 定义块）
+import { APP_URL } from './helpers/app-url.mjs'
 import { chromium } from '@playwright/test'
 const b = await chromium.launch({ headless: true })
 const p = await b.newPage()
-await p.goto('http://127.0.0.1:3083/?token=vU5K_2TREzaaWRSMAi-LOWMciB3QOOarlmbkCtwHNzQ', { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {})
+await p.goto(APP_URL, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {})
 await p.waitForTimeout(2500)
 const urls = await p.evaluate(() => performance.getEntriesByType('resource').map((r) => r.name).filter((u) => u.includes('/plugins/??')).slice(0, 2))
 console.log('bundle urls:', urls.length)

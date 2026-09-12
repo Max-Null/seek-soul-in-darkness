@@ -1,6 +1,6 @@
 import { chromium } from '@playwright/test';
 
-const b = await chromium.connectOverCDP('http://127.0.0.1:9222');
+const b = await chromium.connectOverCDP(process.env.SSID_CDP ?? 'http://127.0.0.1:9222');
 const pages = b.contexts()[0]?.pages() ?? [];
 const p = pages.find((x) => /^http/.test(x.url()) && !/file:/.test(x.url()));
 await p.screenshot({ path: 'H:/MaxNull/WorkStation/.dsh-tmp/full-vp.png' });

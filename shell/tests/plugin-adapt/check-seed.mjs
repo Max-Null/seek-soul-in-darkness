@@ -1,5 +1,6 @@
 // 抓 SSiD 页面 HTML → 查 PLATFORM_MODULES 种子是否含 ui-primitives
-const url = 'http://127.0.0.1:54170/?token=MxZZ_idTf92zvSxvKhFfkWHKFVdiVWcWf8Txy34QTEA'
+import { APP_URL } from './helpers/app-url.mjs'
+const url = APP_URL
 const html = await (await fetch(url)).text()
 console.log('HTML 长度:', html.length)
 for (const key of ['ui-primitives', 'ui-slots', 'client-store', 'PLATFORM_MODULES', 'spell_', 'platform']) {

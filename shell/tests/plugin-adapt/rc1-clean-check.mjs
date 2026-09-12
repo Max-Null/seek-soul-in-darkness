@@ -1,7 +1,8 @@
+import { APP_URL } from './helpers/app-url.mjs'
 import { chromium } from '@playwright/test';
 
-const URL = 'http://127.0.0.1:3083/?token=GWFGMz9oLpvU7J5a4Eu4IYF6v0XPU-w_mw_Ob3lSU4s';
-const b = await chromium.launch({ headless: true, executablePath: 'C:\\Users\\MaxNull\\AppData\\Local\\ms-playwright\\chromium-1237\\chrome-win64\\chrome.exe' });
+const URL = APP_URL;
+const b = await chromium.launch({ headless: true, });
 const ctx = await b.newContext();
 const p = await ctx.newPage();
 const logs = [];

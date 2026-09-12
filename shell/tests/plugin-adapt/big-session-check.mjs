@@ -2,7 +2,7 @@ import { chromium } from '@playwright/test';
 
 const TITLE = '会话历史加载失败原因';
 const MARK = '加载更早'; // 该会话内容区特征文本
-const b = await chromium.connectOverCDP('http://127.0.0.1:9222');
+const b = await chromium.connectOverCDP(process.env.SSID_CDP ?? 'http://127.0.0.1:9222');
 const pages = b.contexts()[0]?.pages() ?? [];
 const p = pages.find((x) => /^http/.test(x.url()) && !/file:/.test(x.url()));
 if (!p) { console.log('NO_PAGE'); await b.close(); process.exit(1); }
