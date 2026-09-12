@@ -3,16 +3,20 @@
 # overrides, disables, and insert lists; `!!js` expressions allowed).
 #
 # SSiD 预制 MCP：Playwright MCP（浏览器自动化，默认启用）+ CodeGraph MCP
-# （语义代码图：callers/impact/上下文，代码索引）。
+# （语义代码图：callers/impact/上下文，代码索引；索引目录按需适配，见下）。
 # 运行时由 shell/main.mjs 注入 env（与 SSID_PNPM 同模式）：
 #   SSID_MCP_NODE      — 打包内置 node.exe → NVM v22.22.2 → PATH（electron 的
 #                        execPath 因 ABI 不匹配不可用，见 worker 分支同款注释）
 #   SSID_MCP_PW_CLI    — 本 profile pin 依赖 @playwright/mcp 的 cli.js 绝对路径
 #   SSID_MCP_CG_CLI    — @astudioplus/codegraph-mcp 的 cli.js 绝对路径
-#   SSID_MCP_CG_WS     — CodeGraph 索引目录（默认用户主目录；可在 MCP 管理
-#                        改 cwd / 追加 --workspace 定制；首次使用引擎已随包安装）
+#   SSID_MCP_CG_WS     — CodeGraph 索引目录。boot 前由壳解析：SSID_MCP_CG_WS 环境
+#                        变量 → ~/.ssid/codegraph.json → 最近会话探测；**不再默认
+#                        用户主目录**（主目录没有代码仓库，会让首次调用扫描 AppData
+#                        卡死超时、结果与项目无关——2026-09-09 用户反馈）
+#   SSID_MCP_CG_ENABLE — '1' = 已适配到可用目录；否则条目停用（不启动引擎进程）
 # 浏览器二进制不随安装包发布：首次使用需 `playwright install chromium`
-# （方案与命令详见 docs/决策/2026-08-24-Playwright-MCP-预制-实施方案.md）。
+# （方案与命令详见 docs/决策/2026-08-24-Playwright-MCP-预制-实施方案.md；
+#  CodeGraph 索引目录适配见 docs/决策/2026-09-09-CodeGraph-MCP-默认索引目录修复.md）。
 - insert:
     - id: mcp-playwright
       name: '@deepseek-ai/dsh-mcp-client'
@@ -25,6 +29,10 @@
           - '--headless'
     - id: mcp-codegraph
       name: '@deepseek-ai/dsh-mcp-client'
+      # 未适配到可用目录时停用：出厂不再默认指向用户主目录（v0.2.1 的行为），
+      # 否则引擎会扫描 AppData 等无关目录、撞 --max-files 上限后长时间卡死。
+      # 壳在 boot 前解析目录并设 SSID_MCP_CG_ENABLE=1（见文件头注释）。
+      disabled: !!js 'process.env.SSID_MCP_CG_ENABLE !== "1"'
       config:
         serverName: codegraph
         transport: stdio
@@ -32,6 +40,24 @@
         command: !!js 'process.env.SSID_MCP_NODE || "node"'
         args:
           - !!js 'process.env.SSID_MCP_CG_CLI'
+          # 出厂保护清单：即使索引目录被改到项目根，也不进这些目录
+          # （报告第 3 条建议；用户可在「设置 → MCP」里追加/覆盖 args）。
+          - '--exclude'
+          - 'node_modules'
+          - '--exclude'
+          - '.git'
+          - '--exclude'
+          - 'AppData'
+          - '--exclude'
+          - 'target'
+          - '--exclude'
+          - 'dist'
+          - '--exclude'
+          - 'build'
+          - '--exclude'
+          - '.venv'
+          - '--exclude'
+          - '__pycache__'
         env:
           # 匿名遥测默认开启（工具调用/启动/错误上报）——预制出厂必须关闭
           CODEGRAPH_TELEMETRY: 'off'

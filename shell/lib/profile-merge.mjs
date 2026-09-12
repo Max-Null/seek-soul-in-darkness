@@ -146,11 +146,12 @@ function isInsertEntry(entry) {
 }
 
 /**
- * 把一个 insert 块的子条目切分为 [{ id, text, index }]。
+ * 把一个 insert 块的子条目切分为 [{ id, text, index, start, end }]。
  * 子条目判定 = 缩进 2+ 空格的 `- <key>:` 形态（`- id:` / `- disable:` 等），
  * **排除** args/env 等块内的普通列表项（`- !!js`、`- '字符串'`——它们不是条目，
  * 否则 args 会被误切并「保留」成伪用户条目，0.2.1 修复后实测虚高合并）。
  * id 提取不到为 null（无 id 子条目按「用户新增」保留——见 mergeUserPatch 注释）。
+ * start/end 为子条目在 entryText 内的 0-based 行号区间（供文本级替换定位）。
  */
 export function splitChildEntries(entryText) {
   const lines = String(entryText ?? '').split(/\r?\n/)
@@ -160,7 +161,7 @@ export function splitChildEntries(entryText) {
     const line = lines[i]
     if (/^\s+-\s+[A-Za-z_-][\w-]*\s*:/.test(line)) {
       if (cur !== null) children.push(cur)
-      cur = { lines: [line] }
+      cur = { lines: [line], start: i }
     } else if (cur !== null) {
       cur.lines.push(line)
     }
@@ -169,38 +170,56 @@ export function splitChildEntries(entryText) {
   return children.map((c, idx) => {
     const text = c.lines.join('\n') + '\n'
     const m = /^\s+-\s+id:\s*([^\s#]+)/.exec(c.lines[0] ?? '')
-    return { id: m !== null ? m[1] : null, text, index: idx }
+    return {
+      id: m !== null ? m[1] : null,
+      text,
+      index: idx,
+      start: c.start,
+      end: c.start + c.lines.length - 1,
+    }
   })
 }
 
 /**
  * 合并用户 patch 层：以 templateText 为基线（整体保留，含头注释），把
- * oldText（升级前用户 patch）中的用户增量追加回写：
- * - **insert 块子条目级**：模板 insert 块内不存在的子条目（用户追加进
- *   `- insert:` 列表的 MCP 等）→ 并入模板的 insert 块（追加到块尾）。
- *   这是 0.2.1 事故的根因——面板/插件中心把新 MCP 追加成既有
- *   `- insert:` 列表的第三个子条目，顶层条目级对比会整块误判「模板已有」
- *   而丢弃用户子条目（2026-09-07 用户在另一台电脑实证：MCP 仍全丢）。
+ * oldText（升级前用户 patch）中的用户增量追加/替换回写：
+ * - **insert 块子条目级·用户改动识别（v0.2.2）**：给定 baseText（上次部署时
+ *   的模板原文）时做三方比较——base 有同 id 子条目且用户文本 ≠ base
+ *   ⇒ 用户改过 ⇒ 用用户版本替换模板的该子条目（模板升级不再打回用户对出厂
+ *   MCP 条目（如 codegraph 的 cwd / args）的修改）；文本与 base 相同 ⇒ 用户
+ *   没改 ⇒ 用模板新版（模板升级照常生效）。
+ * - **insert 块子条目级·用户新增**：模板 insert 块内不存在的子条目（用户
+ *   追加进 `- insert:` 列表的 MCP 等）→ 并入模板的 insert 块（追加到块尾）。
+ *   这是 0.2.1 事故的根因——面板/插件中心把新 MCP 追加成既有 `- insert:`
+ *   列表的第三个子条目，顶层条目级对比会整块误判「模板已有」而丢弃用户
+ *   子条目（2026-09-07 用户在另一台电脑实证：MCP 仍全丢）。
  * - **顶层条目级**：模板中不存在同 id 的顶层条目（disable/assign/set 等
  *   insert 之外形态）→ 追加到文件末尾，原文按原样拼接（!!js 保留）。
  * - 任何解析异常都退回模板原文，绝不写坏 profile 的 patch。
- * @returns {{ text: string, merged: number, ids: string[] }}
+ * @param {string} oldText - 升级前的 profile patch（含用户改动）。
+ * @param {string} templateText - 本次部署的归档模板 patch。
+ * @param {string} [baseText] - 上次部署的模板 patch（三方合并基线）；缺失时
+ *   退化为「只保留用户新增条目」（v0.2.1 行为）。
+ * @returns {{ text: string, merged: number, ids: string[], overridden: string[] }}
  */
-export function mergeUserPatch(oldText, templateText) {
+export function mergeUserPatch(oldText, templateText, baseText = '') {
   // BOM 防御（P1）：用户机器上 patch 可能被编辑器写成带 BOM 的 UTF-8——若首行
   // 就是 `- insert:`（无头注释），`\uFEFF- insert:` 会被条目切分误判为非条目行，
   // 整块（含用户 MCP）被丢弃（审查发现，2026-09-07 深夜）。
   const base = String(templateText ?? '').replace(/^\uFEFF/, '')
   const old = String(oldText ?? '').replace(/^\uFEFF/, '')
+  const prev = String(baseText ?? '').replace(/^\uFEFF/, '')
   let oldEntries
   let tmplEntries
+  let prevEntries
   try {
     oldEntries = splitPatchEntries(old)
     tmplEntries = splitPatchEntries(base)
+    prevEntries = prev === '' ? [] : splitPatchEntries(prev)
   } catch {
-    return { text: base, merged: 0, ids: [] }
+    return { text: base, merged: 0, ids: [], overridden: [] }
   }
-  if (oldEntries.length === 0) return { text: base, merged: 0, ids: [] }
+  if (oldEntries.length === 0) return { text: base, merged: 0, ids: [], overridden: [] }
   // 模板身份全集：顶层条目 id + 所有 insert 块内的子条目 id
   const tmplTopIds = new Set(tmplEntries.map((e) => e.id).filter(Boolean))
   const tmplChildIds = new Set()
@@ -209,24 +228,56 @@ export function mergeUserPatch(oldText, templateText) {
       if (c.id !== null) tmplChildIds.add(c.id)
     }
   }
+  // 上次模板的子条目原文（三方比较的 base 侧）
+  const prevChildText = new Map()
+  for (const e of prevEntries) {
+    for (const c of splitChildEntries(e.text)) {
+      if (c.id !== null) prevChildText.set(c.id, c.text)
+    }
+  }
   // 用户增量：insert 块内的新子条目（子条目级）+ 非 insert 顶层条目的新条目
   const extraChildren = []
   const extraTops = []
+  // 用户改动：base 有同 id 且文本不同 ⇒ 用户改过 ⇒ 覆盖模板的同 id 子条目
+  const overridden = new Map()
   for (const e of oldEntries) {
     if (isInsertEntry(e)) {
       for (const c of splitChildEntries(e.text)) {
-        if (c.id === null || !tmplChildIds.has(c.id)) extraChildren.push(c)
+        if (c.id === null || !tmplChildIds.has(c.id)) {
+          extraChildren.push(c)
+          continue
+        }
+        const prevText = prevChildText.get(c.id)
+        if (prevText !== undefined && prevText !== c.text) overridden.set(c.id, c.text)
       }
     } else if (e.id === null || !tmplTopIds.has(e.id)) {
       extraTops.push(e.text)
     }
   }
-  if (extraChildren.length === 0 && extraTops.length === 0) {
-    return { text: base, merged: 0, ids: [] }
+  if (extraChildren.length === 0 && extraTops.length === 0 && overridden.size === 0) {
+    return { text: base, merged: 0, ids: [], overridden: [] }
   }
   let text = base
+  // 1) 覆盖用户改过的子条目：行号基于 base，从后往前替换避免行号漂移
+  if (overridden.size > 0) {
+    const lines = text.split(/\r?\n/)
+    const edits = []
+    for (const e of tmplEntries) {
+      if (!isInsertEntry(e)) continue
+      for (const c of splitChildEntries(e.text)) {
+        if (c.id === null || !overridden.has(c.id)) continue
+        edits.push({ start: e.start + c.start, end: e.start + c.end, text: overridden.get(c.id) })
+      }
+    }
+    edits.sort((a, b) => b.start - a.start)
+    for (const edit of edits) {
+      lines.splice(edit.start, edit.end - edit.start + 1, ...edit.text.replace(/\n$/, '').split(/\r?\n/))
+    }
+    text = lines.join('\n')
+  }
+  // 2) 用户新增子条目并入模板 insert 块尾（基于替换后的文本重新定位行号）
   if (extraChildren.length > 0) {
-    const tmplInsert = tmplEntries.filter(isInsertEntry).pop()
+    const tmplInsert = splitPatchEntries(text).filter(isInsertEntry).pop()
     if (tmplInsert !== undefined) {
       // 并入模板的 insert 块末尾（保持缩进=原样文本；模板块内子条目同缩进）
       const lines = text.split(/\r?\n/)
@@ -244,7 +295,12 @@ export function mergeUserPatch(oldText, templateText) {
     ...extraChildren.map((c) => c.id).filter(Boolean),
     ...extraTops.map((t) => (splitPatchEntries(t)[0]?.id ?? null)).filter(Boolean),
   ]
-  return { text, merged: extraChildren.length + extraTops.length, ids }
+  return {
+    text,
+    merged: extraChildren.length + extraTops.length + overridden.size,
+    ids,
+    overridden: [...overridden.keys()],
+  }
 }
 
 /** 轻量 semver 解析：主.次.补丁[-pre][+build]。无法解析 → null。 */
@@ -350,10 +406,13 @@ export function buildUpgradeReport({
     patchMerged: {
       count: patchMerge?.merged ?? 0,
       ids: patchMerge?.ids ?? [],
+      // 用户改过的出厂子条目 id（v0.2.2 三方合并：用户版本优先于模板新版）
+      overridden: patchMerge?.overridden ?? [],
     },
     notes: [
       'userPluginsLost：升级前声明、部署后不存在的插件（不自动重装，请从插件中心安装与新内核兼容的版本）',
       'patchMerged：升级前 cordis.patch.yml 中不属于出厂模板的条目，已自动合并保留（含用户自装 MCP 注册）',
+      'patchMerged.overridden：用户改过的出厂条目（如 MCP 的 cwd/args），已保留用户版本而非模板新版',
       `快照目录：${snapshotDir ?? '（无）'}（部署前的 package.json / cordis.patch.yml / pnpm-lock.yaml 等原文）`,
     ],
   }

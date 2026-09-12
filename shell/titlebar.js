@@ -6,7 +6,7 @@ document.getElementById('btn-close').addEventListener('click', () => { void wind
 // ── SSiD 标题栏统一按钮组 ──────────────────────────────────────────────
 // 会话管理 / 插件中心 / 侧栏 / 底栏：经 IPC 通知主进程，主进程在
 // DSH UI（mainView）内派发 `ssid:titlebar` CustomEvent，由内置插件
-// dsh-header-unify 执行（hero 页无 session header，标题栏按钮是唯一常驻入口）。
+// dsh-quick-toolbar 执行（hero 页无 session header，标题栏按钮是唯一常驻入口）。
 document.getElementById('btn-session-manager').addEventListener('click', () => { void window.ssidTitle.action('session-manager') })
 document.getElementById('btn-plugins').addEventListener('click', () => { void window.ssidTitle.action('plugin-center') })
 document.getElementById('btn-sidebar').addEventListener('click', () => { void window.ssidTitle.action('sidebar') })

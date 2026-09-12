@@ -213,6 +213,76 @@ test('mergeUserPatch：用户子条目内的 args !!js/字符串保持原样（�
   assert.ok(text.includes("'--verbose'"), '字符串参数行完整保留')
 })
 
+// ── v0.2.2 三方合并（base = 上次模板）──────────────────────────────────
+// 场景：用户在 MCP 管理页把 codegraph 的 cwd 改成项目路径；随后升级带来
+// 模板新版（该条目新增 --exclude 保护参数）。期望：用户的 cwd 保留、模板
+// 的其它子条目照常升级。
+const CG_BASE_ENTRY = `    - id: mcp-codegraph
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: codegraph
+        cwd: !!js 'process.env.SSID_MCP_CG_WS || ""'
+`
+
+const PATCH_BASE = `- insert:
+    - id: mcp-playwright
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: playwright
+${CG_BASE_ENTRY}`
+
+const PATCH_OURS = PATCH_BASE.replace(
+  `cwd: !!js 'process.env.SSID_MCP_CG_WS || ""'`,
+  `cwd: 'D:\\Project\\ai-platform'`,
+)
+
+const PATCH_THEIRS = PATCH_BASE.replace(
+  `        cwd: !!js 'process.env.SSID_MCP_CG_WS || ""'`,
+  `        cwd: !!js 'process.env.SSID_MCP_CG_WS || ""'
+        args:
+          - !!js 'process.env.SSID_MCP_CG_CLI'
+          - '--exclude'
+          - 'node_modules'`,
+)
+
+test('mergeUserPatch：用户改过的出厂子条目保留用户版本（v0.2.2 三方合并）', () => {
+  const { text, overridden, merged } = mergeUserPatch(PATCH_OURS, PATCH_THEIRS, PATCH_BASE)
+  assert.deepEqual(overridden, ['mcp-codegraph'])
+  assert.equal(merged, 1)
+  assert.ok(text.includes("cwd: 'D:\\Project\\ai-platform'"), '用户改的 cwd 必须保留')
+  assert.ok(!text.includes('--exclude'), '该子条目整体以用户版本为准（不被模板新版打回）')
+  assert.ok(text.includes('mcp-playwright'), '未改动的子条目仍在')
+  assert.ok(text.includes('serverName: playwright'), '未改动的子条目用模板原文')
+})
+
+test('mergeUserPatch：用户没改过的子条目采用模板新版（模板升级照常生效）', () => {
+  const { text, overridden, merged } = mergeUserPatch(PATCH_BASE, PATCH_THEIRS, PATCH_BASE)
+  assert.deepEqual(overridden, [])
+  assert.equal(merged, 0)
+  assert.ok(text.includes('--exclude'), '模板新增参数生效')
+  assert.ok(!text.includes('ai-platform'), '用户没有改动时不引入旧值')
+})
+
+test('mergeUserPatch：无 base 时退化为只保留用户新增（v0.2.1 行为）', () => {
+  const { text, overridden } = mergeUserPatch(PATCH_OURS, PATCH_THEIRS)
+  assert.deepEqual(overridden, [])
+  assert.ok(text.includes('--exclude'), '无基线时模板优先')
+})
+
+test('mergeUserPatch：用户改动 + 用户新增子条目同时生效', () => {
+  const ours = PATCH_OURS + `    - id: mcp-user-extra
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: extra
+`
+  const { text, overridden, ids } = mergeUserPatch(ours, PATCH_THEIRS, PATCH_BASE)
+  assert.deepEqual(overridden, ['mcp-codegraph'])
+  assert.deepEqual(ids, ['mcp-user-extra'])
+  assert.ok(text.includes("cwd: 'D:\\Project\\ai-platform'"))
+  assert.ok(text.includes('mcp-user-extra'))
+  assert.equal(text.match(/^- /gm)?.length ?? 0, 1, '仍为单顶层 insert 块')
+})
+
 test('mergeUserPatch：空/损坏输入退回模板原文（绝不写坏 patch）', () => {
   assert.equal(mergeUserPatch('', TEMPLATE_PATCH).text, TEMPLATE_PATCH)
   assert.equal(mergeUserPatch(null, TEMPLATE_PATCH).text, TEMPLATE_PATCH)

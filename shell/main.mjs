@@ -19,13 +19,14 @@
  */
 
 import { register } from 'tsx/esm/api'
-import { app, BrowserView, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, Menu, nativeImage, Notification, screen, Tray } from 'electron'
+import { app, BrowserView, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, Notification, screen, Tray } from 'electron'
 import { spawn, spawnSync } from 'node:child_process'
 import { appendFileSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { buildUpgradeReport, mergeUserPatch, snapshotProfileConfigs } from './lib/profile-merge.mjs'
+import { CG_CONFIG_FILE, readCodeGraphConfig, resolveCodeGraphWorkspace, writeCodeGraphConfig } from './lib/codegraph-adapt.mjs'
 
 // ── stderr/stdout 管道防护 ───────────────────────────────────────────────
 // GUI 启动时 stderr 可能挂在一个已关闭的管道上（启动终端关闭 / 双击 exe）：
@@ -633,19 +634,32 @@ async function start() {
       // 部署到本机后不改写，pnpm 任何操作（含插件中心应用内更新）都报
       // ERR_PNPM_UNEXPECTED_STORE / _VIRTUAL_STORE——2026-08-18 跨盘部署实验确认。
       rewritePnpmMeta(profileDir)
-      // ── v0.2.1 用户层回写：合并用户 cordis.patch.yml 条目（MCP 注册等）──
-      // 模板 patch 为基线，升级前用户 patch 中不存在于模板的条目（按 id
-      // 判定）追加回写；失败仅记日志（最坏用户 MCP 需重装，绝不阻断部署）。
+      // ── v0.2.1 用户层回写（v0.2.2 起三方合并）：合并用户 cordis.patch.yml ──
+      // 模板 patch 为基线；上次部署的模板原文（~/.ssid/template-cordis.patch.yml）
+      // 作为 base，用于区分「用户改过的出厂条目」（保留用户版本）与「模板升级」
+      // （采用模板新版）——否则用户在 MCP 管理页改的 cwd/启停会被下次升级打回。
+      // 失败仅记日志（最坏用户 MCP 需重装，绝不阻断部署）。
       try {
         const oldPatchPath = join(snapshotDir, 'cordis.patch.yml')
         const newPatchPath = join(profileDir, 'cordis.patch.yml')
+        const basePatchPath = join(homedir(), '.ssid', 'template-cordis.patch.yml')
+        const templateRaw = existsSync(newPatchPath) ? readFileSync(newPatchPath, 'utf8') : ''
         const merged = mergeUserPatch(
           existsSync(oldPatchPath) ? readFileSync(oldPatchPath, 'utf8') : '',
-          existsSync(newPatchPath) ? readFileSync(newPatchPath, 'utf8') : '',
+          templateRaw,
+          existsSync(basePatchPath) ? readFileSync(basePatchPath, 'utf8') : '',
         )
         if (merged.merged > 0) {
           writeFileSync(newPatchPath, merged.text, 'utf8')
-          safeLog(`ssid: merged ${merged.merged} user patch entries (ids=${merged.ids.join(',') || 'n/a'})\n`)
+          safeLog(
+            `ssid: merged ${merged.merged} user patch entries`
+            + ` (new=${merged.ids.join(',') || 'n/a'}; overridden=${merged.overridden.join(',') || 'n/a'})\n`,
+          )
+        }
+        // 缓存本次模板原文：下次升级三方合并的 base（识别用户改动 vs 模板更新）。
+        if (templateRaw !== '') {
+          mkdirSync(join(homedir(), '.ssid'), { recursive: true })
+          writeFileSync(basePatchPath, templateRaw, 'utf8')
         }
         // 升级报告：用户插件丢失清单落盘 ~/.ssid（node 写 JSON = UTF-8 无 BOM）。
         const toVersion = readProfileVersion() ?? 'latest'
@@ -900,9 +914,14 @@ async function start() {
     } else {
       safeLog(`ssid: prefab mcp cli missing (profile not redeployed yet?): ${mcpPwCli}\n`)
     }
-    // 预制 CodeGraph MCP（v0.2.1）：索引目录默认用户主目录（可在 MCP 管理面板
-    // 改 cwd / 追加 --workspace 定制）；codegraph 引擎随包安装（依赖包自带
-    // fetch-engine，首次由 mcp 进程按需就绪）。
+    // 预制 CodeGraph MCP（v0.2.1；v0.2.2 起索引目录按需适配）：出厂**不再**默认
+    // 指向用户主目录——主目录没有代码仓库，会让首次调用扫描 AppData 卡死超时、
+    // 索引常驻 700–900MB、查询结果与项目无关（AI 中台项目组 2026-09-09 反馈）。
+    // 适配优先级：SSID_MCP_CG_WS 环境变量 → ~/.ssid/codegraph.json → 最近会话
+    // 探测 → 都没有则条目停用（模板 patch 的 disabled 表达式读 SSID_MCP_CG_ENABLE）。
+    // 架构约束：dsh-mcp-client 是 profile 级单例，cwd 在 MCP 进程启动时固定，
+    // **无法**跟随当前会话工作目录——报告建议 1 不可行，故改为 boot 前解析一次。
+    // 见 docs/决策/2026-09-09-CodeGraph-MCP-默认索引目录修复.md。
     const mcpCgCli = join(profileDir, 'node_modules', '@astudioplus', 'codegraph-mcp', 'bin', 'codegraph-mcp.js')
     if (existsSync(mcpCgCli)) {
       process.env.SSID_MCP_CG_CLI = mcpCgCli
@@ -910,7 +929,62 @@ async function start() {
     } else {
       safeLog(`ssid: prefab mcp codegraph cli missing (profile not redeployed yet?): ${mcpCgCli}\n`)
     }
-    process.env.SSID_MCP_CG_WS = process.env.SSID_MCP_CG_WS || homedir()
+    /** 首次引导：让用户选一个项目目录（可跳过）。返回绝对路径或 null。 */
+    const promptCodeGraphWorkspace = async () => {
+      try {
+        const { response } = await dialog.showMessageBox(win, {
+          type: 'question',
+          buttons: ['选择项目目录…', '暂不启用'],
+          defaultId: 0,
+          cancelId: 1,
+          title: '思灵 · CodeGraph 代码索引',
+          message: 'CodeGraph 需要指定一个项目目录才能建立代码图谱。',
+          detail: '不指定时代码索引工具保持停用，不会扫描你的用户主目录。以后可在「设置 → MCP」里随时修改。',
+        })
+        if (response !== 0) return null
+        const picked = await dialog.showOpenDialog(win, {
+          title: '选择要建立代码图谱的项目目录',
+          properties: ['openDirectory', 'createDirectory'],
+        })
+        if (picked.canceled || picked.filePaths.length === 0) return null
+        return picked.filePaths[0]
+      } catch (error) {
+        safeLog(`ssid: codegraph prompt failed: ${error instanceof Error ? error.message : String(error)}\n`)
+        return null
+      }
+    }
+    const cgConfigPath = join(homedir(), '.ssid', CG_CONFIG_FILE)
+    const cgConfig = readCodeGraphConfig(cgConfigPath) ?? {}
+    const cgResolved = resolveCodeGraphWorkspace({
+      envWorkspace: process.env.SSID_MCP_CG_WS,
+      config: cgConfig,
+      // 隔离根在前：会话存储隔离开启时（出厂预设）会话都落在 sessions-ssid。
+      sessionRoots: [join(dshHome, 'sessions-ssid'), join(dshHome, 'sessions')],
+    })
+    let cgWorkspace = cgResolved.workspace
+    let cgSource = cgResolved.source
+    if (cgWorkspace === null && cgConfig.decided !== true) {
+      cgWorkspace = await promptCodeGraphWorkspace()
+      if (cgWorkspace !== null) cgSource = 'prompt'
+      try {
+        writeCodeGraphConfig(cgConfigPath, {
+          ...cgConfig,
+          workspace: cgWorkspace,
+          decided: true,
+          decidedAt: new Date().toISOString(),
+        })
+      } catch (error) {
+        safeLog(`ssid: codegraph config write failed: ${error instanceof Error ? error.message : String(error)}\n`)
+      }
+    }
+    // cwd 必须非空：空字符串经 dsh-mcp-client 直接传给 spawn，实测 ENOENT。
+    // 未适配时给一个占位目录，条目本身由 SSID_MCP_CG_ENABLE 停用、不会启动。
+    process.env.SSID_MCP_CG_WS = cgWorkspace ?? join(homedir(), '.ssid')
+    process.env.SSID_MCP_CG_ENABLE = cgWorkspace === null ? '0' : '1'
+    safeLog(
+      `ssid: codegraph workspace=${cgWorkspace ?? '(none)'} source=${cgSource}`
+      + ` enabled=${cgWorkspace === null ? '0' : '1'}\n`,
+    )
     // preferBundled: 打包版强制用内置闭包（忽略用户环境的 DSH_CHECKOUT，
     // 避免标题栏版本与归档不一致——pitfalls #5 幽灵依赖的根治）。
     kernel = await bootKernel(undefined, {
