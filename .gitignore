@@ -28,3 +28,6 @@ shell/*.pre-master-*.bak
 shell/.playwright-mcp/
 # 决策记录知识库的中间产物（由 shell/scripts/build-decision-index.mjs 重建；index.html 入库）
 docs/决策/decisions.json
+# 本地备份与临时脚本（2026-09-12）：备份内容可由 git 复原（git show <commit>^:<file>），不必入库
+*.bak-*
+.tmp-*
