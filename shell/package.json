@@ -21,7 +21,8 @@
         "check:legacy-names": "node scripts/check-legacy-names.mjs",
         "check:rules": "node scripts/check-rules.mjs",
     "check:cot": "node scripts/check-cot-leakage.mjs",
-    "sync:vendor": "node scripts/sync-vendor.mjs"
+    "sync:vendor": "node scripts/sync-vendor.mjs",
+    "verify:release": "node scripts/verify-release.mjs"
   },
   "main": "main.mjs",
   "author": "MaxNull",
