@@ -4,6 +4,8 @@
 > 范围：SSiD 出厂预制（profile-template）+ 本机 profile 同步
 > 关联：`docs/设计/SSiD-插件清单.md`（MCP 五通道 → 本次落地浏览器自动化通道）、`docs/决策/2026-08-19-预设技能包-落地方案.md`（prefab 模式参照）
 
+> 状态：已决策（推断 · 2026-09-12）
+
 ## 1. 背景
 
 用户在某个 DSH 会话中看到「playwright-core（全局 MCP 包内）」的表述，追问 DSH 是否有全局 MCP、为何 MCP 管理插件看不到。排查结论：

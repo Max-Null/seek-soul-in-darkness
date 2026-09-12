@@ -1,6 +1,8 @@
 # SSiD 内核升级执行指南：DSH 0.1.2-alpha.2 → 0.1.2-alpha.4（2026-09-02）
 
 > 执行方：web 端（3080）会话（当前宿主）；验证对象：SSiD dev（`~/.dsh/profiles/ssid`）。
+> 状态：进行中（推断 · 2026-09-12）
+
 > 官方 npm 已发布 `@deepseek-ai/dsh@0.1.2-alpha.4`（与全部 30 个 `@deepseek-ai/dsh-*` 子包）——无需私有源/源码模式。
 > 上游变更全景（α.2→α.4 338 提交）见 `docs/决策/2026-09-02-DSH-alpha2到alpha4-上游变更清单.md`。
 

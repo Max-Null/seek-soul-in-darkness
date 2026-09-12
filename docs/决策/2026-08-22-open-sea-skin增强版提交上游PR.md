@@ -1,5 +1,7 @@
 # open-sea-skin 增强版提交上游 PR（2026-08-22）
 
+> 状态：已完成（推断 · 2026-09-12）
+
 ## 背景
 
 前一决策（2026-08-22-open-sea-skin本地增强与SSiD集成.md）本地 fork 增强版已运行于 SSiD。用户要求：将增强改动整理成 commit 并向上游 d-dev0101/open-sea-skin 提 PR。

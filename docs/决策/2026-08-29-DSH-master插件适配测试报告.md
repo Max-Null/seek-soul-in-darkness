@@ -4,6 +4,8 @@
 - 背景：deepseek-harness 拉取最新 master（0.1.2-alpha.1 之后），相对 SSiD 安装版内置的 0.1.1-rc.2 有大量架构变化。web 版 DSH（`dsh web`，3080）启动后出现插件加载失败、新增会话不可用等异常，需确认插件全家桶对 master 的适配情况。
 - 测试环境：`C:\Users\MaxNull\.dsh\profiles\web`（web profile，源码模式 `node --import tsx/esm apps/cli/src/bin.ts web`），Playwright 驱动 UI 验证。
 
+> 状态：进行中（推断 · 2026-09-12）
+
 ## 结论速览
 
 - 纯净版（仅 `@deepseek-ai/dsh-base` + `@deepseek-ai/dsh-web-app`）→ 新增会话/完整对话链路正常；旧依赖（web profile 的 node-pty）`AttachConsole failed` 报错消失。

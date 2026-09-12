@@ -1,5 +1,7 @@
 # DSH 0.1.2-alpha.2 → 0.1.2-alpha.4 上游变更清单（2026-09-02）
 
+> 状态：记录（推断 · 2026-09-12）
+
 > 拉取总结（基于全部 338 个 non-merge 提交的实际 diff 阅读，非标题推断）。
 > 拉取布局：主工作区 `deepseek-harness/` 保持 alpha.2（运行环境）；官方主线在独立
 > worktree `H:\MaxNull\WorkStation\deepseek-harness-alpha4`（master @ 4e84901e64）。

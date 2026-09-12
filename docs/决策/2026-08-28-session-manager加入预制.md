@@ -1,5 +1,7 @@
 # dsh-session-manager 加入 SSiD 预制（2026-08-28）
 
+> 状态：进行中（推断 · 2026-09-12）
+
 ## 背景与决策
 
 - 用户要求：`dsh-session-manager` 加入 SSiD 预制插件。候选 6 个（hkkz9522/dream12347/Semidia/WSL043/wsxwj123/wuxiangru915），用户选定 **dream12347**（功能最全：删除回收站/恢复/彻底清除、归档恢复、活动统计、继续/暂停、未读标记、工作区分组排序、上下文压缩阈值）。

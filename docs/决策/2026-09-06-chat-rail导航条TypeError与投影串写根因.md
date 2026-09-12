@@ -1,5 +1,7 @@
 # chat-rail 导航条点击报错：TypeError 根因 + chatRail 投影跨会话串写（2026-09-06）
 
+> 状态：进行中（推断 · 2026-09-12）
+
 > 用户报「web 版 dsh 导航条点击报错」，定位与修复记录。
 > 环境：web 端（3080，`bin.ts web` 源码模式，checkout @ dsh-v0.1.2-rc.1）；插件 `@max-null/dsh-chat-rail@0.6.0`。
 

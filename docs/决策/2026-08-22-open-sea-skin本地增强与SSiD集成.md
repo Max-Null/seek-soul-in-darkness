@@ -1,5 +1,7 @@
 # open-sea-skin 本地增强与 SSiD 集成（2026-08-22）
 
+> 状态：进行中（推断 · 2026-09-12）
+
 ## 背景
 
 open-sea-skin（d-dev0101/open-sea-skin，WebGPU 海洋皮肤，release tarball 安装）加入 SSiD 预制后，用户要求：设置面板增加「启用开关（ossEnabled）」「自动昼夜循环开关（autoCycle）」「恢复默认」按钮。
