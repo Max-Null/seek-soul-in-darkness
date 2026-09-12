@@ -39,14 +39,24 @@
 
 ---
 
-## 三、你要做的一件事
+## 三、你要做的事（两条命令）
+
+**GitHub 侧已完成**：`https://github.com/Max-Null/dsh-skills`（PUBLIC，分支 main，6 个提交已推送）；SSiD 本仓库也已推送（`d7fb2bb`）。
 
 ```sh
 cd H:\MaxNull\WorkStation\max-null-plugins\dsh-skills
+npm login                      # 必须：本机 .npmrc 里的 _authToken 已失效（npm whoami → E401）
 npm publish --access public
 ```
 
-`--access public` 是必须的——`@max-null/*` 是 scoped 包，**默认按私有发布**。
+- `--access public` 是必须的——`@max-null/*` 是 scoped 包，**默认按私有发布**。
+- 包名已确认**未被占用**（`npm view` → 404）；同 scope 的 `dsh-chat-rail@0.6.1` 与 `dsh-memory@0.6.0` 都能查到，说明 scope 存在且你有发布权。
+
+**发布后自检**：
+
+```sh
+npm view @max-null/dsh-skills version    # 应返回 0.1.0
+```
 
 ---
 
@@ -68,7 +78,7 @@ npm publish --access public
 |---|---|---|
 | 1 | ~~`ssid-trim-cot-leakage/references/examples.md` 校准样本不全~~ **已补齐** | **11 节 / 22 案例 / 152 行**，节数与上游一致（上游 11 节 / 30 案例 / 275 行）。案例数少于上游是**有意的**：上游案例绑定 DSH 的目录与机制，逐个直译会得到"在思灵读不懂"的样本集；取舍是保证每节至少一个可校准的真实样本 |
 | 2 | ~~本机未安装 `ffmpeg` / `ffprobe`~~ **已装** | ffmpeg / ffprobe **9.0.1**（gyan.dev release-essentials，106 MB）解压在 `H:\MaxNull\WorkStation\.build\ffmpeg\ffmpeg-9.0.1-essentials_build\bin\`，并写入**用户级 PATH**（`IsAdmin=False` 下走便携版路线，不需要提权）。**编码器 5 个自测已实测通过**。若不想让用户 PATH 保留这一条，删掉即可——skill 里也记了绝对路径 |
-| 3 | 包的 GitHub 仓库（`github.com/Max-Null/dsh-skills`）**尚未创建** | `package.json` 的 `repository`/`homepage`/`bugs` 字段暂时指向空地址；发布前建库即可 |
+| 3 | ~~包的 GitHub 仓库尚未创建~~ **已建并推送** | `https://github.com/Max-Null/dsh-skills`（PUBLIC，分支 main，6 个提交）；`package.json` 的 `repository` / `homepage` / `bugs` 现在都指向真实地址。**SSiD 本仓库也已推送**（`d7fb2bb`） |
 | 4 | 手册待办 **#7（`docs/决策/` 状态机）未做** | `ssid-code-review` 的「决策记录与已交付现实一致」与 `ssid-find-simplifications` 的「取代标记」两条判据依赖它；缺失时只按当前无状态机的形态执行 |
 
 ---
