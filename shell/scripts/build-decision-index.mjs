@@ -277,6 +277,7 @@ const PAGE_CSS = [
   '.back{display:inline-flex;align-items:center;gap:5px;margin-bottom:14px;font-size:13px;color:var(--dim);cursor:pointer;user-select:none}',
   '.back:hover{color:var(--acc)}',
   '::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:var(--line);border-radius:5px}::-webkit-scrollbar-track{background:transparent}',
+  '@media (max-width:768px){html,body{height:auto}body{overflow-y:auto;-webkit-text-size-adjust:100%}#app{display:block;height:auto;overflow:visible}#side{width:auto;max-width:none;flex:none;max-height:none;overflow:visible;border-right:none;border-bottom:1px solid var(--line);padding:12px 14px 6px}.grp{margin-bottom:9px}.grp>h2{font-size:10px;margin-bottom:5px}.chip{font-size:11px;padding:2px 8px;margin:0 3px 3px 0}#ftag{max-height:92px;overflow-y:auto}#main{padding:14px 14px 48px;overflow:visible}.card{padding:11px 13px;margin-bottom:8px}.card .t{font-size:14px}.card:hover{transform:none}#detail h2{font-size:17px}#body{font-size:13.5px;line-height:1.75}#body table{font-size:12.5px}#body pre{padding:9px 11px}input#q{margin-bottom:10px;padding:9px 10px}}',
 ].join('\n');
 
 const PAGE_JS = [
