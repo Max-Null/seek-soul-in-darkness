@@ -26,3 +26,5 @@ shell/*.png
 shell/dsh-runtime.rc2-backup-*.tar.gz
 shell/*.pre-master-*.bak
 shell/.playwright-mcp/
+# 决策记录知识库的中间产物（由 shell/scripts/build-decision-index.mjs 重建；index.html 入库）
+docs/决策/decisions.json
