@@ -16,9 +16,10 @@ node scripts/prepare-runtime.mjs   # 重建 dsh-runtime.tar.gz（发版收尾；
 
 ## 内置专属插件（plugins/）
 
-- 源头 + 同步链与发版纪律见手册 §10：不发布 npm、vendor 四份 MD5 一致、改后必同步运行时实体。
-- 当前：dsh-ssid-panels（0.1.9）、dsh-ssid-zh-ui（0.1.0）。
-- dsh-quick-toolbar（原 dsh-header-unify）已于 2026-08-30 **迁出独立**（仓库 `max-null-plugins/dsh-quick-toolbar`，独立化设计中——设计文档 doc/设计/）；SSiD 暂仍 vendor 集成（同步链：独立仓库构建产物 → 三处 vendor）。
+- 源头 + 同步链与发版纪律见手册 §10：不发布 npm、vendor 四份指纹一致、改后必同步运行时实体。
+- 当前：dsh-ssid-panels（0.1.9）、dsh-ssid-zh-ui（0.1.0）——源码在 `plugins/`，与三处 vendor **逐文件全等**（含 `src/`、`tests/`）。
+- dsh-quick-toolbar（原 dsh-header-unify）已于 2026-08-30 **迁出独立**，源头在 `max-null-plugins/dsh-quick-toolbar`，`plugins/` 下不保留副本（`plugins/dsh-quick-toolbar` 残骸已于 2026-09-10 清理）；SSiD 侧仍 vendor 集成，同步链 = 独立仓库构建产物 → 三处 vendor。
+- 该插件的 vendor 是**精简副本**：只收 `lib/` + `cordis.patch.yml` + `package.json`，源码/测试/截图/README 都不进 vendor——核对时不要按"整目录相等"比。
 
 ## 文档约定
 

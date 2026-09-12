@@ -9,22 +9,27 @@ node scripts/prepare-runtime.mjs   # 重建 dsh-runtime.tar.gz（归档带 vendo
 
 ## 条目
 
-### dsh-capture / dsh-ssid-panels / dsh-ssid-zh-ui / dsh-header-unify
+### dsh-capture / dsh-ssid-panels / dsh-ssid-zh-ui / dsh-quick-toolbar
 
-Max-Null 自有 @max-null/* 插件的源码目录（`file:./vendor/<name>` 引用）：
-SSiD 集成版本直接随归档发布，不依赖 npm 发布节奏。更新方式为替换目录内容
-后重建归档。
+Max-Null 自有 @max-null/* 插件（`file:./vendor/<name>` 引用）：SSiD 集成版本直接随
+归档发布，不依赖 npm 发布节奏。更新方式为替换目录内容后重建归档。
+
+比对面按包区分：`dsh-ssid-panels` / `dsh-ssid-zh-ui` 的源头是 SSiD 仓 `plugins/<pkg>/`，
+与 vendor 为**全等副本**（连 `src/`、`tests/`、`docs/` 都同步）；`dsh-capture` 与
+`dsh-quick-toolbar` 的源头在上游仓库（`max-null-plugins/`），vendor 只收运行所需文件
+（`lib/` + `cordis.patch.yml` + `package.json`），按"整目录相等"核会报大量假差异。
 
 ### dsh-genui（来源仓库 omdsh-dev/dsh-genui；npm 发布名 @changfenhuang/dsh-genui）
 
-第三方 genui 的 vendor 固化（`file:./vendor/dsh-genui`）。基线 = 上游
-v0.9.2 + **SSiD 面板样式修复**：会话面板 dock 对齐宿主 composer 宽度轴、
-头部/body 分隔线、badge 间距（--dsl-g-* token 作用域修复）、chevron 换宿主
-图标——修复已提上游 PR [omdsh-dev/dsh-genui#58](https://github.com/omdsh-dev/dsh-genui/pull/58)。
-上游合并并发布新版本后，切换到 npm 声明并移除本 vendor。本地开发/重构建：
+当前经 npm 声明（`package.json` 写 `"@changfenhuang/dsh-genui": "0.9.8"`），本 vendor
+目录下不再保留该包。历史上的 vendor 固化基线 = 上游 v0.9.2 + **SSiD 面板样式修复**：
+会话面板 dock 对齐宿主 composer 宽度轴、头部/body 分隔线、badge 间距（--dsl-g-* token
+作用域修复）、chevron 换宿主图标——修复已提上游 PR
+[omdsh-dev/dsh-genui#58](https://github.com/omdsh-dev/dsh-genui/pull/58)。
+本地开发/重构建：
 `H:\MaxNull\WorkStation\dsh-genui`（Windows 构建绕过 `rm -rf`：`Remove-Item lib -Recurse;
 pnpm exec tsc -p tsconfig.json; pnpm exec tsdown`）。
-`genui` skill 教学（`SKILL.md`）同步预置在 `profile-template/skills/genui/`。
+`genui` skill 教学（`SKILL.md`）预置在 `profile-template/skills/genui/`。
 
 ### dsh-context-doctor
 
