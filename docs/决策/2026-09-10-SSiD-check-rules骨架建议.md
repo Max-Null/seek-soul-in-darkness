@@ -9,8 +9,8 @@
 本文的输入是官方仓库 `DSHfork`（= `deepseek-ai/deepseek-harness`）`scripts/` 下 55 个
 `verify-*` 门脚本与 1583 行编排器 `run-gates.ts` 的精读结果，报告原文见：
 
-- `docs/决策/2026-09-10-DSH官方Gates拆解原始报告-E-配对与配置门.md`（`verify-translation-pairing.ts`、`verify-cordis-config.ts`）
-- `docs/决策/2026-09-10-DSH官方Gates拆解原始报告-F-run-gates编排.md`（`run-gates.ts`）
+- `dsh-anatomy/工程范式/2026-09-10-DSH官方Gates拆解原始报告-E-配对与配置门.md`（`verify-translation-pairing.ts`、`verify-cordis-config.ts`）
+- `dsh-anatomy/工程范式/2026-09-10-DSH官方Gates拆解原始报告-F-run-gates编排.md`（`run-gates.ts`）
 
 结论对 SSiD 侧的真实结构做了核实：SSiD 壳库根目录**没有** `package.json`，脚本家在
 `seek-soul-in-darkness/shell/`，运行器是 `npm run`。本文所有落点均按此写。
