@@ -66,7 +66,7 @@ try {
 
 // ── 静态断言 ─────────────────────────────────────────────────────
 ok(new RegExp(N + ' 篇').test(els.stat.innerHTML), `侧栏统计：${els.stat.innerHTML.replace(/<[^>]+>/g, '')}`);
-ok(count(els.fst.innerHTML, /class="chip/g) === 5, `状态筛选 5 个 chip（实测 ${count(els.fst.innerHTML, /class="chip/g)}）`);
+ok(count(els.fst.innerHTML, /class="chip/g) === 6, `状态筛选 6 个 chip（进行中/已决策/已完成/已归档/记录/未标注；实测 ${count(els.fst.innerHTML, /class="chip/g)}）`);
 ok(count(els.fym.innerHTML, /class="chip/g) >= 2, `月份筛选 ${count(els.fym.innerHTML, /class="chip/g)} 个 chip`);
 ok(count(els.ftag.innerHTML, /class="chip/g) === 26, `标签筛选 ${count(els.ftag.innerHTML, /class="chip/g)} 个 chip（Top 26）`);
 ok(count(els.list.innerHTML, /data-file=/g) === N, `初始列表 ${count(els.list.innerHTML, /data-file=/g)} 张卡片（期望 ${N}）`);
@@ -78,7 +78,7 @@ function click(attr, val) {
   clickHandlers.forEach((fn) => fn({ target: { closest: () => fake } }));
   return count(els.list.innerHTML, /data-file=/g);
 }
-for (const kind of ['进行中', '已完成', '已决策', '未标注']) {
+for (const kind of ['进行中', '已完成', '已决策', '已归档', '未标注']) {
   const got = click('data-st', kind);
   const exp = expOf(kind);
   ok(got === exp, `点「${kind}」筛出 ${got} 条 == 期望 ${exp}`);

@@ -31,13 +31,15 @@ const OUT_HTML = path.join(DEC_DIR, 'index.html');
  * 真实状态是进行中，若先判「已完成」就会误归。
  */
 const STATUS_RULES = [
+  // 「已归档」优先于「已完成」：归档是完成之后的状态流转，不该被压成普通完成
+  [/已归档/, '已归档'],
   [/进行中|实施中|执行中|待确认|待定|待拍板|待用户|待准备|方案待|卡在|规划中|评估完成/, '进行中'],
   [/已决策|已定案|已选定/, '已决策'],
-  [/已完成|完成|已落地|已发布|发布完成|已修复|收尾|已归档|确认/, '已完成'],
+  [/已完成|完成|已落地|已发布|发布完成|已修复|收尾|确认/, '已完成'],
   [/记录|存档|素材|事实已|已核对/, '记录'],
 ];
 
-const STATUS_ORDER = ['进行中', '已决策', '已完成', '记录', '其它', '未标注'];
+const STATUS_ORDER = ['进行中', '已决策', '已完成', '已归档', '记录', '其它', '未标注'];
 
 /**
  * 从正文头部（前 20 行）抓一个 `标签：值` 字段。
@@ -245,7 +247,7 @@ const PAGE_CSS = [
   '.card .tg{margin-top:6px}',
   '.card .tg i{font-style:normal;font-size:11px;color:var(--mut);background:var(--card);border:1px solid var(--line);border-radius:4px;padding:1px 5px;margin-right:4px}',
   '.st{font-size:11px;padding:1px 7px;border-radius:4px;border:1px solid currentColor;font-weight:600}',
-  '.st.进行中{color:var(--warn)}.st.已完成{color:var(--ok)}.st.已决策{color:var(--acc)}.st.记录{color:var(--dim)}.st.未标注{color:var(--mut);font-weight:400}',
+  '.st.进行中{color:var(--warn)}.st.已完成{color:var(--ok)}.st.已决策{color:var(--acc)}.st.已归档{color:var(--mut)}.st.记录{color:var(--dim)}.st.未标注{color:var(--mut);font-weight:400}',
   'mark{background:#fde68a;color:#000;border-radius:2px;padding:0 1px}',
   '@media(prefers-color-scheme:dark){mark{background:#7c5e10;color:#fff}}',
   '#hint{font-size:12.5px;color:var(--dim);margin-bottom:12px}',
@@ -374,7 +376,7 @@ const PAGE_JS = [
   '    e.tags.forEach(function(t){byTag[t]=(byTag[t]||0)+1;});',
   '    var y=e.date.slice(0,7);byYm[y]=(byYm[y]||0)+1;',
   '  });',
-  '  var sc=[["进行中",bySt["进行中"]],["已决策",bySt["已决策"]],["已完成",bySt["已完成"]],["记录",bySt["记录"]],["未标注",bySt["未标注"]]];',
+  '  var sc=[["进行中",bySt["进行中"]],["已决策",bySt["已决策"]],["已完成",bySt["已完成"]],["已归档",bySt["已归档"]],["记录",bySt["记录"]],["未标注",bySt["未标注"]]];',
   '  E("fst").innerHTML=sc.map(function(p){',
   '    return chip(p[0],p[1],S.st===p[0],"data-st=\\""+p[0]+"\\"");',
   '  }).join("");',
