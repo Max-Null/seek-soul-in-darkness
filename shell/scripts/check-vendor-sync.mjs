@@ -22,16 +22,18 @@
  *      差异分三类输出（未同步 / 多余 / 漂移）。只在源侧存在与内容漂移是两种处置，
  *      压成一个"目录不一致"就没法定位了。
  *
- * 指纹用 sha256；手册习惯叫"MD5"，文档与错误信息统一写「指纹」。
+ * 指纹与比对面的实现在 `lib/vendor-fingerprint.mjs`，**与 sync-vendor 共用同一份** ——
+ * 两边各写一份就会出现「验证说通过、同步完却仍不一致」这类自相矛盾，而防那类事故正是
+ * 本门存在的理由。手册习惯叫"MD5"，文档与错误信息统一写「指纹」，实现用 sha256。
  *
  * 退出码：0 通过 / 1 有差异 / 2 空语料。
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createGate } from './lib/gate-report.mjs';
+import { resolveSpec, fingerprint, firstDiffLine } from './lib/vendor-fingerprint.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SHELL = path.resolve(HERE, '..');
@@ -42,73 +44,7 @@ const MANIFEST = path.join(HERE, 'check-rules.manifest.json');
 const manifest = JSON.parse(fs.readFileSync(MANIFEST, 'utf8'));
 const gate = createGate({ id: 'check-vendor-sync', label: 'vendor 各份一致性', base: REPO });
 
-/** manifest 里的路径写法 → 绝对路径（支持 ~ 与相对 SSiD 仓库）。 */
-function resolveSpec(p) {
-  if (p.startsWith('~')) return path.join(os.homedir(), p.slice(1).replace(/^[\\/]/, ''));
-  return path.resolve(REPO, p);
-}
-
-/** 极简 glob：manifest 只用到 `**`、`dir/**`、`*.ext`、精确路径四种形式。 */
-function globToRe(p) {
-  if (p === '**') return /^.*$/;
-  let re = '';
-  for (let i = 0; i < p.length; i++) {
-    const c = p[i];
-    if (c === '*') {
-      if (p[i + 1] === '*') { re += '.*'; i++; }
-      else re += '[^/]*';
-    } else if ('.+^$()[]{}|\\'.includes(c)) re += '\\' + c;
-    else re += c;
-  }
-  return new RegExp('^' + re + '$');
-}
-
-function matchAny(rel, patterns, defaultVal) {
-  if (!patterns) return defaultVal;
-  return patterns.some((p) => globToRe(p).test(rel));
-}
-
-/** 逐文件建「相对路径 → sha256」映射。 */
-function fingerprint(dir, spec) {
-  const out = new Map();
-  if (!fs.existsSync(dir)) return null;
-  const include = spec.include ?? ['**'];
-  const exclude = spec.exclude ?? [];
-  (function visit(d, rel) {
-    let entries;
-    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
-    for (const e of entries) {
-      const childRel = rel ? `${rel}/${e.name}` : e.name;
-      const full = path.join(d, e.name);
-      if (e.isDirectory()) {
-        if (matchAny(childRel + '/x', exclude, false) || matchAny(childRel, exclude, false) || matchAny(childRel + '/', exclude, false)) continue;
-        visit(full, childRel);
-      } else if (e.isFile()) {
-        if (!matchAny(childRel, include, true)) continue;
-        if (matchAny(childRel, exclude, false)) continue;
-        out.set(childRel, crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex'));
-      }
-    }
-  })(dir, '');
-  return out;
-}
-
-/** 文本文件报第一处不同的行号；二进制或读取失败返回 null。 */
-function firstDiffLine(fa, fb) {
-  try {
-    const a = fs.readFileSync(fa), b = fs.readFileSync(fb);
-    if (a.includes(0) || b.includes(0) || a.length > 2 * 1024 * 1024) return null;
-    const la = a.toString('utf8').split('\n');
-    const lb = b.toString('utf8').split('\n');
-    for (let i = 0; i < Math.max(la.length, lb.length); i++) {
-      if (la[i] !== lb[i]) return i + 1;
-    }
-    return null;
-  } catch { return null; }
-}
-
 const copies = manifest.vendorCopies ?? {};
-const ok = (v) => [...v].map((b) => b.toString(16).toUpperCase().padStart(2, '0')).join('');
 
 for (const [pkg, spec] of Object.entries(manifest.packages ?? {})) {
   if (spec.$unmanaged) {
@@ -116,10 +52,11 @@ for (const [pkg, spec] of Object.entries(manifest.packages ?? {})) {
     continue;
   }
   const onlyProfiles = spec.profiles;   // 例如 dsh-dream-skin 只在 web
-  const sides = [['tpl', path.join(resolveSpec(copies.tpl), pkg)]];
+
+  const sides = [['tpl', path.join(resolveSpec(copies.tpl, REPO), pkg)]];
   for (const name of ['web', 'ssid']) {
     if (onlyProfiles && !onlyProfiles.includes(name)) continue;
-    sides.push([name, path.join(resolveSpec(copies[`${name}` === 'web' ? 'web' : 'ssid']), pkg)]);
+    sides.push([name, path.join(resolveSpec(copies[name], REPO), pkg)]);
   }
 
   const maps = {};
@@ -127,7 +64,7 @@ for (const [pkg, spec] of Object.entries(manifest.packages ?? {})) {
 
   let sourceMap = null, sourceLabel = '';
   if (spec.mode === 'full' && spec.source) {
-    const dir = resolveSpec(spec.source);
+    const dir = resolveSpec(spec.source, REPO);
     sourceMap = fingerprint(dir, spec);
     sourceLabel = 'src';
     if (sourceMap === null) {
@@ -142,7 +79,6 @@ for (const [pkg, spec] of Object.entries(manifest.packages ?? {})) {
   const present = all.filter(([, m]) => m !== null);
   const missingSides = all.filter(([, m]) => m === null).map(([l]) => l);
 
-  const nFiles = present.reduce((n, [, m]) => n + m.size, 0);
   gate.inspect();
   gate.info(`${pkg}（${spec.mode}）：${present.map(([l, m]) => `${l}=${m.size}`).join('  ')}${missingSides.length ? `  缺=${missingSides.join(',')}` : ''}`);
 
@@ -159,7 +95,8 @@ for (const [pkg, spec] of Object.entries(manifest.packages ?? {})) {
       if (!m.has(rel)) {
         gate.violation(path.join(REPO, rel), null, `${pkg}/${rel}  只在 ${baseLabel} 侧存在（${label} 缺该文件）→ 未同步`);
       } else if (m.get(rel) !== h) {
-        const ln = firstDiffLine(path.join(resolveSpec(spec.source ?? copies.tpl), pkg, rel), path.join(resolveSpec(copies[label]), pkg, rel));
+        const srcRoot = resolveSpec(spec.source ?? copies.tpl, REPO);
+        const ln = firstDiffLine(path.join(srcRoot, pkg, rel), path.join(resolveSpec(copies[label], REPO), pkg, rel));
         gate.violation(path.join(REPO, rel), ln, `${pkg}/${rel}  ${baseLabel} 与 ${label} 内容漂移（指纹 ${h.slice(0, 8)} vs ${m.get(rel).slice(0, 8)}）`);
       }
     }

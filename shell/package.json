@@ -8,7 +8,7 @@
     "start": "electron .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "smoke": "node --import tsx/esm boot-smoke.ts",
-    "test": "node --import tsx/esm --test tests/profile-merge.spec.ts tests/codegraph-adapt.spec.ts scripts/check-bom.spec.mjs scripts/check-legacy-names.spec.mjs scripts/check-cot-leakage.spec.mjs",
+    "test": "node --import tsx/esm --test tests/profile-merge.spec.ts tests/codegraph-adapt.spec.ts scripts/check-bom.spec.mjs scripts/check-legacy-names.spec.mjs scripts/check-cot-leakage.spec.mjs scripts/sync-vendor.spec.mjs",
     "test:check-rules": "node --test scripts/check-bom.spec.mjs scripts/check-legacy-names.spec.mjs scripts/check-cot-leakage.spec.mjs",
     "test:profile-merge": "node --import tsx/esm --test tests/profile-merge.spec.ts",
     "test:codegraph-adapt": "node --import tsx/esm --test tests/codegraph-adapt.spec.ts",
@@ -20,7 +20,8 @@
         "check:vendor-sync": "node scripts/check-vendor-sync.mjs",
         "check:legacy-names": "node scripts/check-legacy-names.mjs",
         "check:rules": "node scripts/check-rules.mjs",
-    "check:cot": "node scripts/check-cot-leakage.mjs"
+    "check:cot": "node scripts/check-cot-leakage.mjs",
+    "sync:vendor": "node scripts/sync-vendor.mjs"
   },
   "main": "main.mjs",
   "author": "MaxNull",
