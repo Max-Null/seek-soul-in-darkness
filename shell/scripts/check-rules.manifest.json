@@ -1,0 +1,90 @@
+{
+  "$comment": [
+    "check-rules 的比对面声明（白名单式：只列需要特殊处理的项，其余按默认规则）。",
+    "本文件的字段值来自 2026-09-12 的实测复核，不是照抄文档：",
+    "  - dsh-ssid-panels 源12/vendor12×3 全等（含 src、tests——整包同步）",
+    "  - dsh-ssid-zh-ui  源5/vendor5×3 全等（整包同步）",
+    "  - dsh-quick-toolbar 源18/vendor4×3（vendor 是精简副本：lib + cordis.patch.yml + package.json）",
+    "  - dsh-capture     源13/vendor5×3（同为精简副本；源在 SSiD 仓库之外）",
+    "  - dsh-context-doctor 无本地源，三处 vendor 27/27/27 互比",
+    "比对面必须逐包声明：整目录摘要比对会让 dsh-quick-toolbar 报出 40 处假差异（其中只有 1 处真信号）。"
+  ],
+
+  "profiles": ["ssid"],
+  "$profilesNote": "只比 ssid。~/.dsh/profiles/web 是 web 开发环境，vendor 包集合不同（实测多一个 dsh-dream-skin）。",
+
+  "vendorCopies": {
+    "tpl": "shell/profile-template/vendor",
+    "web": "~/.dsh/profiles/web/vendor",
+    "ssid": "~/.dsh/profiles/ssid/vendor"
+  },
+
+  "packages": {
+    "dsh-ssid-panels": {
+      "mode": "full",
+      "source": "plugins/dsh-ssid-panels",
+      "include": ["**"],
+      "exclude": ["node_modules/**", "**/*.tsbuildinfo", "**/*.log", ".git/**"]
+    },
+    "dsh-ssid-zh-ui": {
+      "mode": "full",
+      "source": "plugins/dsh-ssid-zh-ui",
+      "include": ["**"],
+      "exclude": ["node_modules/**", "**/*.tsbuildinfo", "**/*.log", ".git/**"]
+    },
+    "dsh-quick-toolbar": {
+      "mode": "vendor-only",
+      "$sourceNote": "源头在 max-null-plugins/dsh-quick-toolbar（SSiD 仓库之外），本门只做三处 vendor 互比",
+      "include": ["lib/**", "cordis.patch.yml", "package.json"],
+      "exclude": ["node_modules/**", ".git/**"]
+    },
+    "dsh-capture": {
+      "mode": "vendor-only",
+      "$sourceNote": "源头同样在仓库之外（max-null-plugins/dsh-capture）",
+      "include": ["lib/**", "cordis.patch.yml", "package.json"],
+      "exclude": ["node_modules/**", ".git/**"]
+    },
+    "dsh-context-doctor": {
+      "mode": "vendor-only",
+      "$sourceNote": "上游固化包，无本地源头，只能三处互比",
+      "include": ["**"],
+      "exclude": ["node_modules/**", "**/*.tsbuildinfo", ".git/**"]
+    },
+    "dsh-dream-skin": {
+      "mode": "vendor-only",
+      "$sourceNote": "仅 web profile 有（实测），不纳入 ssid 侧比对",
+      "profiles": ["web"],
+      "include": ["**"],
+      "exclude": ["node_modules/**", ".git/**"]
+    }
+  },
+
+  "hardScopes": [
+    "shell/profile-template/package.json",
+    "~/.dsh/profiles/*/package.json",
+    "**/cordis.patch.yml"
+  ],
+  "$hardScopesNote": "旧名出现在这些位置会导致运行失败，必须为零。用结构化解析（读 JSON/YAML 的键与数组项）而非文本扫描。",
+
+  "renames": [
+    { "from": "dsh-header-unify", "to": "dsh-quick-toolbar", "at": "2026-08-30" }
+  ],
+  "$renamesNote": "比对前归一化：去掉 @scope/ 前缀与连字符变体。旧名的多个变体见骨架建议 §3.4。",
+
+  "exemptPathPrefixes": [
+    "docs/决策/",
+    "docs/release-notes-",
+    "shell/tests/"
+  ],
+  "$exemptNote": "软域：历史文档里的「原 dsh-header-unify」是合法叙述（实测 79 处），全仓文本扫描会被这类命中淹没、摧毁规则可信度。门禁回答「这样写会不会坏」，不回答「这样写是否够新」。",
+
+  "bom": {
+    "skipDirs": ["node_modules", "build", "dist", "dist-electron", "out", "lib", ".git"],
+    "exts": [".json", ".yml", ".yaml"]
+  },
+
+  "todo4Regression": {
+    "$note": "待办 #4 暴露的同类问题，纳入 legacy-names/files 检查视野",
+    "requireShotsInFiles": true
+  }
+}

@@ -8,12 +8,14 @@
     "start": "electron .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "smoke": "node --import tsx/esm boot-smoke.ts",
-    "test": "node --import tsx/esm --test tests/profile-merge.spec.ts tests/codegraph-adapt.spec.ts",
+    "test": "node --import tsx/esm --test tests/profile-merge.spec.ts tests/codegraph-adapt.spec.ts scripts/check-bom.spec.mjs",
+    "test:check-rules": "node --test scripts/check-bom.spec.mjs",
     "test:profile-merge": "node --import tsx/esm --test tests/profile-merge.spec.ts",
     "test:codegraph-adapt": "node --import tsx/esm --test tests/codegraph-adapt.spec.ts",
     "pack": "npm run bundle-kernel && electron-builder --win",
     "bundle-kernel": "esbuild kernel.ts --bundle --platform=node --format=esm --outfile=kernel.bundle.mjs --external:node:* --external:*.node --alias:resolve.exports=./node_modules/resolve.exports",
-    "pack:mac": "npm run bundle-kernel && electron-builder --mac"
+    "pack:mac": "npm run bundle-kernel && electron-builder --mac",
+    "check:bom": "node scripts/check-bom.mjs"
   },
   "main": "main.mjs",
   "author": "MaxNull",
