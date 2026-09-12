@@ -9,7 +9,7 @@
 | # | 铁律 | 详见 |
 |---|---|---|
 | 1 | 放置规则：自制插件→`max-null-plugins/`；第三方→`third-party-plugins/`；参考/学习→`references/`；旧项目→`old-project/`；生态同级→顶层 | 工作区规范 |
-| 2 | **不弑主体**：当前会话在 web(3080) 时禁启停任何 DSH 实例；重启前先判断会话宿主 | 环境与流转 5 |
+| 2 | **不弑主体**：当前会话在 web(3080) 时禁启停任何 DSH 实例；重启前先判断会话宿主<br>**2.1 共享 checkout 是红线**：`deepseek-harness/` 同供 web 与 SSiD 作内核，切 tag／install／build 会连带影响运行中的 web 宿主，动前须经用户同意；隔离走独立副本 + 各自启动入口，**不用 `DSH_CHECKOUT` 用户级变量**；降级内核会永久损坏 v3 会话 | 环境与流转 5 / **§5.0 第 0 条** |
 | 3 | 三环境流转：升级/测试谁，用另一半操作（医者不能自医） | 环境与流转 1–4 |
 | 4 | dev 热更新，**发版才归档**；归档从模板（发版基准）构建 | §2 |
 | 5 | 插件升级**双处声明**（profile + template）；JSON 一律 node 写（防 BOM） | §4 / §7 |
@@ -40,6 +40,7 @@
 | 2026-09-09 | §7 坑速查 / §3 | 新增 #13「预制 MCP 是 profile 级单例，索引目录不能跟随会话」+ CodeGraph 索引目录适配（`SSID_MCP_CG_WS`/`SSID_MCP_CG_ENABLE`）+ 升级合并升级为三方合并（同 id 子条目用户改动保留）| 用户报 CodeGraph 默认扫用户主目录（见 `docs/决策/2026-09-09-CodeGraph-MCP-默认索引目录修复.md`）|
 | 2026-09-12 | §5.0（新增） | **内核升级必须同步的三个口子**：①agent preset 手工部署（仓库 + `~/.dsh` 两副本，不进归档）②`dsh-persona` 字段名跨版本会变（`text` → `prefix` required）③`shell/tsconfig.json` paths 手写清单要随内核加包补条目 | 0.1.2-rc.1 → 0.1.5-rc.2 升级实测（见 `docs/决策/2026-09-12-SSiD内核升级-0.1.5-rc.2.md`）|
 | 2026-09-12 | §7 坑速查 | 新增 #14「overrides 是 YAML block mapping 不能加尾逗号」#15「内核加包打断 typecheck 且错误指向 checkout」#16「prepare-runtime 第 4.5 步把 vendor 根 README.md 当插件复制」| 同上（本次实踩）|
+| 2026-09-13 | §5.0 第 0 条（新增）/ 铁律 2.1 / §5.5（新增） | **共享 checkout 是红线**：`deepseek-harness/` 同供 web 与 SSiD 作内核，切 tag／install／build 会连带崩掉运行中的 web 宿主（2026-09-13 实际事故）；隔离改走 `dsh-web-runtime/` 独立副本 + `启动-DSH-Web.bat`。另新增 §5.5「dev 源码模式要求 checkout 自身完整」：paths 映射 / 完整 install / dist 型包 `lib/` 三个条件，以及「先确认单实例锁持有者」的排查纪律 | 用户报告 web 版被连带升级后崩溃；根因与隔离方案见工作区 `AGENTS.md` 铁律 2.1 |
 
 ## 工作区规范（布局 + 放置规则，2026-08-29 整理定稿）
 
@@ -187,9 +188,19 @@ seek-soul-in-darkness/
 
 > **当前内核**：`0.1.5-rc.2`（2026-09-12 升，执行记录见 `docs/决策/2026-09-12-SSiD内核升级-0.1.5-rc.2.md`；归档指纹 `0.2.1-0.1.5-rc.2-d5876b8a`）。
 
-### 5.0 内核升级必须同步的三个口子（2026-09-12 rc.2 升级定稿）
+### 5.0 内核升级必须同步的口子（2026-09-12 rc.2 升级定稿）
 
-内核换版时，**版本号切换只是其中一步**。下面三处不在任何自动化链路上，漏了不会报「升级失败」，只会安静地坏或安静地失效：
+内核换版时，**版本号切换只是其中一步**。下面几处不在任何自动化链路上，漏了不会报「升级失败」，只会安静地坏或安静地失效：
+
+**0. 先看第 0 条：共享 checkout 是红线（2026-09-13 事故后补，优先级高于下面各条）。**
+
+`deepseek-harness/` **同时**是 web 版与 SSiD 的内核来源——web profile **不带内核闭包**，直接用这个 checkout。所以对它做任何变更——`git checkout <tag>`、`pnpm install`、`pnpm run build`——都会**连带影响正在运行的 web 会话宿主**（也就是用户正在用的那个界面）。
+
+- 动之前**必须先告知用户并取得同意**。2026-09-13 的实际事故：为升级 SSiD 把该 checkout 切到 `0.1.5-rc.2` 并 rebuild，web 版被连带升级后崩溃。
+- 需要独立内核**不要切主 checkout**：web 版已有独立副本 `dsh-web-runtime/`，用工作区根的 `启动-DSH-Web.bat` 启动（它设 `DSH_CHECKOUT` 指向副本）；SSiD 侧同理另建副本或 `git worktree`。
+- **不要用用户级环境变量 `DSH_CHECKOUT` 做隔离**——那会同时改变 SSiD 的内核解析，更乱。隔离只走各自的启动入口。
+- **降级内核不是可用选项**：DSH 会话格式已到 **v3 且无降级路径**（源码只有 v0→v1→v2→v3 迁移器），旧内核读 v3 日志会直接抛「older than the supported vN, and this build ships no upgrade path for it」，已有会话**永久打不开**。
+- 改这个 checkout 的后续代价还没完：SSiD 的 **dev 源码模式**需要该 checkout 自身完整可用（见 §5.5）。
 
 1. **agent preset 是手工部署的，仓库副本与 `~/.dsh` 读取副本要同时改。**
    `prepare-runtime.mjs` 只把 `skills/` 纳入归档与指纹，`kernel.ts` 的 `syncPresetSkills` 也只同步技能；`agentPresetsRoot` 指向的 `apps/cli/config/agent-presets` 在各版本里都只有 `examples/`（`scanRoot` 对不存在的根返回 `[]`，静默忽略）。所以 `presets/ssid-double-star/` **不进归档、不进升级流程**：
@@ -243,6 +254,18 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 - **alpha.1（及相邻 alpha）常见**：`apps/web/dist` 产物缺函数级导出（`FISH_LOGO_VIEWBOX` 等 7 项，
   seed.ts 静态表被 tree-shake）→ 页面 `#130 (sidebar.settings)` + `conversation: …reading 'height'`；
   **rc.1 源码全量构建产物完整**（与 npm 包 hash 一致），遇此现象优先对齐版本（alpha→rc.1）。
+
+### 5.5 dev 源码模式要求 checkout 自身完整（2026-09-13 实测）
+
+`kernel.ts:374` 的规则是：dev 裸跑时若 `$DSH_CHECKOUT` 未设且 profile 有部署闭包，**理应走闭包**。但 SSiD 用 `node --import tsx/esm` 启动，tsx 会读 `shell/tsconfig.json` 的 `paths` 把内核包解析到 checkout 源码——于是**实际加载的是源码，闭包被旁路**。源码模式因此要求那个 checkout 自身完整可用，三个条件缺一不可：
+
+1. **`shell/tsconfig.json` 的 paths 跟得上内核加包**（见 §7 坑 15）。rc.2 实测缺 57 条 → 补到 347 条。
+2. **checkout 必须完整 `pnpm install` 过**。它此前从未装过：`zod`、`mime-types`、`@deepseek-ai/node-addon-system` 全缺，表现是 boot 时 `Cannot find package ... imported from <checkout>/packages/...`。
+3. **dist 型包必须有 `lib/` 构建产物**。rc.2 实测 22 个包缺（`pnpm run build` 补齐；`native/system/packages/entry` 是其中之一，可单独 `pnpm run build:js`）。
+
+排查顺序就是上面 1→2→3：报 `Cannot find package` 先看 paths 映射，映射补了再看 install，install 好了再看 `lib/`。**错误信息里出现的路径是 checkout 源码路径时，先怀疑这三个，不要怀疑 SSiD 自己的代码。**
+
+> 顺带：判断「启动失败」前**先确认单实例锁的持有者**。思灵有 single-instance 锁，打包版与 dev 版会互相抢占，被拒绝启动时日志只有 `single-instance lock FAILED -> quit`，看起来像崩溃但其实是「根本没轮到它跑」。
 
 ## 6. 壳-内核兼容契约（master 升级后重点）
 
