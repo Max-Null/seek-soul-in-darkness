@@ -30,7 +30,8 @@
     "dsh-video-preview": "0.1.4",
     "dsh-wechat": "0.9.1",
     "@astudioplus/codegraph-mcp": "0.20.1",
-    "@max-null/dsh-quick-toolbar": "file:./vendor/dsh-quick-toolbar"
+    "@max-null/dsh-quick-toolbar": "file:./vendor/dsh-quick-toolbar",
+    "@max-null/dsh-skills": "0.1.0"
   },
   "dsh": {
     "profile": {
@@ -63,7 +64,8 @@
         "dsh-pocket",
         "ds-harness-remote",
         "dsh-session-manager",
-        "@huanlin/dsh-plugin-better-sidebar-plugin-office"
+        "@huanlin/dsh-plugin-better-sidebar-plugin-office",
+        "@max-null/dsh-skills"
       ],
       "patchReload": "live"
     }
