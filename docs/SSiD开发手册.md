@@ -282,7 +282,7 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 | 1 | `shell/scripts/sync-vendor.cjs` | dev 热更新一键同步：plugins 源 → web/ssid/template 三处 vendor + 运行时实体（哈希比对防漏） | 待做 |
 | 2 | `shell/scripts/verify-release.mjs` | 发版验证脚本（归档抽查 + 部署 + boot 断言），**服务 `ssid-release` skill 的抽查环节**（skill=流程清单，脚本=其机械化工具） | 待做 |
 | 3 | —（已完成） | 手册变更记录表 + 待办清单 | ✅ 本轮完成 |
-| 4 | 全家桶 README 截图补全 | 规范 §9「截图演示」：6 个缺 + 3 个半规范补齐（chat-rail/node-appearance 为范本） | 待做 |
+| 4 | 全家桶 README 截图补全 | ✅ **完成**（2026-09-12）。**口径修正**：原记「6 个缺 + 3 个半规范」，实测**缺图 10 个**（原记漏了 dsh-node-appearance 等）。处理分三类：①**新截 5 个**（dsh-draft-polish / dsh-memory / dsh-plugin-center / dsh-skill-mcp-center / dsh-ssid-achievements）——连 SSiD dev（`npm start -- --remote-debugging-port=9222`，内核动态端口不碰 3080）经 `playwright-core` CDP 截设置页，**严格按设置对话框 boundingBox 裁剪**，避免带出私人会话/工作区内容；②**归位 2 个**（dsh-capture 7 张 `shot/` → `docs/shots/` 并语义化重命名；dsh-plugin-center 3 张 `assets/` → `docs/shots/`）；③**豁免 4 个**（dsh-chinese-thinking / dsh-guardian / dsh-habit / dsh-skills 无界面元素，改用行为效果说明，见 §9 新增第 5 条）。**顺带修复系统性缺陷**：6 个插件的 `package.json` `files` 字段缺 `docs/shots`，导致**截图根本没随 npm 包发布**（dsh-node-appearance 此前一直如此）。最终 **13/13 通过审计** | ✅ 完成 |
 | 5 | **规范检查器**（合并 ①） | `check-rules`：profile vs template 声明逐键对比、BOM 扫描、旧名残留、vendor MD5 四份核——挂 pre-push / 发版前置（把文字规范变成机器强制）。**骨架已产出**（`docs/决策/2026-09-10-SSiD-check-rules骨架建议.md`：判定契约 + 编排器取舍 + 首次体检实测）。**组织方式参考官方 Gates**（一脚本一职责 + 每 gate 配自测 + 统一编排器 + 命名聚合） | 骨架完成，待实现 |
 | 6 | **host 通信通道规范升格** | 决策文档 §12 草案（host 侧端点一律用 `ctx.connection.fetch.register`，不用 `webServer`）——**升格前置①已具备**（0.1.5-rc.1 已于 09-10 发布为 npm latest，其 connection 与 alpha.2 零改动）；待周末实测后升格为 §9 正式规范 | 进行中 |
 | 7 | **SSiD Agent Notes 状态机** | ✅ **主体完成**（2026-09-12）。原案「`docs/决策/` 改为 `{proposed,implemented,rejected,archived}` 四状态目录」**已被替代**——物理重组要移动 110 个历史文件、破坏既有互引路径，且状态每次流转都要再移动一次、git 历史碎片化；改用**零侵入的元数据投影**：`shell/scripts/build-decision-index.mjs` 构建器 + `docs/决策/index.html`（自包含单页，110 篇可全文检索、按状态/月份/标签浏览），状态用「原文 + 类别」双字段（不批量补写；67 篇无状态头者诚实标为「未标注」并由构建器点名）。**四段模板已生效**（Problem → Decision → **Alternatives considered（必填）** → Consequences），首个范例 `docs/决策/2026-09-12-决策记录知识库化.md`。**未做**：①归档现有决策文档一批；②67 篇「未标注」需人工逐篇补状态。重建命令 `node shell/scripts/build-decision-index.mjs`。参考 §3.B.1 | 主体完成，归档待做 |
@@ -339,6 +339,10 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 **现状缺口（2026-08-30 清点）**：
 - ✅ 达标：dsh-chat-rail、dsh-node-appearance
 - ⚠️ 半规范（图未进 shots / 空段 / 散落）：dsh-capture、dsh-draft-polish、dsh-plugin-center
+  - ✅ 上述三处已于 2026-09-12 补齐（dsh-capture 归位 7 张、dsh-draft-polish 填充空段、dsh-plugin-center 归位 3 张）。
+5. **无 UI 插件豁免**（2026-09-12 补）：**行为/提示注入/Provider 类**插件（不新增任何按钮、面板或设置项）**不适用**第 3 条的「入口与面板」截图要求；改为在 `## 截图` 段用文字说明「装完会多出/变成什么」的行为效果，并注明本插件无界面元素。当前适用：dsh-chinese-thinking、dsh-guardian、dsh-habit、dsh-skills。
+6. **标题允许双语**（2026-09-12 补）：`## 截图` 段标题可写作 `## Screenshots / 截图` 等**含「截图」**的形式（便于英文读者定位）；校验按「h2 标题含『截图』」判定，不强制纯中文。
+7. **`files` 字段必须含 `docs/shots`**（2026-09-12 补）：截图目录移入 `docs/shots/` 后，若 `package.json` 的 `files` 未列入该路径，**截图不会随 npm 包发布**（README 在 npm 页面上会显示裂图）。这是易漏项，新增截图时一并检查。
 - ❌ 缺：dsh-chinese-thinking、dsh-guardian、dsh-habit、dsh-memory、dsh-skill-mcp-center、dsh-ssid-achievements（dsh-assistant-center 开发中，README 待建）
 
 ### 样式与视觉一致性（DSH 风格对齐，2026-08-30）
