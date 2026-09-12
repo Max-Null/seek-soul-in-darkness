@@ -284,7 +284,7 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 | 3 | —（已完成） | 手册变更记录表 + 待办清单 | ✅ 本轮完成 |
 | 4 | 全家桶 README 截图补全 | ✅ **完成**（2026-09-12）。**口径修正**：原记「6 个缺 + 3 个半规范」，实测**缺图 10 个**（原记漏了 dsh-node-appearance 等）。处理分三类：①**新截 5 个**（dsh-draft-polish / dsh-memory / dsh-plugin-center / dsh-skill-mcp-center / dsh-ssid-achievements）——连 SSiD dev（`npm start -- --remote-debugging-port=9222`，内核动态端口不碰 3080）经 `playwright-core` CDP 截设置页，**严格按设置对话框 boundingBox 裁剪**，避免带出私人会话/工作区内容；②**归位 2 个**（dsh-capture 7 张 `shot/` → `docs/shots/` 并语义化重命名；dsh-plugin-center 3 张 `assets/` → `docs/shots/`）；③**豁免 4 个**（dsh-chinese-thinking / dsh-guardian / dsh-habit / dsh-skills 无界面元素，改用行为效果说明，见 §9 新增第 5 条）。**顺带修复系统性缺陷**：6 个插件的 `package.json` `files` 字段缺 `docs/shots`，导致**截图根本没随 npm 包发布**（dsh-node-appearance 此前一直如此）。最终 **13/13 通过审计** | ✅ 完成 |
 | 5 | **规范检查器**（合并 ①） | `check-rules`：profile vs template 声明逐键对比、BOM 扫描、旧名残留、vendor MD5 四份核——挂 pre-push / 发版前置（把文字规范变成机器强制）。**骨架已产出**（`docs/决策/2026-09-10-SSiD-check-rules骨架建议.md`：判定契约 + 编排器取舍 + 首次体检实测）。**组织方式参考官方 Gates**（一脚本一职责 + 每 gate 配自测 + 统一编排器 + 命名聚合）。**2026-09-12 进度（1/4 门）**：已落地 `shell/scripts/lib/gate-report.mjs`（报告契约：`文件:行` 定位 + 三类事实 + **非零退出** + 空语料 fail-loud）、`shell/scripts/check-bom.mjs`（6 项自测全绿、已显式登记进 `npm test`，全套 35 项通过）、`shell/scripts/check-rules.manifest.json`（比对面声明，字段值取自实测复核）。**首批实战即命中两处真问题并当场修复**：① `~/.dsh/profiles/web/cordis.patch.yml` 带 UTF-8 BOM（用 PowerShell 独立读前三字节复核确认后去 BOM，门转绿 exit 0）；② `verify-header-unify.cjs` 残骸仍留在 **web/ssid 两份运行时 vendor**（tpl 已于 09-10 清理而运行时未清，造成三份不一致）——确认无任何引用后清理，三处回到 4 文件一致；它同时是 `check-vendor-sync` 与 `check-legacy-names` 两门的首个真实命中。**09-12 追加（3/4 门）**：新增 `check-profile-sync.mjs`（A=profile-template vs B=运行时 profile，四条判定 + **方向区分**；构造期排除内核族 `@deepseek-ai/*` 与 `cordis` —— 实测 B 有 33 个内核族条目而 A 一个都没有）。**命中 1 处真失配**：`@max-null/dsh-skills` 只在 B 有（集成时漏改 template），方向为「**B 超前于 A**」即下次部署会被归档覆盖；因它在 B 是 `file:` 本地路径、而 A 现有依赖实测全是 npm 版本号（绝对路径进归档包在用户机必失效），故不能照搬，登记进 manifest 白名单（**门仍打印豁免项，不静默**）并从 A 排期。新增 `check-vendor-sync.mjs`（逐文件 sha256 + 三类差异 + 文本报**首处不同行号**；按包分 `full`/`vendor-only` —— 实测整目录比对会让 dsh-quick-toolbar 报 40 处假差异）。**命中 1 处真信号**：`dsh-ssid-panels/release-notes.md` 在 **web 运行时 vendor 落后一版**（v0.2.0，而源/tpl/ssid 均为 v0.2.1）；因 web 是当前会话宿主实例（**铁律 2**）**未自动修**，保留报红待人工决定。**剩余**：check-legacy-names / check-rules.mjs 编排器 + 各门自测 **09-12 收尾（4/4 门）**：新增 `check-legacy-names.mjs`（硬域用**结构化等值匹配**而非文本扫描：profile 声明的 dependencies 键与 bundles 项、`cordis.patch.yml` 的 id/name、plugins 与 vendor 的目录名；软域 `docs/决策/`、`docs/release-notes-*` 豁免——实测全仓 grep 旧名有 79 处合法历史叙述）与编排器 `check-rules.mjs`（单入口 + 白名单 mode 校验并回显合法值、门表数据化、逐门计时、失败时 error/exit/signal 三类事实互不遮蔽、任一失败 ⇒ exit 1）。**自测 11 项全绿**（bom 6 + legacy-names 5），已显式登记进 `npm test`。其中 legacy-names 的自测以**校准正例**为前提：门在真实仓库零命中，而零命中既可能是真干净、也可能是门根本没工作——故用例 1 造已知正例证明它**会**命中，用例 4 造「注释里的旧名」反例证明它**不**误报（后者正是骨架 §3.5 说的「变更探测器」边界）。**耗时**：四门合计约 320 ms（vendor 129 / profile 51 / bom 70 / legacy 73），串行足够，未引入并发与 fail-fast。**挂载**：`npm run check:rules`；四个门各有独立 script 便于单独复现与单独接钩子。**当前唯一红**：vendor-sync 报 web 运行时 vendor 的 `release-notes.md` 落后一版（铁律 2 未自动修，待人工决定）。 | ✅ 完成（4/4 门） |
-| 6 | **host 通信通道规范升格** | 决策文档 §12 草案（host 侧端点一律用 `ctx.connection.fetch.register`，不用 `webServer`）——**升格前置①已具备**（0.1.5-rc.1 已于 09-10 发布为 npm latest，其 connection 与 alpha.2 零改动）；待周末实测后升格为 §9 正式规范 | 进行中 |
+| 6 | **host 通信通道规范升格** | ✅ **完成**（2026-09-12），**但升格时补做的实测改变了它的适用范围**。决策文档 §12 的 7 条条文已升格为手册 **§9「插件开发与测试规范」新增小节「host 侧通信通道」**，并附加了版本边界。**实测结论**：本机所有已安装内核（assistant-probe `0.1.1-rc.2`、ssid 与 rc1-clean `0.1.2-rc.1`）的 `dsh-client-connection` 均只有 `GET`＋`HEAD`，**不支持 POST**、也没有 `requestBody` —— 与决策 §13.1 的断代实测吻合。**故升格条件①「在一个 rc.1 环境实测通过」当前并不成立**：`dsh-capture` 的三条路由都是 POST，在 `0.1.2-rc.1` 上跑不通。这是一条**面向升级后**的规范，手册小节里已写明「不要据此在 `0.1.2-rc.1` 上改插件（会得到静默失效的路由）」。**证据强弱已分清**：alpha.2 支持 POST 有**源码证据**（`DSHfork/packages/client/connection/src/rpc.ts:110`）与**行为断言**（同包 `tests/fetch-routes.host.spec.ts:60/62` 证明「路径必须在 `/api` 下」「methods 不能为空」是代码强制而非约定）；而「`0.1.5-rc.1` 的 connection 与 alpha.2 零改动」**仍系此前手册的断言，本机无该版本、本次未能独立复核**，已在手册标注待升级后按升格条件①②补测 | ✅ 完成（附版本边界） |
 | 7 | **SSiD Agent Notes 状态机** | ✅ **主体完成**（2026-09-12）。原案「`docs/决策/` 改为 `{proposed,implemented,rejected,archived}` 四状态目录」**已被替代**——物理重组要移动 110 个历史文件、破坏既有互引路径，且状态每次流转都要再移动一次、git 历史碎片化；改用**零侵入的元数据投影**：`shell/scripts/build-decision-index.mjs` 构建器 + `docs/决策/index.html`（自包含单页，110 篇可全文检索、按状态/月份/标签浏览），状态用「原文 + 类别」双字段（不批量补写；67 篇无状态头者诚实标为「未标注」并由构建器点名）。**四段模板已生效**（Problem → Decision → **Alternatives considered（必填）** → Consequences），首个范例 `docs/决策/2026-09-12-决策记录知识库化.md`。**未做**：①归档现有决策文档一批；②67 篇「未标注」需人工逐篇补状态。重建命令 `node shell/scripts/build-decision-index.mjs`。参考 §3.B.1 | 主体完成，归档待做 |
 | 8 | **CoT 泄漏探针（首批）** | ✅ **完成**（2026-09-12）：落地 `shell/scripts/check-cot-leakage.mjs`，探针**逐字**取自 `@max-null/dsh-skills` 的 `ssid-trim-cot-leakage/references/recall-batteries.md`（中文 4 组 + 英文 1 组，未改写）。**关键判断——做成报告型而非阻塞门**：探针集自己写明「每个命中都需要语义判断、按设计会过度匹配」，且其「已知假阳性家族」末条对自身语料有实测（扫 8 份 SKILL.md 命中 24 处、**真泄漏 0**）；若做成命中即失败，它会第一时间误杀自己的校准语料、随后被无视——那才是真的失效。故默认**恒 exit 0**，只给候选并标注该组的已知误报家族；`--strict` 才在命中时阻塞（供收窄范围后的 CI）。**范围只取代码**（.ts/.mjs/.cjs/.js），刻意不含任何 .md：代码注释是主要载体，而 .md 里的变更叙事多为**合法主场**（决策记录／release notes／规范文档本身就在陈述变更史）。**两次踩到同一个坑并修正**：脚本最初扫到它自己（体内含探针词表，命中率恒 100%），补排后自测文件又被扫——正是 recall-batteries 第 47 条预告的假阳性家族，最终按文件名前缀 `check-cot-leakage` 整体排除。**自测 5/5**：含**校准正例**（造泄漏代码，证明探针确实在工作）与**近失负例**（`this PR` 必须命中 `this PR adds`，却不得命中 `this project`／`this process`／`this provider`），两者都出自 recall-batteries 的校准纪律。**首次实测**：29 个代码文件、42 处候选待人工判断。挂载 `npm run check:cot`。**未挂 commit-msg 的理由**：本仓库当前**零 git hooks**，引 hook 需动 `core.hooksPath` 才随克隆传播；且提交信息本身就是变更叙事，用它查 CoT 泄漏属自相矛盾。改以独立 script + `--strict` 供 CI 调用 | ✅ 完成 |
 | 9 | **深挖官方 Gates 实现** | 读 3–5 个 `verify-*` 脚本源码 + `run-gates.ts` 的依赖图与聚合编排，产出「SSiD `check-rules` 可借鉴的组织方式」。参考 `docs/决策/2026-09-10-DSH官方工程化范式调查.md` §4 | ✅ 本轮完成（7 个脚本 + 编排器；产出骨架建议 + 两份原始报告存档；顺带实测出 2 处残骸） |
@@ -393,6 +393,38 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 **排查清单**：卡片缺失 → ① host 有 installSection（served）？② 卡片 key 是否 = NS？③ console 有无
 slot 冲突/界面错误；切换不生效 → scope 绑定/namespace 拼写；显示为裸行/无卡片壳 → 未用官方卡片
 样式（检查上述视觉段）。
+
+### host 侧通信通道（2026-09-12 升格自决策 §12）
+
+**来源**：`docs/决策/2026-09-10-官方桌面壳评估与方案B决策.md` §12（草案）。本次升格**附加了版本边界**——决策文档给的是条文，实测补的是"从哪个版本起才成立"。
+
+#### 条文
+
+1. **host 侧新增 HTTP 端点一律用 `ctx.connection.fetch.register`**，不用 `ctx.webServer.register`。
+   理由：`connection` 是 carrier-neutral（web 载体把路由挂到 webserver 的 `/api`；Electron shell 载体由帧化管道直接分发），而 `webServer` 只在 web 载体存在，**官方桌面端已在配置层禁用**。
+2. **路由路径必须在 `/api` 之下**（如 `/api/ssid/<plugin>/<method>`）。两种载体的分发都只把 `/api` 前缀交给 connection 路由表。
+   这条**不是约定而是代码强制**：`packages/client/connection/tests/fetch-routes.host.spec.ts:60` 有断言，注册 `/outside` 直接抛错（同文件 :62 断言 `methods: []` 也抛错）。
+3. **精确路径匹配**：一个 `kind: 'prefix'` 路由要拆成若干条精确路径（未命中即 404）。
+4. **handler 用标准 Fetch API**：`(request: Request) => Promise<Response>`，不再用 node:http 的 `(req, res)`。
+5. **不要自建 Host/Origin fence**：carrier 在 handler 运行前已应用信任与鉴权策略。
+6. **注入声明用 `inject: ['connection']`**；避免静态 `inject` 里出现 `webServer` / `webRuntime` —— 静态声明缺失服务会让插件**静默不激活**（无报错、无警告）。
+7. **客户端请求路径与 host 注册路径保持一致**（同为 `/api/...`）。
+
+#### ⚠️ 版本边界（升格时的实测，2026-09-12）
+
+**本规范自 `0.1.5-rc.1` 起适用。** 实测证据：
+
+- `0.1.2-rc.1`（SSiD 当前内核）：`ConnectionFetchMethod` 只有 `GET` 与 `HEAD`，**不支持 POST**，也没有 `requestBody`。
+- `0.1.5-alpha.2` / `0.1.5-rc.1`：为 `GET`／`HEAD`／`POST`，另有 `requestBody`（buffered／streaming）。
+- 本机实测（2026-09-12）：**所有**已安装内核（assistant-probe `0.1.1-rc.2`、ssid 与 rc1-clean `0.1.2-rc.1`）的 `dsh-client-connection` 均为 `GET`+`HEAD`；本机**未安装 0.1.5-rc.1**。
+
+**因此升格条件①「在一个 rc.1 环境实测通过」当前并不成立** —— `dsh-capture` 的三条路由都是 POST，在 0.1.2-rc.1 上跑不通。**这是一条面向升级后的规范**，不要据此在 0.1.2-rc.1 上改插件（会得到静默失效的路由）。
+
+**证据强弱须分清**：alpha.2 支持 POST 有源码证据（`DSHfork/packages/client/connection/src/rpc.ts:110` 的 `ConnectionFetchMethod = 'GET' | 'HEAD' | 'POST'`）；而「0.1.5-rc.1 的 connection 与 alpha.2 零改动」**仍系此前手册的断言，本次未能独立复核**（本机无该版本）。升级到 0.1.5-rc.1 后应按升格条件①②补做实测。
+
+**迁移是单向的**：从 `webServer` 迁到 `connection` **改一次两端都能跑**（web 载体下 connection 把路由挂到 webserver 的 `/api`；桌面载体下由 shell 直接分发），不是二选一。
+
+**当前进度**：`dsh-capture` 已完成改造（`inject` 从 `[webServer, webRuntime]` → `[connection]`；三条路由改 Fetch handler；删自建 Host/Origin fence）。其余 5 个仍在 `webServer` 上，按决策文档 §14 排期：`dsh-memory`、`dsh-draft-polish`、`dsh-ssid-achievements`（静态必需）+ `dsh-quick-toolbar`（动态、核心功能依赖）+ `dsh-chat-rail`（动态、非核心）。
 
 ## 10. 内置专属插件规范（2026-08-30 定稿）
 
