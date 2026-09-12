@@ -8,8 +8,8 @@
     "start": "electron .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "smoke": "node --import tsx/esm boot-smoke.ts",
-    "test": "node --import tsx/esm --test tests/profile-merge.spec.ts tests/codegraph-adapt.spec.ts scripts/check-bom.spec.mjs",
-    "test:check-rules": "node --test scripts/check-bom.spec.mjs",
+    "test": "node --import tsx/esm --test tests/profile-merge.spec.ts tests/codegraph-adapt.spec.ts scripts/check-bom.spec.mjs scripts/check-legacy-names.spec.mjs",
+    "test:check-rules": "node --test scripts/check-bom.spec.mjs scripts/check-legacy-names.spec.mjs",
     "test:profile-merge": "node --import tsx/esm --test tests/profile-merge.spec.ts",
     "test:codegraph-adapt": "node --import tsx/esm --test tests/codegraph-adapt.spec.ts",
     "pack": "npm run bundle-kernel && electron-builder --win",
@@ -17,7 +17,9 @@
     "pack:mac": "npm run bundle-kernel && electron-builder --mac",
     "check:bom": "node scripts/check-bom.mjs",
         "check:profile-sync": "node scripts/check-profile-sync.mjs",
-        "check:vendor-sync": "node scripts/check-vendor-sync.mjs"
+        "check:vendor-sync": "node scripts/check-vendor-sync.mjs",
+        "check:legacy-names": "node scripts/check-legacy-names.mjs",
+        "check:rules": "node scripts/check-rules.mjs"
   },
   "main": "main.mjs",
   "author": "MaxNull",
