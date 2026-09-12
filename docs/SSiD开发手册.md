@@ -37,6 +37,7 @@
 | 2026-08-30 | §9 插件开发与测试规范 | 分级门槛 L1/L2/L3 + 反馈环纪律 | 用户提议（测试补齐后门槛化） |
 | 2026-08-30 | §7 坑速查 | 新增 #10「DSH 页面状态持久化 = host 化，禁 localStorage」（动态端口 origin 隔离坑——quick-toolbar 状态/panels seen 两次实踩）| 用户拍板（localStorage 问题多次出现）|
 | 2026-09-07 | §7 坑速查 / §2 | 新增 #12「部署零保留覆盖用户层」（用户插件/MCP 升级丢失 + pending 回滚雷；v0.2.1 修复：快照+patch 合并+升级报告+pending 护栏+失败兜底）| 用户报 0.2.0 重大 bug（见 `docs/决策/2026-09-07-升级部署覆盖用户层修复.md`）|
+| 2026-09-09 | §7 坑速查 / §3 | 新增 #13「预制 MCP 是 profile 级单例，索引目录不能跟随会话」+ CodeGraph 索引目录适配（`SSID_MCP_CG_WS`/`SSID_MCP_CG_ENABLE`）+ 升级合并升级为三方合并（同 id 子条目用户改动保留）| 用户报 CodeGraph 默认扫用户主目录（见 `docs/决策/2026-09-09-CodeGraph-MCP-默认索引目录修复.md`）|
 
 ## 工作区规范（布局 + 放置规则，2026-08-29 整理定稿）
 
@@ -127,11 +128,11 @@ seek-soul-in-darkness/
 │   ├── prepare-runtime.mjs   # 归档构建（scripts/）：模板→pnpm install→tar → dsh-runtime.tar.gz
 │   ├── profile-template/     # ★发版基准★：package.json(插件声明)/vendor/ 出厂技能
 │   └── dsh-runtime.tar.gz    # 内置内核闭包（安装版部署源，~204MB @0.1.2-alpha.1）
-├── plugins/                  # SSiD 自研插件源码（dsh-header-unify / dsh-ssid-panels / dsh-ssid-zh-ui）
+├── plugins/                  # SSiD 自研插件源码（dsh-ssid-panels / dsh-ssid-zh-ui）
 └── docs/决策/                # 执行记录与决策文档
 ```
 
-- **插件同步链**：`plugins/<pkg>/lib/*`（源头）→ 同步三处 vendor：`~/.dsh/profiles/{web,ssid}/vendor/<pkg>` + `shell/profile-template/vendor/<pkg>`（MD5 四份一致是硬性要求；发版归档自动带模板 vendor）。
+- **插件同步链**：`plugins/<pkg>/`（源头，与 vendor 全等）→ 同步三处 vendor：`~/.dsh/profiles/{web,ssid}/vendor/<pkg>` + `shell/profile-template/vendor/<pkg>`（四份逐文件指纹一致是硬性要求，比对面按包声明；发版归档自动带模板 vendor）。dsh-quick-toolbar 是例外：源头在上游仓库、vendor 为精简副本，见 §10。
 - **内核来源回退链**（`kernel.ts resolveDshRuntime` + `bootKernel`）：打包版强制闭包（preferBundled）→ dev：`DSH_CHECKOUT` 显式 → **并列源码 `../../deepseek-harness`** → 关闭时 profile `node_modules/@deepseek-ai/dsh`（部署锚点）优先于源码。
 - **DSH 双实例**：DSH web 端（3080，opencode 启动器管理）与 SSiD 是不同类型（浏览器 web 进程 vs Electron 壳）；共享 `~/.dsh` 与源码 checkout——**验证 SSiD 时由用户手动启动/关闭；不要启停 web 实例**（opencode 管理其生命周期，轮换会让 web 会话工具调用显示 interrupted）。
 
@@ -167,6 +168,7 @@ seek-soul-in-darkness/
 | `SSID_LOG_FILE` | 覆盖日志路径（默认 `~/.ssid/ssid.log`） | 诊断 |
 | `DSH_CHECKOUT` | 显式指定内核源码 | **用完即删**（pitfalls #5 幽灵依赖：User 级残留会劫持运行时） |
 | `SSID_MCP_NODE`/`SSID_MCP_PW_CLI` | 预制 Playwright MCP 运行时 | main.mjs 自动注入；smoke 裸跑需手动设（否则 mcp 行 args 为 null 启动失败） |
+| `SSID_MCP_CG_CLI`/`SSID_MCP_CG_WS`/`SSID_MCP_CG_ENABLE` | 预制 CodeGraph MCP：cli 路径 / 索引目录 / 是否启用 | main.mjs 自动解析注入（优先级：env → `~/.ssid/codegraph.json` → 最近会话探测 → 停用）；smoke 裸跑同样需手动设 `SSID_MCP_CG_CLI` |
 | `DSH_HOME` | DSH 家目录（默认 `~/.dsh`） | 换机/测试隔离 |
 
 ## 4. 插件升级流程（本次教训：**双处声明**）
@@ -178,6 +180,8 @@ seek-soul-in-darkness/
 5. 升级验证：实体校验（读 node_modules/<pkg>/package.json version 对比目标表）。
 
 ## 5. 内核与归档升级
+
+> **跨系列升级先看核对清单**：如 0.1.2 → 0.1.5 这类跨系列升级，先读 `docs/决策/2026-09-10-升级前置差异清单-0.1.2-rc.1到0.1.5-rc.1.md`（破坏性变更表 + 前置 checklist + 回滚要点）；同系列升级（如 alpha.2 → rc.1）套 `2026-09-06-SSiD内核升级执行指南-rc.1通用范本.md` 即可。
 
 ### 5.1 dev 源码模式（日常，不等 npm）
 - 移出部署锚点即可回退并列源码：`node_modules/@deepseek-ai` → `.upgrade-backup/`（回滚=移回）。
@@ -223,7 +227,7 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 | `healProfilesModuleFallback` | **options 对象 + async**（旧双参签名失效） | `kernel.ts` 已适配（await + {installAnchor, home}） |
 | `loadProfile`/`boot`/`provideCmdline`/`webServer` | 签名兼容（webServer 键名不变） | 无需改动 |
 | **浏览器认证** | web 服务带 token（`connection.authenticatedUrl`）；裸 URL 401 | `kernel.ts` 产出 `kernel.url`（authenticated）/ main.mjs `loadURL(kernel.url)`——**无 token 则 splash 不替换**（2026-08-29 实测） |
-| 壳标志注入 | `window.__SSID_SHELL__`（header-unify 分支依据） | main.mjs 在 **dom-ready** 注入——**晚于插件 apply**！插件侧必须**兜底**（load 时复查/重算，见 header-unify client.js） |
+| 壳标志注入 | `window.__SSID_SHELL__`（dsh-quick-toolbar 分支依据） | main.mjs 在 **dom-ready** 注入——**晚于插件 apply**！插件侧必须**兜底**（load 时复查/重算，见 quick-toolbar client.js） |
 | `patchReload` | web=live；默认 live | profile/模板显式声明 `"live"` |
 | `dsh-sidebar-qa ≥0.5.0` | 依赖 `remote.session`（master 提供；rc.2 无） | 升级到 0.5.0 需随 master |
 | server 认证 401 | smoke 断言需接受 401 | `boot-smoke.ts` 已更新 |
@@ -243,6 +247,17 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 11. **`#130 (sidebar.settings)` / `conversation: …reading 'height'`**（2026-09-05 rc.1 适配实踩）：**先对齐 serve 根与版本**——大概率是**源码树 `apps/web/dist` 的旧版本构建产物缺函数级导出**（alpha.1 树必现；rc.1 全量构建完整）。处置：`git -C deepseek-harness checkout dsh-v0.1.2-rc.1` → `pnpm run clean && pnpm run build` → 页面 reload。**不要**改 profile dist（serve 根不在 profile）。
 12. **部署零保留覆盖用户层（v0.2.0 重大事故，2026-09-07 修复）**：`deployRuntime` 部署 = 归档模板**整体覆盖** profile 根的 package.json / cordis.patch.yml / pnpm-lock.yaml / node_modules——用户**自装插件声明与自装 MCP 注册（cordis.patch.yml insert 条目）零保留**（dev 与安装版共用 `~/.dsh/profiles/ssid` 更放大了它）；叠加 `~/.ssid/pending-plugin-updates/index.json` 陈旧条目（如 dsh-sidebar-qa@0.4.2）会在每次 boot 前把兼容插件**回滚**到不兼容旧版 → `Failed to load plugins` 白屏「无法启动」；部署失败（EPERM .deploy.old）且旧环境无闭包锚点时走「无法定位 DeepSeek Harness 运行时」崩溃。**v0.2.1 修复链**：部署前快照用户配置（`~/.ssid/profile-backups/`）→ 部署后 patch 条目级合并回写（MCP 自动保留；插件只进升级报告不自动重装——旧版插件×新内核会白屏）→ pending 消费护栏（版本 < 当前声明/声明缺失/非 registry 一律丢弃）→ 失败或取消时无闭包锚点则 splash 阻断提示。相关：`docs/决策/2026-09-07-升级部署覆盖用户层修复.md`；**发版预演（L2）需覆盖「用户插件+MCP 预置后部署」场景**（SSID_DEV_DEPLOY=1 或真机）。
 
+13. **预制 MCP 是 profile 级单例，cwd 不能跟随会话**（2026-09-09 实踩，CodeGraph 扫用户主目录）：
+    `dsh-mcp-client` 条目一个进程服务所有会话，`cwd` 在 spawn 时固定
+    （`packages/mcp/mcp-client/src/transport.ts` 直传 `StdioClientTransport`）——
+    「默认取当前会话工作目录」这类需求在架构上不成立；改成 agent-preset 级挂载则变成
+    每会话一个引擎（700–900MB/索引，内存不可接受）。且 **`cwd: ''` 会让 spawn ENOENT**
+    （空字符串不能当「不设」用），所以 MCP 条目的 cwd 必须有非空值。
+    处置范式：**boot 前由壳解析一次**（`shell/lib/codegraph-adapt.mjs`），解析不到就
+    `disabled: !!js` 停用条目（`!!js` 求值见 `vendor/loader/src/config/entry.ts:104`，
+    insert 子条目同样适用），而不是给个「看起来能用」的错误默认值。
+    相关：`docs/决策/2026-09-09-CodeGraph-MCP-默认索引目录修复.md`。
+
 ## 8. 文档索引
 
 - 本手册（总览/流程/坑）
@@ -250,6 +265,15 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 - `docs/决策/2026-08-29-SSiD升级执行记录.md`（本次升级全过程与修复记录）
 - `docs/决策/2026-08-29-DSH-master插件适配测试报告.md`（插件 × master 适配矩阵、根因、PR 追踪）
 - `docs/决策/2026-08-24-Playwright-MCP-预制-实施方案.md`、`docs/发版流程规范.md`（发版：归档抽查/NSIS/GitHub Release）
+- `docs/决策/2026-09-07-升级部署覆盖用户层修复.md`（用户层保留）、`docs/决策/2026-09-09-CodeGraph-MCP-默认索引目录修复.md`（预制 MCP 索引目录适配 + 三方合并）
+- `docs/决策/2026-09-10-官方桌面壳评估与方案B决策.md`（官方壳底座评估、cordis inject 语义实测、**§12 host 通信通道规范草案**）
+- `docs/决策/2026-09-10-升级前置差异清单-0.1.2-rc.1到0.1.5-rc.1.md`（跨系列升级的破坏性变更核对 + 前置 checklist）
+- `docs/决策/2026-09-10-DSH官方工程化范式调查.md`（Agent Notes / Skills / Gates 三套机制实测 + 可移植清单）
+- `docs/决策/2026-09-10-DSH工程方法论学习笔记.md`（8 个 skill 的方法论提炼：八条核心原则 + 个人/工具双线可迁移清单）
+- `docs/决策/2026-09-10-DSH作为AI中台内核的评估框架.md`（就绪观察信号五维 + 可替换用法的中间道路 + 季度评估节奏）
+- `docs/决策/2026-09-10-DSH方法论精读原始报告存档.md`（8 个 skill 的原始精读报告：逐字引用 + 完整规则清单，供复核）
+- `docs/决策/2026-09-10-SSiD-check-rules骨架建议.md`（**待办 #5 的骨架**：四项检查的判定契约 + 编排器取舍 + 首次体检实测）
+- `docs/决策/2026-09-10-DSH官方Gates拆解原始报告-E-配对与配置门.md`、`...-F-run-gates编排.md`（上述骨架的原始依据，含逐行行号引用）
 
 ## 待办清单（2026-08-30 记）
 
@@ -259,7 +283,13 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 | 2 | `shell/scripts/verify-release.mjs` | 发版验证脚本（归档抽查 + 部署 + boot 断言），**服务 `ssid-release` skill 的抽查环节**（skill=流程清单，脚本=其机械化工具） | 待做 |
 | 3 | —（已完成） | 手册变更记录表 + 待办清单 | ✅ 本轮完成 |
 | 4 | 全家桶 README 截图补全 | 规范 §9「截图演示」：6 个缺 + 3 个半规范补齐（chat-rail/node-appearance 为范本） | 待做 |
-| 5 | **规范检查器**（合并 ①） | `check-rules`：profile vs template 声明逐键对比、BOM 扫描、旧名残留、vendor MD5 四份核——挂 pre-push / 发版前置（把文字规范变成机器强制） | 待做 |
+| 5 | **规范检查器**（合并 ①） | `check-rules`：profile vs template 声明逐键对比、BOM 扫描、旧名残留、vendor MD5 四份核——挂 pre-push / 发版前置（把文字规范变成机器强制）。**骨架已产出**（`docs/决策/2026-09-10-SSiD-check-rules骨架建议.md`：判定契约 + 编排器取舍 + 首次体检实测）。**组织方式参考官方 Gates**（一脚本一职责 + 每 gate 配自测 + 统一编排器 + 命名聚合） | 骨架完成，待实现 |
+| 6 | **host 通信通道规范升格** | 决策文档 §12 草案（host 侧端点一律用 `ctx.connection.fetch.register`，不用 `webServer`）——**升格前置①已具备**（0.1.5-rc.1 已于 09-10 发布为 npm latest，其 connection 与 alpha.2 零改动）；待周末实测后升格为 §9 正式规范 | 进行中 |
+| 7 | **SSiD Agent Notes 状态机** | `docs/决策/` 改为 `{proposed,implemented,rejected,archived}` 四状态目录；新决策套四段模板（Problem → Decision → **Alternatives considered（必填）** → Consequences）；归档现有决策文档一批。参考 `docs/决策/2026-09-10-DSH工程方法论学习笔记.md` §3.B.1 | 待做 |
+| 8 | **CoT 泄漏探针（首批）** | 从八类泄漏中挑最容易命中的两类（变更叙事 + 死设计会引用）写 rg 探针，**必须带正负例校准 + keep 白名单**，否则误报会摧毁规则可信度；先手动跑通，再考虑挂 commit-msg / CI。参考学习笔记 §2.1。**探针集已产出**：`@max-null/dsh-skills` 的 `ssid-trim-cot-leakage/references/recall-batteries.md`（中文 4 组 + 英文 1 组，含三条校准纪律与已知假阳性家族）；**待接线**（挂 commit-msg / CI）| 探针已产出，待接线 |
+| 9 | **深挖官方 Gates 实现** | 读 3–5 个 `verify-*` 脚本源码 + `run-gates.ts` 的依赖图与聚合编排，产出「SSiD `check-rules` 可借鉴的组织方式」。参考 `docs/决策/2026-09-10-DSH官方工程化范式调查.md` §4 | ✅ 本轮完成（7 个脚本 + 编排器；产出骨架建议 + 两份原始报告存档；顺带实测出 2 处残骸） |
+| 10 | **探针脚本清理** | `shell/tests/plugin-adapt/` 下的 `.mjs` 探针存在三类硬编码，均已被 git 跟踪（66 个文件）：①**5 个文件含硬编码会话 token**（`check-seed`/`grab-clean-modules`/`grab-clean-web`/`probe-3083`/`rc1-clean-check`）②约 28 个文件硬编码 `127.0.0.1:9222`（未走 `SSID_CDP` 回退）③`rc1-clean-check.mjs` 硬编码 `C:\Users\MaxNull\...` 绝对路径。**该目录 README 自己已写明「断言勿硬编码端口」**，规范写法同目录内已有约 22 例。相关记录：`docs/决策/2026-09-10-skill适配说明-01-测试可靠性.md` §3 | 待做 |
+| 11 | **`@max-null/dsh-skills` 发布与集成** | DSH 官方 12 个 skill 的适配成果：**8 个已生成**（SKILL.md + SOURCE.md；含 1 份带 Python 编码器），4 个不适配并记录了理由。包已通过 `npm pack` 校验（25 个文件、skills/ 下 20 个）与 8 个单元测试。**待你执行 `npm publish --access public`**，随后三步集成：`profile-template` 双处声明 → `node scripts/prepare-runtime.mjs` → 重启后确认八个 `ssid-` skill 全部可见。全过程见 `docs/决策/2026-09-10-skill适配说明-写作规则.md` §九 | 待发布 |
 
 ## 附录 A：开发会话行为清单（2026-08-30，agent 执行前自检）
 
@@ -364,8 +394,10 @@ slot 冲突/界面错误；切换不生效 → scope 绑定/namespace 拼写；�
 
 ### 定位
 - 内置插件 **dsh-ssid-panels / dsh-ssid-zh-ui**：**脱离 SSiD 生态无法独立使用** → **不单独建库、不发布 npm**。
-- 源码在壳库 **`plugins/`**（源头）→ 三处 vendor 同步（`~/.dsh/profiles/{web,ssid}/vendor` + `shell/profile-template/vendor`），MD5 四份一致。
-- **dsh-quick-toolbar（原 dsh-header-unify）已于 2026-08-30 迁出独立**（仓库 `max-null-plugins/dsh-quick-toolbar`；独立化设计与目标见 `doc/设计/2026-08-30-quick-toolbar-独立化设计方案.md`）；SSiD 暂仍 vendor 集成——同步链 = 独立仓库构建产物 → 三处 vendor（正式发布 npm 后切官方路径）。
+- 源码在壳库 **`plugins/`**（源头）→ 三处 vendor 同步（`~/.dsh/profiles/{web,ssid}/vendor` + `shell/profile-template/vendor`），四份**逐文件**指纹一致（源与 vendor 为全等副本，连 `src/`、`tests/`、`docs/` 都同步；**不要**按"整目录摘要相等"比）。
+- **dsh-quick-toolbar（原 dsh-header-unify）已于 2026-08-30 迁出独立**（仓库 `max-null-plugins/dsh-quick-toolbar`；独立化设计见该仓库 `doc/设计/2026-08-30-quick-toolbar-独立化设计方案.md`）；SSiD 侧仍 vendor 集成——同步链 = 独立仓库构建产物 → 三处 vendor（正式发布 npm 后切官方路径）。
+  - 与另两个内置插件不同，它的 vendor 是**精简副本**：只收 `lib/` + `cordis.patch.yml` + `package.json`，源码/测试/截图/README/LICENSE 都不进 vendor。按"整目录相等"核会报出 39 处假差异。
+  - `plugins/dsh-quick-toolbar` 副本已于 2026-09-10 清理（2026-08-30 迁出时未删净，停留在 0.1.0）。
 
 ### 打包注意（发版）
 - 归档集成**只走 vendor**：`profile-template/vendor/<pkg>` + package.json `file:./vendor/<pkg>` 声明——**不存在 npm 安装路径**。
@@ -378,4 +410,4 @@ slot 冲突/界面错误；切换不生效 → scope 绑定/namespace 拼写；�
   - 独立插件设计迭代：**待用户详说**（design doc 后再动）。
 
 ### 门槛
-- §9 适用：现状 **dsh-ssid-panels** 有 typecheck+测试；**dsh-header-unify / dsh-ssid-zh-ui** 无 scripts/测试；README/截图三兄弟全缺（待补）。
+- §9 适用：现状 **dsh-ssid-panels** 有 typecheck+测试；**dsh-ssid-zh-ui** 无 scripts/测试；README/截图两兄弟全缺（待补）。dsh-quick-toolbar 已迁出独立，门槛随上游仓库（`max-null-plugins/dsh-quick-toolbar` 具备 build/typecheck/test 三件套）。
