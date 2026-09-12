@@ -200,6 +200,10 @@ seek-soul-in-darkness/
    `0.1.2-rc.1` 是 `config.text`；`0.1.5-rc.1`/`rc.2` 改为 **`config.prefix`（required）** + `suffix`（默认 `''`），段名也从 `deployment:persona` 拆为 `deployment:persona-prefix`/`-suffix`。字段不对就是 `$.prefix missing required value` 硬失败。**升级后必须用新版 `dsh-persona` 实体 + 真 schemastery 校验一遍真实 preset 文件**，不要只读 release notes。
 3. **`shell/tsconfig.json` 的 paths 是手写清单，内核加包就要补条目。**
    （见 §7 坑 15）本次补了 `@deepseek-ai/dsh-package-manifest`。
+4. **用 `ctx.connection.rpc.handle` 注册通道的插件，会在无 webServer 宿主下崩。**
+   `client-connection` 在 0.1.5 把 inject 由 `['webServer','credentials']` 收缩为只 `['credentials']`，webServer 降为可选注入；于是 `rpc.handle()` 内部访问 `owner.webServer` 必抛 `cannot get property "webServer" without inject`。**SSiD 正是这种宿主**（Electron 壳、无 webServer）。
+   适配写法（`dsh-pocket@2.10.6` 是范例）：插件自己 `inject: ['connection','webServer']`，优先自行把路由挂到 webServer，失败才回退 `rpc.handle`。
+   **每次升内核都要扫一遍**：`grep -rn 'connection.rpc.handle\|connection.fetch.register' max-null-plugins third-party-plugins`。
 
 > 另有一条不属于「升级口子」但每次升级都要过：**升 rc 一律精确 pin，不用 `^`**——rc 版本常只挂在 npm 的 `next` 通道上（如 `0.1.5-rc.2`），`^0.x.y` 语义下不跨 minor，会静默装回旧版。
 
