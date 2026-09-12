@@ -15,7 +15,7 @@
 | 5 | 插件升级**双处声明**（profile + template）；JSON 一律 node 写（防 BOM） | §4 / §7 |
 | 6 | **L1 门槛**：typecheck+test 全绿才能发版/进全家桶；新插件无测试不入库 | §9 |
 | 7 | README **必须**有 `## 截图` 段 + `docs/shots/`（用户视角三覆盖） | §9 |
-| 8 | 样式一致：DSH token + `data-slot`/aria-label 锚点；侧边栏插件耦合**不假设移除** | §9 |
+| 8 | **CoT 泄漏探针（首批）** | ✅ **完成**（2026-09-12）：落地 `shell/scripts/check-cot-leakage.mjs`，探针**逐字**取自 `@max-null/dsh-skills` 的 `ssid-trim-cot-leakage/references/recall-batteries.md`（中文 4 组 + 英文 1 组，未改写）。**关键判断——做成报告型而非阻塞门**：探针集自己写明「每个命中都需要语义判断、按设计会过度匹配」，且其「已知假阳性家族」末条对自身语料有实测（扫 8 份 SKILL.md 命中 24 处、**真泄漏 0**）；若做成命中即失败，它会第一时间误杀自己的校准语料、随后被无视——那才是真的失效。故默认**恒 exit 0**，只给候选并标注该组的已知误报家族；`--strict` 才在命中时阻塞（供收窄范围后的 CI）。**范围只取代码**（.ts/.mjs/.cjs/.js），刻意不含任何 .md：代码注释是主要载体，而 .md 里的变更叙事多为**合法主场**（决策记录／release notes／规范文档本身就在陈述变更史）。**两次踩到同一个坑并修正**：脚本最初扫到它自己（体内含探针词表，命中率恒 100%），补排后自测文件又被扫——正是 recall-batteries 第 47 条预告的假阳性家族，最终按文件名前缀 `check-cot-leakage` 整体排除。**自测 5/5**：含**校准正例**（造泄漏代码，证明探针确实在工作）与**近失负例**（`this PR` 必须命中 `this PR adds`，却不得命中 `this project`／`this process`／`this provider`），两者都出自 recall-batteries 的校准纪律。**首次实测**：29 个代码文件、42 处候选待人工判断。挂载 `npm run check:cot`。**未挂 commit-msg 的理由**：本仓库当前**零 git hooks**，引 hook 需动 `core.hooksPath` 才随克隆传播；且提交信息本身就是变更叙事，用它查 CoT 泄漏属自相矛盾。改以独立 script + `--strict` 供 CI 调用 | ✅ 完成 |
 | 9 | **npm 发版 F2A**：publish 由用户手动，开发会话只给指令 | §9 / 流转 5 |
 
 ## 文档体系（层级）
