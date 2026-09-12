@@ -48,8 +48,9 @@ if (EXPECT) ok(data.entries.length === EXPECT, `篇数 == ${EXPECT}`);
 const fmLeft = data.entries.filter((e) => /^\s*---\r?\n/.test(e.body));
 ok(fmLeft.length === 0, `frontmatter 已剥离（残留 ${fmLeft.length} 篇）${fmLeft.length ? '：' + fmLeft.slice(0, 3).map((e) => e.file).join(', ') : ''}`);
 
-// 4. 分类齐全
-const groups = [...new Set(data.entries.map((e) => e.group))];
+// 4. 分类齐全（字段名在两个世代里不同：母版 SSiD 用 statusKind，派生版用 group）
+const groupOf = (e) => e.group ?? e.statusKind ?? '?';
+const groups = [...new Set(data.entries.map(groupOf))];
 ok(groups.length > 0, `分类：${groups.join(' / ')}`);
 
 // 5. 真跑页面脚本（静态搜不到运行时才拼出的内容）
@@ -72,7 +73,7 @@ try {
   (doc._c || []).forEach((f) => f({ target: { closest: () => fake } }));
   const det = els.detail?.innerHTML ?? '';
   ok(/>undefined</.test(det) === false, '详情页无 undefined 文本');
-  ok(det.includes(first.group), `详情页显示分类「${first.group}」`);
+  ok(det.includes(groupOf(first)), `详情页显示分类「${groupOf(first)}」`);
   ok(/<h2>/.test(det), '详情页渲染出标题');
 } catch (e) {
   ok(false, '页面脚本执行抛错：' + e.message.split('\n')[0]);
