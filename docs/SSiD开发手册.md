@@ -211,8 +211,10 @@ seek-soul-in-darkness/
    `0.1.2-rc.1` 是 `config.text`；`0.1.5-rc.1`/`rc.2` 改为 **`config.prefix`（required）** + `suffix`（默认 `''`），段名也从 `deployment:persona` 拆为 `deployment:persona-prefix`/`-suffix`。字段不对就是 `$.prefix missing required value` 硬失败。**升级后必须用新版 `dsh-persona` 实体 + 真 schemastery 校验一遍真实 preset 文件**，不要只读 release notes。
 3. **`shell/tsconfig.json` 的 paths 是手写清单，内核加包就要补条目。**
    （见 §7 坑 15）本次补了 `@deepseek-ai/dsh-package-manifest`。
-4. **用 `ctx.connection.rpc.handle` 注册通道的插件，会在无 webServer 宿主下崩。**
-   `client-connection` 在 0.1.5 把 inject 由 `['webServer','credentials']` 收缩为只 `['credentials']`，webServer 降为可选注入；于是 `rpc.handle()` 内部访问 `owner.webServer` 必抛 `cannot get property "webServer" without inject`。**SSiD 正是这种宿主**（Electron 壳、无 webServer）。
+4. **用 `ctx.connection.rpc.handle` 注册通道的插件，会在 0.1.5 上崩（与宿主有无 webServer 无关）。**
+   `client-connection` 在 0.1.5 把 inject 由 `['webServer','credentials']` 收缩为只 `['credentials']`。而 `rpc.handle` 的 owner 是 **connection 自己的 ctx**（`rpc-host.ts` 的 `get rpc()` 里 `const owner = this.ctx`），不是调用方插件的 ctx；owner 只声明了 `credentials`，于是 `owner.webServer.register(route)` 必抛 `cannot get property "webServer" without inject`。
+   **注意归因**：报错说的是 connection 实例的 ctx 没有 webServer 权限，**不是**「宿主没提供 webServer」。SSiD **有** webServer（`webserver` 行在组合树里启用——实测内核端口在监听、HTTP 401；profile patch 只 insert 了 MCP，没有禁用该行）。已知没有 webServer 的宿主是 DSH 官方桌面壳（`desktop.cordis.patch.yml` 显式 `webserver: disabled: true`）；那种宿主会让 connection 的 `/api` 路由整体不挂载（走 `createSharedFetchHandler` 的另一条路）。
+   判定宿主有没有 webServer：`node --import tsx/esm apps/cli/src/bin.ts --profile <名> --dump-config`，看 `webserver` 行有没有 `disabled`。
    适配写法（`dsh-pocket@2.10.6` 是范例）：插件自己 `inject: ['connection','webServer']`，优先自行把路由挂到 webServer，失败才回退 `rpc.handle`。
    **每次升内核都要扫一遍**：`grep -rn 'connection.rpc.handle\|connection.fetch.register' max-null-plugins third-party-plugins`。
 
