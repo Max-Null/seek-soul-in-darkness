@@ -13,6 +13,12 @@
   "profiles": ["ssid"],
   "$profilesNote": "只比 ssid。~/.dsh/profiles/web 是 web 开发环境，vendor 包集合不同（实测多一个 dsh-dream-skin）。",
 
+  "profileSync": {
+    "exemptOnlyInB": {
+      "@max-null/dsh-skills": "临时态（2026-09-12 记）：B(ssid) 用 file: 指向本地包，因为 npm 上该包尚不可见；A(profile-template) 是发版基准，实测其依赖全是 npm 版本号、无一个 file:（绝对路径进归档包在用户机上必然失效），所以不能照搬 B 的形式补进 A。**npm 可见后应把两边都改为 0.1.0，并从本表删除此项**。此项被豁免时门仍会打印出来，不静默。"
+    }
+  },
+
   "vendorCopies": {
     "tpl": "shell/profile-template/vendor",
     "web": "~/.dsh/profiles/web/vendor",
@@ -51,11 +57,9 @@
       "exclude": ["node_modules/**", "**/*.tsbuildinfo", ".git/**"]
     },
     "dsh-dream-skin": {
-      "mode": "vendor-only",
-      "$sourceNote": "仅 web profile 有（实测），不纳入 ssid 侧比对",
-      "profiles": ["web"],
-      "include": ["**"],
-      "exclude": ["node_modules/**", ".git/**"]
+      "$unmanaged": true,
+      "$unmanagedReason": "实测它只在 ~/.dsh/profiles/web/vendor 有一份，tpl 与 ssid 都没有——而 tpl 是 ssid 的发版基准，不含它属设计如此（web 专有）。**只有一份就没有可比对象**，纳入比对会报「可比的份数不足 2」这种无意义的红。此条仅作事实登记，不参与比对。",
+      "profiles": ["web"]
     }
   },
 
