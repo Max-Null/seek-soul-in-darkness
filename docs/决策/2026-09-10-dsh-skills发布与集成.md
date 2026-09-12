@@ -67,7 +67,7 @@ npm publish --access public
 | # | 事项 | 影响 |
 |---|---|---|
 | 1 | ~~`ssid-trim-cot-leakage/references/examples.md` 校准样本不全~~ **已补齐** | **11 节 / 22 案例 / 152 行**，节数与上游一致（上游 11 节 / 30 案例 / 275 行）。案例数少于上游是**有意的**：上游案例绑定 DSH 的目录与机制，逐个直译会得到"在思灵读不懂"的样本集；取舍是保证每节至少一个可校准的真实样本 |
-| 2 | 本机**未安装 `ffmpeg` / `ffprobe`** | `ssid-record-browser-gif` 的编码步骤暂不可用；按纪律**报告依赖而不自行安装**，是否安装由你决定 |
+| 2 | ~~本机未安装 `ffmpeg` / `ffprobe`~~ **已装** | ffmpeg / ffprobe **9.0.1**（gyan.dev release-essentials，106 MB）解压在 `H:\MaxNull\WorkStation\.build\ffmpeg\ffmpeg-9.0.1-essentials_build\bin\`，并写入**用户级 PATH**（`IsAdmin=False` 下走便携版路线，不需要提权）。**编码器 5 个自测已实测通过**。若不想让用户 PATH 保留这一条，删掉即可——skill 里也记了绝对路径 |
 | 3 | 包的 GitHub 仓库（`github.com/Max-Null/dsh-skills`）**尚未创建** | `package.json` 的 `repository`/`homepage`/`bugs` 字段暂时指向空地址；发布前建库即可 |
 | 4 | 手册待办 **#7（`docs/决策/` 状态机）未做** | `ssid-code-review` 的「决策记录与已交付现实一致」与 `ssid-find-simplifications` 的「取代标记」两条判据依赖它；缺失时只按当前无状态机的形态执行 |
 
