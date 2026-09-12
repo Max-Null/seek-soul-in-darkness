@@ -835,6 +835,9 @@
       "@deepseek-ai/dsh-timeout": [
         "../../deepseek-harness/packages/util/timeout/src"
       ],
+      "@deepseek-ai/dsh-package-manifest": [
+        "../../deepseek-harness/packages/util/package-manifest/src"
+      ],
       "@deepseek-ai/dsh-tool-web": [
         "../../deepseek-harness/packages/web/tool-web/src"
       ],

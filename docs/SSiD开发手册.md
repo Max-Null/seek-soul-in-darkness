@@ -38,6 +38,8 @@
 | 2026-08-30 | §7 坑速查 | 新增 #10「DSH 页面状态持久化 = host 化，禁 localStorage」（动态端口 origin 隔离坑——quick-toolbar 状态/panels seen 两次实踩）| 用户拍板（localStorage 问题多次出现）|
 | 2026-09-07 | §7 坑速查 / §2 | 新增 #12「部署零保留覆盖用户层」（用户插件/MCP 升级丢失 + pending 回滚雷；v0.2.1 修复：快照+patch 合并+升级报告+pending 护栏+失败兜底）| 用户报 0.2.0 重大 bug（见 `docs/决策/2026-09-07-升级部署覆盖用户层修复.md`）|
 | 2026-09-09 | §7 坑速查 / §3 | 新增 #13「预制 MCP 是 profile 级单例，索引目录不能跟随会话」+ CodeGraph 索引目录适配（`SSID_MCP_CG_WS`/`SSID_MCP_CG_ENABLE`）+ 升级合并升级为三方合并（同 id 子条目用户改动保留）| 用户报 CodeGraph 默认扫用户主目录（见 `docs/决策/2026-09-09-CodeGraph-MCP-默认索引目录修复.md`）|
+| 2026-09-12 | §5.0（新增） | **内核升级必须同步的三个口子**：①agent preset 手工部署（仓库 + `~/.dsh` 两副本，不进归档）②`dsh-persona` 字段名跨版本会变（`text` → `prefix` required）③`shell/tsconfig.json` paths 手写清单要随内核加包补条目 | 0.1.2-rc.1 → 0.1.5-rc.2 升级实测（见 `docs/决策/2026-09-12-SSiD内核升级-0.1.5-rc.2.md`）|
+| 2026-09-12 | §7 坑速查 | 新增 #14「overrides 是 YAML block mapping 不能加尾逗号」#15「内核加包打断 typecheck 且错误指向 checkout」#16「prepare-runtime 第 4.5 步把 vendor 根 README.md 当插件复制」| 同上（本次实踩）|
 
 ## 工作区规范（布局 + 放置规则，2026-08-29 整理定稿）
 
@@ -183,6 +185,24 @@ seek-soul-in-darkness/
 
 > **跨系列升级先看核对清单**：如 0.1.2 → 0.1.5 这类跨系列升级，先读 `docs/决策/2026-09-10-升级前置差异清单-0.1.2-rc.1到0.1.5-rc.1.md`（破坏性变更表 + 前置 checklist + 回滚要点）；同系列升级（如 alpha.2 → rc.1）套 `2026-09-06-SSiD内核升级执行指南-rc.1通用范本.md` 即可。
 
+> **当前内核**：`0.1.5-rc.2`（2026-09-12 升，执行记录见 `docs/决策/2026-09-12-SSiD内核升级-0.1.5-rc.2.md`；归档指纹 `0.2.1-0.1.5-rc.2-d5876b8a`）。
+
+### 5.0 内核升级必须同步的三个口子（2026-09-12 rc.2 升级定稿）
+
+内核换版时，**版本号切换只是其中一步**。下面三处不在任何自动化链路上，漏了不会报「升级失败」，只会安静地坏或安静地失效：
+
+1. **agent preset 是手工部署的，仓库副本与 `~/.dsh` 读取副本要同时改。**
+   `prepare-runtime.mjs` 只把 `skills/` 纳入归档与指纹，`kernel.ts` 的 `syncPresetSkills` 也只同步技能；`agentPresetsRoot` 指向的 `apps/cli/config/agent-presets` 在各版本里都只有 `examples/`（`scanRoot` 对不存在的根返回 `[]`，静默忽略）。所以 `presets/ssid-double-star/` **不进归档、不进升级流程**：
+   - 仓库副本 `presets/ssid-double-star/agent.cordis.yml`（版本管理）
+   - 运行时副本 `~/.dsh/.agent-presets/ssid-double-star/agent.cordis.yml`（DSH 实际读取）
+   改完用 SHA256 核对两处一致。**任何 preset 字段变更漏掉其中一处 = 该处静默不生效**。
+2. **`dsh-persona` 的配置字段名跨版本会变，preset 会因此挂载失败。**
+   `0.1.2-rc.1` 是 `config.text`；`0.1.5-rc.1`/`rc.2` 改为 **`config.prefix`（required）** + `suffix`（默认 `''`），段名也从 `deployment:persona` 拆为 `deployment:persona-prefix`/`-suffix`。字段不对就是 `$.prefix missing required value` 硬失败。**升级后必须用新版 `dsh-persona` 实体 + 真 schemastery 校验一遍真实 preset 文件**，不要只读 release notes。
+3. **`shell/tsconfig.json` 的 paths 是手写清单，内核加包就要补条目。**
+   （见 §7 坑 15）本次补了 `@deepseek-ai/dsh-package-manifest`。
+
+> 另有一条不属于「升级口子」但每次升级都要过：**升 rc 一律精确 pin，不用 `^`**——rc 版本常只挂在 npm 的 `next` 通道上（如 `0.1.5-rc.2`），`^0.x.y` 语义下不跨 minor，会静默装回旧版。
+
 ### 5.1 dev 源码模式（日常，不等 npm）
 - 移出部署锚点即可回退并列源码：`node_modules/@deepseek-ai` → `.upgrade-backup/`（回滚=移回）。
 - 源码模式下 profile 声明**不包含** `@deepseek-ai/dsh*` 内核族（从 checkout 解析；web 端同构）。
@@ -257,6 +277,10 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
     `disabled: !!js` 停用条目（`!!js` 求值见 `vendor/loader/src/config/entry.ts:104`，
     insert 子条目同样适用），而不是给个「看起来能用」的错误默认值。
     相关：`docs/决策/2026-09-09-CodeGraph-MCP-默认索引目录修复.md`。
+
+14. **改 `pnpm-workspace.yaml` 的 overrides 不能加尾逗号**（2026-09-12 实踩）：该文件用的是 **YAML block mapping**，条目写 `'pkg': 'ver'`，**没有尾逗号**（逗号属 flow style）。用脚本批量切版本时惯性写 `'pkg': 'ver',` → `pnpm install` 立刻 `[ERROR] bad indentation of a mapping entry (47:39)`。且**改完必须用真解析器验语法**（`yaml` 包，或直接让 pnpm 解析），正则自检挡不住这类错误。
+15. **内核加包会打断 `npm run typecheck`，且错误指向 checkout 不是 SSiD**（2026-09-12 rc.2 实踩）：`shell/tsconfig.json` 的 `paths` 是**手写清单**（289 条）用于把内核包解析到 `../../deepseek-harness/packages/...` 源码；内核新版新增一个被 `app-boot` 引用的包，就会报 `TS2307: Cannot find module '@deepseek-ai/dsh-<新包>'`，位置显示在 checkout 的源码文件里。**处置：补一条 paths 映射**（本次是 `@deepseek-ai/dsh-package-manifest` → `packages/util/package-manifest/src`）。这是**每次内核升级都要过的门**，别误判成 SSiD 代码问题。
+16. **`prepare-runtime.mjs` 第 4.5 步会把 vendor 根的 `README.md` 当插件复制**（2026-09-12 实踩）：日志出现「修复 vendor 副本 README.md」，产物里 `node_modules/@max-null/README.md` 是个 **0 文件**条目。第 2.1 步过滤了非目录条目，**第 4.5 步没过滤**。当前无害（不参与解析），属待修噪声。
 
 ## 8. 文档索引
 

@@ -4,7 +4,7 @@
 - id: persona
   name: '@deepseek-ai/dsh-persona'
   config:
-    text: |-
+    prefix: |-
       你是 SSiD 的主力智能助手「双星」：先理解用户需求、对齐方案，再动手执行。
 
       ## 先对齐，再动手
