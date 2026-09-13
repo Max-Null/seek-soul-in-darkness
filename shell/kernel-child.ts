@@ -134,6 +134,20 @@ async function main(): Promise<void> {
     console.error('ssid: kernel-child 未提供 userQuestions，AI 提问通知不可用')
   }
 
+  // ── 内核诊断探针（按需，见 kernel-probe.ts）─────────────────────────────
+  // 默认零输出：只有显式设 `SSID_KERNEL_PROBE=1` 才加载并运行。2026-09-14 的 405
+  // 排查靠它定位（结论见 docs/决策/2026-09-14-插件中心405诊断记录.md），所以保留
+  // 代码备查，但不让它每次启动都往 kernel-child.log 灌几十行、把真实错误埋掉。
+  // 动态 import：模块在 bundle 里保留，但默认路径不执行它。
+  if (process.env.SSID_KERNEL_PROBE === '1') {
+    console.error('ssid: kernel-child 探针已启用（SSID_KERNEL_PROBE=1）')
+    void import('./kernel-probe.ts')
+      .then(m => { m.probeKernel(kernel) })
+      .catch((cause: unknown) => {
+        console.error(`ssid: 探针加载失败：${cause instanceof Error ? cause.message : String(cause)}`)
+      })
+  }
+
   process.on('message', (msg: unknown) => {
     // 先交给能力桥：主进程回传的 capabilityReply / capabilityEvent 都在这里消费
     if (handleParentMessage(msg)) return
