@@ -567,6 +567,7 @@ window.__ModuleLoader__.load({
 			applyLocale();
 		}
 		var TOOLBAR_ID = "ssid-toolbar";
+		var QT_STYLE_OWNER = "dsh-quick-toolbar-styles";
 		var qtState = {
 			pos: null,
 			collapsed: true,
@@ -1247,10 +1248,12 @@ window.__ModuleLoader__.load({
 			uiWorkspaceSvc = svcCtx.uiWorkspace ?? null;
 			var style = document.createElement("style");
 			style.setAttribute("data-dsh-quick-toolbar", "");
+			style.setAttribute("data-plugin", QT_STYLE_OWNER);
 			style.textContent = BASE_CSS + (SHELL_CSS.length > 0 && win.__SSID_SHELL__ === true ? "\n" + SHELL_CSS.join("\n") : "");
 			document.head.appendChild(style);
 			var tbStyle = document.createElement("style");
 			tbStyle.setAttribute("data-dsh-quick-toolbar-toolbar", "");
+			tbStyle.setAttribute("data-plugin", QT_STYLE_OWNER);
 			tbStyle.textContent = TOOLBAR_CSS;
 			document.head.appendChild(tbStyle);
 			loadState(function() {

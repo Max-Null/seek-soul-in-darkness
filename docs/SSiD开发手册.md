@@ -41,6 +41,7 @@
 | 2026-09-12 | §5.0（新增） | **内核升级必须同步的三个口子**：①agent preset 手工部署（仓库 + `~/.dsh` 两副本，不进归档）②`dsh-persona` 字段名跨版本会变（`text` → `prefix` required）③`shell/tsconfig.json` paths 手写清单要随内核加包补条目 | 0.1.2-rc.1 → 0.1.5-rc.2 升级实测（见 `docs/决策/2026-09-12-SSiD内核升级-0.1.5-rc.2.md`）|
 | 2026-09-12 | §7 坑速查 | 新增 #14「overrides 是 YAML block mapping 不能加尾逗号」#15「内核加包打断 typecheck 且错误指向 checkout」#16「prepare-runtime 第 4.5 步把 vendor 根 README.md 当插件复制」| 同上（本次实踩）|
 | 2026-09-13 | §5.0 第 0 条（新增）/ 铁律 2.1 / §5.5（新增） | **共享 checkout 是红线**：`deepseek-harness/` 同供 web 与 SSiD 作内核，切 tag／install／build 会连带崩掉运行中的 web 宿主（2026-09-13 实际事故）；隔离改走 `dsh-web-runtime/` 独立副本 + `启动-DSH-Web.bat`。另新增 §5.5「dev 源码模式要求 checkout 自身完整」：paths 映射 / 完整 install / dist 型包 `lib/` 三个条件，以及「先确认单实例锁持有者」的排查纪律 | 用户报告 web 版被连带升级后崩溃；根因与隔离方案见工作区 `AGENTS.md` 铁律 2.1 |
+| 2026-09-14 | §7 坑速查 / §8 | 新增 #17「手动注入的 `<style>` 必须带 `data-plugin` 且值不等于模块 id」（裸注入会被任意模块认领、随它的一次 HMR 重载被删 → 元素在样式没、刷新才恢复；已实测复现——连续两次重载 chat-rail 后 quick-toolbar 的两个样式标签消失、`#ssid-toolbar` 规则数归零）与 #18「CDP 几何测量前先开焦点模拟」（未聚焦窗口冻结过渡时钟，曾把展开态 280px 读成 36px） | 用户报悬浮球样式反复损坏（见 `docs/决策/2026-09-14-插件样式归属与HMR连带删除.md`）|
 
 ## 工作区规范（布局 + 放置规则，2026-08-29 整理定稿）
 
@@ -311,6 +312,10 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 15. **内核加包会打断 `npm run typecheck`，且错误指向 checkout 不是 SSiD**（2026-09-12 rc.2 实踩）：`shell/tsconfig.json` 的 `paths` 是**手写清单**（289 条）用于把内核包解析到 `../../deepseek-harness/packages/...` 源码；内核新版新增一个被 `app-boot` 引用的包，就会报 `TS2307: Cannot find module '@deepseek-ai/dsh-<新包>'`，位置显示在 checkout 的源码文件里。**处置：补一条 paths 映射**（本次是 `@deepseek-ai/dsh-package-manifest` → `packages/util/package-manifest/src`）。这是**每次内核升级都要过的门**，别误判成 SSiD 代码问题。
 16. **`prepare-runtime.mjs` 第 4.5 步会把 vendor 根的 `README.md` 当插件复制**（2026-09-12 实踩）：日志出现「修复 vendor 副本 README.md」，产物里 `node_modules/@max-null/README.md` 是个 **0 文件**条目。第 2.1 步过滤了非目录条目，**第 4.5 步没过滤**。当前无害（不参与解析），属待修噪声。
 
+17. **手动注入的 `<style>` 必须带 `data-plugin`，且值不等于模块 id**（2026-09-14 实踩，悬浮球样式事故）：DSH 的 client 模块系统在**任何模块 materialize 时**做一次认领——`packages/client/modules/src/client/system.ts:42-52` 的 `claimStyles(id)` 对 `document.querySelectorAll('style:not([data-plugin])')` 逐个 `setAttribute('data-plugin', id)`；那个模块被 HMR 重载时，`packages/client/hmr/src/client/index.ts:86-91` 的 `removeOwnedStyles(id)` 在 `entry.refresh()` 之前按 `data-plugin === id` 逐字匹配删除。于是**裸注入的样式会被任意模块认领、随它的一次重载被物理删除**，而元素（div）既不被认领也不被删 → 表现为「元素在、样式全没、刷新才恢复」；插件的防重守卫又让重建的 fiber 直接 return、不再补注。修法：`data-plugin` 取一个**独立于模块 id** 的稳定值（如 `dsh-quick-toolbar-styles`、`dsh-chat-rail-hide-official`）。**排查线索**：用户说「你操作 ssid dev 之后就这样」——每次把插件 bundle 同步进 profile 都会触发该插件的 HMR 重载；web 端同源受害（共用同一批 profile 插件文件）。复现/复测：改 profile 里某个插件的 `lib/client.js` 内容触发重载，连续两次即可看到「第一次认领、第二次删除」。相关：`docs/决策/2026-09-14-插件样式归属与HMR连带删除.md`。
+
+18. **CDP 几何测量前先开焦点模拟**（2026-09-14 实踩）：CDP 所连的 Electron 窗口未聚焦/未绘制时，Chromium **冻结 CSS 过渡与 rAF**——`getComputedStyle().width` 恒返回过渡的**起始值**（实测把 rail 展开态 280px 读成 36px 并据此误判），`el.getAnimations()` 里 `CSSTransition` 永远处于 `running`，连 `style.setProperty('width','280px','important')` 都读不回新值。先 `Emulation.setFocusEmulationEnabled({ enabled: true })` 再测；但开启后 `Input.dispatchMouseEvent` 的 hover 可能不再触发 React 的 mouseenter → **先在未开启时 hover 展开、再开焦点模拟让过渡跑完**。判据：过渡恒为 `running` 即时钟已冻结。同类现象：`behavior:'smooth'` 滚动不推进（需 `'auto'` 兜底）。
+
 ## 8. 文档索引
 
 - 本手册（总览/流程/坑）
@@ -327,6 +332,7 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 - `dsh-anatomy/工程范式/2026-09-10-DSH方法论精读原始报告存档.md`（8 个 skill 的原始精读报告：逐字引用 + 完整规则清单，供复核）
 - `docs/决策/2026-09-10-SSiD-check-rules骨架建议.md`（**待办 #5 的骨架**：四项检查的判定契约 + 编排器取舍 + 首次体检实测）
 - `dsh-anatomy/工程范式/2026-09-10-DSH官方Gates拆解原始报告-E-配对与配置门.md`、`...-F-run-gates编排.md`（上述骨架的原始依据，含逐行行号引用）
+- `docs/决策/2026-09-14-插件样式归属与HMR连带删除.md`（**手动注入 `<style>` 的归属标记规范** + sticky header 遮挡修复 + CDP 焦点模拟测量纪律 + 13 处同类注入点清单）
 
 ## 待办清单（2026-08-30 记）
 
