@@ -21,7 +21,7 @@
 import { spawnSync } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   boot,
@@ -96,6 +96,50 @@ function sourceRuntime(root: string): DshRuntime {
     installAnchor: join(root, 'apps', 'cli', 'package.json'),
     agentPresetsRoot: join(root, 'apps', 'cli', 'config', 'agent-presets'),
   }
+}
+
+/**
+ * 探出**实际被加载的**内核模块版本，而不是 installAnchor 上的版本。
+ *
+ * 为什么需要分开：dev 下 `resolveDshRuntime` 按"profile 里有没有部署闭包"选
+ * runtime，有闭包就选 bundled——于是 installAnchor 指向的是**部署闭包**（可能
+ * 是上一版，如 0.1.2-rc.1）。但 SSiD 用 `node --import tsx/esm` 启动，tsx 会读
+ * shell/tsconfig.json 的 paths，把 `@deepseek-ai/*` 解析到 checkout **源码**。
+ * 两者不一致时，只读 installAnchor 会让标题栏显示"没升级"，与实际运行相反。
+ *
+ * 做法：用 ESM 的 import.meta.resolve 解析一个内核包（走与运行时相同的解析链，
+ * 因此包含 tsx 的 paths 效果），再读该实体自报的版本。
+ * @param probe 被解析的内核包名。
+ * @returns `{ version, sourceKind }`；解析失败时 version 为 undefined。
+ */
+function detectLoadedKernel(probe = '@deepseek-ai/dsh-app-boot'): { version?: string; sourceKind: 'source' | 'bundled' | 'unknown' } {
+  let url: string
+  try {
+    url = import.meta.resolve(probe)
+  } catch {
+    return { sourceKind: 'unknown' }
+  }
+  if (!url.startsWith('file:')) return { sourceKind: 'unknown' }
+  const entry = fileURLToPath(url)
+  // 从入口向上找到最近的 package.json（一次目录遍历，不限层级）
+  let dir = dirname(entry)
+  for (let i = 0; i < 12; i++) {
+    const candidate = join(dir, 'package.json')
+    if (existsSync(candidate)) {
+      try {
+        const pkg = JSON.parse(readFileSync(candidate, 'utf8')) as { version?: string }
+        // 源码树在 packages/ 下；闭包在 node_modules 下。据此标注来源，便于一眼区分
+        const sourceKind = dir.includes(`${sep}node_modules${sep}`) ? 'bundled' : 'source'
+        return { version: pkg.version, sourceKind }
+      } catch {
+        return { sourceKind: 'unknown' }
+      }
+    }
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return { sourceKind: 'unknown' }
 }
 
 /** 内置 npm 闭包模式的 runtime。 */
@@ -377,9 +421,12 @@ export async function bootKernel(
     runtime = resolveDshRuntime()
   }
   const installAnchor = runtime.installAnchor
-  // DSH 版本：installAnchor 指向运行时自身的 package.json（source 模式 =
-  // apps/cli/package.json；bundled 模式 = @deepseek-ai/dsh/package.json）。
+  // DSH 版本：以**实际加载**的内核模块为准（见 detectLoadedKernel 注释），
+  // installAnchor 上的版本仅作兜底——dev 下它是部署闭包的版本，可能与实际
+  // 运行的源码不同（曾导致标题栏显示 0.1.2-rc.1 而实际跑 0.1.5-rc.2）。
   const dshVersion = (() => {
+    const detected = detectLoadedKernel()
+    if (detected.version !== undefined) return detected.version
     try {
       const pkg = JSON.parse(readFileSync(installAnchor, 'utf8')) as { version?: string }
       return pkg.version ?? 'unknown'

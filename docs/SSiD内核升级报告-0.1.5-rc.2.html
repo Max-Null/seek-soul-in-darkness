@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SSiD 内核升级报告 · 0.1.2-rc.1 → 0.1.5-rc.2</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#161a21; --panel2:#1c2129; --line:#272d38;
+    --fg:#e6e9ef; --fg2:#a8b0bf; --fg3:#6f7787;
+    --ok:#3fb950; --warn:#d29922; --bad:#f85149; --info:#58a6ff; --accent:#a371f7;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:15px/1.7 -apple-system,"Segoe UI",system-ui,"Microsoft YaHei",sans-serif;}
+  .wrap{max-width:1000px;margin:0 auto;padding:28px 20px 80px}
+  header{border-bottom:1px solid var(--line);padding-bottom:20px;margin-bottom:26px}
+  h1{margin:0 0 8px;font-size:23px;letter-spacing:.2px}
+  .sub{color:var(--fg2);font-size:13.5px}
+  .sub b{color:var(--fg)}
+  h2{margin:38px 0 14px;font-size:18px;padding-left:11px;border-left:3px solid var(--accent)}
+  h3{margin:24px 0 8px;font-size:15px;color:var(--fg)}
+  p{margin:9px 0;color:var(--fg2)}
+  p b,li b{color:var(--fg)}
+  code{font-family:var(--mono);font-size:12.5px;background:var(--panel2);
+    padding:1.5px 5px;border-radius:4px;color:#9ecbff;word-break:break-all}
+  pre{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+    padding:12px 14px;overflow:auto;font-family:var(--mono);font-size:12.5px;line-height:1.6;color:#c9d1d9}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13.5px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--fg3);font-weight:600;font-size:12px;letter-spacing:.4px;text-transform:uppercase}
+  td code{font-size:12px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:10px;margin:14px 0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:12px 14px}
+  .card .k{color:var(--fg3);font-size:11.5px;letter-spacing:.3px}
+  .card .v{font-size:15px;margin-top:3px;font-weight:600;word-break:break-all}
+  .box{background:var(--panel);border:1px solid var(--line);border-left-width:3px;
+    border-radius:8px;padding:12px 15px;margin:14px 0}
+  .box.ok{border-left-color:var(--ok)} .box.warn{border-left-color:var(--warn)}
+  .box.bad{border-left-color:var(--bad)} .box.info{border-left-color:var(--info)}
+  .box .t{font-weight:600;margin-bottom:5px;font-size:14px}
+  .tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:999px;
+    border:1px solid var(--line);color:var(--fg2);margin-right:5px}
+  .tag.ok{color:var(--ok);border-color:#1c4429} .tag.bad{color:var(--bad);border-color:#4d1f1f}
+  .tag.warn{color:var(--warn);border-color:#4a3a12} .tag.info{color:var(--info);border-color:#1b3a5c}
+  ul{margin:8px 0;padding-left:22px;color:var(--fg2)} li{margin:5px 0}
+  .muted{color:var(--fg3);font-size:12.5px}
+  footer{margin-top:46px;padding-top:18px;border-top:1px solid var(--line);color:var(--fg3);font-size:12.5px}
+  @media(max-width:640px){
+    .wrap{padding:18px 13px 60px} h1{font-size:19px} h2{font-size:16px}
+    table{font-size:12.5px} th,td{padding:6px 7px} .card .v{font-size:14px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>SSiD 内核升级报告</h1>
+  <div class="sub">
+    <b>0.1.2-rc.1 → 0.1.5-rc.2</b> ｜ 执行日期 2026-09-12 ~ 09-13 ｜
+    仓库提交 <code>611d8a9</code> <code>7cc46db</code> <code>8df4588</code> <code>7312bf7</code>
+  </div>
+</header>
+
+<div class="cards">
+  <div class="card"><div class="k">内核版本</div><div class="v">0.1.5-rc.2</div></div>
+  <div class="card"><div class="k">归档指纹</div><div class="v" style="font-size:12.5px">0.2.1-0.1.5-rc.2-d5876b8a</div></div>
+  <div class="card"><div class="k">归档体积</div><div class="v">226.9 MB</div></div>
+  <div class="card"><div class="k">preset 两副本</div><div class="v" style="color:var(--ok);font-size:14px">SHA256 一致</div></div>
+</div>
+
+<h2>1 · 升级基本信息</h2>
+<table>
+  <tr><th>项</th><th>值</th></tr>
+  <tr><td>内核 tag</td><td><code>dsh-v0.1.5-rc.2</code>（commit <code>fb2c4b9e69</code>），起点 <code>dsh-v0.1.2-rc.1</code>（<code>a66e470204</code>）</td></tr>
+  <tr><td>为什么不是 rc.1</td><td>核对清单写的是 rc.1，但执行时 npm <code>next</code> 已是 rc.2（rc.1 停在 <code>latest</code>）；二者对本轮唯一的破坏性变更完全一致，取更新者</td></tr>
+  <tr><td>SSiD 版本</td><td>不变（<code>shell/package.json</code> 仍是 <code>0.2.1</code>）——内核换版不等于发版</td></tr>
+  <tr><td>通道纪律</td><td>rc 只挂 <code>next</code> 通道，所有 pin 必须写精确版本串，<b>不能用 <code>^</code></b>（<code>^0.x.y</code> 不跨 minor，会静默装回旧版）</td></tr>
+</table>
+
+<h2>2 · 破坏性变更（全部实测，非读文档推断）</h2>
+
+<h3>2.1 <code>dsh-persona</code> 配置字段改名 —— 唯一的硬失败</h3>
+<p>用 rc.2 的真实包实体 + 真 schemastery 跑校验，而非照抄 release notes：</p>
+<pre>✗ SSiD 原写法 { text: "…" }   →  $.prefix missing required value
+✓ rc.2 新写法  { prefix: "…" } →  解析通过（suffix 默认 ""）</pre>
+<ul>
+  <li><code>0.1.2-rc.1</code>：<code>Config = { text: string }</code></li>
+  <li><code>0.1.5-rc.1</code>/<code>rc.2</code>：<code>Config = { prefix: z.string().required(), suffix: z.string().default(''), complete?, includeRuntimeContext? }</code></li>
+  <li><b>rc.1 → rc.2 的 persona 源码零差异</b>（<code>packages/preset/</code> 下只改了 package.json 版本号）。变更实际由 0.1.5 系列引入，清单标注正确</li>
+</ul>
+
+<h3>2.2 段名拆分 + 内核包族必须整体升</h3>
+<p><code>dsh-system-prompt</code> 把 <code>deployment:persona</code> 拆成 <code>deployment:persona-prefix</code> / <code>-suffix</code>，新增导出 <code>PERSONA_PREFIX_SECTION</code> / <code>PERSONA_SUFFIX_SECTION</code>。实测：rc.2 的 persona 配 rc.1 的 system-prompt 会在 ESM 链接期直接报 <code>does not provide an export named …</code>。</p>
+
+<h3>2.3 <code>client-connection</code> 的 inject 收缩（第三方插件的雷）</h3>
+<pre>failed to apply loader entry dsh-pocket: cannot get property "webServer" without inject
+  at client-connection/src/rpc-host.ts:179  ← owner.webServer.register(route)
+  at dsh-pocket/lib/web-rpc.js:39 installPocketRpc</pre>
+<p><b>精确机制</b>：<code>rpc.handle</code> 的 owner 是 <b>connection 实例自己的 ctx</b>（<code>get rpc()</code> 里 <code>const owner = this.ctx</code>），它只声明 <code>credentials</code>，所以 <code>owner.webServer</code> 必抛。<b>这是 ctx 权限问题，与宿主有没有 webServer 无关</b>（详见 §5 的归因更正）。</p>
+
+<h2>3 · 改动清单</h2>
+<table>
+  <tr><th>文件</th><th>改动</th><th>为什么</th></tr>
+  <tr>
+    <td><code>presets/ssid-double-star/agent.cordis.yml</code></td>
+    <td><code>config.text</code> → <code>config.prefix</code></td>
+    <td>§2.1 硬失败；仓库副本与 <code>~/.dsh/.agent-presets/</code> 读取副本必须同时改（preset 不进归档流程，是手工部署的）</td>
+  </tr>
+  <tr>
+    <td><code>shell/profile-template/pnpm-workspace.yaml</code><br><code>~/.dsh/profiles/ssid/pnpm-workspace.yaml</code></td>
+    <td>overrides <b>212 条</b> pin → <code>0.1.5-rc.2</code>；删 2 条官方已下线包</td>
+    <td>全量切版，无混杂（半切 = 闭包混版本必坏）。删掉的两条在 rc.2 的 <code>packages/</code> 下不存在、npm 上只发到 <code>0.1.2-alpha.*</code>、全仓零依赖</td>
+  </tr>
+  <tr>
+    <td><code>shell/tsconfig.json</code></td>
+    <td>paths 补 <b>57 条</b>（289 → 347）</td>
+    <td>源码模式的运行时解析依赖它；rc.2 新增的 <code>@deepseek-ai/dsh-http-proxy</code>（<code>subprocess/src</code> 新 import）是首个症状</td>
+  </tr>
+  <tr>
+    <td><code>shell/profile-template/package.json</code><br>ssid profile <code>package.json</code></td>
+    <td><code>dsh-pocket</code> 2.10.3 → <b>2.10.6</b></td>
+    <td>§2.3；2.10.6 的 <code>inject</code> 含 <code>webServer</code> 并优先自行挂载路由（其源码注释逐字写明了这个坑）</td>
+  </tr>
+  <tr>
+    <td><code>docs/SSiD开发手册.md</code></td>
+    <td>新增 §5.0 第 0 条 + §5.5；§7 坑 14–16；铁律表第 2 行加 2.1</td>
+    <td>把本轮踩的坑变成规范（见 §6）</td>
+  </tr>
+  <tr>
+    <td><code>docs/决策/2026-09-12-SSiD内核升级-0.1.5-rc.2.md</code></td>
+    <td>新建 + 后续补 §9 与归因更正</td>
+    <td>执行记录与证据留痕</td>
+  </tr>
+</table>
+
+<h2>4 · 验证证据链</h2>
+<table>
+  <tr><th>门</th><th>方法</th><th>结果</th></tr>
+  <tr><td>preset schema</td><td>rc.2 persona 实体 + 真 schemastery 校验真实 preset 文件</td><td><span class="tag bad">修前 0/2</span><span class="tag ok">修后 2/2</span>，两副本 SHA256 一致</td></tr>
+  <tr><td>YAML 语法</td><td><code>yaml@2.9.0</code> 解析（含已知有效正例对照）</td><td><span class="tag ok">212 条全为 0.1.5-rc.2，无下线包残留</span></td></tr>
+  <tr><td>依赖可用性</td><td>registry 逐包查 <code>0.1.5-rc.2</code></td><td><span class="tag ok">212/214 存在</span>（缺的 2 个即已下线包）</td></tr>
+  <tr><td>typecheck</td><td><code>npm run typecheck</code></td><td><span class="tag ok">exit 0</span></td></tr>
+  <tr><td>单测</td><td><code>npm test</code></td><td><span class="tag ok">50/50</span></td></tr>
+  <tr><td>规范检查器</td><td><code>npm run check:rules</code></td><td><span class="tag ok">4 门 / 91 受检 / 0 违规</span></td></tr>
+  <tr><td>归档抽查</td><td><code>npm run verify:release</code></td><td><span class="tag ok">9 项 / 0 违规</span></td></tr>
+  <tr><td>CoT 探针</td><td><code>npm run check:cot</code></td><td><span class="tag ok">新写文档 0 命中</span></td></tr>
+  <tr><td>真机 boot</td><td>SSiD dev 起动</td><td><span class="tag ok">bootKernel ok → loadURL ok → start() completed</span>，无插件加载失败</td></tr>
+  <tr><td>双星 preset</td><td>用户启动后生效</td><td><span class="tag ok">rc.2 源码 + <code>config.prefix</code> 正常工作</span></td></tr>
+</table>
+
+<h2>5 · 本轮发现与纠正（含我自己的错误）</h2>
+
+<div class="box bad">
+  <div class="t">5.1 共享 checkout 是红线 —— 连带崩掉了 web 版</div>
+  <p><code>deepseek-harness/</code> <b>同时</b>是 web 版与 SSiD 的内核来源（web profile 不带内核闭包）。我为升级 SSiD 把它切到 <code>0.1.5-rc.2</code> 并 <code>pnpm install</code> + <code>pnpm run build</code>，<b>web 版被连带升级后崩溃</b>。</p>
+  <p class="muted">处置：建独立副本 <code>dsh-web-runtime/</code>（1.62 GB，实测能独立 boot）+ 启动脚本 <code>启动-DSH-Web.bat</code>（设 <code>DSH_CHECKOUT</code> 指向副本）；约束写进 <code>AGENTS.md</code> 铁律 2.1 与手册 §5.0 第 0 条。附带查到：会话格式已是 <b>v3 且无降级路径</b>——降级内核会让已有会话永久打不开，所以「回退内核」不是可选方案。</p>
+</div>
+
+<div class="box warn">
+  <div class="t">5.2 归因更正：SSiD 其实有 webServer</div>
+  <p>我此前把 SSiD 当成「无 webServer 的 Electron 壳」并据此归因，<b>这是错的</b>。实测：组合树里 <code>webserver</code> 行启用，内核端口在监听且返回 HTTP 401，profile patch 只 insert 了 MCP、没有禁用该行。</p>
+  <p>据此，<code>dsh-pocket</code> 崩溃的机制应按 §2.3 表述（ctx 权限，不是宿主能力）。真正没有 webServer 的宿主是 DSH 官方桌面壳（<code>desktop.cordis.patch.yml</code> 显式 <code>webserver: disabled: true</code>）。判定命令：<code>--dump-config</code> 看 <code>webserver</code> 行有无 <code>disabled</code>。</p>
+</div>
+
+<div class="box info">
+  <div class="t">5.3 源码模式的三个依赖口子（与 rc.2 无关，但升级时才会暴露）</div>
+  <p>SSiD 用 <code>node --import tsx/esm</code> 启动，tsx 读 <code>shell/tsconfig.json</code> 的 paths 把内核包解析到 checkout 源码——于是实际加载源码、闭包被旁路。源码模式因此要求 checkout 自身完整：</p>
+  <ul>
+    <li><b>paths 跟得上内核加包</b>（缺 57 条）</li>
+    <li><b>checkout 完整 <code>pnpm install</code> 过</b>（<code>zod</code>/<code>mime-types</code>/<code>@deepseek-ai/node-addon-system</code> 全缺）</li>
+    <li><b>dist 型包有 <code>lib/</code> 产物</b>（22 个包缺，<code>pnpm run build</code> 补齐）</li>
+  </ul>
+</div>
+
+<div class="box warn">
+  <div class="t">5.4 排查纪律：先确认单实例锁的持有者</div>
+  <p>「启动失败」有两次根本不是内核问题：打包版思灵一直在后台运行占着 single-instance 锁，dev 实例起来后立刻 <code>single-instance lock FAILED -> quit</code>。被拒绝启动看起来像崩溃，实际是「根本没轮到它跑」。</p>
+</div>
+
+<h2>6 · 本轮踩的坑（已进手册 §7）</h2>
+<table>
+  <tr><th>#</th><th>坑</th><th>现象</th><th>根因</th></tr>
+  <tr><td>14</td><td>YAML overrides 加尾逗号</td><td><code>pnpm install</code> 报 <code>bad indentation of a mapping entry</code></td><td>该段是 block mapping，条目不带逗号（逗号属 flow style）。批量切版脚本惯性加逗号所致</td></tr>
+  <tr><td>15</td><td>内核加包打断 typecheck</td><td><code>TS2307</code>，错误位置指向 checkout 源码</td><td>手写 paths 清单缺新包条目；易误判为 SSiD 代码问题</td></tr>
+  <tr><td>16</td><td><code>prepare-runtime</code> 把 vendor 根 README 当插件</td><td>产物里出现 0 字节的 <code>@max-null/README.md</code></td><td>第 4.5 步遍历未过滤非目录条目（第 2.1 步过滤了）</td></tr>
+  <tr><td>—</td><td>PowerShell 读 UTF-8 源码乱码</td><td>中文被按 ANSI 解析，语法报错</td><td>PS 5.1 读无 BOM 的 UTF-8；<code>Get-Content -Raw | ConvertFrom-Json</code> 会失败</td></tr>
+  <tr><td>—</td><td><code>edit</code> 工具丢 BOM</td><td>PS 脚本改完后语法报错（中文变乱码）</td><td>read 剥离 BOM → edit 写回无 BOM；每次改完要用 node 补回</td></tr>
+  <tr><td>—</td><td>检查器未校准就下结论</td><td>误报「客户端新旧路径并存」</td><td>旧路径只存在于 JSDoc 注释；文本匹配必须排除注释行</td></tr>
+</table>
+
+<h2>7 · 遗留与后续</h2>
+<table>
+  <tr><th>项</th><th>状态</th><th>说明</th></tr>
+  <tr>
+    <td>dsh-capture 路由迁移</td>
+    <td><span class="tag info">已就绪未合入</span></td>
+    <td>分支 <code>feat/connection-fetch-routes-clean</code>（<code>54f75ec</code>，已推送）：+81/-132，typecheck 0 错、build 产物含新路由、8 项 rc.2 契约核对全过。<b>但经 §5.2 更正后，它对当前 SSiD 收益为零</b>（SSiD 有 webServer，新旧写法走同一挂载点）——价值是为真正无 webServer 的宿主铺路。尚未真机验证</td>
+  </tr>
+  <tr>
+    <td>dsh-pocket 分发同步</td>
+    <td><span class="tag warn">待同步</span></td>
+    <td>已升到 2.10.6 并双处声明，但 <b>SSiD 侧 vendor 副本与归档尚未同步</b>（需重建归档）</td>
+  </tr>
+  <tr>
+    <td>归档逐文件 hash 清单</td>
+    <td><span class="tag warn">未做</span></td>
+    <td>现在只有 <code>.runtime-version</code> 一个依赖指纹，无法回答「解压出来的文件对不对」</td>
+  </tr>
+  <tr>
+    <td>内核移出 Electron 主进程</td>
+    <td><span class="tag warn">未做</span></td>
+    <td>可根治 <code>kernel.ts</code> 记录的 native addon / V8 embedder 问题，内核可独立重启；架构级改动</td>
+  </tr>
+  <tr>
+    <td>web 版隔离生效</td>
+    <td><span class="tag warn">待重启</span></td>
+    <td><code>dsh-web-runtime/</code> 与启动脚本已就绪并实测通过；需用新脚本重启一次 web 才真正切换</td>
+  </tr>
+  <tr>
+    <td>日志中的明文 token</td>
+    <td><span class="tag bad">待处理</span></td>
+    <td><code>Temp\opencode\dsh-web-restart.log</code> 含 <code>?token=…</code> 明文——那是 <b>web 版</b>启动器把 stdout 重定向所致（<code>dsh web: http://127.0.0.1:3080/?token=…</code>）。<b>更正</b>：本报告初版把这处记到了 SSiD 名下，实测 <code>~/.ssid/ssid.log</code> 里搜到的 10 处 "token" 全是 <code>SyntaxError: Invalid or unexpected token</code> 与 about 页 JSON，<b>不含内核认证 token</b>。处置是改 web 的启动方式（如 <code>--no-open</code> 之外再关掉 URL 打印），不是改 SSiD</td>
+  </tr>
+</table>
+
+<h2>附录 A · 壳实现对比：0.1.2 内核时代 vs 0.1.5 内核时代</h2>
+
+<div class="box info">
+  <div class="t">先纠正一个容易误解的说法</div>
+  <p><b>Electron</b> 指上游框架（双方都用 v44.2.0）；<b>Electron 壳</b>指「怎么起内核、怎么装 UI、怎么通信、怎么打包」的应用层。SSiD 的壳是<b>自研的</b>（<code>shell/main.mjs</code> + <code>kernel.ts</code>），官方有它的 <code>apps/desktop</code>。所以不是「改造了 Electron」，而是「自研了 Electron 壳、没有沿用官方那个」。</p>
+  <p>另有一处关键事实：<b>这次 rc.2 升级完全没动壳的核心实现</b>——<code>kernel.ts</code> / <code>main.mjs</code> / <code>boot-smoke.ts</code> 一个字节都没改。变的是壳所面对的内核契约，以及三处被内核升级逼出来的配套改动。</p>
+</div>
+
+<h3>A.1 内核契约层：真正变了的东西</h3>
+<table>
+  <tr><th>契约点</th><th>0.1.2-rc.1</th><th>0.1.5-rc.2</th></tr>
+  <tr><td><code>connection</code> 的 inject</td><td><code>['webServer','credentials']</code></td><td><code>['credentials']</code>，webServer 降为可选 <code>ctx.inject(['webServer'],…)</code></td></tr>
+  <tr><td>路由挂载来源</td><td>connection 自己持有 webServer，直接 <code>owner.webServer.register</code></td><td>改用 <code>attachWebServer</code> 注入的 <code>webServerCtx</code>；另有 <code>createSharedFetchHandler('/api')</code> 这条不依赖 webServer 的路</td></tr>
+  <tr><td><code>rpc.handle</code> 的 owner</td><td>connection 自己的 ctx（有 webServer 权限）</td><td>同一个 owner，但<b>权限没了</b> → 必抛 <code>cannot get property "webServer" without inject</code></td></tr>
+  <tr><td>persona 字段</td><td><code>config.text</code></td><td><code>config.prefix</code>（required）+ <code>suffix</code></td></tr>
+  <tr><td>persona 段名</td><td><code>deployment:persona</code></td><td>拆成 <code>deployment:persona-prefix</code> / <code>-suffix</code></td></tr>
+  <tr><td>connection 定位</td><td>webServer 的语义包装层</td><td>carrier-neutral（Web 载与 Electron 载分发同一 handler）</td></tr>
+</table>
+<p>关键推论：<b>0.1.5 之前 connection 与 webServer 是绑定的，之后解耦了</b>。这让「无 webServer 宿主」成为一等公民——DSH 官方桌面壳正是靠这一点把 <code>webserver</code> 整行禁掉、改用 <code>dsh-app://</code> 自定义协议。</p>
+
+<h3>A.2 壳所面对的运行时形态</h3>
+<table>
+  <tr><th>维度</th><th>0.1.2 时代</th><th>0.1.5 时代（当前）</th></tr>
+  <tr><td>SSiD 怎么起内核</td><td>Electron 主进程内直接 boot，单进程</td><td>同样（壳代码未改）</td></tr>
+  <tr><td>为什么必须单进程</td><td>Electron 里 DSH 的 native addon 探测不到标准 Node 的 V8 embedder，<code>ctx.loader.internal</code> 为 undefined；用 <code>registerHooks</code> 改写 bare specifier 的 parentURL 绕开</td><td>同样（<b>问题依旧存在，未根治</b>）</td></tr>
+  <tr><td>内核从哪加载</td><td>看起来在跑闭包</td><td>tsx 的 paths 把内核包解析到 checkout 源码，<b>闭包被旁路</b></td></tr>
+  <tr><td>同进程能拿到什么</td><td><code>kernel.get('memory')</code> 直接读 host 服务、<code>kernel.ctx.on('session/event')</code></td><td>同样（单进程收益保留）</td></tr>
+  <tr><td>UI 怎么加载</td><td>BrowserWindow 加载 <code>http://127.0.0.1:&lt;动态端口&gt;</code></td><td>同样</td></tr>
+  <tr><td>webServer</td><td>在</td><td>在（内核端口仍监听、HTTP 401）</td></tr>
+</table>
+
+<div class="box warn">
+  <div class="t">A.2 里有个反直觉的结论</div>
+  <p>「0.1.2 时代跑闭包、0.1.5 时代跑源码」<b>不是升级导致的</b>，而是壳自己的 <code>tsconfig</code> paths 造成的——它一直把内核包指向 checkout 源码。0.1.2 时之所以看起来在跑闭包，是因为加载器当时没被引到源码路径上；升级后源码路径被走通，闭包才被旁路。<b>同一份壳代码，两个时代的运行时来源不同。</b></p>
+</div>
+
+<h3>A.3 三处被内核升级逼出来的配套改动</h3>
+<table>
+  <tr><th>#</th><th>改动</th><th>为什么是内核逼的</th></tr>
+  <tr><td>1</td><td><code>preset</code> 的 <code>config.text</code> → <code>config.prefix</code></td><td>persona schema 变了，不改就硬失败（<code>$.prefix missing required value</code>）；且 preset 是<b>手工部署</b>的——仓库副本与 <code>~/.dsh/.agent-presets/</code> 两处都得改，不在任何自动化链路上</td></tr>
+  <tr><td>2</td><td><code>tsconfig.json</code> paths 补 57 条（289→347）</td><td>内核加包就要补；rc.2 新增的 <code>@deepseek-ai/dsh-http-proxy</code>（<code>subprocess/src</code> 新 import）是首个症状</td></tr>
+  <tr><td>3</td><td><code>dsh-pocket</code> 2.10.3 → 2.10.6</td><td>connection 的 inject 收缩使 <code>rpc.handle</code> 必抛；2.10.6 的 <code>inject</code> 含 webServer 并优先自行挂载</td></tr>
+</table>
+<p class="muted">另有两条属于<b>环境欠债</b>、与内核版本无关，只是升级时才暴露：checkout 从未完整 <code>pnpm install</code>（<code>zod</code> / <code>mime-types</code> / <code>node-addon-system</code> 全缺）、22 个 dist 型包没有 <code>lib/</code> 产物。</p>
+
+<h3>A.4 一句话总结两个时代的差别</h3>
+<table>
+  <tr><th></th><th>0.1.2 时代</th><th>0.1.5 时代</th></tr>
+  <tr><td>壳的职责</td><td>起内核 + 加载 UI + 同进程读 host 服务</td><td>完全相同</td></tr>
+  <tr><td>内核给壳的假设</td><td>webServer 一定在，connection 依附于它</td><td><b>宿主可能没有 webServer</b>，connection 可独立工作</td></tr>
+  <tr><td>插件怎么写路由</td><td><code>webServer.register</code> / <code>connection.rpc.handle</code> 都行</td><td>想跨宿主就得用 <code>connection.fetch.register</code>（载体中立）</td></tr>
+  <tr><td>对 SSiD 的实际影响</td><td>—</td><td>自身没坏（它有 webServer），但<b>为将来换宿主留了门</b></td></tr>
+</table>
+<p><b>结论：</b>「0.1.5 的 SSiD 壳」并不是一种新实现，而是同一份壳跑在新内核契约上。真正的分水岭不在壳，在于内核开始承认「没有 webServer 的宿主」这个形态——那正是官方桌面壳的架构前提。</p>
+
+<footer>
+  生成于 2026-09-13 ｜ 所有数字均附可复现命令；「实测」= 有命令输出，「推断」= 已在正文标注<br>
+  相关文档：<code>docs/决策/2026-09-12-SSiD内核升级-0.1.5-rc.2.md</code> · <code>docs/SSiD开发手册.md</code> §5.0 / §5.5 / §7
+</footer>
+
+</div>
+</body>
+</html>
