@@ -18,7 +18,7 @@
     "@max-null/dsh-ssid-panels": "file:./vendor/dsh-ssid-panels",
     "@max-null/dsh-ssid-zh-ui": "file:./vendor/dsh-ssid-zh-ui",
     "@playwright/mcp": "0.0.80",
-    "ds-harness-remote": "0.4.10",
+    "ds-harness-remote": "0.4.13",
     "dsh-better-sidebar": "0.18.0",
     "dsh-context": "0.44.0",
     "dsh-context-doctor": "file:./vendor/dsh-context-doctor",
