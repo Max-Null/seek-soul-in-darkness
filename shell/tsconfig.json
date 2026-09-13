@@ -1062,6 +1062,7 @@
   },
   "include": [
     "kernel.ts",
+    "kernel-child.ts",
     "module-resolution.ts",
     "boot-smoke.ts"
   ]
