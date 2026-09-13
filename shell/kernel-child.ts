@@ -114,6 +114,26 @@ async function main(): Promise<void> {
       forwardEvent(event as { type?: string, data?: unknown, time?: number })
     })
 
+  // ── 「AI 提问」通知 ─────────────────────────────────────────────────────
+  // 同进程模式下由**主进程**包装 userQuestions.ask 发通知（main.mjs 的通知段）；
+  // 内核搬到子进程后那个包装点够不着服务（kernel.get 在主进程返回 undefined），
+  // 于是改在这里的**子进程内**包装同一个服务，ask() 前上报一条事件。
+  // 与主进程的包装同形：只加一个前置动作，不改 ask 自身行为。
+  const uq = kernel.get('userQuestions') as { ask?: (...args: unknown[]) => Promise<unknown> } | undefined
+  const ask = uq?.ask
+  if (uq !== undefined && typeof ask === 'function') {
+    const originalAsk = ask.bind(uq)
+    uq.ask = async (...args: unknown[]) => {
+      send({ type: 'event', name: 'question/asked' })
+      return await originalAsk(...args)
+    }
+    console.error('ssid: kernel-child 已包装 userQuestions（AI 提问通知可用）')
+  } else {
+    // 服务缺失不是错误（profile 可能没装相关行），但必须留痕：否则「子进程模式下
+    // AI 提问不通知」会被当成随机故障去排查。
+    console.error('ssid: kernel-child 未提供 userQuestions，AI 提问通知不可用')
+  }
+
   process.on('message', (msg: unknown) => {
     // 先交给能力桥：主进程回传的 capabilityReply / capabilityEvent 都在这里消费
     if (handleParentMessage(msg)) return

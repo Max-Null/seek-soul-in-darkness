@@ -1095,7 +1095,8 @@ async function start() {
           dshVersion: readyKernel.dshVersion,
           // 子进程模式下主进程没有内核 ctx / 服务句柄：
           //   ctx === null → 通知安装走 IPC 事件分支（见下方通知段）
-          //   get() 不可用 → userQuestions 包装跳过（该通知需子进程侧上报，见 D14）
+          //   get() 不可用 → userQuestions 包装跳过；「AI 提问」改由子进程侧
+          //   包装同一服务并上报 question/asked 事件（见 kernel-child.ts）
           ctx: null,
           get: () => undefined,
           shutdown: (code) => host.shutdown().then(() => app.exit(code)),
@@ -1428,6 +1429,11 @@ async function start() {
       }
       if (name === 'approval/asked') {
         maybeNotify('approval', WINDOW_TITLE, `工具「${String(p.toolName ?? '?')}」请求授权，请回到思灵处理`)
+      }
+      if (name === 'question/asked') {
+        // 子进程侧在 ask() 之前上报，此刻还不知道要问什么，故文案不含问题内容
+        // ——与同进程模式（下方 userQuestions 包装）保持一致。
+        maybeNotify('question', WINDOW_TITLE, 'AI 向你提出了一个问题，请回到思灵回答')
       }
     }
     // sink 装好后冲刷 boot 期间缓冲的事件
