@@ -23,23 +23,54 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, write
 import { homedir } from 'node:os'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import {
-  boot,
-  composeEntries,
-  healProfilesModuleFallback,
-  initProfile,
-  loadLayeredEnv,
-  loadOptionalPatches,
-  loadProfile,
-  PROFILE_PATCH_FILENAME,
-  resolveProfileDir,
-} from '@deepseek-ai/dsh-app-boot'
 import type { PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import type { Context } from '@deepseek-ai/cordis'
-import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
-import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
-import { DSH_LAUNCH_ENVIRONMENT_KEY } from '@deepseek-ai/dsh-launch-environment'
 import { installProfilePackageResolver } from './module-resolution.ts'
+
+// ── 为什么 DSH 的包在这里只有 type 导入 ─────────────────────────────────
+// bundle 形态必须把 `@deepseek-ai/*` 标记为 external（见 check-loader-external），
+// 否则 include 被内联会产生两份 Loader peer，插件的 RPC channel 注册不上宿主
+// ——那就是 v0.3.0 的 405 故障。而 external 之后，bundle 顶层若仍有静态
+// import，ESM 会在模块体执行前解析它，那时 resolver 还没装，直接
+// ERR_MODULE_NOT_FOUND（实测）。所以值导入一律改成 bootKernel 内的动态
+// import，只在 resolver 装好之后发生；`import type` 会被 esbuild 擦除，不受影响。
+
+/**
+ * 解析 DSH home。与 `@deepseek-ai/dsh-home-paths` 的 `resolveDshHome` 同语义，
+ * 本地实现的原因见上：它是 resolver 安装**之前**就要用的两个符号之一。
+ * $DSH_HOME（去空白）优先，否则 ~/.dsh；支持 `~` / `~/` / `~\` 展开。
+ * @param env - 环境变量源，默认 process.env（参数化便于自测）。
+ * @returns 绝对路径。
+ */
+function resolveDshHome(env: Record<string, string | undefined> = process.env): string {
+  const fromEnv = env.DSH_HOME
+  const selected = fromEnv !== undefined && fromEnv.trim().length > 0
+    ? fromEnv.trim()
+    : join(homedir(), DSH_HOME_DIR_NAME)
+  return resolve(expandHomePath(selected))
+}
+
+/** `~` / `~/` / `~\` 展开（与 dsh-home-paths 的 expandHomePath 同语义）。 */
+function expandHomePath(input: string): string {
+  if (input === '~') return homedir()
+  if (input.startsWith('~/') || input.startsWith('~\\')) return join(homedir(), input.slice(2))
+  return input
+}
+
+/**
+ * 解析 profile 目录。与 `@deepseek-ai/dsh-app-boot` 的 `resolveProfileDir` 同语义
+ * （同样的名字校验 + `join(home, PROFILES_DIR, name)`），同样是 resolver 之前要用。
+ * @param name - profile 名。
+ * @param home - DSH home。
+ * @returns profile 绝对路径。
+ */
+function resolveProfileDir(name: string, home: string): string {
+  if (name === '' || name.includes('/') || name.includes('\\') || name === '.' || name === '..'
+    || name === 'node_modules') {
+    throw new Error(`ssid: invalid profile name ${JSON.stringify(name)}`)
+  }
+  return join(home, PROFILES_DIR, name)
+}
 // 纯 ESM JS 工具（lib/profile-merge.mjs，无类型声明；noImplicitAny=false 容忍）
 import { shouldDropPending } from './lib/profile-merge.mjs'
 
@@ -49,6 +80,12 @@ const BIN_NAME = 'ssid'
 const PROFILE_NAME = 'ssid'
 /** SSiD profile 的 bundle 层 = DSH 官方 web 的两个 bundle。 */
 const PROFILE_BUNDLES = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app']
+/** profile 目录名（与 dsh-app-boot 的 PROFILES_DIR 同值）。 */
+const PROFILES_DIR = 'profiles'
+/** DSH home 目录名（与 dsh-home-paths 的 DSH_HOME_DIR_NAME 同值）。 */
+const DSH_HOME_DIR_NAME = '.dsh'
+/** profile 自己的 patch 文件名（与 dsh-app-boot 的 PROFILE_PATCH_FILENAME 同值）。 */
+const PROFILE_PATCH_FILENAME = 'cordis.patch.yml'
 /** 空 root config 文件名（官方约定 cordis.yml）。 */
 const ROOT_CONFIG_FILENAME = 'cordis.yml'
 /** 会话遥测 row id（官方 profile-boot 的 DSH_TELEMETRY_DISABLED 开关目标）。 */
@@ -383,10 +420,7 @@ export async function bootKernel(
   const profileDir = resolveProfileDir(PROFILE_NAME, home)
   // 供宿主插件定位 profile 物理目录（如 ssid-panels 读预制插件元数据）。
   process.env.SSID_PROFILE_DIR = profileDir
-  // 首次运行初始化（官方 loadProfile 只认 web/headless 模板，ssid 要自己建）。
-  if (!existsSync(join(profileDir, 'package.json'))) {
-    initProfile(profileDir, PROFILE_BUNDLES)
-  }
+  // 首次运行初始化已移到动态 import 之后（initProfile 来自 DSH，见文件头注释）。
   // 预设技能同步：出厂技能（profileDir/skills，随归档部署）非覆盖合并到
   // $DSH_HOME/skills。旧版/开发裸跑 profile 无 skills 目录时静默跳过。
   syncPresetSkills(join(profileDir, 'skills'), join(home, 'skills'))
@@ -439,16 +473,33 @@ export async function bootKernel(
   // 没 heal 会解析失败。
   // master 内核 API：healProfilesModuleFallback 改为 options 对象 + async
   // （0.1.2-alpha.1；旧双参签名会在 options.installAnchor 上取到 undefined）。
-  await healProfilesModuleFallback({ installAnchor, home })
   // loader 的 bare specifier 从这个锚点向上找 node_modules：profile 自己的
   // node_modules（第三方插件）→ ~/.dsh/profiles/node_modules（heal 建立的
-  // 平面 symlink，覆盖所有 @deepseek-ai/dsh-*）。必须在 boot 之前装好。
+  // 平面 symlink，覆盖所有 @deepseek-ai/dsh-*）。必须在任何 DSH 动态 import
+  // 之前装好。
+  //
+  // 提到 heal 之前是安全的：前缀从 profileDir/package.json 出发解析，而打包版
+  // 的闭包就部署在 profileDir/node_modules（main.mjs 的 deployRuntime 保证进到
+  // 这里时已部署），不走 heal 建立的 profiles/node_modules 平面 symlink。
   const releaseResolver = installProfilePackageResolver(
     pathToFileURL(join(profileDir, 'package.json')).href,
   )
 
+  // 唯一的 DSH 动态 import 点：resolver 已装好，bare specifier 会被改写到
+  // profile 目录。三个包各自独立 import，缺少哪个一眼可见。
+  const dsh = await import('@deepseek-ai/dsh-app-boot')
+  const { provideCmdline } = await import('@deepseek-ai/dsh-cmdline')
+  const { DSH_LAUNCH_ENVIRONMENT_KEY } = await import('@deepseek-ai/dsh-launch-environment')
+
   try {
-    const profile = loadProfile(BIN_NAME, PROFILE_NAME, installAnchor, home)
+    // 首次运行初始化（官方 loadProfile 只认 web/headless 模板，ssid 要自己建）。
+    if (!existsSync(join(profileDir, 'package.json'))) {
+      dsh.initProfile(profileDir, PROFILE_BUNDLES)
+    }
+    // 必须先 heal：resolver 之后的 bare 解析会用到 profiles/node_modules 平面
+    // symlink；master 内核 API 是 options 对象 + async（0.1.2-alpha.1 起）。
+    await dsh.healProfilesModuleFallback({ installAnchor, home })
+    const profile = dsh.loadProfile(BIN_NAME, PROFILE_NAME, installAnchor, home)
 
     const rootConfig = join(profile.dir, ROOT_CONFIG_FILENAME)
     writeFileSync(rootConfig, '[]\n')
@@ -476,7 +527,7 @@ export async function bootKernel(
     }
     const homePatches = safeMode
       ? []
-      : (loadOptionalPatches(BIN_NAME, join(home, PROFILE_PATCH_FILENAME)) ?? [])
+      : (dsh.loadOptionalPatches(BIN_NAME, join(home, PROFILE_PATCH_FILENAME)) ?? [])
     const patches: PatchOptions[] = [
       ...layers.flatMap(layer => layer.patches),
       ...(safeMode ? [] : profile.patches),
@@ -489,7 +540,7 @@ export async function bootKernel(
     // agent-presets row 默认 default: standard，缺了这个 root 会报
     // agent-preset-not-found。
     const rows = new Map<string, { config?: unknown }>()
-    for (const row of composeEntries([patches])) {
+    for (const row of dsh.composeEntries([patches])) {
       if (typeof row.id === 'string') rows.set(row.id, row)
     }
     const presets = rows.get('agent-presets')
@@ -560,8 +611,8 @@ export async function bootKernel(
       // 配置不可写不阻断启动：开关状态以本次 boot 读到的为准
     }
 
-    const environment = loadLayeredEnv(BIN_NAME)
-    const ctx = await boot(BIN_NAME, rootConfig, structuredClone(patches), (hostCtx) => {
+    const environment = dsh.loadLayeredEnv(BIN_NAME)
+    const ctx = await dsh.boot(BIN_NAME, rootConfig, structuredClone(patches), (hostCtx) => {
       hostCtx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, environment)
       // 壳层「重启 DSH」能力（main.mjs 的 restartDsh：app.relaunch +
       // kernel.shutdown），dsh-ssid-panels 设置页经 ctx.get(SSID_SHELL_RESTART_KEY)

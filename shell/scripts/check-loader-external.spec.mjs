@@ -73,12 +73,32 @@ test('构建脚本缺 --external:@deepseek-ai/* → 退出码 1，且指名是�
 test('产物内联了 include → 退出码 1，且点出特征串（本次 405 的形状）', () => {
   withTempDir((dir) => {
     writePkg(dir);
-    fs.writeFileSync(path.join(dir, 'kernel.bundle.mjs'), 'function applyEntryPatches(){}\nfunction composeEntries(){}\n');
+    fs.writeFileSync(path.join(dir, 'kernel.bundle.mjs'), 'function applyEntryPatches(){}\nfrom "@deepseek-ai/dsh-app-boot";\n');
     const r = runGate(dir);
     assert.equal(r.code, 1, `期望 1，实际 ${r.code}\n${r.out}`);
     assert.match(r.out, /applyEntryPatches/);
-    assert.match(r.out, /composeEntries/);
     assert.match(r.out, /kernel\.bundle\.mjs/);
+  });
+});
+
+test('composeEntries 不是内联特征 —— kernel.ts 自己会调用它（初版误报的回归）', () => {
+  withTempDir((dir) => {
+    writePkg(dir);
+    // 正确产物的真实形态：external import + dsh.composeEntries(...) 调用点
+    fs.writeFileSync(path.join(dir, 'kernel-child.bundle.mjs'),
+      'const dsh = await import("@deepseek-ai/dsh-app-boot");\nfor (const row of dsh.composeEntries([patches])) {}\n');
+    const r = runGate(dir);
+    assert.equal(r.code, 0, `调用点不该被当成内联特征\n${r.out}`);
+  });
+});
+
+test('产物里没有任何 @deepseek-ai/* 的 external 引用 → 退出码 1（整棵内联）', () => {
+  withTempDir((dir) => {
+    writePkg(dir);
+    fs.writeFileSync(path.join(dir, 'kernel.bundle.mjs'), 'function boot(){}\n');
+    const r = runGate(dir);
+    assert.equal(r.code, 1, `期望 1，实际 ${r.code}\n${r.out}`);
+    assert.match(r.out, /没有对 @deepseek-ai\/\* 的 external 引用/);
   });
 });
 

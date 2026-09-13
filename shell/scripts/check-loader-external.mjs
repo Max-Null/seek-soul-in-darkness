@@ -39,8 +39,20 @@ const BUNDLE_DIR = process.env.SSID_BUNDLE_DIR ?? SHELL;
 
 const gate = createGate({ id: 'check-loader-external', label: 'bundle 不得内联 DSH', base: REPO });
 
-/** 内联 DSH 的产物特征：include 的实现函数名（external 时只留 import 语句）。 */
-const INLINE_MARKERS = ['applyEntryPatches', 'composeEntries'];
+/**
+ * 内联 DSH 的产物特征：include 的**内部实现**函数名。
+ *
+ * 只取 `applyEntryPatches` —— 它只存在于 include 的实现里，kernel.ts 从不直接调用。
+ * 初版把 `composeEntries` 也当特征，那是错的：kernel.ts 自己会调
+ * `dsh.composeEntries(...)`，这个名字在任何正确产物里都会出现，门会永远误报。
+ */
+const INLINE_MARKERS = ['applyEntryPatches'];
+
+/**
+ * 反向判据：产物必须保留对 DSH 的 external 引用。
+ * 若一条都没有，说明整棵 DSH 被内联了 —— 这比逐个特征串更可靠。
+ */
+const EXTERNAL_IMPORT = /(?:from\s*"@deepseek-ai\/|import\("@deepseek-ai\/)/;
 
 /** 产物体积上限。正确值约 21 KB，内联 DSH 后约 257 KB。 */
 const MAX_KB = 64;
@@ -90,6 +102,9 @@ for (const name of ['kernel.bundle.mjs', 'kernel-child.bundle.mjs']) {
     if (text.includes(marker)) {
       gate.violation(file, null, `内联了 DSH：出现 include 的实现特征 \`${marker}\`（应为 external import）`);
     }
+  }
+  if (!EXTERNAL_IMPORT.test(text)) {
+    gate.violation(file, null, '产物里没有对 @deepseek-ai/* 的 external 引用 —— 说明 DSH 被整棵内联了');
   }
   const kb = fs.statSync(file).size / 1024;
   if (kb > MAX_KB) {
