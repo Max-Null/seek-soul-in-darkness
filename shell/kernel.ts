@@ -453,10 +453,33 @@ export async function bootKernel(
     const rootConfig = join(profile.dir, ROOT_CONFIG_FILENAME)
     writeFileSync(rootConfig, '[]\n')
 
-    const homePatches = loadOptionalPatches(BIN_NAME, join(home, PROFILE_PATCH_FILENAME)) ?? []
+    // ── 纯净模式：故障恢复入口（托盘「以纯净模式重启」/ --ssid-safe-mode）────
+    // 只留**官方 bundle 的 patch 层**，丢弃 profile 自己的 cordis.patch.yml 与
+    // ~/.dsh/cordis.patch.yml。改的只是「加载哪些插件」，不碰任何数据
+    // （会话/设置/记忆/storage 全不动），所以用户看到的还是同一个思灵，
+    // 只是没有第三方插件，于是能进设置页把坏插件禁用掉。
+    //
+    // 为什么按**层**判定而不是逐个 row：composeEntries 只回 EntryOptions，不带
+    // 「这一行来自哪个 patch」；ProfileLayer.packageName 是唯一可靠的来源信息
+    // （app-boot 的 profile.ts 里它取自 dsh.profile.bundles）。也不能只禁用非官方
+    // 行——用户 patch 可能是**改官方行的 config**，那样坏配置照样生效，必须整层丢。
+    const safeMode = process.env.SSID_SAFE_MODE === '1'
+    const layers = safeMode
+      ? profile.layers.filter(layer => layer.packageName.startsWith('@deepseek-ai/'))
+      : profile.layers
+    if (safeMode) {
+      console.log(
+        `ssid: 纯净模式（SSID_SAFE_MODE=1）：${String(profile.layers.length)} 层中保留官方 ${String(layers.length)} 层`
+        + `：${layers.map(l => l.packageName).join(', ')}`
+        + `；丢弃 ${String(profile.patches.length)} 条 profile patch 与 home patch`,
+      )
+    }
+    const homePatches = safeMode
+      ? []
+      : (loadOptionalPatches(BIN_NAME, join(home, PROFILE_PATCH_FILENAME)) ?? [])
     const patches: PatchOptions[] = [
-      ...profile.layers.flatMap(layer => layer.patches),
-      ...profile.patches,
+      ...layers.flatMap(layer => layer.patches),
+      ...(safeMode ? [] : profile.patches),
       ...homePatches,
     ]
 

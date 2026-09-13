@@ -29,6 +29,15 @@ import { buildUpgradeReport, mergeUserPatch, snapshotProfileConfigs } from './li
 import { CG_CONFIG_FILE, readCodeGraphConfig, resolveCodeGraphWorkspace, writeCodeGraphConfig } from './lib/codegraph-adapt.mjs'
 import { startKernelHost } from './host-process.mjs'
 
+// ── 纯净模式启动标志（故障恢复）─────────────────────────────────────────
+// 托盘「以纯净模式重启」把它写进**下次** launch 的 argv（restartDsh 显式传
+// args），这里再转写成环境变量供 kernel.ts 读取——内核可能跑在同进程，也可能
+// 跑在子进程（host-process.mjs 用 ...process.env 继承），两条路都覆盖。
+// 用 argv 而非只改 env：app.relaunch 的 env 传递依赖默认行为，显式传参既可验证，
+// 也便于用户手工在命令行加该参数进纯净模式。
+const SAFE_MODE_FLAG = '--ssid-safe-mode'
+if (process.argv.includes(SAFE_MODE_FLAG)) process.env.SSID_SAFE_MODE = '1'
+
 // ── stderr/stdout 管道防护 ───────────────────────────────────────────────
 // GUI 启动时 stderr 可能挂在一个已关闭的管道上（启动终端关闭 / 双击 exe）：
 // 继续写入抛 EPIPE，无人监听 error 事件会升级为未捕获异常，Electron 弹
@@ -870,8 +879,18 @@ async function start() {
   // 先标记 relaunch 再优雅退出：shutdown 内部 await fiber.dispose 后
   // app.exit(0)，Electron 检测到 relaunch 标志自动以新进程重启；
   // 过滤 worker.cjs：worker 模式 relaunch 不能沿用原始 argv。
-  const restartDsh = () => {
-    app.relaunch({ args: process.argv.slice(1).filter((arg) => !arg.endsWith('worker.cjs')) })
+  /**
+   * 重启壳：置 relaunch 标志 + 优雅退出。
+   * @param {boolean|undefined} safeMode 改写**下次**启动的模式：true 附加
+   *   --ssid-safe-mode（进纯净模式），false 剥掉它（回正常模式）；不传则沿用
+   *   当前 argv，因此内核侧（设置页开关）调用它时行为不变。
+   */
+  const restartDsh = (safeMode) => {
+    const current = process.argv.slice(1).filter((arg) => !arg.endsWith('worker.cjs'))
+    const args = safeMode === undefined
+      ? current
+      : current.filter((arg) => arg !== SAFE_MODE_FLAG).concat(safeMode ? [SAFE_MODE_FLAG] : [])
+    app.relaunch({ args })
     quitting = true
     void kernel.shutdown(0).catch(() => app.exit(0))
   }
@@ -1400,6 +1419,10 @@ async function start() {
   const tray = new Tray(nativeImage.createFromPath(asset('tray.png')))
   safeLog('ssid: phase tray ok\n')
   tray.setToolTip(WINDOW_TITLE)
+  // 纯净模式（故障恢复）：只加载官方 bundle 的插件行，用来救「第三方插件把
+  // boot 弄坏、设置页进不去」的环境。放托盘是因为菜单本身不依赖内核状态；
+  // 数据（会话/设置/记忆/storage）一律不动，用户看到的是同一个思灵。
+  const safeMode = process.env.SSID_SAFE_MODE === '1'
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '显示思灵', click: () => { win.show(); win.focus() } },
     {
@@ -1414,6 +1437,11 @@ async function start() {
     {
       label: '重启',
       click: () => restartDsh(),
+    },
+    {
+      // 同一位置反向切换：进了纯净模式必须能出来，否则用户只能手工改启动参数。
+      label: safeMode ? '以正常模式重启（退出纯净模式）' : '以纯净模式重启（只留官方插件）',
+      click: () => { restartDsh(!safeMode) },
     },
     { type: 'separator' },
     { label: '退出', click: () => app.quit() },
