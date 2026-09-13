@@ -100,6 +100,23 @@ const WINDOW_TITLE = '思灵 (SSiD)'
 
 const asset = (name) => fileURLToPath(new URL(`./assets/${name}`, import.meta.url))
 
+/**
+ * 清除上一次内核实例留下的 dsh-auth-* cookie。
+ * 内核每次启动都会 mint 新 token，而旧 cookie 的 authority 同为 127.0.0.1:*，
+ * 留着只会在会话里累积。首次 loadURL 与「只重启内核」都要走这一步，故抽出来。
+ * @param {Electron.Session} session 目标会话（mainView 的默认 session）。
+ */
+async function clearStaleAuthCookies(session) {
+  try {
+    const cookies = await session.cookies.get({})
+    const stale = cookies.filter((c) => typeof c.name === 'string' && c.name.startsWith('dsh-auth-'))
+    for (const c of stale) {
+      try { await session.cookies.remove('http://127.0.0.1/', c.name) } catch { /* best-effort */ }
+    }
+    if (stale.length > 0) safeLog(`ssid: cleared ${stale.length} stale dsh-auth cookies\n`)
+  } catch { /* 清除失败不影响启动（下次实例继续累积） */ }
+}
+
 const workerScript = process.argv.find((arg) => arg.endsWith('worker.cjs'))
 // bootKernel 提升到模块顶层：worker 分支上移后原 `const { bootKernel }` 落在
 // else 块内（块级作用域），start() 在模块顶层定义、608 行访问 bootKernel 会
@@ -872,6 +889,10 @@ async function start() {
 
   // ── boot DSH kernel (this process) ──────────────────────────────────────
   let kernel
+  // 子进程模式下的「只重启内核」入口，由下方 child 分支赋值；null = 同进程模式，
+  // 内核就在本进程里，只能整壳重启。必须声明在 restartDsh 之前且同一作用域：
+  // restartDsh 定义在 try 块外（块内 const 会让托盘闭包 ReferenceError，2026-08-23 实锤）。
+  let respawnKernel = null
   // 重启回调：注入 DSH 内核（服务键 'ssid.shell.restart'，供 dsh-ssid-panels
   // 设置开关「确认后重启」）与托盘「重启」走同一路径。必须定义在 try 块外
   // （托盘菜单 1026 行的 click 闭包引用它；try 内 const 是块级作用域，
@@ -880,12 +901,28 @@ async function start() {
   // app.exit(0)，Electron 检测到 relaunch 标志自动以新进程重启；
   // 过滤 worker.cjs：worker 模式 relaunch 不能沿用原始 argv。
   /**
-   * 重启壳：置 relaunch 标志 + 优雅退出。
+   * 重启 DSH。三种情形：
+   *   - 子进程模式 + 未指定模式：**只重启内核**（respawn 子进程 + 重新 loadURL），
+   *     窗口/托盘/标题栏都不重建，比重启整个 Electron 快得多；
+   *   - 指定了 safeMode（托盘「以纯净/正常模式重启」）：必须整壳 relaunch ——
+   *     模式切换要改的是**下次启动的 argv**，只换内核改不了它；
+   *   - 同进程模式：只能整壳 relaunch（内核就在主进程里）。
    * @param {boolean|undefined} safeMode 改写**下次**启动的模式：true 附加
    *   --ssid-safe-mode（进纯净模式），false 剥掉它（回正常模式）；不传则沿用
    *   当前 argv，因此内核侧（设置页开关）调用它时行为不变。
    */
   const restartDsh = (safeMode) => {
+    if (safeMode === undefined && respawnKernel !== null) {
+      safeLog('ssid: 只重启内核（不重启壳）\n')
+      void respawnKernel().catch((cause) => {
+        // 失败就退回整壳重启：否则用户点了重启却什么都没发生。
+        safeLog(`ssid: 只重启内核失败，回退整壳重启：${String(cause)}\n`)
+        app.relaunch({ args: process.argv.slice(1).filter((arg) => !arg.endsWith('worker.cjs')) })
+        quitting = true
+        app.exit(0)
+      })
+      return
+    }
     const current = process.argv.slice(1).filter((arg) => !arg.endsWith('worker.cjs'))
     const args = safeMode === undefined
       ? current
@@ -1022,36 +1059,57 @@ async function start() {
     // 能力侧（restart/update/screenshot）已由 kernel-child-bridge 经 IPC 代理。
     if (process.env.SSID_KERNEL_CHILD === '1') {
       safeLog('ssid: kernel 模式 = 子进程（SSID_KERNEL_CHILD=1）\n')
-      const host = startKernelHost({
-        isPackaged: app.isPackaged,
-        log: safeLog,
-        onEvent: (e) => {
-          if (kernelEventSink === null) pendingKernelEvents.push(e)
-          else kernelEventSink(e)
-        },
-        onExit: ({ code, signal }) => {
-          safeLog(`ssid: kernel-child 退出 code=${String(code)} signal=${String(signal)}\n`)
-        },
-        capabilities: {
-          restart: { invoke: () => { restartDsh() } },
-          update: createShellUpdater(),
-          screenshot: {
-            trigger: () => { void startScreenshotCapture() },
-            apply: () => applyScreenshotHotkey(),
+      // 起一个内核子进程并等 ready。抽成函数是为了「只重启内核」能复用它：
+      // 重启 = 关掉旧子进程 + 再走一遍这里，主进程与窗口都不动。
+      let kernelHost = null
+      const bootChildKernel = async () => {
+        if (kernelHost !== null) {
+          const old = kernelHost
+          kernelHost = null
+          await old.shutdown()
+        }
+        const host = startKernelHost({
+          isPackaged: app.isPackaged,
+          log: safeLog,
+          onEvent: (e) => {
+            if (kernelEventSink === null) pendingKernelEvents.push(e)
+            else kernelEventSink(e)
           },
-        },
-      })
-      const readyKernel = await host.ready
-      kernel = {
-        port: readyKernel.port,
-        url: readyKernel.url,
-        dshVersion: readyKernel.dshVersion,
-        // 子进程模式下主进程没有内核 ctx / 服务句柄：
-        //   ctx === null → 通知安装走 IPC 事件分支（见下方通知段）
-        //   get() 不可用 → userQuestions 包装跳过（该通知需子进程侧上报，见 D14）
-        ctx: null,
-        get: () => undefined,
-        shutdown: (code) => host.shutdown().then(() => app.exit(code)),
+          onExit: ({ code, signal }) => {
+            safeLog(`ssid: kernel-child 退出 code=${String(code)} signal=${String(signal)}\n`)
+          },
+          capabilities: {
+            restart: { invoke: () => { restartDsh() } },
+            update: createShellUpdater(),
+            screenshot: {
+              trigger: () => { void startScreenshotCapture() },
+              apply: () => applyScreenshotHotkey(),
+            },
+          },
+        })
+        kernelHost = host
+        const readyKernel = await host.ready
+        return {
+          port: readyKernel.port,
+          url: readyKernel.url,
+          dshVersion: readyKernel.dshVersion,
+          // 子进程模式下主进程没有内核 ctx / 服务句柄：
+          //   ctx === null → 通知安装走 IPC 事件分支（见下方通知段）
+          //   get() 不可用 → userQuestions 包装跳过（该通知需子进程侧上报，见 D14）
+          ctx: null,
+          get: () => undefined,
+          shutdown: (code) => host.shutdown().then(() => app.exit(code)),
+        }
+      }
+      kernel = await bootChildKernel()
+      // 「只重启内核」：换内核 + 指向新端口。新内核会 mint 新的认证 token，
+      // 故先清掉上一实例的 dsh-auth-* cookie（与首次 loadURL 同一处理）。
+      respawnKernel = async () => {
+        const next = await bootChildKernel()
+        kernel = next
+        await clearStaleAuthCookies(mainView.webContents.session)
+        await mainView.webContents.loadURL(next.url)
+        safeLog(`ssid: 内核已重启 port=${next.port}\n`)
       }
     } else {
       kernel = await bootKernel(undefined, {
@@ -1185,15 +1243,7 @@ async function start() {
   // 加载时会新 mint 一个，数量恒为 1，不会累积。注意：必须用当前窗口会话
   // 清（mainView 默认 session）；旧 cookie 的 authority 同样是 127.0.0.1:*，
   // 在 loadURL 前清除不影响后续认证（当前实例会重建自己的 cookie）。
-  try {
-    const sess = mainView.webContents.session
-    const cookies = await sess.cookies.get({})
-    const stale = cookies.filter((c) => typeof c.name === 'string' && c.name.startsWith('dsh-auth-'))
-    for (const c of stale) {
-      try { await sess.cookies.remove('http://127.0.0.1/', c.name) } catch { /* best-effort */ }
-    }
-    if (stale.length > 0) safeLog(`ssid: cleared ${stale.length} stale dsh-auth cookies\n`)
-  } catch { /* 清除失败不影响启动（下次实例继续累积） */ }
+  await clearStaleAuthCookies(mainView.webContents.session)
   await mainView.webContents.loadURL(kernel.url)
   safeLog('ssid: phase loadURL ok\n')
   splashStep(4)
