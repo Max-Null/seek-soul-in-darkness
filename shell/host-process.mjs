@@ -11,11 +11,22 @@
  * 且内核崩溃不会拖死 UI，可独立重启。
  */
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
+
+/**
+ * 内核子进程诊断输出的落盘位置。
+ *
+ * 不落盘就只能靠 inherit —— 而 GUI（双击）启动时 Electron 的 stderr 是无效的，
+ * 内核里任何插件加载失败、channel 注册报错都会**整段丢失**：2026-09-13 的
+ * 「插件中心 405」正是这样一个被藏住的错误，只能靠外部探测反推根因。
+ * 与 ssid.log 同目录，便于并排对照。
+ */
+const CHILD_LOG_PATH = process.env.SSID_KERNEL_CHILD_LOG ?? join(homedir(), '.ssid', 'kernel-child.log')
 
 /** ready 等待上限：源码模式首次 boot 要转译几百个 TS 文件，给足时间。 */
 const READY_TIMEOUT_MS = 180_000
@@ -79,6 +90,15 @@ export function startKernelHost({
   // spawn 会以 ENOENT 失败，而错误信息指向 exe 路径，极具误导性（实测：
   // resources/node/node.exe 明明存在，却报 `spawn ...node.exe ENOENT`；
   // dev 下 HERE 就是 shell/，所以这个坑只在运行打包产物时才暴露）。
+  // 子进程的诊断输出落盘（见 CHILD_LOG_PATH 注释）：GUI 启动时 Electron 的 stderr
+  // 无效，inherit 等于把内核报错整段丢掉。打不开就退回 inherit，不因此阻断启动。
+  let childLogFd = null
+  try {
+    mkdirSync(dirname(CHILD_LOG_PATH), { recursive: true })
+    childLogFd = openSync(CHILD_LOG_PATH, 'a')
+    appendFileSync(CHILD_LOG_PATH, `\n===== kernel-child @ ${new Date().toISOString()} =====\n`)
+  } catch { /* 落盘不可用（权限/磁盘）时退回 inherit，子进程照常启动 */ }
+
   const cwd = isPackaged ? process.resourcesPath : HERE
   const child = spawn(command, args, {
     cwd,
@@ -94,11 +114,11 @@ export function startKernelHost({
       // 的 preferBundled（防 $DSH_CHECKOUT 劫持运行时，pitfalls #5 幽灵依赖）。
       ...(isPackaged ? { SSID_KERNEL_CHILD_PACKAGED: '1' } : {}),
     },
-    // stdin 忽略；stdout/stderr 继承，内核日志直接进 Electron 的控制台/日志文件
-    // （与同进程模式看到的日志一致，便于对照排查）
-    stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+    stdio: ['ignore', childLogFd ?? 'inherit', childLogFd ?? 'inherit', 'ipc'],
     windowsHide: true,
   })
+  // 父进程关掉自己这一份句柄（子进程已 dup），避免句柄泄漏
+  if (childLogFd !== null) closeSync(childLogFd)
 
   let settled = false
   let resolveReady

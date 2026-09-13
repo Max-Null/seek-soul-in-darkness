@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * check-rules —— 四项规范检查的编排器（待办 #5，骨架建议 §4）
+ * check-rules —— 规范检查的编排器（待办 #5，骨架建议 §4）
  *
  * 只做四件事（官方 run-gates.ts 那 1583 行里被 SSiD 用得上的一小部分）：
  *   1. 单入口 + 白名单 mode 校验。非法值抛错并**回显全部合法值**。
@@ -8,8 +8,14 @@
  *   3. 顺序执行 + 逐门计时 + 输出缓冲。
  *   4. 退出码契约：**任一失败 ⇒ exit 1**。
  *
- * 明确不抄的部分及理由（骨架 §5）：needs/after 双依赖与环检测（四门之间无产物依赖）、
- * 手写并发调度（四门串行秒级完成，官方封顶 4 是被多个 doc 门各建整棵 ts.Program 逼出来的）、
+ * 什么进编排器、什么不进：进的都是**可机械判定**的规则（门）；需要语义判断的
+ * 只写进 `docs/插件开发规范.md`，不做门。已有先例 —— `check-cot-leakage.mjs`
+ * 的注释写明自己是「报告型而不是门」：探针按设计会过度匹配、按本性又匹配不足，
+ * 做成门会第一时间误杀它自己的校准语料然后被无视，故它恒以 0 退出、
+ * **刻意游离**在本编排器之外（不是遗漏）。
+ *
+ * 明确不抄的部分及理由（骨架 §5）：needs/after 双依赖与环检测（门之间无产物依赖）、
+ * 手写并发调度（门串行秒级完成，官方封顶 4 是被多个 doc 门各建整棵 ts.Program 逼出来的）、
  * fail-fast 进程树终止（SSiD 的门读完文件就退出、不留后代）、十余个 DSH_* 开关（配置面即理解成本）。
  *
  * 失败输出按官方 `formatGateResultReason` 把三类事实**全列出、互不遮蔽**：
@@ -28,6 +34,8 @@ const MODES = [
   { id: 'profile-sync', label: 'profile 与 template 声明对比', script: 'check-profile-sync.mjs' },
   { id: 'bom', label: 'BOM 扫描', script: 'check-bom.mjs' },
   { id: 'legacy-names', label: '旧名残留（硬域）', script: 'check-legacy-names.mjs' },
+  { id: 'loader-external', label: 'bundle 不得内联 DSH', script: 'check-loader-external.mjs' },
+  { id: 'plugin-peers', label: '插件 peerDeps 覆盖性', script: 'check-plugin-peers.mjs' },
 ];
 
 const README = `用法: node scripts/check-rules.mjs [${['all', ...MODES.map((m) => m.id)].join('|')}]
