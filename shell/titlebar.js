@@ -33,6 +33,20 @@ window.ssidTitle.onMaximized((maximized) => {
   iconRestore.style.display = maximized ? '' : 'none'
 })
 
+// 运行形态徽章（主进程按 app.isPackaged 注入）：dev 与安装版外观完全一致，
+// 没有它就无法区分手上这个是源码裸跑还是装出来的（2026-09-14 用户提出）。
+// 只在 dev 显示 —— 正式版不需要给自己加噪。
+window.__setShellMode = (mode) => {
+  const el = document.getElementById('shell-mode')
+  if (el !== null && mode === 'dev') {
+    el.textContent = 'DEV'
+    // 内联样式：避免为一个徽章再动 titlebar.html 的样式表
+    el.style.cssText = 'margin-left:5px;padding:0 4px;border:1px solid currentColor;'
+      + 'border-radius:3px;font-size:9px;line-height:13px;opacity:.65;letter-spacing:.5px'
+    el.hidden = false
+  }
+}
+
 // DSH 版本副标题（主进程 boot 后注入；官方 host.describe 是占位符 0.0.1）。
 window.__setDshVersion = (version) => {
   const el = document.getElementById('dsh-ver')

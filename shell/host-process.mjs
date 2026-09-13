@@ -11,7 +11,7 @@
  * 且内核崩溃不会拖死 UI，可独立重启。
  */
 import { spawn } from 'node:child_process'
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync } from 'node:fs'
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, renameSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -27,6 +27,13 @@ const HERE = dirname(fileURLToPath(import.meta.url))
  * 与 ssid.log 同目录，便于并排对照。
  */
 const CHILD_LOG_PATH = process.env.SSID_KERNEL_CHILD_LOG ?? join(homedir(), '.ssid', 'kernel-child.log')
+
+/**
+ * 子进程日志的上限。内核每次 boot 都会打不少输出（codegraph MCP 是 DEBUG 级），
+ * 无限追加会攒出 MB 级文件——实测单次 boot 近 1 MB。超限就轮转成 `.1` 一份，
+ * 只留最近两次，既够排查又不失控。
+ */
+const CHILD_LOG_MAX_BYTES = 4 * 1024 * 1024
 
 /** ready 等待上限：源码模式首次 boot 要转译几百个 TS 文件，给足时间。 */
 const READY_TIMEOUT_MS = 180_000
@@ -95,6 +102,10 @@ export function startKernelHost({
   let childLogFd = null
   try {
     mkdirSync(dirname(CHILD_LOG_PATH), { recursive: true })
+    // 超限先轮转（旧的变 .1，下一次启动时被覆盖），避免无限追加
+    if (existsSync(CHILD_LOG_PATH) && statSync(CHILD_LOG_PATH).size > CHILD_LOG_MAX_BYTES) {
+      renameSync(CHILD_LOG_PATH, `${CHILD_LOG_PATH}.1`)
+    }
     childLogFd = openSync(CHILD_LOG_PATH, 'a')
     appendFileSync(CHILD_LOG_PATH, `\n===== kernel-child @ ${new Date().toISOString()} =====\n`)
   } catch { /* 落盘不可用（权限/磁盘）时退回 inherit，子进程照常启动 */ }

@@ -1170,6 +1170,17 @@ async function start() {
   void titleBar.webContents.executeJavaScript(
     `window.__setDshVersion(${JSON.stringify(kernel.dshVersion)})`,
   ).catch(() => {})
+  // 运行形态徽章：dev（源码裸跑）与安装版外观一致，没有它区分不了（2026-09-14 用户提出）。
+  // 安装版不注入任何东西，徽章保持 hidden。成功与否都记一行 —— 徽章在标题栏里，
+  // 出问题时从日志才能判断是「注入没发生」还是「渲染没生效」。
+  if (!app.isPackaged) {
+    void titleBar.webContents.executeJavaScript(
+      `window.__setShellMode('dev')`,
+    ).then(
+      () => { safeLog('ssid: 已注入 dev 徽章\n') },
+      (cause) => { safeLog(`ssid: 注入 dev 徽章失败：${String(cause)}\n`) },
+    )
+  }
 
   // 标题栏窗口控制 IPC。
   ipcMain.handle('ssid:title:minimize', () => { win.minimize() })

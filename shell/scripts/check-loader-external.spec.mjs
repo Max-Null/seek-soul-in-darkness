@@ -130,3 +130,50 @@ test('package.json 缺失 → 退出码 1（而不是静默通过）', () => {
     assert.match(r.out, /找不到 package\.json/);
   });
 });
+
+/** 造出 electron-builder 放置进包产物的路径（extraResources 的落点）。 */
+function writeShipped(dir, content) {
+  const p = path.join(dir, 'dist-electron', 'win-unpacked', 'resources', 'kernel-child.bundle.mjs');
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, content);
+  return p;
+}
+
+test('仓库根产物正确、但进包的那份是内联旧产物 → 退出码 1（本次 405 的真实形状）', () => {
+  withTempDir((dir) => {
+    writePkg(dir);
+    // 源头正确：两个产物都是外置版
+    fs.writeFileSync(path.join(dir, 'kernel.bundle.mjs'), 'import { boot } from "@deepseek-ai/dsh-app-boot";\n');
+    fs.writeFileSync(path.join(dir, 'kernel-child.bundle.mjs'), 'import { boot } from "@deepseek-ai/dsh-app-boot";\n');
+    // 落点却是上次构建遗留的内联产物 —— 只查源头会漏掉这一层
+    writeShipped(dir, 'function applyEntryPatches(){}\nfrom "@deepseek-ai/dsh-app-boot";\n');
+    const r = runGate(dir);
+    assert.equal(r.code, 1, `进包产物内联必须被拦下\n${r.out}`);
+    assert.match(r.out, /applyEntryPatches/);
+    assert.match(r.out, /kernel-child\.bundle\.mjs/, '要定位到进包的那份');
+  });
+});
+
+test('没打过包（无 dist-electron）→ 不检查也不报错', () => {
+  withTempDir((dir) => {
+    writePkg(dir);
+    fs.writeFileSync(path.join(dir, 'kernel.bundle.mjs'), 'import { boot } from "@deepseek-ai/dsh-app-boot";\n');
+    fs.writeFileSync(path.join(dir, 'kernel-child.bundle.mjs'), 'import { boot } from "@deepseek-ai/dsh-app-boot";\n');
+    const r = runGate(dir);
+    assert.equal(r.code, 0, `未打包不该违规\n${r.out}`);
+    assert.match(r.out, /受检 4 个/, '只有脚本 2 + 产物 2');
+  });
+});
+
+test('进包产物合格时计入受检数（拿到的是真交付物的证据）', () => {
+  withTempDir((dir) => {
+    writePkg(dir);
+    fs.writeFileSync(path.join(dir, 'kernel.bundle.mjs'), 'import { boot } from "@deepseek-ai/dsh-app-boot";\n');
+    fs.writeFileSync(path.join(dir, 'kernel-child.bundle.mjs'), 'import { boot } from "@deepseek-ai/dsh-app-boot";\n');
+    writeShipped(dir, 'import { boot } from "@deepseek-ai/dsh-app-boot";\n');
+    const r = runGate(dir);
+    assert.equal(r.code, 0, r.out);
+    assert.match(r.out, /受检 5 个/, '进包产物也要被检视过');
+    assert.match(r.out, /进包产物/);
+  });
+});
