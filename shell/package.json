@@ -25,6 +25,7 @@
     "check:cot": "node scripts/check-cot-leakage.mjs",
     "check:loader-external": "node scripts/check-loader-external.mjs",
     "check:plugin-peers": "node scripts/check-plugin-peers.mjs",
+    "verify:shipped": "node scripts/verify-shipped-kernel.mjs",
     "sync:vendor": "node scripts/sync-vendor.mjs",
     "verify:release": "node scripts/verify-release.mjs"
   },
