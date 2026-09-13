@@ -63,7 +63,14 @@ export function startKernelHost({
 
   const child = spawn(command, args, {
     cwd: HERE,
-    env: { ...process.env },
+    env: {
+      ...process.env,
+      // dev 模式下 command 是 process.execPath —— 在 Electron 里那是 electron.exe，
+      // 不加这个变量它会当自己是 Electron 主进程、把 `kernel-child.ts` 当应用路径解析，
+      // 于是秒退 code=1 且不打印任何栈（实测：报「在 ready 之前退出」，无从归因）。
+      // 该变量让 electron 二进制表现为纯 Node。
+      ...(isPackaged ? {} : { ELECTRON_RUN_AS_NODE: '1' }),
+    },
     // stdin 忽略；stdout/stderr 继承，内核日志直接进 Electron 的控制台/日志文件
     // （与同进程模式看到的日志一致，便于对照排查）
     stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
