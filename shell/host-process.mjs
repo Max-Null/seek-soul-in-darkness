@@ -48,9 +48,16 @@ function resolveLauncher(isPackaged) {
  * @param options.isPackaged 打包版标记（决定运行时与脚本形态）。
  * @param options.onEvent 内核事件回调（`{ name, payload }`），用于通知等主进程动作。
  * @param options.onExit 子进程退出回调（拿到退出码与信号）。
- * @returns `{ port, url, dshVersion, pid, shutdown }`。
+ * @param options.capabilities 壳层能力（restart/update/screenshot），供子进程经 IPC 调用。
+ * @returns `{ port, url, dshVersion, pid, shutdown, pushCapabilityEvent }`。
  */
-export function startKernelHost({ isPackaged = false, onEvent = () => {}, onExit = () => {}, log = () => {} } = {}) {
+export function startKernelHost({
+  isPackaged = false,
+  onEvent = () => {},
+  onExit = () => {},
+  capabilities = {},
+  log = () => {},
+} = {}) {
   const { command, args } = resolveLauncher(isPackaged)
   log(`ssid: kernel-child spawn ${command} ${args.join(' ')}\n`)
 
@@ -74,8 +81,35 @@ export function startKernelHost({ isPackaged = false, onEvent = () => {}, onExit
     rejectReady(new Error(`kernel-child 在 ${READY_TIMEOUT_MS / 1000}s 内没有 ready（boot 超时或子进程已挂）`))
   }, READY_TIMEOUT_MS)
 
+  /**
+   * 执行一次子进程请求的能力调用。
+   *
+   * 返回值**必须可 JSON 序列化**（IPC 限制）：闭包、类实例、Buffer 之外的二进制都不行。
+   * 这也是 capabilities 的契约——见 main.mjs 传入的那三个对象。
+   */
+  const runCapability = async (name, method, args) => {
+    const cap = capabilities[name]
+    if (cap === undefined) throw new Error(`主进程未提供能力：${name}`)
+    const fn = cap[method]
+    if (typeof fn !== 'function') throw new Error(`能力 ${name} 上没有方法：${method}`)
+    return await fn(...(Array.isArray(args) ? args : []))
+  }
+
   child.on('message', (msg) => {
     if (msg === null || typeof msg !== 'object') return
+    if (msg.type === 'capability') {
+      const { name, method, callId, args } = msg
+      // 异步执行但立刻返回——不阻塞其它 IPC 消息（shutdown / 事件转发）
+      void (async () => {
+        try {
+          const value = await runCapability(name, method, args)
+          child.send({ type: 'capabilityReply', callId, ok: true, value })
+        } catch (cause) {
+          child.send({ type: 'capabilityReply', callId, ok: false, error: cause instanceof Error ? cause.message : String(cause) })
+        }
+      })()
+      return
+    }
     if (msg.type === 'ready') {
       if (settled) return
       settled = true
@@ -116,6 +150,15 @@ export function startKernelHost({ isPackaged = false, onEvent = () => {}, onExit
   return {
     ready,
     pid: child.pid,
+    /**
+     * 主进程 → 子进程的能力事件推送（如 `update:status`）。
+     * 子进程侧由 kernel-child-bridge 的 onStatus 订阅接收。
+     * @param name 事件名（与 bridge 的 subscribe 名称对应）。
+     * @param payload 任意可序列化负载。
+     */
+    pushCapabilityEvent(name, payload) {
+      try { child.send({ type: 'capabilityEvent', name, payload }) } catch { /* IPC 已断 */ }
+    },
     /**
      * 优雅关闭：先请子进程 dispose 内核树，超时未退则强杀。
      *

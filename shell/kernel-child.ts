@@ -21,6 +21,7 @@
  *   打包 : node resources/node/node.exe shell/kernel-child.bundle.mjs
  */
 import { bootKernel } from './kernel.ts'
+import { createCapabilityProxies, handleParentMessage } from './kernel-child-bridge.ts'
 
 /** 子进程 → 主进程的消息 */
 type ToParent =
@@ -61,12 +62,14 @@ function forwardEvent(event: { type?: string; data?: unknown; time?: number }): 
 }
 
 async function main(): Promise<void> {
+  // 壳层能力的**代理**：内核对 restart/update/screenshot 的用法是「调用 + 订阅状态」，
+  // 所以子进程侧放代理，真实能力仍在 Electron 主进程（闭包不能跨进程传对象）。
+  // 见 kernel-child-bridge.ts 的协议与近似点说明。
+  const capabilities = createCapabilityProxies()
+
   const kernel = await bootKernel(
     (code) => { process.exit(code) },
-    // 子进程不提供 restart/update/screenshot：那三项要 Electron 主进程的能力
-    // （app.relaunch / electron-updater / 全局快捷键），不能跨进程传递对象。
-    // 需要它们时由主进程经 IPC 反向请求——见 host-process.mjs 的预留分支。
-    {},
+    capabilities,
   )
 
   send({
@@ -90,8 +93,10 @@ async function main(): Promise<void> {
       forwardEvent(event as { type?: string, data?: unknown, time?: number })
     })
 
-  process.on('message', (msg: FromParent) => {
-    if (msg?.type === 'shutdown') {
+  process.on('message', (msg: unknown) => {
+    // 先交给能力桥：主进程回传的 capabilityReply / capabilityEvent 都在这里消费
+    if (handleParentMessage(msg)) return
+    if ((msg as FromParent)?.type === 'shutdown') {
       void kernel.shutdown(0).catch((cause: unknown) => {
         send({ type: 'fatal', message: `shutdown 失败：${String(cause)}` })
         process.exit(1)
