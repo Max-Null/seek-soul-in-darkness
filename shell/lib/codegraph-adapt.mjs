@@ -1,5 +1,5 @@
 /**
- * CodeGraph MCP 索引目录适配（v0.2.2）。
+ * CodeGraph MCP 索引目录适配（v0.3.0）。
  *
  * 背景：v0.2.1 出厂把 CodeGraph 的索引目录默认设为用户主目录（homedir），
  * 而 CodeGraph 是代码图谱工具——主目录里没有代码仓库。后果（AI 中台项目组

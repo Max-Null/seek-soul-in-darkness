@@ -667,7 +667,7 @@ async function start() {
       // 部署到本机后不改写，pnpm 任何操作（含插件中心应用内更新）都报
       // ERR_PNPM_UNEXPECTED_STORE / _VIRTUAL_STORE——2026-08-18 跨盘部署实验确认。
       rewritePnpmMeta(profileDir)
-      // ── v0.2.1 用户层回写（v0.2.2 起三方合并）：合并用户 cordis.patch.yml ──
+      // ── v0.2.1 用户层回写（v0.3.0 起三方合并）：合并用户 cordis.patch.yml ──
       // 模板 patch 为基线；上次部署的模板原文（~/.ssid/template-cordis.patch.yml）
       // 作为 base，用于区分「用户改过的出厂条目」（保留用户版本）与「模板升级」
       // （采用模板新版）——否则用户在 MCP 管理页改的 cwd/启停会被下次升级打回。
@@ -977,7 +977,7 @@ async function start() {
     } else {
       safeLog(`ssid: prefab mcp cli missing (profile not redeployed yet?): ${mcpPwCli}\n`)
     }
-    // 预制 CodeGraph MCP（v0.2.1；v0.2.2 起索引目录按需适配）：出厂**不再**默认
+    // 预制 CodeGraph MCP（v0.2.1；v0.3.0 起索引目录按需适配）：出厂**不再**默认
     // 指向用户主目录——主目录没有代码仓库，会让首次调用扫描 AppData 卡死超时、
     // 索引常驻 700–900MB、查询结果与项目无关（AI 中台项目组 2026-09-09 反馈）。
     // 适配优先级：SSID_MCP_CG_WS 环境变量 → ~/.ssid/codegraph.json → 最近会话

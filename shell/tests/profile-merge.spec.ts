@@ -213,7 +213,7 @@ test('mergeUserPatch：用户子条目内的 args !!js/字符串保持原样（�
   assert.ok(text.includes("'--verbose'"), '字符串参数行完整保留')
 })
 
-// ── v0.2.2 三方合并（base = 上次模板）──────────────────────────────────
+// ── v0.3.0 三方合并（base = 上次模板）──────────────────────────────────
 // 场景：用户在 MCP 管理页把 codegraph 的 cwd 改成项目路径；随后升级带来
 // 模板新版（该条目新增 --exclude 保护参数）。期望：用户的 cwd 保留、模板
 // 的其它子条目照常升级。
@@ -245,7 +245,7 @@ const PATCH_THEIRS = PATCH_BASE.replace(
           - 'node_modules'`,
 )
 
-test('mergeUserPatch：用户改过的出厂子条目保留用户版本（v0.2.2 三方合并）', () => {
+test('mergeUserPatch：用户改过的出厂子条目保留用户版本（v0.3.0 三方合并）', () => {
   const { text, overridden, merged } = mergeUserPatch(PATCH_OURS, PATCH_THEIRS, PATCH_BASE)
   assert.deepEqual(overridden, ['mcp-codegraph'])
   assert.equal(merged, 1)

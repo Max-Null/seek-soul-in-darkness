@@ -183,7 +183,7 @@ export function splitChildEntries(entryText) {
 /**
  * 合并用户 patch 层：以 templateText 为基线（整体保留，含头注释），把
  * oldText（升级前用户 patch）中的用户增量追加/替换回写：
- * - **insert 块子条目级·用户改动识别（v0.2.2）**：给定 baseText（上次部署时
+ * - **insert 块子条目级·用户改动识别（v0.3.0）**：给定 baseText（上次部署时
  *   的模板原文）时做三方比较——base 有同 id 子条目且用户文本 ≠ base
  *   ⇒ 用户改过 ⇒ 用用户版本替换模板的该子条目（模板升级不再打回用户对出厂
  *   MCP 条目（如 codegraph 的 cwd / args）的修改）；文本与 base 相同 ⇒ 用户
@@ -406,7 +406,7 @@ export function buildUpgradeReport({
     patchMerged: {
       count: patchMerge?.merged ?? 0,
       ids: patchMerge?.ids ?? [],
-      // 用户改过的出厂子条目 id（v0.2.2 三方合并：用户版本优先于模板新版）
+      // 用户改过的出厂子条目 id（v0.3.0 三方合并：用户版本优先于模板新版）
       overridden: patchMerge?.overridden ?? [],
     },
     notes: [
