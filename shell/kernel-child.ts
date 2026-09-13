@@ -18,9 +18,20 @@
  *
  * 用法：node <本文件或 kernel-child.bundle.mjs>
  *   dev  : node --import tsx/esm shell/kernel-child.ts
- *   打包 : node resources/node/node.exe shell/kernel-child.bundle.mjs
+ *   打包 : resources/node/node.exe resources/kernel-child.bundle.mjs
+ */
+/**
+ * 打包链路：本文件由 esbuild 打成 `kernel-child.bundle.mjs`，`./kernel.ts` **一并内联**
+ * （`npm run bundle-kernel-child`）。所以下面保持**静态导入**——内联后产物自包含，
+ * 运行时不存在 `./kernel.ts` 这个路径，也就不需要按形态分支的动态导入。
+ *
+ * 产物必须放在 **resources/ 而不是 asar 内**：打包形态的子进程是纯 `node.exe`
+ * （`ELECTRON_RUN_AS_NODE` 在这里也用不上——它压根不是 Electron 进程），
+ * 读不到 asar 虚拟文件系统，asar 内的脚本路径对它就是 ENOENT。
+ * 落点由 host-process.mjs 的 resolveLauncher 决定。
  */
 import { bootKernel } from './kernel.ts'
+
 import { createCapabilityProxies, handleParentMessage } from './kernel-child-bridge.ts'
 
 /** 子进程 → 主进程的消息 */
@@ -43,7 +54,9 @@ function forwardEvent(event: { type?: string; data?: unknown; time?: number }): 
   const type = event.type
   if (type === 'turn/start') {
     const data = event.data as { turn?: unknown } | undefined
-    send({ type: 'event', name: 'turn/start', payload: { turn: data?.turn, time: event.time } })
+    // 带上 nowMs：主进程不能事后补算「这一回合何时开始」，缺了就只能用主进程时钟，
+    // 会让「会话已完成，用时 mm:ss」与同进程模式不一致。
+    send({ type: 'event', name: 'turn/start', payload: { turn: data?.turn, time: event.time, nowMs: Date.now() } })
     return
   }
   if (type === 'turn/end') {
@@ -69,7 +82,15 @@ async function main(): Promise<void> {
 
   const kernel = await bootKernel(
     (code) => { process.exit(code) },
-    capabilities,
+    {
+      ...capabilities,
+      // 打包形态**必须**显式声明「优先内置闭包」。缺了它 kernel.ts 会落到
+      // resolveDshRuntime()：先认 $DSH_CHECKOUT（用户残留变量会把运行时劫持到旧源码，
+      // 即 pitfalls #5 的幽灵依赖），再认 `<bundle目录>/../../deepseek-harness`
+      // ——打包后那是安装目录附近，必然不存在，boot 直接失败。
+      // 判据由主进程传入：只有 Electron 主进程知道 app.isPackaged，子进程不知道。
+      preferBundled: process.env.SSID_KERNEL_CHILD_PACKAGED === '1',
+    },
   )
 
   send({

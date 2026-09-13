@@ -22,17 +22,20 @@ const READY_TIMEOUT_MS = 180_000
 
 /**
  * 解析子进程的执行方式。
- * @param isPackaged 是否打包版（打包走 `node <bundle>`，dev 走 `electron --import tsx/esm`）。
- * @returns `{ command, args }`，command 为空串时表示无法确定运行时。
+ * @param isPackaged 是否打包版（打包走 `resources/node/node.exe resources/kernel-child.bundle.mjs`，
+ *   dev 走 `electron --import tsx/esm kernel-child.ts`）。
+ * @returns `{ command, args }`。
  */
 function resolveLauncher(isPackaged) {
   if (isPackaged) {
     // 打包版：用内置 node.exe。resources/node/node.exe 由 electron-builder 的
     // extraResources 带入（main.mjs 的预制 MCP 也用它，路径约定一致）。
     const node = join(process.resourcesPath, 'node', process.platform === 'win32' ? 'node.exe' : 'node')
+    // 脚本取 resources/ 下的 bundle，**不是** asar 内的同名文件：这个子进程是纯
+    // Node（没有 Electron 的 asar 补丁），asar 内的路径对它是 ENOENT。
     return {
       command: existsSync(node) ? node : process.execPath,
-      args: [join(HERE, 'kernel-child.bundle.mjs')],
+      args: [join(process.resourcesPath, 'kernel-child.bundle.mjs')],
     }
   }
   // dev：Electron 自带的 Node 当运行时，tsx 负责转译 TS。
@@ -59,17 +62,32 @@ export function startKernelHost({
   log = () => {},
 } = {}) {
   const { command, args } = resolveLauncher(isPackaged)
+  const scriptPath = args[args.length - 1]
+  if (!existsSync(scriptPath)) {
+    // 提前给可读错误：spawn 只会回一句 ENOENT，看不出缺的是哪个产物。
+    throw new Error(
+      `内核子进程脚本不存在：${scriptPath}\n`
+      + (isPackaged
+        ? '打包版应由 electron-builder 的 build.extraResources 带入（见 shell/package.json），'
+          + '且打包前需先跑 npm run bundle-kernel-child 生成。'
+        : 'dev 形态请确认 shell/kernel-child.ts 存在且完整。'),
+    )
+  }
   log(`ssid: kernel-child spawn ${command} ${args.join(' ')}\n`)
 
   const child = spawn(command, args, {
     cwd: HERE,
     env: {
       ...process.env,
-      // dev 模式下 command 是 process.execPath —— 在 Electron 里那是 electron.exe，
-      // 不加这个变量它会当自己是 Electron 主进程、把 `kernel-child.ts` 当应用路径解析，
-      // 于是秒退 code=1 且不打印任何栈（实测：报「在 ready 之前退出」，无从归因）。
-      // 该变量让 electron 二进制表现为纯 Node。
-      ...(isPackaged ? {} : { ELECTRON_RUN_AS_NODE: '1' }),
+      // command 是 electron 二进制（process.execPath）时必须加这个变量：否则它当
+      // 自己是 Electron 主进程、把脚本当应用路径解析，秒退 code=1 且不打印任何栈
+      // （实测只报「在 ready 之前退出」，无从归因）。该变量让 electron 表现为纯 Node。
+      // 判据跟随**实际命令**而非 isPackaged：打包版在 resources/node/node.exe 缺失时
+      // 会退回 process.execPath，同样需要它。
+      ...(command === process.execPath ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
+      // 子进程无从得知 app.isPackaged，由这里告知：kernel-child 据此决定 bootKernel
+      // 的 preferBundled（防 $DSH_CHECKOUT 劫持运行时，pitfalls #5 幽灵依赖）。
+      ...(isPackaged ? { SSID_KERNEL_CHILD_PACKAGED: '1' } : {}),
     },
     // stdin 忽略；stdout/stderr 继承，内核日志直接进 Electron 的控制台/日志文件
     // （与同进程模式看到的日志一致，便于对照排查）

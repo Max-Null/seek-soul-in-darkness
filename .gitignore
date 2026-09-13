@@ -17,6 +17,9 @@ dist-electron-016/
 shell/dsh-runtime/
 
 kernel.bundle.mjs
+# 内核子进程 bundle（npm run bundle-kernel-child 生成；随 electron-builder
+# extraResources 进安装包，不含内联内核之外的额外内容，故不入库）
+kernel-child.bundle.mjs
 exe-stderr.log
 exe-stdout.log
 shell/dsh-runtime.tar.gz
