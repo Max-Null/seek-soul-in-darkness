@@ -135,11 +135,29 @@ async function main(): Promise<void> {
   }
 
   // ── 405 诊断探针（临时，定位后移除）──────────────────────────────────────
-  // bundle 形态下 plugin-center / ds-harness-remote 的 connection.rpc.handle 不生效，
-  // 而 .ts（tsx）形态正常。假设是 connection 的 webServerCtx 未 attach —— 那样
-  // register() 会抛出「before the webServer scope attaches」。主动调一次，让真实
-  // 结果落进子进程日志（host-process 已把 stderr 落盘）。
+  // 实测结论（2026-09-14）：405 来自 `packages/host/frontend-static` 的兜底
+  // ——「Non-GET/HEAD without a matching named route is 405」，即请求**没匹配到
+  // 任何已注册路由**；同一路径 GET 走 404 兜底，`/api` 走 connection 的 401，
+  // 说明 connection 自身正常，缺的是 `connection.rpc.handle` 注册的那两个 channel。
   // 见 docs/决策/2026-09-14-插件中心405诊断记录.md。
+  const probeNames = ['pluginCenter', 'pluginCenterRpc', 'loader', 'skills', 'tools', 'apiProxy', 'remote']
+
+  /** 探测一次：服务可见性 + `ctx.<name>` 代理可用性（两者语义不同，见 DSH packages/AGENTS.md）。 */
+  const probeOnce = (tag: string): void => {
+    for (const name of probeNames) {
+      let present = false
+      try { present = kernel.get(name) !== undefined } catch { present = false }
+      // ctx.<name> 走 cordis 的拓扑敏感属性代理，与 ctx.get 不是同一路径
+      let viaProxy = 'n/a'
+      try {
+        viaProxy = String((kernel.ctx as unknown as Record<string, unknown>)[name] !== undefined)
+      } catch (cause) {
+        viaProxy = `throw:${cause instanceof Error ? cause.message : String(cause)}`
+      }
+      console.error(`ssid: [probe${tag}] ${name}: get=${String(present)} proxy=${viaProxy}`)
+    }
+  }
+
   const probeConnection = kernel.get('connection') as
     | { rpc?: { handle: (channel: string, handler: unknown) => unknown } }
     | undefined
@@ -156,24 +174,91 @@ async function main(): Promise<void> {
       console.error(`ssid: [probe] connection.rpc.handle 抛出：${String(cause)}`)
     }
   }
-  // 坏掉的两个插件各自在等什么服务：pluginCenter（plugin-center 的 engine 提供）
-  // 与 ds-harness-remote 依赖的那几个。存在 = 已提供，undefined = 仍 pending。
-  for (const name of ['pluginCenter', 'pluginCenterRpc', 'loader', 'slots', 'skills', 'tools', 'apiProxy', 'remote']) {
-    let present = false
-    try { present = kernel.get(name) !== undefined } catch { present = false }
-    console.error(`ssid: [probe] ctx.get('${name}') = ${String(present)}`)
-  }
-  // Cordis 的服务表：拿到名字列表才能看出缺了谁
-  const registry = (kernel.ctx as unknown as { registry?: { keys?: () => Iterable<string> } }).registry
-  if (registry?.keys !== undefined) {
-    try {
-      const names = Array.from(registry.keys()).sort()
-      console.error(`ssid: [probe] cordis 服务表（${names.length} 个）：${names.join(', ')}`)
-    } catch (cause) {
-      console.error(`ssid: [probe] 读服务表失败：${String(cause)}`)
+  probeOnce('')
+  // 延迟复探：boot 返回后插件 fiber 可能仍在微任务队列里（cordis 的
+  // `_reload()` 有 `await Promise.resolve()` 让位）。若 5s 后仍为 false，则不是
+  // 「还没醒」而是「确实没成」——那就要看 fiber 自身状态，而不是猜。
+  setTimeout(() => { probeOnce('+5s') }, 5000)
+  setTimeout(() => { probeOnce('+20s') }, 20000)
+
+  /**
+   * 从 `ctx.registry` 找目标 runtime 的 fiber 列表。
+   *
+   * 走这条路是因为 `notify()` 用的正是 `runtime.fibers`（reflect.ts:316），
+   * 而每个 fiber 由 `Fiber` 构造时通过 `parent.fiber.effect()` 挂进那个列表——
+   * 也就是说 `pluginCenterRpc` 的 fiber 若存在、若被唤醒，一定在这里。
+   */
+  const loaderForWatch = kernel.get('loader') as
+    | { entries?: () => Iterable<{ options?: { id?: string, name?: string }, fiber?: unknown }> }
+    | undefined
+  const registrySvc = (kernel.ctx as unknown as {
+    registry?: { values?: () => Iterable<{ name?: string, fibers?: Iterable<unknown> }> }
+  }).registry
+  const dumpFibers = (tag: string): void => {
+    // 照抄 reflect.ts:316 的迭代方式（`registry.values()`），它才是可用的那条路
+    const runtimes = typeof registrySvc?.values === 'function' ? [...registrySvc.values()] : []
+    if (runtimes.length === 0) {
+      console.error(`ssid: [fibers${tag}] registry.values() 不可用或为空`)
+      return
     }
-  } else {
-    console.error('ssid: [probe] ctx.registry.keys 不可用')
+    let fiberCount = 0
+    let active = 0
+    const rows: string[] = []
+    try {
+      for (const runtime of runtimes) {
+        for (const fiber of runtime.fibers ?? []) {
+          fiberCount++
+          const f = fiber as {
+            state?: unknown
+            inject?: Record<string, unknown>
+            _store?: Record<string, unknown>
+            _error?: unknown
+            name?: unknown
+          }
+          const state = Math.floor(Number(f.state))
+          if (state === 2) { active++; continue }
+          const injected = Object.keys(f.inject ?? {})
+          const held = Object.keys(f._store ?? {})
+          rows.push(
+            `runtime=${runtime.name ?? '(anon)'} fiber=${String(f.name ?? '?')} state=${String(f.state)}`
+            + ` inject=[${injected.join('|')}] store=[${held.join('|')}]`
+            + ` missing=[${injected.filter(k => !held.includes(k)).join('|')}]`
+            + (f._error ? ` error=${String(f._error).slice(0, 180)}` : ''),
+          )
+        }
+      }
+    } catch (cause) {
+      console.error(`ssid: [fibers${tag}] 遍历失败：${String(cause)}`)
+      return
+    }
+    console.error(`ssid: [fibers${tag}] runtime ${runtimes.length}，fiber ${fiberCount}，ACTIVE ${active}，非 ACTIVE ${rows.length}`)
+    for (const r of rows.filter(x => /connection|pluginCenter|remote|apiProxy/i.test(x)).slice(0, 25)) {
+      console.error(`ssid: [fibers${tag}]  * ${r}`)
+    }
+    for (const r of rows.slice(0, 20)) console.error(`ssid: [fibers${tag}]    ${r}`)
+  }
+  dumpFibers('')
+  setTimeout(() => { dumpFibers('+20s') }, 20000)
+
+  // 上一轮 boot 是否抛过错：app-boot 会把失败记在 loader entry 上。
+  // 若 plugin-center 自身在列，就是它没 ACTIVE；若不在列，说明它 ACTIVE 了，
+  // 405 另有原因（那种情况下条目的 name 会出现在 ACTIVE 里）。
+  if (typeof loaderForWatch?.entries === 'function') {
+    try {
+      for (const entry of loaderForWatch.entries()) {
+        const n = entry.options?.name ?? ''
+        if (!/plugin-center|harness-remote|client-connection/.test(n)) continue
+        const f = entry.fiber as { state?: unknown, _error?: unknown, inject?: Record<string, unknown> } | undefined
+        console.error(
+          `ssid: [watch] ${entry.options?.id ?? '(?)'} <${n}>`
+          + ` state=${String(f?.state)}`
+          + ` inject=[${Object.keys(f?.inject ?? {}).join('|')}]`
+          + ` error=${f && '_error' in f && f._error ? String(f._error).slice(0, 200) : 'none'}`,
+        )
+      }
+    } catch (cause) {
+      console.error(`ssid: [watch] 失败：${String(cause)}`)
+    }
   }
 
   process.on('message', (msg: unknown) => {
