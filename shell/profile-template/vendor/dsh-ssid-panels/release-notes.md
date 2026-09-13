@@ -112,8 +112,9 @@
 - 优先使用免安装版（zip）：解压即用，绕过安装器/签名拦截；NSIS 安装版报
   「不支持的 16 位应用程序」= 下载文件损坏（非兼容问题），删后重下或换 zip。
 - 资产（GitHub Release 页）：
-  - `ssid-shell-0.3.0-win.zip`（约 4XX MB）
-  - `ssid-shell-setup-0.3.0.exe`（约 3XX MB）
+  - `ssid-shell-0.3.0-win.zip`（409.7 MB）
+  - `ssid-shell-setup-0.3.0.exe`（359.8 MB）
+  - 附 `latest.yml` 与 `ssid-shell-setup-0.3.0.exe.blockmap`（在线增量更新所需）
 - SHA256（`certutil -hashfile <文件> SHA256`）：
-  - zip：`<打包后填入>`
-  - exe：`<打包后填入>`
+  - zip：`F856227B65797EF43C61BCCB812C50FA0FC7C730F96C3C4AAC3996AECF5B6B9C`
+  - exe：`BD0EEF1999FE89863D4541E90E6905806068DED46C95BCED6C28FF821FE22501`
