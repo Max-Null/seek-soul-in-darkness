@@ -568,6 +568,35 @@ window.__ModuleLoader__.load({
 		}
 		var TOOLBAR_ID = "ssid-toolbar";
 		var QT_STYLE_OWNER = "dsh-quick-toolbar-styles";
+		/** 本插件两份样式的幂等键（各自代表一份 CSS 的角色名）。 */
+		var QT_BASE_STYLE_KEY = "@max-null/dsh-quick-toolbar/base";
+		var QT_TOOLBAR_STYLE_KEY = "@max-null/dsh-quick-toolbar/toolbar";
+		/**
+		* 注入或就地更新一个样式标签（幂等 + 内容比对）。
+		*
+		* 内容比对而非「已存在就跳过」：本模块在 HMR 重载后会重新执行，沿用旧标签会让
+		* 旧 CSS 一直占住该键，改动看着像生效了、实际仍是旧规则（chat-rail 同款实测）。
+		* 壳标志 __SSID_SHELL__ 由 main.mjs 在 dom-ready 注入、晚于 apply，SHELL_CSS
+		* 正是靠这次比对补进去。
+		*/
+		function ensureStyleTag(marker, key, text) {
+			var existing = document.head.querySelector("style[data-plugin-css=\"" + key + "\"]");
+			if (existing === null) {
+				var tag = document.createElement("style");
+				tag.setAttribute(marker, "");
+				tag.setAttribute("data-plugin", QT_STYLE_OWNER);
+				tag.setAttribute("data-plugin-css", key);
+				tag.textContent = text;
+				document.head.appendChild(tag);
+				return;
+			}
+			if (existing.textContent !== text) existing.textContent = text;
+		}
+		/** 本插件的两份样式（基础 + 悬浮工具栏），每次都按当前壳标志重算内容。 */
+		function ensureStyles() {
+			ensureStyleTag("data-dsh-quick-toolbar", QT_BASE_STYLE_KEY, BASE_CSS + (SHELL_CSS.length > 0 && win.__SSID_SHELL__ === true ? "\n" + SHELL_CSS.join("\n") : ""));
+			ensureStyleTag("data-dsh-quick-toolbar-toolbar", QT_TOOLBAR_STYLE_KEY, TOOLBAR_CSS);
+		}
 		var qtState = {
 			pos: null,
 			collapsed: true,
@@ -1240,28 +1269,20 @@ window.__ModuleLoader__.load({
 			});
 		}
 		exports.apply = function(ctx) {
+			ensureStyles();
 			if (win.__dshQuickToolbarInstalled === true) return;
 			win.__dshQuickToolbarInstalled = true;
 			var svcCtx = ctx !== null && typeof ctx === "object" ? ctx : {};
 			sessionsSvc = svcCtx.sessions ?? null;
 			workspacesSvc = svcCtx.workspaces ?? null;
 			uiWorkspaceSvc = svcCtx.uiWorkspace ?? null;
-			var style = document.createElement("style");
-			style.setAttribute("data-dsh-quick-toolbar", "");
-			style.setAttribute("data-plugin", QT_STYLE_OWNER);
-			style.textContent = BASE_CSS + (SHELL_CSS.length > 0 && win.__SSID_SHELL__ === true ? "\n" + SHELL_CSS.join("\n") : "");
-			document.head.appendChild(style);
-			var tbStyle = document.createElement("style");
-			tbStyle.setAttribute("data-dsh-quick-toolbar-toolbar", "");
-			tbStyle.setAttribute("data-plugin", QT_STYLE_OWNER);
-			tbStyle.textContent = TOOLBAR_CSS;
-			document.head.appendChild(tbStyle);
 			loadState(function() {
 				if (win.__SSID_SHELL__ === true && !qtState.shellVisible) return;
 				createToolbar();
 			});
 			var hideIfShell = function() {
 				if (win.__SSID_SHELL__ !== true) return false;
+				ensureStyles();
 				if (qtState.shellVisible) return false;
 				var tb = document.getElementById(TOOLBAR_ID);
 				if (tb !== null) tb.remove();
