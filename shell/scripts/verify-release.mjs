@@ -128,6 +128,62 @@ if (sizeMB < lo) {
   }
 }
 
+// ── §5-8 逐文件 sha256 清单（prepare-runtime 第 6.5 步产出）──
+// 只校验清单的**结构与自洽**，不重算全量 sha256（那要遍历 1000+ MB，属用户侧按需操作，
+// 命令写在通过后的提示里）。结构问题——重复路径、越界路径、清单里有归档内不存在的文件
+// ——都会让用户侧校验报假错，所以必须挡住。
+{
+  const e = find('runtime-integrity.sha256');
+  gate.inspect();
+  if (!e) {
+    gate.violation(ARCHIVE, null, '§5-8 归档内没有 runtime-integrity.sha256 —— 逐文件校验清单缺失（由 prepare-runtime 第 6.5 步生成）');
+  } else {
+    const txt = readOrNull(e);
+    if (txt === null) {
+      gate.info('§5-8 runtime-integrity.sha256 读不到内容（0 字节），跳过');
+    } else {
+      const lines = txt.split('\n').filter((l) => l !== '');
+      const set = new Set(entries);
+      const badFormat = [];
+      const seen = new Set();
+      const dup = [];
+      const escape = [];
+      const notInArchive = [];
+      for (const l of lines) {
+        const m = /^([0-9a-f]{64}) {2}(.+)$/.exec(l);
+        if (!m) { badFormat.push(l.slice(0, 70)); continue }
+        const p = m[2];
+        if (seen.has(p)) dup.push(p);
+        seen.add(p);
+        if (p.startsWith('/') || p.includes('..') || p.includes('\\')) escape.push(p);
+        else if (!set.has('./' + p)) notInArchive.push(p);
+      }
+      gate.info(`§5-8 清单 ${lines.length} 条`);
+      if (badFormat.length) gate.violation(ARCHIVE, null, `§5-8 有 ${badFormat.length} 行不是「<64位hex>  <路径>」格式，例：${badFormat[0]}`);
+      if (dup.length) gate.violation(ARCHIVE, null, `§5-8 清单有 ${dup.length} 个重复路径，例：${dup[0]}`);
+      if (escape.length) gate.violation(ARCHIVE, null, `§5-8 清单有 ${escape.length} 个越界/绝对路径，例：${escape[0]}`);
+      // 路径存在性不能只靠条目名比对：Windows 的 bsdtar 列名用系统代码页（cp936），
+      // 中文路径列出来是乱码，与清单里的 UTF-8 路径永远不相等——实测 6 个差异全是中文路径，
+      // 文件其实都在归档里。故对"名字对不上"的项做一次**解包回退确认**：
+      // tar -xzOf 能解出内容（非空）即为存在；解不出才判违规。
+      const resolvedByExtract = [];
+      const trulyMissing = [];
+      for (const p of notInArchive) {
+        let ok = false;
+        try { ok = tar(['-xzOf', ARCHIVE, './' + p]).length > 0 } catch { ok = false }
+        (ok ? resolvedByExtract : trulyMissing).push(p);
+      }
+      if (resolvedByExtract.length) {
+        gate.info(`§5-8 ${resolvedByExtract.length} 条路径与 tar 列名不符但可正常解出（含非 ASCII 的列名编码差异），不计违规`);
+      }
+      if (trulyMissing.length) gate.violation(ARCHIVE, null, `§5-8 清单有 ${trulyMissing.length} 个路径既不在列名中、也解不出来，例：${trulyMissing[0]}`);
+      if (!badFormat.length && !dup.length && !escape.length && !trulyMissing.length) {
+        gate.info('§5-8 清单结构与自洽 ✓（全量对账：解包后 `sha256sum -c runtime-integrity.sha256`）');
+      }
+    }
+  }
+}
+
 // ── §5-3 / §5-4：外部包版本（优先 vendor 副本，再退回 node_modules） ──
 const pkgVersionOf = (name, relPkg = 'package.json') => {
   for (const e of [findVendor(name, relPkg), find(`node_modules/${name}/${relPkg}`), find(`${name}/${relPkg}`)]) {

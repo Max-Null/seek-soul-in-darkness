@@ -13,7 +13,8 @@
 
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { createReadStream, createWriteStream, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { once } from 'node:events'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -108,7 +109,7 @@ const MISSING_PEERS = [
   `@deepseek-ai/dsh-sdk-protocol@${DSH_VERSION}`,
 ]
 
-function main() {
+async function main() {
   // 1. 清空重建 runtime 目录
   rmSync(runtimeDir, { recursive: true, force: true })
   mkdirSync(runtimeDir, { recursive: true })
@@ -285,6 +286,47 @@ function main() {
   writeFileSync(join(runtimeDir, '.runtime-version'), runtimeVer + '\n')
   console.log(`[6/7] .runtime-version = ${runtimeVer}`)
 
+  // 6.5 逐文件 sha256 清单（待办 C）。
+  //     `.runtime-version` 只证明「依赖声明没变」，回答不了「解压出来的文件对不对」——
+  //     用户侧若遇到解压损坏/磁盘写坏，没有任何东西能发现。此清单补上这一层：
+  //     归档内 `runtime-integrity.sha256`，格式为 GNU coreutils 的 `<sha256>  <path>`，
+  //     因此可直接用系统自带工具校验：
+  //       tar -xzf dsh-runtime.tar.gz && cd dsh-runtime && sha256sum -c runtime-integrity.sha256
+  //     路径统一用正斜杠（跨平台，Windows 上 git-bash/WSL 的 sha256sum 也能用）。
+  console.log('      生成逐文件 sha256 清单…')
+  const manifestStart = Date.now()
+  const manifestLines = []
+  /** 递归收集相对路径（正斜杠），与本脚本既有的 walkVendor 同源约定 */
+  const collectFiles = (dir, rel) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, entry.name)
+      const r = rel === '' ? entry.name : `${rel}/${entry.name}`
+      if (entry.isDirectory()) collectFiles(p, r)
+      else manifestLines.push([p, r])
+    }
+  }
+  collectFiles(runtimeDir, '')
+  const manifestName = 'runtime-integrity.sha256'
+  // 清单自己不进清单（否则自我引用）
+  const targets = manifestLines.filter(([, r]) => r !== manifestName)
+  /** 流式读，避免一次性把整个文件读进内存（1016 MB 目录里有 25 MB 级的产物） */
+  const hashFile = (p) => new Promise((resolveKey, rejectKey) => {
+    const h = createHash('sha256')
+    const s = createReadStream(p)
+    s.on('error', rejectKey)
+    s.on('data', (chunk) => h.update(chunk))
+    s.on('end', () => resolveKey(h.digest('hex')))
+  })
+  const manifestPath = join(runtimeDir, manifestName)
+  const out = createWriteStream(manifestPath)
+  out.setMaxListeners(0)
+  for (const [p, r] of targets.sort((a, b) => (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0))) {
+    const digest = await hashFile(p)
+    if (!out.write(`${digest}  ${r}\n`)) await once(out, 'drain')
+  }
+  await new Promise((resolveDone) => out.end(resolveDone))
+  console.log(`      ${manifestName}: ${targets.length} 个文件 / ${(statSync(manifestPath).size / 1024 / 1024).toFixed(1)} MB / ${((Date.now() - manifestStart) / 1000).toFixed(1)}s`)
+
   const archivePath = join(shellDir, 'dsh-runtime.tar.gz')
   console.log(`      tar -czf（${total.toFixed(0)} MB 压缩，约 1-3 分钟）…`)
   const tarR = spawnSync('tar', ['-czf', archivePath, '-C', runtimeDir, '.'], {
@@ -302,4 +344,9 @@ function main() {
   console.log('[7/7] 已删除 dsh-runtime/ 源目录（产物仅剩 dsh-runtime.tar.gz）')
 }
 
-main()
+// main 现在是 async（第 6.5 步的逐文件 hash 需要 await）：必须接住 rejection，
+// 否则清单生成里的异常会变成 unhandled rejection —— 归档看着"成功"，清单却缺段落。
+void main().catch((cause) => {
+  console.error('prepare-runtime 失败：', cause instanceof Error ? cause.stack ?? cause.message : String(cause))
+  process.exit(1)
+})
