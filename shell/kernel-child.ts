@@ -134,6 +134,48 @@ async function main(): Promise<void> {
     console.error('ssid: kernel-child 未提供 userQuestions，AI 提问通知不可用')
   }
 
+  // ── 405 诊断探针（临时，定位后移除）──────────────────────────────────────
+  // bundle 形态下 plugin-center / ds-harness-remote 的 connection.rpc.handle 不生效，
+  // 而 .ts（tsx）形态正常。假设是 connection 的 webServerCtx 未 attach —— 那样
+  // register() 会抛出「before the webServer scope attaches」。主动调一次，让真实
+  // 结果落进子进程日志（host-process 已把 stderr 落盘）。
+  // 见 docs/决策/2026-09-14-插件中心405诊断记录.md。
+  const probeConnection = kernel.get('connection') as
+    | { rpc?: { handle: (channel: string, handler: unknown) => unknown } }
+    | undefined
+  console.error(
+    `ssid: [probe] webServer=${String(kernel.get('webServer') !== undefined)}`
+    + ` connection=${String(probeConnection !== undefined)}`
+    + ` rpc=${String(probeConnection?.rpc !== undefined)}`,
+  )
+  if (probeConnection?.rpc !== undefined) {
+    try {
+      probeConnection.rpc.handle('/__ssid-probe', async () => ({ ok: true, value: null }))
+      console.error('ssid: [probe] connection.rpc.handle 成功 —— webServerCtx 已 attach')
+    } catch (cause) {
+      console.error(`ssid: [probe] connection.rpc.handle 抛出：${String(cause)}`)
+    }
+  }
+  // 坏掉的两个插件各自在等什么服务：pluginCenter（plugin-center 的 engine 提供）
+  // 与 ds-harness-remote 依赖的那几个。存在 = 已提供，undefined = 仍 pending。
+  for (const name of ['pluginCenter', 'pluginCenterRpc', 'loader', 'slots', 'skills', 'tools', 'apiProxy', 'remote']) {
+    let present = false
+    try { present = kernel.get(name) !== undefined } catch { present = false }
+    console.error(`ssid: [probe] ctx.get('${name}') = ${String(present)}`)
+  }
+  // Cordis 的服务表：拿到名字列表才能看出缺了谁
+  const registry = (kernel.ctx as unknown as { registry?: { keys?: () => Iterable<string> } }).registry
+  if (registry?.keys !== undefined) {
+    try {
+      const names = Array.from(registry.keys()).sort()
+      console.error(`ssid: [probe] cordis 服务表（${names.length} 个）：${names.join(', ')}`)
+    } catch (cause) {
+      console.error(`ssid: [probe] 读服务表失败：${String(cause)}`)
+    }
+  } else {
+    console.error('ssid: [probe] ctx.registry.keys 不可用')
+  }
+
   process.on('message', (msg: unknown) => {
     // 先交给能力桥：主进程回传的 capabilityReply / capabilityEvent 都在这里消费
     if (handleParentMessage(msg)) return
