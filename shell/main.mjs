@@ -27,6 +27,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { buildUpgradeReport, mergeUserPatch, snapshotProfileConfigs } from './lib/profile-merge.mjs'
 import { CG_CONFIG_FILE, readCodeGraphConfig, resolveCodeGraphWorkspace, writeCodeGraphConfig } from './lib/codegraph-adapt.mjs'
+import { startKernelHost } from './host-process.mjs'
 
 // ── stderr/stdout 管道防护 ───────────────────────────────────────────────
 // GUI 启动时 stderr 可能挂在一个已关闭的管道上（启动终端关闭 / 双击 exe）：
@@ -183,6 +184,12 @@ function runWorkerMode(workerScript) {
 /** App name / window title. (定义已上移至文件顶部,见 PRODUCT_NAME 声明处) */
 
 async function start() {
+  // 内核子进程模式的两个跨段状态。**必须声明在 start() 内**：使用点（通知安装段）
+  // 在本函数更深的嵌套块里，声明在 else{} 或模块顶层都够不到
+  // —— 前两轮各踩一次，现象都是 `ReferenceError: kernelEventSink is not defined`。
+  let kernelEventSink = null
+  const pendingKernelEvents = []
+
   app.setName(PRODUCT_NAME)
 
   // ── 启动阶段埋点（保留勿删）──
@@ -987,16 +994,58 @@ async function start() {
     )
     // preferBundled: 打包版强制用内置闭包（忽略用户环境的 DSH_CHECKOUT，
     // 避免标题栏版本与归档不一致——pitfalls #5 幽灵依赖的根治）。
-    kernel = await bootKernel(undefined, {
-      preferBundled: app.isPackaged,
-      restart: restartDsh,
-      // 在线增量更新桥（electron-updater；dev 下桥内部自报不可用）
-      update: createShellUpdater(),
-      screenshot: {
-        trigger: () => { void startScreenshotCapture() },
-        apply: () => applyScreenshotHotkey(),
-      },
-    })
+    // 内核进程模式（SSID_KERNEL_CHILD=1）：内核跑在独立 Node 子进程里，可根治
+    // 「主进程内 boot 时 native addon 探测不到标准 Node 的 V8 embedder → 需
+    // registerHooks 改写 bare specifier」的老问题（见 kernel.ts 头部），
+    // 且内核崩溃不再拖死 UI。
+    //
+    // **默认仍走同进程**：开关式灰度，先验证「启动 / 事件 / 关闭」三段链路。
+    // 能力侧（restart/update/screenshot）已由 kernel-child-bridge 经 IPC 代理。
+    if (process.env.SSID_KERNEL_CHILD === '1') {
+      safeLog('ssid: kernel 模式 = 子进程（SSID_KERNEL_CHILD=1）\n')
+      const host = startKernelHost({
+        isPackaged: app.isPackaged,
+        log: safeLog,
+        onEvent: (e) => {
+          if (kernelEventSink === null) pendingKernelEvents.push(e)
+          else kernelEventSink(e)
+        },
+        onExit: ({ code, signal }) => {
+          safeLog(`ssid: kernel-child 退出 code=${String(code)} signal=${String(signal)}\n`)
+        },
+        capabilities: {
+          restart: { invoke: () => { restartDsh() } },
+          update: createShellUpdater(),
+          screenshot: {
+            trigger: () => { void startScreenshotCapture() },
+            apply: () => applyScreenshotHotkey(),
+          },
+        },
+      })
+      const readyKernel = await host.ready
+      kernel = {
+        port: readyKernel.port,
+        url: readyKernel.url,
+        dshVersion: readyKernel.dshVersion,
+        // 子进程模式下主进程没有内核 ctx / 服务句柄：
+        //   ctx === null → 通知安装走 IPC 事件分支（见下方通知段）
+        //   get() 不可用 → userQuestions 包装跳过（该通知需子进程侧上报，见 D14）
+        ctx: null,
+        get: () => undefined,
+        shutdown: (code) => host.shutdown().then(() => app.exit(code)),
+      }
+    } else {
+      kernel = await bootKernel(undefined, {
+        preferBundled: app.isPackaged,
+        restart: restartDsh,
+        // 在线增量更新桥（electron-updater；dev 下桥内部自报不可用）
+        update: createShellUpdater(),
+        screenshot: {
+          trigger: () => { void startScreenshotCapture() },
+          apply: () => applyScreenshotHotkey(),
+        },
+      })
+    }
     safeLog(`ssid: phase bootKernel ok port=${kernel.port}\n`)
     splashStep(3)
   } catch (cause) {
@@ -1283,27 +1332,59 @@ async function start() {
     safeLog(`ssid: notify ${scene} (${body})\n`)
   }
   const turnStartTimes = new Map()
-  kernel.ctx.on('session/event', (_session, event) => {
-    const type = event?.type
-    const data = event?.data
-    if (type === 'turn/start') {
-      turnStartTimes.set(String(data?.turn ?? ''), event.time)
-      return
+  // 「会话已完成，用时 mm:ss」——两条分支共用同一段计算，避免文案分叉
+  const notifyTurnDone = (startMs, endMs) => {
+    const seconds = Math.max(0, Math.round(((endMs ?? Date.now()) - startMs) / 1000))
+    const mm = String(Math.floor(seconds / 60)).padStart(2, '0')
+    const ss = String(seconds % 60).padStart(2, '0')
+    maybeNotify('replyDone', WINDOW_TITLE, `会话已完成，用时 ${mm}:${ss}`)
+  }
+  if (kernel.ctx === null) {
+    // 子进程模式：事件由内核子进程经 IPC 转发，payload 只带用得上的字段
+    // （{turn, time, reasonKind, nowMs}），不是内核原始 event 对象。
+    const childTurnStarts = new Map()
+    kernelEventSink = ({ name, payload }) => {
+      const p = payload ?? {}
+      if (name === 'turn/start') {
+        childTurnStarts.set(String(p.turn ?? ''), Number(p.nowMs) || Date.now())
+        return
+      }
+      if (name === 'turn/end' && p.reasonKind === 'completed') {
+        const key = String(p.turn ?? '')
+        const start = childTurnStarts.get(key)
+        childTurnStarts.delete(key)
+        if (start === undefined) return
+        notifyTurnDone(start, Number(p.time) || Date.now())
+        return
+      }
+      if (name === 'approval/asked') {
+        maybeNotify('approval', WINDOW_TITLE, `工具「${String(p.toolName ?? '?')}」请求授权，请回到思灵处理`)
+      }
     }
-    if (type === 'turn/end' && data?.reason?.kind === 'completed') {
-      const start = turnStartTimes.get(String(data?.turn ?? ''))
-      turnStartTimes.delete(String(data?.turn ?? ''))
-      if (start === undefined) return
-      const seconds = Math.max(0, Math.round((event.time - start) / 1000))
-      const mm = String(Math.floor(seconds / 60)).padStart(2, '0')
-      const ss = String(seconds % 60).padStart(2, '0')
-      maybeNotify('replyDone', WINDOW_TITLE, `会话已完成，用时 ${mm}:${ss}`)
-      return
-    }
-    if (type === 'approval/asked') {
-      maybeNotify('approval', WINDOW_TITLE, `工具「${String(data?.toolName ?? '?')}」请求授权，请回到思灵处理`)
-    }
-  })
+    // sink 装好后冲刷 boot 期间缓冲的事件
+    for (const e of pendingKernelEvents.splice(0)) kernelEventSink(e)
+    // 「AI 提问」通知依赖 userQuestions 服务句柄，子进程模式下主进程不可达，
+    // 需由子进程侧在 ask() 前主动上报——列入 D14 阶段二待办。
+  } else {
+    kernel.ctx.on('session/event', (_session, event) => {
+      const type = event?.type
+      const data = event?.data
+      if (type === 'turn/start') {
+        turnStartTimes.set(String(data?.turn ?? ''), event.time)
+        return
+      }
+      if (type === 'turn/end' && data?.reason?.kind === 'completed') {
+        const start = turnStartTimes.get(String(data?.turn ?? ''))
+        turnStartTimes.delete(String(data?.turn ?? ''))
+        if (start === undefined) return
+        notifyTurnDone(start, event.time)
+        return
+      }
+      if (type === 'approval/asked') {
+        maybeNotify('approval', WINDOW_TITLE, `工具「${String(data?.toolName ?? '?')}」请求授权，请回到思灵处理`)
+      }
+    })
+  }
   // 提问：包装 userQuestions 服务实例（纯服务调用，无 session 事件可监听）。
   const userQuestions = kernel.get('userQuestions')
   if (userQuestions !== null && userQuestions !== undefined && typeof userQuestions.ask === 'function') {
