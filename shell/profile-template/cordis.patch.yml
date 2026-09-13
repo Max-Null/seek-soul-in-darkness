@@ -61,3 +61,32 @@
         env:
           # 匿名遥测默认开启（工具调用/启动/错误上报）——预制出厂必须关闭
           CODEGRAPH_TELEMETRY: 'off'
+
+# ── connection 行：补回 webServer 注入（405 的修复点）───────────────────────
+#
+# 背景：DSH 0.1.5 把 `@deepseek-ai/dsh-client-connection` 的 inject 从 rc.1 的
+# `['webServer','credentials']` 收缩为 web-app bundle 里的 `inject: [webRuntime]`。
+# 但 `rpc.handle()` 的实现仍读 **connection 实例自己的 ctx**（`rpc-host.ts` 的
+# `get rpc()` 里 `const owner = this.ctx`）：
+#
+#     return owner.effect(() => owner.webServer.register(route), …)
+#
+# owner 的 store 里没有 `webServer` → cordis 的 ctx 代理沿父链找不到（`reflect.ts:155-166`）
+# → 抛 `cannot get property "webServer" without inject`。凡是用
+# `ctx.connection.rpc.handle(channel, …)` 注册通道的插件（plugin-center、
+# ds-harness-remote、apiProxy…）于是全部注册失败：路由不入 webserver 路由表，
+# 请求落到 frontend-static 兜底 → **405**（同路径 GET 是 404，`/api` 是 401）。
+#
+# 这里把 webServer 加回 connection 的 inject。cordis 在 fiber 激活时会把已就绪的依赖
+# 写进 `fiber.store`（`_checkImpl`），于是 `owner.webServer` 沿父链可解析，rpc.handle
+# 恢复。**这是配置层适配**：不改 DSH 源码（工作区铁律 2.0），也不必逐个改插件。
+#
+# 与 bundle 原始值保持一致（web-app/cordis.patch.yml 的 connection 行是
+# `inject: [webRuntime]`）：webRuntime 不能丢，它那行的 config 里
+# `trustedHosts: !!js ctx.webRuntime.trustedHosts` 依赖它。
+#
+# 已实机验证（2026-09-14）：connection 的 inject 变为
+# `[credentials|webRuntime|webServer]`，`pluginCenterRpc` 由 false 变 true，
+# 插件中心恢复正常。诊断全文见 docs/决策/2026-09-14-插件中心405诊断记录.md 第十节。
+- id: connection
+  inject: [webRuntime, webServer]
