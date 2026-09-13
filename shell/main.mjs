@@ -1050,15 +1050,19 @@ async function start() {
     )
     // preferBundled: 打包版强制用内置闭包（忽略用户环境的 DSH_CHECKOUT，
     // 避免标题栏版本与归档不一致——pitfalls #5 幽灵依赖的根治）。
-    // 内核进程模式（SSID_KERNEL_CHILD=1）：内核跑在独立 Node 子进程里，可根治
-    // 「主进程内 boot 时 native addon 探测不到标准 Node 的 V8 embedder → 需
-    // registerHooks 改写 bare specifier」的老问题（见 kernel.ts 头部），
-    // 且内核崩溃不再拖死 UI。
+    // 内核进程模式：内核跑在独立 Node 子进程里，可根治「主进程内 boot 时 native
+    // addon 探测不到标准 Node 的 V8 embedder → 需 registerHooks 改写 bare
+    // specifier」的老问题（见 kernel.ts 头部），且内核崩溃不拖死 UI、
+    // 重启只需换内核（见 restartDsh）。
     //
-    // **默认仍走同进程**：开关式灰度，先验证「启动 / 事件 / 关闭」三段链路。
+    // **默认走子进程**（2026-09-13 起）：SSID_KERNEL_CHILD=0 强制回同进程，是灰度期
+    // 的逃生门——子进程模式若在某台机器上有环境差异，改这一个变量就能退回去。
     // 能力侧（restart/update/screenshot）已由 kernel-child-bridge 经 IPC 代理。
-    if (process.env.SSID_KERNEL_CHILD === '1') {
-      safeLog('ssid: kernel 模式 = 子进程（SSID_KERNEL_CHILD=1）\n')
+    if (process.env.SSID_KERNEL_CHILD !== '0') {
+      safeLog(
+        'ssid: kernel 模式 = 子进程'
+        + `（${process.env.SSID_KERNEL_CHILD === '1' ? 'SSID_KERNEL_CHILD=1' : '默认'}）\n`,
+      )
       // 起一个内核子进程并等 ready。抽成函数是为了「只重启内核」能复用它：
       // 重启 = 关掉旧子进程 + 再走一遍这里，主进程与窗口都不动。
       let kernelHost = null
@@ -1113,6 +1117,7 @@ async function start() {
         safeLog(`ssid: 内核已重启 port=${next.port}\n`)
       }
     } else {
+      safeLog('ssid: kernel 模式 = 同进程（SSID_KERNEL_CHILD=0）\n')
       kernel = await bootKernel(undefined, {
         preferBundled: app.isPackaged,
         restart: restartDsh,

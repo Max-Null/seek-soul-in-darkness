@@ -75,8 +75,13 @@ export function startKernelHost({
   }
   log(`ssid: kernel-child spawn ${command} ${args.join(' ')}\n`)
 
+  // cwd 必须是真实存在的目录。打包版 HERE 指向 app.asar —— 那是**文件**不是目录，
+  // spawn 会以 ENOENT 失败，而错误信息指向 exe 路径，极具误导性（实测：
+  // resources/node/node.exe 明明存在，却报 `spawn ...node.exe ENOENT`；
+  // dev 下 HERE 就是 shell/，所以这个坑只在运行打包产物时才暴露）。
+  const cwd = isPackaged ? process.resourcesPath : HERE
   const child = spawn(command, args, {
-    cwd: HERE,
+    cwd,
     env: {
       ...process.env,
       // command 是 electron 二进制（process.execPath）时必须加这个变量：否则它当

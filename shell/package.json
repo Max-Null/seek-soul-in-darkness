@@ -48,7 +48,10 @@
       "!*.tar.gz",
       "!.tmp-*",
       "!*.png",
-      "!kernel-child.bundle.mjs"
+      "!kernel-child.bundle.mjs",
+      "!*.bak",
+      "!*.bak-*",
+      "!*.pre-*"
     ],
     "asarUnpack": [
       "node_modules/tsx/**",
