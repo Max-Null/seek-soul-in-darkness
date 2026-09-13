@@ -36,6 +36,7 @@ const MODES = [
   { id: 'legacy-names', label: '旧名残留（硬域）', script: 'check-legacy-names.mjs' },
   { id: 'loader-external', label: 'bundle 不得内联 DSH', script: 'check-loader-external.mjs' },
   { id: 'plugin-peers', label: '插件 peerDeps 覆盖性', script: 'check-plugin-peers.mjs' },
+  { id: 'dsh-clean', label: 'DSH 源码只引用不改', script: 'check-dsh-checkout-clean.mjs' },
 ];
 
 const README = `用法: node scripts/check-rules.mjs [${['all', ...MODES.map((m) => m.id)].join('|')}]

@@ -4,6 +4,14 @@
 
 > **开发规范第一入口：`docs/SSiD开发手册.md`**（铁律速查 → 工作区规范 → 三环境流转 → 运行模式 → 插件升级 → 内核/归档 → 壳-内核契约 → 坑 → 内置插件规范）。`docs/决策/` 为历史决策与执行记录。
 
+## 硬约束：不改 DSH 源码
+
+`deepseek-harness/` 与 `dsh-web-runtime/` 里的 DSH 源码**只引用不改**（用户长期约定，工作区铁律 2.0）——目的是跟随 DSH 版本迭代；改了源码就再也跟不上上游，还会让 dev（tsx 跑 checkout 源码）与装版（加载 profile 里的官方 npm 包）跑**行为不同的实现**。
+
+需要适配时只改我们自己的东西：profile 的 `cordis.patch.yml` patch 条目、`max-null-plugins/` 下的插件源码、本库 `shell/` 的壳代码。机械检查：`node shell/scripts/check-dsh-checkout-clean.mjs`（已接入 `npm run check:rules` 的 `dsh-clean` 门）。
+
+**读 DSH 源码做判断前先 `git status`**：工作树脏时先查改动来历（`docs/决策/` + `git log`/`stash` + `.build/` 下的 patch 脚本），否则会把补丁版行为当成官方行为（2026-09-14 的 405 排查即因此绕圈）。涉及运行时行为时，以**目标环境实际加载的产物**为准（`~/.dsh/profiles/<p>/node_modules/**/lib/*.js`），而不是 checkout 源码。
+
 ## 常用命令（shell/ 目录）
 
 ```sh
