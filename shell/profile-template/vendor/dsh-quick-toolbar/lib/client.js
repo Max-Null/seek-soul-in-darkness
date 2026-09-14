@@ -20,7 +20,13 @@ const BUILTIN_ADAPTERS = [
 	},
 	{
 		id: "dsh-better-sidebar.sidebar",
-		button: "[class*=\"toggleCluster\"]",
+		button: "button[data-sidebar-right-expand], button[aria-label=\"收起右侧边栏\"], button[aria-label=\"Collapse right sidebar\"]",
+		buttonTexts: [
+			"打开右侧边栏",
+			"收起右侧边栏",
+			"Open right sidebar",
+			"Collapse right sidebar"
+		],
 		icon: {
 			source: "custom",
 			value: "sidebar"
@@ -31,11 +37,17 @@ const BUILTIN_ADAPTERS = [
 			event: "ssid:titlebar",
 			detail: "sidebar"
 		},
-		hide: true
+		hide: false
 	},
 	{
 		id: "dsh-better-sidebar.bottom",
-		button: "[class*=\"toggleCluster\"]",
+		button: "button[class*=\"nArs4W_toggleButton\"], button[aria-label=\"展开底部面板\"], button[aria-label=\"折叠底部面板\"]",
+		buttonTexts: [
+			"展开底部面板",
+			"折叠底部面板",
+			"Expand bottom panel",
+			"Collapse bottom panel"
+		],
 		icon: {
 			source: "custom",
 			value: "bottom"
@@ -369,13 +381,16 @@ const REGISTER_BRIEF = `# 任务：为「工具栏插件」迁移 / 新增一个
 *
 * 1. 隐藏 DSH 内的原按钮（插件中心 header 按钮 + better-sidebar 的
 *    toggleCluster），消除双入口与错位——统一由自绘标题栏按钮组接管。
+*    （v0.19.0 起 better-sidebar 不再自绘右侧面板：右列归 DSH 原生右侧栏，
+*    其会话头开关保留；只隐藏它自绘的底栏开关——2026-09-14 用户拍板。）
 * 2. 监听 main 进程经 `mainView.webContents.executeJavaScript` 派发的
 *    `ssid:titlebar` CustomEvent：
 *      detail = 'plugin-center' → win.__pluginCenterToggle?.()
 *                                （plugin-center v0.1.7+ 全局控制器：再点关闭；
 *                                  老版回退 __pluginCenterOpen）
 *      detail = 'sidebar'       → 先 __pluginCenterClose?.()（互斥：模态让位
-*                                工具面板），再 click toggleCluster 最后一个按钮
+*                                工具面板），再切换侧栏/底栏（见 panelButtons：
+*                                官方右侧边栏的会话头按钮 / 底栏自绘开关）
 *      detail = 'bottom'        → 同上，click 第一个按钮（窄屏无底栏则跳过）
 *      detail = 'session-manager' → 打开会话管理面板（桥接 click footer 按钮）
 * 3. 会话管理入口统一：隐藏 dsh-session-manager 的 footer 按钮
@@ -390,8 +405,9 @@ const REGISTER_BRIEF = `# 任务：为「工具栏插件」迁移 / 新增一个
 *    document.documentElement.lang（zh* → 中文，其余 → 英文），并监听
 *    lang 变化动态切换（DSH 异步设置语言，初始可能为静态 HTML 的 en）。
 *
-* 选择器只用 CSS Modules 的原始段（编译后如 nArs4W_toggleCluster），
-* 与哈希前缀无关：better-sidebar / plugin-center 升级只要不改类名即有效。
+* 选择器只用 CSS Modules 的原始段或宿主/插件给出的稳定属性，
+* 与哈希前缀无关：better-sidebar 升级只要不改类名或 data 属性即有效
+* （v0.19.0 的 toggleCluster → 会话头按钮 + nArs4W_toggleButton 即一例）。
 * 隐藏元素仍可被 JS 的 .click() 触发（无需可见），与壳已有的
 * 「侧边栏自动诊断」同模式。
 */
@@ -405,55 +421,61 @@ window.__ModuleLoader__.load({
 			"/* SSiD 标题栏统一按钮组：隐藏 DSH 内原按钮，避免双入口与错位 */",
 			".sm-footerBtn { display: none !important; }",
 			"[class*=\"pc-headerbtn\"] { display: none !important; }",
-			"[class*=\"toggleCluster\"] { display: none !important; }",
+			"button[aria-label=\"折叠底部面板\"], button[aria-label=\"展开底部面板\"], button[aria-label=\"Collapse bottom panel\"], button[aria-label=\"Expand bottom panel\"] { display: none !important; }",
 			"#__open-sea-skin-btn__ { visibility: hidden !important; pointer-events: none !important; }"
 		].join("\n");
 		var SHELL_CSS = [];
 		/**
-		* 从 toggleCluster 按钮的 aria-label 反推面板状态——不依赖 CSS 类名
-		* 通配（DSH 官方 UI 也有 css.panel 类，[class*="panel"] 会误匹配，
-		* 2026-08-19 用户实测「打开插件中心同时打开右栏」）。
-		* better-sidebar 按钮语义（src/client/locales.ts 实证）：
-		*   侧栏按钮 aria-label：开着='折叠侧边栏'(collapse) / 关着='展开侧边栏'(expand)
-		*   底栏按钮 aria-label：开着='折叠底部面板'(collapseBottomPanel) / 关着='展开底部面板'(expandBottomPanel)
-		* 面板开着 = 对应按钮 label 是「折叠」语义（collapse/折叠）。
+		* 「侧栏 / 底栏」开关按钮的定位与状态判定。
+		*
+		* better-sidebar **v0.19.0 起不再自绘右侧面板**：右列交给 DSH 原生右侧栏
+		* （插件的 tab 类型经 `ctx.sidebarRightTabs` 注册），旧的 `toggleCluster`
+		* 开关簇随之移除（2026-09-14 实测：该类名已不存在 → 旧锚点双双失效）。
+		* 底栏仍是它自绘的工作台（`nArs4W_*`）。
+		*
+		* 锚点以**实测**为准（同日 dev 实测，与源码推断不同）：
+		*   侧栏：常驻按钮 `P3OORG_iconButton`（aria-label「收起右侧边栏」），开、合
+		*         两态都存在且位置不变 —— 取先命中者，`[data-sidebar-right-expand]`
+		*         在本版未渲染（子句保留作跨版本兜底）；
+		*   底栏：开关按钮只有 aria-label（本版中文恒为「折叠底部面板」，两态同文案），
+		*         `nArs4W_toggleButton` 类名子句当前不命中。
+		*
+		* 状态判定不再靠 aria-label 反推，改用宿主/插件自己的 DOM 状态：
+		*   侧栏：`[data-sidebar-right-open]` 存在 = 展开（ui-sidebar-right 的容器属性）
+		*   底栏：`[class*="nArs4W_bottomPanel"]` 带 `bottomPanelHidden` = 折叠
 		*/
-		function clusterSideButtons() {
-			var cluster = document.querySelector("[class*=\"toggleCluster\"]");
-			if (cluster === null) return {
-				sidebar: null,
-				bottom: null
-			};
-			var buttons = cluster.querySelectorAll("button");
-			var sidebar = null, bottom = null;
-			for (var i = 0; i < buttons.length; i++) {
-				var label = (buttons[i].getAttribute("aria-label") || "").toLowerCase();
-				if (label.indexOf("bottom") !== -1 || label.indexOf("底部") !== -1) bottom = buttons[i];
-				else sidebar = buttons[i];
-			}
+		function panelButtons() {
+			var expand = document.querySelector("button[data-sidebar-right-expand]");
+			var collapse = document.querySelector("button[aria-label=\"收起右侧边栏\"], button[aria-label=\"Collapse right sidebar\"]");
+			var bottom = document.querySelector("button[class*=\"nArs4W_toggleButton\"], button[aria-label=\"折叠底部面板\"], button[aria-label=\"展开底部面板\"], button[aria-label=\"Collapse bottom panel\"], button[aria-label=\"Expand bottom panel\"]");
 			return {
-				sidebar,
+				sidebar: expand !== null ? expand : collapse,
 				bottom
 			};
 		}
-		function isPanelOpen(button) {
-			if (button === null || button === void 0) return false;
-			var label = (button.getAttribute("aria-label") || "").toLowerCase();
-			return label.indexOf("collapse") !== -1 || label.indexOf("折叠") !== -1;
+		/** 右侧边栏是否展开（读宿主容器属性，比 aria-label 可靠）。 */
+		function isSidebarOpen() {
+			return document.querySelector("[data-sidebar-right-open]") !== null;
+		}
+		/** 底部工作台是否展开（无 `bottomPanelHidden` 即展开；面板未渲染 = 未展开）。 */
+		function isBottomOpen() {
+			var panel = document.querySelector("[class*=\"nArs4W_bottomPanel\"]");
+			if (panel === null) return false;
+			return (panel.className || "").toString().indexOf("bottomPanelHidden") === -1;
 		}
 		function clickButton(button) {
 			if (button !== null && button !== void 0 && !button.disabled) button.click();
 		}
 		/**
 		* 反向互斥（2026-08-19 用户补充）：打开插件中心前，若侧栏/底栏
-		* 开着则先收起（点其 toggleCluster 按钮），避免弹窗被面板遮挡。
-		* 两个独立判断：右栏+底栏同时开着时都要收起（不能用 if/else if，
-		* 否则短路漏掉一个——用户实测「双开时底栏保持打开」）。
+		* 开着则先收起，避免弹窗被面板遮挡。两个独立判断：右栏+底栏同时
+		* 开着时都要收起（不能用 if/else if，否则短路漏掉一个——用户实测
+		* 「双开时底栏保持打开」）。
 		*/
 		function closeSidePanelsBeforePluginCenter() {
-			var btns = clusterSideButtons();
-			if (isPanelOpen(btns.sidebar)) clickButton(btns.sidebar);
-			if (isPanelOpen(btns.bottom)) clickButton(btns.bottom);
+			var btns = panelButtons();
+			if (isSidebarOpen()) clickButton(btns.sidebar);
+			if (isBottomOpen()) clickButton(btns.bottom);
 		}
 		var LOCALE_TARGETS = [];
 		function localeIsZh() {
@@ -745,7 +767,7 @@ window.__ModuleLoader__.load({
 			if (kind === "sidebar" || kind === "bottom") {
 				var close = win.__pluginCenterClose;
 				if (typeof close === "function") close();
-				var btns = clusterSideButtons();
+				var btns = panelButtons();
 				clickButton(kind === "sidebar" ? btns.sidebar : btns.bottom);
 				return;
 			}
@@ -1344,7 +1366,7 @@ window.__ModuleLoader__.load({
 				if (detail === "sidebar" || detail === "bottom") {
 					var close = win.__pluginCenterClose;
 					if (typeof close === "function") close();
-					var btns = clusterSideButtons();
+					var btns = panelButtons();
 					clickButton(detail === "sidebar" ? btns.sidebar : btns.bottom);
 				}
 			});

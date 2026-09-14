@@ -1275,27 +1275,36 @@ async function start() {
   } catch {
     titleBar.webContents.send('ssid:title:float-state', false)
   }
-  // ── 侧边栏自动诊断：探测 toggle 按钮 + 模拟点击 + 对比面板 class 变化 ──
-  // better-sidebar 的 toggleCluster 固定在视口右上角；面板 hidden 态有
-  // nArs4W_panelHidden class。点击前后 class 变化 = store 正常响应。
+  // ── 侧边栏自动诊断：探测开关按钮 + 模拟点击 + 对比状态 ──
+  // better-sidebar v0.19.0 起右列归 DSH 原生右侧栏，自绘部分只剩底部工作台。
+  // 2026-09-14 在 dev 实测的锚点实况（与源码推断不同，故以实测为准）：
+  //   侧栏：常驻的 `P3OORG_iconButton`（aria-label「收起右侧边栏」，开、合两态都在
+  //         同一位置），`[data-sidebar-right-expand]` 本版未渲染；
+  //   底栏：开关按钮**不带** `nArs4W_toggleButton` 类，只有 aria-label
+  //         （本版中文恒为「折叠底部面板」），面板容器仍是 `nArs4W_bottomPanel`
+  //         （折叠态带 `bottomPanelHidden`）。
   setTimeout(async () => {
     try {
       const diag = await mainView.webContents.executeJavaScript(`(async () => {
         const out = { toggle: null, buttons: 0, disabled: [], before: null, after: null, changed: null, titleBarCompat: null }
-        const cluster = document.querySelector('.nArs4W_toggleCluster')
-        const panel = document.querySelector('.nArs4W_panel')
-        out.toggle = cluster !== null
+        const expand = document.querySelector('button[data-sidebar-right-expand]')
+        const collapse = document.querySelector('button[aria-label="收起右侧边栏"], button[aria-label="Collapse right sidebar"]')
+        const bottom = document.querySelector('button[aria-label="折叠底部面板"], button[aria-label="展开底部面板"], button[class*="nArs4W_toggleButton"]')
+        out.toggle = (expand || collapse) !== null
+        out.buttons = (expand ? 1 : 0) + (collapse ? 1 : 0) + (bottom ? 1 : 0)
+        out.sidebarOpen = document.querySelector('[data-sidebar-right-open]') !== null
         out.titleBarCompat = document.body?.dataset?.dshTitleBarCompat ?? null
-        if (cluster) {
-          const btns = cluster.querySelectorAll('button')
-          out.buttons = btns.length
-          btns.forEach((b, i) => { if (b.disabled) out.disabled.push(i) })
-          out.before = panel?.className ?? 'no-panel'
-          if (btns[0]) btns[0].click()
-          await new Promise((r) => setTimeout(r, 700))
-          out.after = panel?.className ?? 'no-panel'
-          out.changed = out.before !== out.after
+        if (bottom && bottom.disabled) out.disabled.push('bottom')
+        const stateOf = () => {
+          const p = document.querySelector('[class*="nArs4W_bottomPanel"]')
+          if (p === null) return 'no-panel'
+          return p.className.toString().includes('bottomPanelHidden') ? 'collapsed' : 'expanded'
         }
+        out.before = stateOf()
+        if (bottom) bottom.click()
+        await new Promise((r) => setTimeout(r, 700))
+        out.after = stateOf()
+        out.changed = out.before !== out.after
         return out
       })()`)
       safeLog(`[sidebar-diag] ${JSON.stringify(diag)}\n`)
