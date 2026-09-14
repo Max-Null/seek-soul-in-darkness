@@ -1,120 +1,90 @@
-# v0.3.0 思灵（SSiD）
+# v0.3.1 思灵（SSiD）
 
-> 状态：待发布（2026-09-07 起草，2026-09-13 补「内核与运行架构」一节，2026-09-14 按
-> `git log v0.2.1..HEAD` 的全部 67 个提交补齐分组）。「下载与校验」节的 hash 与体积
-> 于打包后填入。
->
-> 版本号由原计划的 0.2.2 改为 **0.3.0**（用户判定，2026-09-13）：内核移出 Electron
-> 主进程属架构级变更，叠加内核自身 0.1.2-rc.1 → 0.1.5-rc.2 的大版本跨越。
+> 状态：**已发布**（2026-09-15）。按 `git log v0.3.0..HEAD` 分组（不含 v0.3.0
+> 自身的发布收尾提交）。本版是补丁版：壳侧两处用户反馈的修复，叠加内置插件整体跟进到
+> 各自已发布的新版本。
 
-## 内核与运行架构
+## 新增
 
-- **内核移出 Electron 主进程**（本版最大的变更）：DSH 内核改跑在独立 Node 子进程里，
-  经 Node IPC 与壳通信。三个收益：不再需要 `module-resolution.ts` 的 `registerHooks`
-  绕 `ctx.loader.internal`（Electron 内 native addon 探测不到标准 Node 的 V8 embedder）；
-  内核崩溃不再拖死界面；**重启 DSH 只需换内核**——窗口/托盘/标题栏都不重建，
-  比整壳重启快得多。设 `SSID_KERNEL_CHILD=0` 可退回同进程模式。
-- **打包链路随之调整**：`kernel-child.bundle.mjs` 由 esbuild 自包含产出，经
-  `extraResources` 落到 `resources/` —— 子进程是纯 `node.exe`，没有 Electron 的
-  asar 补丁，读不到 asar 虚拟文件系统。打包形态显式传 `preferBundled`，
-  防 `$DSH_CHECKOUT` 残留变量劫持运行时。
-- **新增纯净模式（故障恢复）**：托盘「以纯净模式重启（只留官方插件）」或命令行
-  `--ssid-safe-mode`。只加载官方 bundle 的插件行，**不碰任何数据**（会话/设置/记忆/
-  storage 一律不动），用于救「第三方插件把 boot 弄坏、设置页进不去」的环境；
-  同一位置可切回正常模式。
-- **内核升级 0.1.2-rc.1 → 0.1.5-rc.2**：适配 `dsh-pocket`（2.10.3 → 2.10.6）与
-  `dsh-persona` 的字段变更（`text` → `prefix`）；标题栏改为显示**实际加载**的内核
-  版本（原先读部署闭包，dev 下与实际不符）。
-- **「AI 提问」通知在子进程模式下恢复**：改由子进程内包装 `userQuestions.ask`
-  并上报事件。
+- **托盘拆成两个重启入口**（用户反馈：那个「重启」应该重启思灵）：
+  - **重启思灵**：整壳重启——窗口、托盘、标题栏全部重建，内核在新进程里重新 boot。
+    改过壳代码（`main.mjs` 等）后用这一项。
+  - **重启 DSH 内核**：保留原来的快路径——子进程模式下只换内核，窗口不重建，秒级完成。
+    背景：原先托盘那个「重启」走的就是这条快路径，对「改了壳代码或插件文件」的场景
+    实际无效（壳没换）。
+  - 菜单顺序为「重启 DSH 内核」在前、「重启思灵」在后。
 
 ## 内置升级
 
-- **升级部署「用户层保留」子条目级修复**：用户自装 MCP 作为既有 `- insert:` 列表
-  追加子条目时，升级部署不再丢弃（v0.2.1 只覆盖了「独立顶层 insert 块」形态）；
-  另修复 UTF-8 BOM 开头文件整块丢弃风险。配套单测 18 例。
-- **用户对出厂 MCP 条目的改动不再被升级打回**：patch 合并升级为**三方合并**
-  （以「上次部署的模板」为基线）——用户在 MCP 管理页改过的 cwd / 启停等改动会
-  跨升级保留，同时模板自身的升级（如新增保护参数）对未改动的条目照常生效。
-  升级报告的 `patchMerged.overridden` 会列出被保留的用户改动。
-- **CodeGraph MCP 预制修正**：出厂关闭匿名遥测（`CODEGRAPH_TELEMETRY=off`）；
-  引擎由 postinstall 下载（升级链允许 build scripts，见 archive 修正）。
-- **CodeGraph 索引目录不再默认用户主目录**（用户反馈修复）：此前出厂默认把索引
-  目录设为用户主目录，而主目录没有代码仓库——首次调用会扫描 `AppData` 等无关目录、
-  撞 `--max-files` 上限后长时间卡死（8 分钟+、内存 900MB+），恢复响应后查询结果也
-  与项目无关。现在改为 **boot 前解析**：`SSID_MCP_CG_WS` 环境变量 →
-  `~/.ssid/codegraph.json` → **最近会话的工作目录**（自动适配）；都取不到时该 MCP
-  **保持停用**（不再扫描主目录）。首次启动会弹一次引导（可跳过，随时可在
-  「设置 → MCP」里改）；出厂 args 另加 `--exclude node_modules/.git/AppData/target/dist/build/.venv/__pycache__`
-  保护清单。详见 `docs/决策/2026-09-09-CodeGraph-MCP-默认索引目录修复.md`。
-- **dsh-wechat pin 修正**：`^0.9.1` → 精确 `0.9.1`（归档确定性）。
-- **归档新增逐文件 sha256 清单**：`runtime-integrity.sha256`（65,388 条），
-  发版校验脚本据此核对解压结果，回答「解压出来的文件对不对」。
-- **dsh-chat-rail 0.6.1 → 0.6.2**（导航条四项改造）：hover tip 里的「提问&回答」
-  改用 SVG 图标标示（不再用字符当图标，且与文字垂直居中对齐）；「只显示收藏」开关
-  成为面板的**通栏 header**（折叠与展开同构、贴顶、不再压住条目）；导航条右缘
-  **改锚会话区右列**——官方右侧边栏 push 展开时会话列左移，导航条跟随移动，不再被
-  压在文件面板下面；样式标签补 `data-plugin` 归属标记。
-- **dsh-quick-toolbar（vendor 0.8.6）**：样式标签补 `data-plugin` 归属标记（避免被
-  其它模块的 HMR 重载连带删除）；样式注入改为幂等 + 内容比对，并提到防重守卫之前。
-- **ds-harness-remote 0.4.10 → 0.4.13**：上游修复了同类缺陷（样式标签缺
-  `data-plugin` 归属，会被别的模块认领后随其 HMR 重载删除，issue #52 已关闭）；
-  本机两个 profile 与模板同步升级。
+内置专属插件与预置 pin 整体跟进到已发布的新版本：
 
-## 调整
-
-- 免安装版（zip）交付形态延续（v0.2.1 起）——Win10 64 位家庭版等安装器受阻场景
-  的正解：解压即用，见「下载与校验」。
-- 发版归档不再带调试截图与临时脚本：`build.files` 增加 `!.tmp-*` / `!*.png` /
-  `!*.bak*` / `!*.pre-*` 排除——electron-builder 不读 `.gitignore`，此前被忽略的
-  本地调试产物仍会被打进包。
+- **dsh-ssid-panels 0.1.9 → 0.1.10**：侧栏 tab 图标改为**彩色**（各 tab 品牌色）并放大到
+  **22px**（对齐 DSH 原生右栏「开始」页基准）；`icon` 改为返回 ReactNode 的**函数**——
+  原生右侧栏只认函数形式，传元素会被静默回落到占位图标。
+- **dsh-quick-toolbar（vendor 0.8.7 → 0.10.0）**：悬浮球支持**收藏会话**（☆ 收藏当前
+  会话 + 平铺跳转入口，上限 8 个，失效会话不再占名额）；收藏分组改按**工作区归属**
+  （原先按会话 cwd，会跨工作区串台）；收藏图标与文字对齐修复；锚点适配
+  better-sidebar v0.19.0（改按 `aria-label` 定位）；工具栏「插件中心」按钮恢复
+  （壳标志改为每次读取——原先在 `createToolbar` 里只快照一次，晚到的 `__SSID_SHELL__`
+  会让壳专属分支永不生效）；`open-settings` 支持 **path 深链**（悬浮球可直达设置分区）；
+  隐藏原按钮时一并清掉「只装着它」的包装层（原先会留下 34px 空档）。
+- **dsh-node-appearance 0.3.6 → 0.4.0**：接管官方「AI 提问」卡片——提问结算后**仍能看到
+  当时有哪些选项**（官方行只保留 id 与问题，选项在客户端管线上已被丢弃），选中的一项
+  高亮显示；提问卡配色改用更醒目的酸橙绿。另新增输入框上方的**目标详情面板**（折叠头
+  显示 rev，可展开看详情），与官方目标条在视觉上拼成一张卡。
+- **dsh-skill-mcp-center 0.4.2 → 0.5.0**：收录插件内的 skill 与 MCP 工具名及描述；
+  侧栏 tab 图标 14 → 22px（同原生基准）；MCP 面板工具列表默认收起、点服务器行展开；
+  Skill 面板以来源标签取代「内置只读」。
+- **dsh-memory 0.6.0 → 0.6.1**：侧栏 tab 图标对齐 better-sidebar 内置风格（彩色）并
+  统一到 22px 基准。
+- **dsh-plugin-center 0.2.19 → 0.2.20**：弹窗底色改由「弹窗不透明度」决定，不再跟随
+  壁纸透明度滑杆。
+- **dsh-chat-rail 0.6.2 → 0.6.4**：隐藏会话区的 Y 轴滚动条；hover tip 里的问答归属只
+  归给它前面最近的那条消息；npm 包不再携带开发期验证截图。
+- **dsh-context 0.52.0 → 0.52.1**、**dsh-dream-skin 9.13.0 → 9.14.2**、
+  **dsh-session-manager 0.4.10 → 0.4.11**。
 
 ## 修复
 
-- 打包版子进程启动失败：`spawn` 的 `cwd` 曾指向 `app.asar`（那是文件不是目录），
-  报错却是 `spawn ...node.exe ENOENT`（而该 exe 明明存在），极具误导性。已改为
-  打包版取 `process.resourcesPath`。
-- 部署失败/取消且旧环境无闭包锚点 → 明确阻断提示（不再「无法定位 DeepSeek
-  Harness 运行时」崩溃）——v0.2.1 已含，本版回归确认。
-- **插件中心「检查更新 / 安装」通道 405**（用户报告）：DSH 0.1.5 起
-  `dsh-client-connection` 的 inject 收缩为 `[credentials, webRuntime]`，而 `rpc.handle`
-  仍从 connection 自己的 ctx 取 `webServer`，于是抛
-  `cannot get property "webServer" without inject`，请求落到 frontend-static 兜底 →
-  405（同路径 GET 为 404）。**在配置层修复**：模板给 `connection` 行补回 `webServer`
-  注入，不改 DSH 源码。根因、替代方案与给第三方作者的说明见
-  `docs/决策/2026-09-14-插件中心405诊断记录.md` 与同日的持久化决策。
+- **SSiD 启动后下方栏自动展开**（用户报障）：根因在壳自己的启动诊断——`[sidebar-diag]`
+  在启动 8 秒后点一次底栏做「开合验证」，于是每次启动都把底栏点开，用户侧会合理地怀疑
+  到 better-sidebar 身上。改为**纯只读快照**（只探测按钮存在性与面板状态，不点击）。
+  实测判据：面板状态 0–8 秒 `collapsed`、10 秒起 `EXPANDED`，与该 8000ms 定时器吻合。
+- **壳标题栏与插件中心弹窗的透明度错误跟随壁纸滑杆**（用户报障）：`dsh-dream-skin` 把
+  `--dsw-alias-bg-base` / `--dsw-specific-sidebar-fill` 的 alpha 绑在「壁纸透明度」滑杆上，
+  凡直接取这两个 token 当底色的地方都会跟着变透。壳标题栏改为**剥离 alpha 只取色相**
+  （标题栏语义本就不透明）；插件中心弹窗改用**不带 alpha 的皮肤基色**做 `color-mix`，
+  于是「弹窗不透明度」重新对它生效。
 
 ## 工程与门禁
 
-- **七道检查门**并入 `npm run check:rules`：BOM 扫描、旧名残留、profile↔模板声明对比、
-  vendor 各份一致性、bundle 不得内联 DSH、插件 peerDeps 覆盖性，以及**DSH 源码只引用
-  不改**（`dsh-clean`）。
-- **「DSH 源码只引用不改」升为工作区铁律 2.0**：`deepseek-harness/` 与
-  `dsh-web-runtime/` 的源码一律不改，需要适配时只改我们自己的东西（profile 的 patch
-  条目、自制插件源码、壳代码），由 `check-dsh-checkout-clean.mjs` 机械检查。
-- **交付链三层校验**：仓库根、`dist-electron/win-unpacked`、`setup.exe` 内层三处的
-  内核哈希必须一致（`npm run verify:shipped`）——回答「装进去的内核是不是本次构建的
-  那一份」。
-- **决策记录知识库化**：`docs/决策/` 的 83 篇编译为自包含单页（构建器 + 验证器 +
-  三份同源的库验证器），可按状态/月份/标签浏览、全文检索。
-- **新增两条坑条目**（手册 §7）：手动注入的 `<style>` 必须带 `data-plugin`（否则会被
-  任意模块认领、随其 HMR 重载被删，元素留存而样式消失）；CDP 几何测量前先开焦点模拟
-  （未聚焦窗口会冻结过渡时钟，读到的是过渡起始值）。
+- **手册 §7 新增坑 #19–#29**：第三方插件的 DOM 锚点必须按运行态实测；`createToolbar` 里
+  的壳标志是一次性快照；多入口构建会把双半共享模块拆成 chunk 而 DSH client 加载器不认；
+  排查期的模拟点击别留在启动路径上；原生右侧栏 tab 图标必须传函数且基准是 22px；
+  要显示官方丢弃的数据得接管 keyed slot 而非改样式；改 `lib/client.js` 光刷新页面不生效
+  （内核把 combo bundle 当不可变产物缓存）；托盘两种重启的分工；第三方插件的内嵌资源
+  补丁会被重装覆盖；皮肤插件把 token 的 alpha 绑在滑杆上。
+- **`ssid-release` skill 首轮升级**：归档耗时口径 3–5 分钟 → 约 25 分钟（`runtime-integrity.sha256`
+  的 65,000+ 条占 291 秒）；归档抽查改以 `npm run verify:release` 为首选；补 `npm run pack`
+  已含子进程 bundle、`verify:shipped` 三层哈希、打包产物自检必须隔离等实测条目。
+- **`verify-release.mjs` 修正过时检查**：不再把已移除的 open-sea-skin 定制判为缺失；
+  期望归档体积 185 → 230 MB。
+- 手册待办 #12、#13 收口。
 
 ## 更新说明
 
-- 老用户安装 v0.3.0：启动时版本指纹不一致 → 自动重部署运行环境（约 30 秒，
-  可取消）；重部署后 profile 与本版预置一致，此前已被覆盖的用户 MCP 可从
-  `~/.ssid/profile-backups/` 快照对照找回（2026-09-07 实例）。
+- 老用户安装 v0.3.1：启动时版本指纹不一致 → 自动重部署运行环境（约 30 秒，可取消）。
+  本版重部署会把内置插件一并换成上表的新版本，无需逐个手动更新。
+- 托盘菜单多出一项：「重启思灵」（整壳）与「重启 DSH 内核」（快路径）并存。
 
 ## 下载与校验
 
 - 优先使用免安装版（zip）：解压即用，绕过安装器/签名拦截；NSIS 安装版报
   「不支持的 16 位应用程序」= 下载文件损坏（非兼容问题），删后重下或换 zip。
 - 资产（GitHub Release 页）：
-  - `ssid-shell-0.3.0-win.zip`（409.7 MB）
-  - `ssid-shell-setup-0.3.0.exe`（359.8 MB）
-  - 附 `latest.yml` 与 `ssid-shell-setup-0.3.0.exe.blockmap`（在线增量更新所需）
+  - `ssid-shell-0.3.1-win.zip`（410.8 MB）
+  - `ssid-shell-setup-0.3.1.exe`（360.8 MB）
+  - 附 `latest.yml` 与 `ssid-shell-setup-0.3.1.exe.blockmap`（在线增量更新所需）
 - SHA256（`certutil -hashfile <文件> SHA256`）：
-  - zip：`F856227B65797EF43C61BCCB812C50FA0FC7C730F96C3C4AAC3996AECF5B6B9C`
-  - exe：`BD0EEF1999FE89863D4541E90E6905806068DED46C95BCED6C28FF821FE22501`
+  - zip：`C6FC5F673000545BB262910699A8FBDEE55CE332C8EA3E004EEE6E64CD9378AB`
+  - exe：`F3563BCF70028E1996D184775F16E49EBDD16F513CD331D41AA16D768D628A64`

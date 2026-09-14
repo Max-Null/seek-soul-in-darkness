@@ -155,11 +155,41 @@ const SETTINGS_CLOSE_ANCHORS = [
 ];
 /** 设置面板打开判定（modal mask；SettingsRoot.tsx：mask div onClick=onClose）。 */
 const SETTINGS_MASK_SELECTOR = "[class$=\"_mask\"]";
+/**
+* 定位并点击设置页里的一个分区（`open-settings` 的 `path` 深链）。
+*
+* `path` 两种都收：先当 CSS 选择器，未命中再当**文本精确匹配**。实践上文本是
+* 更稳的那一侧——设置页导航项是 `BUTTON` + CSS module 哈希类（实测
+* `VOzbGW_navCell` / `VOzbGW_navLabel`），类名随上游改版即失效，而分区名
+* （「手机访问」「通用设置」…）是产品语义。
+* @param env - 定位环境。
+* @param path - 分区选择器或分区名。
+* @returns 是否点到了目标。
+*/
+function clickSettingsPath(env, path) {
+	const bySelector = env.find(path);
+	if (bySelector !== null && bySelector !== void 0) {
+		bySelector.click();
+		return true;
+	}
+	if (env.findByText !== void 0) {
+		const byText = env.findByText([path]);
+		if (byText !== null && byText !== void 0) {
+			byText.click();
+			return true;
+		}
+	}
+	return false;
+}
 /** 打开/关闭官方设置面板：开着（mask 存在）→ 关闭（close 按钮 → mask 兜底）；
-*  关着 → 文本语义定位优先（footer trigger）→ 锚点链兜底。 */
-function actOpenSettings(env) {
+*  关着 → 文本语义定位优先（footer trigger）→ 锚点链兜底。
+*
+*  带 `path` 时语义不同（v2 深链）：目标是「到达某个设置分区」，不是开关面板 ——
+*  面板已开则直接跳分区（不关闭），未开则打开后延迟一拍再跳。 */
+function actOpenSettings(env, path) {
 	const mask = env.find(SETTINGS_MASK_SELECTOR);
 	if (mask !== null && mask !== void 0) {
+		if (path !== void 0) return clickSettingsPath(env, path);
 		for (let i = 0; i < SETTINGS_CLOSE_ANCHORS.length; i++) {
 			const closeBtn = env.find(SETTINGS_CLOSE_ANCHORS[i]);
 			if (closeBtn !== null && closeBtn !== void 0 && closeBtn.disabled !== true) {
@@ -170,21 +200,32 @@ function actOpenSettings(env) {
 		mask.click();
 		return true;
 	}
+	let opened = false;
 	if (env.findByText !== void 0) {
 		const byText = env.findByText(["设置", "Settings"]);
 		if (byText !== null && byText !== void 0 && byText.disabled !== true) {
 			byText.click();
-			return true;
+			opened = true;
 		}
 	}
-	for (let i = 0; i < SETTINGS_ANCHORS.length; i++) {
+	if (!opened) for (let i = 0; i < SETTINGS_ANCHORS.length; i++) {
 		const target = env.find(SETTINGS_ANCHORS[i]);
 		if (target !== null && target !== void 0 && target.disabled !== true) {
 			target.click();
-			return true;
+			opened = true;
+			break;
 		}
 	}
-	return false;
+	if (!opened) return false;
+	if (path !== void 0) {
+		const target = path;
+		(env.schedule ?? ((fn, ms) => {
+			setTimeout(fn, ms);
+		}))(() => {
+			clickSettingsPath(env, target);
+		}, 350);
+	}
+	return true;
 }
 /** 触发 dsh-commands 文本命令（空白名防御；执行语义由环境实现——v2 调研点②）。 */
 function actCommand(env, name) {
@@ -252,12 +293,10 @@ function runAdapter(adapter, env) {
 			const closeEl = closeTargetOf(act, env);
 			return actTogglePanel(env.find(adapter.button), closeEl, env.isVisible ?? defaultIsVisible);
 		}
-		case "open-settings":
-			if (act.path !== void 0) console.warn(`quick-toolbar: open-settings path '${act.path}' 暂不支持（v2 深链待入）`);
-			return actOpenSettings({
-				find: env.find,
-				...env.findByText !== void 0 ? { findByText: env.findByText } : {}
-			});
+		case "open-settings": return actOpenSettings({
+			find: env.find,
+			...env.findByText !== void 0 ? { findByText: env.findByText } : {}
+		}, act.path);
 		case "command":
 			if (env.runCommand === void 0) {
 				console.warn("quick-toolbar: command 环境无 runCommand 通道（旧版 DSH/未注入）");
@@ -1149,7 +1188,11 @@ window.__ModuleLoader__.load({
 				else panel.appendChild(b);
 				if (adapter.hide !== false) try {
 					var origBtn = document.querySelector(adapter.button);
-					if (origBtn !== null) origBtn.style.display = "none";
+					if (origBtn !== null) {
+						origBtn.style.display = "none";
+						var wrapper = origBtn.parentElement;
+						if (wrapper !== null && wrapper !== document.body && wrapper.children.length === 1) wrapper.style.display = "none";
+					}
 				} catch (_e) {}
 				return b;
 			};
@@ -1224,7 +1267,11 @@ window.__ModuleLoader__.load({
 						} catch (_e) {}
 						try {
 							var orig = document.querySelector(ad.button);
-							if (orig !== null) orig.style.display = "";
+							if (orig !== null) {
+								orig.style.display = "";
+								var origWrapper = orig.parentElement;
+								if (origWrapper !== null && origWrapper !== document.body && origWrapper.children.length === 1) origWrapper.style.display = "";
+							}
 						} catch (_e2) {}
 					});
 				}).catch(function() {});
