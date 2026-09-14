@@ -46,6 +46,7 @@
 | 2026-09-14 | §7 坑 #2 扩充 | 补入「读含中文的 `package.json` 必须用 node」：PS 5.1 按 ANSI 解码会吞掉中文后的引号 → JSON 解析失败，且赋值表达式内的变量**保留上一轮值**，静默把别的包版本号当成本包版本（`dsh-dream-skin` 升级校验时实踩） | dsh-dream-skin 9.14.0 → 9.14.1 升级（SSiD 72b5ce0）|
 | 2026-09-14 | §7 坑 #20 + 待办 #13 | #20 的「壳标志一次性快照」已修并回填修法（`dsh-quick-toolbar` 6835abb：函数化 + 复用既有补渲染轮询，未加新钩子）；待办 #13 同条收口 | 用户拍板修「壳里缺插件中心按钮」|
 | 2026-09-14 | §7 坑 #21（新增） | 新增「多入口构建会把双半共享模块拆成 chunk，DSH client 加载器不认」——症状是 client 半整体静默失效（工具栏全消失、页面无报错、host 路由却照常响应），处置为 tsdown 数组配置 + vendor 整目录镜像 | quick-toolbar 收藏会话（`dsh-quick-toolbar` 8c2657e）|
+| 2026-09-14 | §7 坑 #22（新增） | 新增「排查期的模拟点击别留在启动路径上」——壳的 `[sidebar-diag]` 启动 8 秒后点底栏做开合验证，用户侧表现为「SSiD 启动后下方栏自动展开」；改为纯只读快照 | 用户报障「下侧栏为啥默认展开」|
 
 ## 工作区规范（布局 + 放置规则，2026-08-29 整理定稿）
 
@@ -325,6 +326,8 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 20. **`createToolbar` 里的壳标志是「一次性快照」——晚到的 `__SSID_SHELL__` 会让壳专属分支永不生效**（2026-09-14 实踩，quick-toolbar 悬浮球）：`win.__SSID_SHELL__` 由 main.mjs 在 **dom-ready** 注入，晚于插件 `apply`；而 `client.ts` 的 `createToolbar()` 内 `var ssidShellEnv = win.__SSID_SHELL__ === true` 只求值一次，且该函数**不会二次进入**（`__dshQuickToolbarInstalled` 守卫 + `hideIfShell` 只在壳标志为真且 `shellVisible` 为假时移除工具栏）。于是首遍走**探测路径**：`dsh-plugin-center`（`[class*="pc-headerbtn"]` 已被 BASE_CSS 隐藏、文本兜底又匹配不到侧栏导航项）**永远探测失败 → 该按钮在 SSiD 壳里根本不渲染**（实测 `#ssid-toolbar` 面板只有会话管理/设置/侧栏/底栏 4 个内置 + 用户适配器；`__SSID_SHELL__ === true` 却仍走探测分支）。影响可控（壳标题栏已有「插件中心」入口），但**「壳环境恒渲染」的兜底形同虚设**；侧栏/底栏能出来纯靠探测后来命中。修法方向：标志改为**每次读取**（函数化）或让 `hideIfShell` 在标志到达时补一次 `renderBuiltins()`。**2026-09-14 已修**（`dsh-quick-toolbar` 6835abb）：`ssidShellEnv` 快照改为 `isShellEnv()` 每次读取 —— 既有的 1s 补渲染轮询随即在标志到达后的下一个 tick 按壳语义补渲染，无需新增钩子（dev 实测面板 4 → 5 个内置；点击「插件中心」按钮 `pc-` 元素 0 → 1858 = 面板打开，再点归 0 = 收起）。**同类风险**：任何在 `apply` 期读取 main.mjs 注入标志的分支都要按「标志可能晚到」设计。
 
 21. **多入口构建会把「双半共享模块」拆成 chunk，而 DSH 的 client 加载器不认**（2026-09-14 实踩，quick-toolbar 收藏会话）：插件的 client 半与 host 半共用一个模块（如 `src/favorites.ts`）时，tsdown/rolldown 在**多入口单次构建**下会把它提成 `xxx-<hash>.js` 共享 chunk，`lib/client.js` 顶部随之多出一条 `import ... from './xxx-<hash>.js'`；而 DSH 的 client 模块加载器按**单文件**取 `/plugins/<pkg>/client.js`（合并 bundle 的 `??pkg/client.js,...` 协议），不会去拉那个相对 chunk → **client 半整体静默失效**。实测现象极具误导性：**工具栏连同所有功能按钮一起消失、页面无任何报错，而 host 半的路由照常响应**（很容易误判成服务端/数据问题）。处置：`tsdown.config.ts` 改**数组配置**（两次独立构建、每次单入口，各自内联共享模块；注意 `clean` 只开在第一次，第二次会删掉前一次的产物），host 半的 `platform: 'node'` 会默认输出 `.mjs`，需 `outExtensions` 钉死 `.js` 以匹配 `package.json` 的 `main`/`exports`——**并且同步 vendor 时整目录镜像 + 清掉旧 hash 文件**，别只复制 `client.js`/`index.js`（产物文件数不固定）。详述见 `dsh-quick-toolbar` README 的构建段。
+
+22. **排查期的「模拟点击」别留在启动路径上——诊断代码会有副作用**（2026-09-14 用户报障）：壳的 `[sidebar-diag]` 原本在启动 8 秒后 `bottom.click()` 做「开合验证」，于是**每次启动都把底栏点开**；用户侧看到的现象是「SSiD 启动后下方栏自动展开」，并会合理地怀疑是 better-sidebar 的行为或配置问题（查错了方向）。实测判据：轮询面板状态，0–8 秒 `collapsed`、**10 秒起 `EXPANDED`**，与该 `setTimeout(..., 8000)` 的时间点完全吻合。处置：改为**纯只读**快照（探测按钮存在性与面板状态，不点击）。**同类自查**：启动路径里任何 `.click()` / `dispatchEvent` / `setProperty` 都要问一句「它替用户改了什么状态」——需要交互验证时用 `.build/` 下的 CDP 脚本，临时脚本不进驻启动路径。
 
 ## 8. 文档索引
 

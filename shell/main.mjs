@@ -1275,37 +1275,38 @@ async function start() {
   } catch {
     titleBar.webContents.send('ssid:title:float-state', false)
   }
-  // ── 侧边栏自动诊断：探测开关按钮 + 模拟点击 + 对比状态 ──
-  // better-sidebar v0.19.0 起右列归 DSH 原生右侧栏，自绘部分只剩底部工作台。
-  // 2026-09-14 在 dev 实测的锚点实况（与源码推断不同，故以实测为准）：
-  //   侧栏：常驻的 `P3OORG_iconButton`（aria-label「收起右侧边栏」，开、合两态都在
-  //         同一位置），`[data-sidebar-right-expand]` 本版未渲染；
-  //   底栏：开关按钮**不带** `nArs4W_toggleButton` 类，只有 aria-label
-  //         （本版中文恒为「折叠底部面板」），面板容器仍是 `nArs4W_bottomPanel`
-  //         （折叠态带 `bottomPanelHidden`）。
+  // ── 侧边栏状态快照（**只读**）：启动后把侧栏/底栏的初始状态记一行，供排查与
+  //    「better-sidebar 是否在运行」的粗判（历史决策文档以此为判据）。
+  //
+  //    这里**不做任何点击**。先前它会在 8 秒后模拟点击底栏开关做「开合验证」，
+  //    结果每次启动都把底栏点开——用户侧表现为「SSiD 启动后下方栏自动展开」，
+  //    且看起来像 better-sidebar 的行为（2026-09-14 报障；实测轮询 0-8s
+  //    collapsed、10s 起 EXPANDED，与该 setTimeout 完全吻合）。诊断代码不该有
+  //    副作用：需要交互验证时用 `.build/` 下的 CDP 脚本，别再往启动路径塞点击。
+  //
+  //    锚点实况（2026-09-14 dev 实测，与源码推断不同，故以实测为准）：
+  //      侧栏：常驻的 `P3OORG_iconButton`（aria-label「收起右侧边栏」，开、合
+  //            两态都在同一位置），`[data-sidebar-right-expand]` 本版未渲染；
+  //      底栏：开关按钮**不带** `nArs4W_toggleButton` 类，只有 aria-label
+  //            （本版中文恒为「折叠底部面板」），面板容器仍是 `nArs4W_bottomPanel`
+  //            （折叠态带 `bottomPanelHidden`）。
   setTimeout(async () => {
     try {
-      const diag = await mainView.webContents.executeJavaScript(`(async () => {
-        const out = { toggle: null, buttons: 0, disabled: [], before: null, after: null, changed: null, titleBarCompat: null }
+      const diag = await mainView.webContents.executeJavaScript(`(() => {
         const expand = document.querySelector('button[data-sidebar-right-expand]')
         const collapse = document.querySelector('button[aria-label="收起右侧边栏"], button[aria-label="Collapse right sidebar"]')
-        const bottom = document.querySelector('button[aria-label="折叠底部面板"], button[aria-label="展开底部面板"], button[class*="nArs4W_toggleButton"]')
-        out.toggle = (expand || collapse) !== null
-        out.buttons = (expand ? 1 : 0) + (collapse ? 1 : 0) + (bottom ? 1 : 0)
-        out.sidebarOpen = document.querySelector('[data-sidebar-right-open]') !== null
-        out.titleBarCompat = document.body?.dataset?.dshTitleBarCompat ?? null
-        if (bottom && bottom.disabled) out.disabled.push('bottom')
-        const stateOf = () => {
-          const p = document.querySelector('[class*="nArs4W_bottomPanel"]')
-          if (p === null) return 'no-panel'
-          return p.className.toString().includes('bottomPanelHidden') ? 'collapsed' : 'expanded'
+        const bottomToggle = document.querySelector('button[aria-label="折叠底部面板"], button[aria-label="展开底部面板"], button[class*="nArs4W_toggleButton"]')
+        const panel = document.querySelector('[class*="nArs4W_bottomPanel"]')
+        const state = panel === null
+          ? 'no-panel'
+          : (panel.className.toString().includes('bottomPanelHidden') ? 'collapsed' : 'expanded')
+        return {
+          sidebarToggle: (expand || collapse) !== null,
+          bottomToggle: bottomToggle !== null,
+          bottomState: state,
+          sidebarOpen: document.querySelector('[data-sidebar-right-open]') !== null,
+          titleBarCompat: document.body?.dataset?.dshTitleBarCompat ?? null,
         }
-        out.before = stateOf()
-        if (bottom) bottom.click()
-        await new Promise((r) => setTimeout(r, 700))
-        out.after = stateOf()
-        out.changed = out.before !== out.after
-        return out
       })()`)
       safeLog(`[sidebar-diag] ${JSON.stringify(diag)}\n`)
     } catch (error) {
