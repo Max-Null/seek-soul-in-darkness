@@ -6,9 +6,9 @@
  * （分工见手册待办 #2 原文）。判定项逐条对应 `docs/发版流程规范.md` 的 §4 完整性检查
  * 与 §5「归档内容抽查清单（解包验证，发布前必须全过）」：
  *
- *   §4  归档约 185 MB；明显偏小 = 被中断/损坏（绿屏案例留下过 7.4MB 半成品）
+ *   §4  归档约 230 MB；明显偏小 = 被中断/损坏（绿屏案例留下过 7.4MB 半成品）
  *   §5-1 `.runtime-version` == <ssidVer>-<dshVer>-<指纹>
- *   §5-2 open-sea-skin/plugin/client.js 含 "enabled: false"（SSiD 定制默认关闭）
+ *   §5-2 open-sea-skin/plugin/client.js 含 "enabled: false"（该定制 v0.1.16 已移除；若缺失则不计违规）
  *   §5-3 @max-null/dsh-plugin-center 版本 == npm 最新
  *   §5-4 dsh-better-sidebar 版本 == pin 预期
  *   §5-5 @max-null/dsh-capture/lib/client.js 含最新功能标记
@@ -31,7 +31,7 @@
  * "发布前只读抽查"。规范 §6.2 把部署与 boot 放在本机 dev 验证环节（要重启思灵、看日志），
  * 那一步由 ssid-release skill 的流程负责人执行，脚本只给出验证方式的提示。
  *
- * 用 `tar -tzf` / `tar -xzOf` **选择性读取**而非整包解包：185 MB 全解包要几十秒且要临时空间，
+ * 用 `tar -tzf` / `tar -xzOf` **选择性读取**而非整包解包：230 MB 全解包要几十秒且要临时空间，
  * 抽查只需要清单里那几个文件。Windows 10+ 自带 bsdtar。
  *
  * 用法：node scripts/verify-release.mjs [--archive=<path>] [--expect-ver=X.Y.Z] [--npm-latest]
@@ -53,8 +53,11 @@ const ARCHIVE = arg('archive') ?? path.join(SHELL, 'dsh-runtime.tar.gz');
 const EXPECT_VER = arg('expect-ver');
 const CHECK_NPM = process.argv.includes('--npm-latest');
 
-/** 规范 §4 的期望体积；容差 ±15% —— 明显偏小才是信号，不必卡在小数点。 */
-const EXPECT_MB = 185;
+/**
+ * 规范 §4 的期望体积；容差 ±15% —— 明显偏小才是信号（上限只提示、不判违规）。
+ * 随预置增多逐版上调：0.1.14 为 200.2 MB、v0.3.0 为 230.5 MB。
+ */
+const EXPECT_MB = 230;
 const TOLERANCE = 0.15;
 
 if (!fs.existsSync(ARCHIVE)) {
@@ -115,11 +118,11 @@ if (sizeMB < lo) {
   }
 }
 
-// ── §5-2 open-sea-skin 定制默认关闭 ──
+// ── §5-2 open-sea-skin 定制默认关闭（该定制已于 v0.1.16 移除，缺文件属预期）──
 {
   const e = entries.find((x) => x.includes('open-sea-skin') && x.endsWith('plugin/client.js'));
   gate.inspect();
-  if (!e) gate.info('§5-2 归档内无 open-sea-skin/plugin/client.js（该定制未纳入本轮？）');
+  if (!e) gate.info('§5-2 归档内无 open-sea-skin/plugin/client.js —— 该定制已于 v0.1.16 移除，属预期');
   else {
     const txt = readOrNull(e);
     if (txt === null) gate.info('§5-2 open-sea-skin client.js 读不到内容，跳过');
