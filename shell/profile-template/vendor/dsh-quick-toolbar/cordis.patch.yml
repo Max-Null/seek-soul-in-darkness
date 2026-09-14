@@ -1,6 +1,8 @@
 # @max-null/dsh-quick-toolbar bundle patch: one insert over the profile root.
-# Host half is a no-op; the client half injects CSS aligning the
-# dsh-better-sidebar toggle cluster with the DSH session header utilities row.
+# Host half: serves the toolbar's persistence routes over webServer
+# (state / user adapters / session favorites, all under $DSH_HOME).
+# Client half: renders the floating toolbar and aggregates scattered
+# third-party plugin buttons plus the session-favorites entry into it.
 - insert:
     - id: dsh-quick-toolbar
       name: '@max-null/dsh-quick-toolbar'
