@@ -339,10 +339,21 @@ const ssid = {
   }),
 } as const
 
-function tabIcon(path: string): ReactNode {
+/**
+ * 侧栏 tab 图标：与 better-sidebar 内置 tab 同风格——**彩色**线性图标、14px。
+ *
+ * 内置那批（文件 #f7ad31 / 终端 #0f1b33 / 浏览器 #2196f3）各自硬编码品牌色、
+ * 不跟随主题，尺寸 14（卡片高 68）。我们原先用 15px + `currentColor`，实测下来
+ * 图标偏大（卡片高 65）且颜色发灰，与内置那排不在一个观感上——2026-09-14 用户
+ * 要求「匹配风格和 better-sidebar 一致的彩色图标」。故尺寸对齐 14、颜色按 tab
+ * 语义各给一色。
+ * @param path - 24 格 viewBox 下的描边路径。
+ * @param color - 该 tab 的品牌色。
+ */
+function tabIcon(path: string, color: string): ReactNode {
   return createElement('svg', {
-    width: 15, height: 15, viewBox: '0 0 24 24', fill: 'none',
-    stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round',
+    width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none',
+    stroke: color, strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round',
   }, createElement('path', { d: path }))
 }
 
@@ -1113,7 +1124,7 @@ export function apply(ctx: Context): void {
     sidebarCtx.effect(() => service.registerTab({
       id: '@max-null/dsh-ssid-panels:guardian',
       title: () => STRINGS[localeId].tabGuardian,
-      icon: tabIcon('M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2'),
+      icon: () => tabIcon('M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2', '#06b6d4'),
       order: 61,
       single: true,
       component: ({ visible }) => createElement(GuardianView, { visible }),
@@ -1121,7 +1132,7 @@ export function apply(ctx: Context): void {
     sidebarCtx.effect(() => service.registerTab({
       id: '@max-null/dsh-ssid-panels:habit',
       title: () => STRINGS[localeId].tabHabit,
-      icon: tabIcon('m17 2 4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14m-14 18-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3'),
+      icon: () => tabIcon('m17 2 4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14m-14 18-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3', '#f97316'),
       order: 62,
       single: true,
       component: ({ visible }) => createElement(HabitView, { visible }),
@@ -1129,7 +1140,7 @@ export function apply(ctx: Context): void {
     sidebarCtx.effect(() => service.registerTab({
       id: '@max-null/dsh-ssid-panels:balance',
       title: () => STRINGS[localeId].tabBalance,
-      icon: tabIcon('M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4'),
+      icon: () => tabIcon('M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4', '#22c55e'),
       order: 63,
       single: true,
       component: () => createElement(BalanceView),
