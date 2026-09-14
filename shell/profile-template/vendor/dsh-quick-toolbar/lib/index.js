@@ -72,6 +72,46 @@ function parseUserAdapters(raw) {
 	};
 }
 //#endregion
+//#region src/favorites.ts
+/**
+* 从文件/请求体里取出收藏数组，兼容两种形态：裸数组，或 `{ favorites: [...] }`。
+* 读写两侧必须走同一个提取步骤——只在一侧提取会让「写进去却读不出来」
+* （2026-09-14 实测：POST 提取了 `.favorites`、GET 把整个 `{favorites}` 交给
+* `normalizeFavorites`，而它只认数组，于是落盘成功却始终读回空列表）。
+* @param raw - 解析后的 JSON（任意形状）。
+* @returns 候选值（不保证合法，交由 `normalizeFavorites` 校验）。
+*/
+function extractFavorites(raw) {
+	return raw !== null && typeof raw === "object" && !Array.isArray(raw) ? raw.favorites : raw;
+}
+/**
+* 归一化收藏列表（防御非法文件：逐条字段级校验，坏条目丢弃而不拖垮整份）。
+* 同 id 去重（保留靠前的一条）。不按上限截断——上限是「新增」时的准入规则，
+* 已有数据（例如早期版本写入的、或跨工作区累计的）不因规则变化被静默删除。
+* @param raw - 解析后的文件内容（任意形状）。
+* @returns 规整过的收藏列表（按 `at` 倒序）。
+*/
+function normalizeFavorites(raw) {
+	const rows = Array.isArray(raw) ? raw : [];
+	const out = [];
+	const seen = /* @__PURE__ */ new Set();
+	for (const row of rows) {
+		if (row === null || typeof row !== "object") continue;
+		const r = row;
+		const id = typeof r.id === "string" ? r.id.trim() : "";
+		if (id === "" || seen.has(id)) continue;
+		seen.add(id);
+		const title = typeof r.title === "string" && r.title.trim() !== "" ? r.title.trim() : id;
+		out.push({
+			id,
+			title,
+			cwd: typeof r.cwd === "string" ? r.cwd : "",
+			at: typeof r.at === "number" && Number.isFinite(r.at) ? r.at : 0
+		});
+	}
+	return out.sort((a, b) => b.at - a.at);
+}
+//#endregion
 //#region src/index.ts
 /**
 * @max-null/dsh-quick-toolbar — host half.
@@ -233,6 +273,80 @@ const stateRouteDefinition = {
 		});
 	}
 };
+const FAVORITES_PATH = join(process.env.DSH_HOME ?? join(homedir(), ".dsh"), "quick-toolbar-favorites.json");
+const favoritesRouteDefinition = {
+	kind: "exact",
+	path: "/quick-toolbar/api/favorites",
+	handler: async (req, res) => {
+		if (req.method === "GET") {
+			let raw = null;
+			try {
+				raw = readFileSync(FAVORITES_PATH, "utf8");
+			} catch {
+				sendJson(res, 200, {
+					ok: true,
+					value: { favorites: [] }
+				});
+				return;
+			}
+			let parsed = null;
+			try {
+				parsed = JSON.parse(raw);
+			} catch {
+				sendJson(res, 200, {
+					ok: false,
+					error: "invalid-json"
+				});
+				return;
+			}
+			sendJson(res, 200, {
+				ok: true,
+				value: { favorites: normalizeFavorites(extractFavorites(parsed)) }
+			});
+			return;
+		}
+		if (req.method === "POST") {
+			let raw = "";
+			req.on?.("data", (chunk) => {
+				raw += chunk;
+			});
+			await new Promise((resolve) => req.on?.("end", () => {
+				resolve();
+			}));
+			let parsed = null;
+			try {
+				parsed = JSON.parse(raw);
+			} catch {
+				sendJson(res, 200, {
+					ok: false,
+					error: "invalid-json"
+				});
+				return;
+			}
+			const favorites = normalizeFavorites(extractFavorites(parsed));
+			try {
+				const tmp = FAVORITES_PATH + ".tmp";
+				writeFileSync(tmp, JSON.stringify({ favorites }, null, 2), "utf8");
+				renameSync(tmp, FAVORITES_PATH);
+			} catch {
+				sendJson(res, 200, {
+					ok: false,
+					error: "write-failed"
+				});
+				return;
+			}
+			sendJson(res, 200, {
+				ok: true,
+				value: { favorites }
+			});
+			return;
+		}
+		sendJson(res, 405, {
+			ok: false,
+			error: "method-not-allowed"
+		});
+	}
+};
 let wsSvc = null;
 const authUrlRouteDefinition = {
 	kind: "exact",
@@ -264,6 +378,7 @@ function apply(ctx) {
 		wsSvc = wsCtx;
 		wsCtx.webServer.register(adaptersRouteDefinition);
 		wsCtx.webServer.register(stateRouteDefinition);
+		wsCtx.webServer.register(favoritesRouteDefinition);
 		wsCtx.webServer.register(authUrlRouteDefinition);
 	}));
 }

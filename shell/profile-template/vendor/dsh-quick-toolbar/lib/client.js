@@ -266,6 +266,81 @@ function runAdapter(adapter, env) {
 			return actCommand({ execute: env.runCommand }, act.name);
 	}
 }
+/**
+* 归一化收藏列表（防御非法文件：逐条字段级校验，坏条目丢弃而不拖垮整份）。
+* 同 id 去重（保留靠前的一条）。不按上限截断——上限是「新增」时的准入规则，
+* 已有数据（例如早期版本写入的、或跨工作区累计的）不因规则变化被静默删除。
+* @param raw - 解析后的文件内容（任意形状）。
+* @returns 规整过的收藏列表（按 `at` 倒序）。
+*/
+function normalizeFavorites(raw) {
+	const rows = Array.isArray(raw) ? raw : [];
+	const out = [];
+	const seen = /* @__PURE__ */ new Set();
+	for (const row of rows) {
+		if (row === null || typeof row !== "object") continue;
+		const r = row;
+		const id = typeof r.id === "string" ? r.id.trim() : "";
+		if (id === "" || seen.has(id)) continue;
+		seen.add(id);
+		const title = typeof r.title === "string" && r.title.trim() !== "" ? r.title.trim() : id;
+		out.push({
+			id,
+			title,
+			cwd: typeof r.cwd === "string" ? r.cwd : "",
+			at: typeof r.at === "number" && Number.isFinite(r.at) ? r.at : 0
+		});
+	}
+	return out.sort((a, b) => b.at - a.at);
+}
+/**
+* 取某个工作区的收藏（悬浮球实际展示的那一份）。
+* @param list - 全量收藏。
+* @param cwd - 当前会话的工作目录；`undefined` 与空串等价（无 cwd 的会话归一组）。
+*/
+function favoritesForCwd(list, cwd) {
+	const key = cwd === void 0 ? "" : cwd;
+	return list.filter((f) => f.cwd === key);
+}
+/**
+* 新增一条收藏（列表已含同 id → duplicate；该 cwd 已达上限 → limit）。
+* 返回**新数组**，调用方负责持久化。
+* @param list - 全量收藏。
+* @param item - 待收藏的会话（`at` 由调用方给，便于测试注入固定时钟）。
+*/
+function addFavorite(list, item) {
+	if (list.some((f) => f.id === item.id)) return {
+		ok: false,
+		list: [...list],
+		reason: "duplicate"
+	};
+	if (favoritesForCwd(list, item.cwd).length >= 8) return {
+		ok: false,
+		list: [...list],
+		reason: "limit"
+	};
+	return {
+		ok: true,
+		list: [item, ...list].sort((a, b) => b.at - a.at)
+	};
+}
+/**
+* 移除一条收藏（不存在则原样返回新数组）。
+* @param list - 全量收藏。
+* @param id - 目标会话 id。
+*/
+function removeFavorite(list, id) {
+	return list.filter((f) => f.id !== id);
+}
+/**
+* 悬浮球里显示用的短标签：`displayTitle` 可能很长（首条提问全文），截到 12 字
+* 与内置适配器按钮的取字规则一致，完整名走 `title` 提示。
+* @param title - 会话显示名。
+*/
+function favoriteLabel(title) {
+	const t = title.trim();
+	return t.length > 12 ? t.slice(0, 12) + "…" : t;
+}
 //#endregion
 //#region src/register-brief.ts
 /**
@@ -466,6 +541,91 @@ window.__ModuleLoader__.load({
 		function clickButton(button) {
 			if (button !== null && button !== void 0 && !button.disabled) button.click();
 		}
+		/** i18n 取词。收藏区每次重渲都重建按钮，故**不走 `trackLocale`**
+		*  （那会把失效元素累积进 LOCALE_TARGETS）；改为渲染时按当前语言直取。 */
+		function favText(key) {
+			var pair = LOCALE_DICT[key];
+			if (pair === void 0) return key;
+			return pair[localeIsZh() ? 0 : 1];
+		}
+		/** 会话列表快照（服务缺失或未就绪 → null）。 */
+		function sessionsSnapshot() {
+			var svc = sessionsSvc;
+			if (svc === null || svc.list === void 0 || svc.list === null) return null;
+			if (typeof svc.list.getSnapshot !== "function") return null;
+			try {
+				return svc.list.getSnapshot() ?? null;
+			} catch (_e) {
+				return null;
+			}
+		}
+		/** 当前会话的 id / 工作目录 / 显示名；无当前会话或服务不可用 → null。 */
+		function currentSession() {
+			var snap = sessionsSnapshot();
+			if (snap === null) return null;
+			var id = typeof snap.current === "string" ? snap.current : "";
+			if (id === "") return null;
+			var row = (snap.byId !== void 0 && snap.byId !== null ? snap.byId : {})[id];
+			var title = row !== void 0 && typeof row.displayTitle === "string" && row.displayTitle !== "" ? row.displayTitle : id;
+			return {
+				id,
+				cwd: row !== void 0 && typeof row.cwd === "string" ? row.cwd : "",
+				title
+			};
+		}
+		/** 读收藏（host 文件；读不到就是空列表，不打断工具栏渲染）。 */
+		function loadFavorites(done) {
+			fetch("/quick-toolbar/api/favorites").then(function(r) {
+				return r.json();
+			}).then(function(d) {
+				var value = d !== null && typeof d === "object" && d.ok === true ? d.value : void 0;
+				favList = normalizeFavorites(value !== void 0 && value !== null ? value.favorites : []);
+				done();
+			}).catch(function() {
+				done();
+			});
+		}
+		/** 写回收藏（全量替换——客户端持有全量，包含其他工作区的条目）。
+		*  先更新内存再发请求：界面即时响应，写失败由下一次操作整体重写。 */
+		function saveFavorites(next) {
+			favList = next;
+			fetch("/quick-toolbar/api/favorites", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ favorites: next })
+			}).catch(function() {});
+		}
+		/** 收藏/取消收藏当前会话。返回是否发生了变化（供调用方决定是否重渲）。 */
+		function toggleCurrentFavorite() {
+			var cur = currentSession();
+			if (cur === null) return false;
+			var curId = cur.id;
+			var mine = favoritesForCwd(favList, cur.cwd);
+			if (favList.some(function(f) {
+				return f.id === curId;
+			})) {
+				saveFavorites(removeFavorite(favList, curId));
+				return true;
+			}
+			if (mine.length >= 8) return false;
+			var added = addFavorite(favList, {
+				id: curId,
+				title: cur.title,
+				cwd: cur.cwd,
+				at: Date.now()
+			});
+			if (!added.ok) return false;
+			saveFavorites(added.list);
+			return true;
+		}
+		/** 切到某个收藏的会话。 */
+		function openFavorite(id) {
+			var svc = sessionsSvc;
+			if (svc === null || typeof svc.open !== "function") return;
+			try {
+				svc.open(id);
+			} catch (_e) {}
+		}
 		/**
 		* 反向互斥（2026-08-19 用户补充）：打开插件中心前，若侧栏/底栏
 		* 开着则先收起，避免弹窗被面板遮挡。两个独立判断：右栏+底栏同时
@@ -494,7 +654,11 @@ window.__ModuleLoader__.load({
 			"tb.add": ["添加按钮", "Add button"],
 			"tb.addAria": ["添加/迁移按钮（让 LLM 来注册）", "Add / migrate a button (let the LLM register it)"],
 			"sm.open": ["会话管理", "Sessions"],
-			"sm.openTitle": ["打开会话管理面板", "Open session manager"]
+			"sm.openTitle": ["打开会话管理面板", "Open session manager"],
+			"fav.add": ["收藏当前会话", "Favorite current session"],
+			"fav.remove": ["取消收藏", "Unfavorite"],
+			"fav.full": ["收藏已满（每工作区 8 个）", "Favorites full (8 per workspace)"],
+			"fav.open": ["打开会话", "Open session"]
 		};
 		function applyLocale() {
 			var zh = localeIsZh();
@@ -677,7 +841,13 @@ window.__ModuleLoader__.load({
 			".ssid-tb-slide{display:flex;position:relative;width:100%;transition:transform .2s ease}",
 			".ssid-tb-row .ssid-tb-btn{flex:1 1 auto;min-width:0;position:relative;z-index:1;box-sizing:border-box;background:transparent}",
 			".ssid-tb-row.ssid-tb-row-open .ssid-tb-slide{transform:translateX(-56px)}",
-			".ssid-tb-del{position:absolute;right:-56px;top:0;bottom:0;width:56px;border:0;background:var(--dsw-alias-state-error-primary,#e5484d);color:#fff;font-size:12px;cursor:pointer;font-weight:500;border-radius:8px 0 0 8px}"
+			".ssid-tb-del{position:absolute;right:-56px;top:0;bottom:0;width:56px;border:0;background:var(--dsw-alias-state-error-primary,#e5484d);color:#fff;font-size:12px;cursor:pointer;font-weight:500;border-radius:8px 0 0 8px}",
+			"#ssid-toolbar .ssid-tb-favs{display:flex;flex-direction:column;gap:4px}",
+			"#ssid-toolbar .ssid-tb-favs>*{opacity:0;transform:translateY(4px);transition:opacity .16s ease,transform .16s ease}",
+			"#ssid-toolbar.ssid-tb-expanded .ssid-tb-favs>*{opacity:1;transform:none}",
+			"#ssid-toolbar .ssid-tb-fav svg{color:var(--dsw-alias-state-business-primary,#4d6bfe)}",
+			"#ssid-toolbar .ssid-tb-favstar[data-on=\"1\"] svg{color:var(--dsw-alias-state-business-primary,#4d6bfe)}",
+			"#ssid-toolbar .ssid-tb-favstar[data-full=\"1\"]{opacity:.45;cursor:not-allowed}"
 		].join("\n");
 		function toolbarIcon(name) {
 			var ICONS = {
@@ -690,7 +860,10 @@ window.__ModuleLoader__.load({
 				menu: "<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\"><path d=\"M3 5h10M3 8h10M3 11h10\" stroke-linecap=\"round\"/></svg>",
 				pin: "<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M9.8 2.2l4 4-2.6 1.4-1.8 1.8.4 2.6-1.4 1.4-2.6-3L3.9 13l-1-1 3-3.9-3-2.6 1.4-1.4 2.6.4 1.8-1.8z\"/></svg>",
 				settings: "<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"8\" cy=\"8\" r=\"2.2\"/><path d=\"M8 1.8v2M8 12.2v2M1.8 8h2M12.2 8h2M3.6 3.6l1.4 1.4M11 11l1.4 1.4M12.4 3.6L11 5M5 11l-1.4 1.4\"/></svg>",
-				add: "<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\"><path d=\"M8 3.5v9M3.5 8h9\"/></svg>"
+				add: "<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\"><path d=\"M8 3.5v9M3.5 8h9\"/></svg>",
+				star: "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linejoin=\"round\"><path d=\"M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z\"/></svg>",
+				starOn: "<svg viewBox=\"0 0 24 24\" fill=\"currentColor\" stroke=\"currentColor\" stroke-width=\"1.4\" stroke-linejoin=\"round\"><path d=\"M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z\"/></svg>",
+				chat: "<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linejoin=\"round\"><path d=\"M13.6 8.4c0 2.5-2.5 4.5-5.6 4.5-.6 0-1.2-.08-1.7-.23L3 14.2l1.05-2.5C3.1 10.8 2.4 9.68 2.4 8.4c0-2.5 2.5-4.5 5.6-4.5s5.6 2 5.6 4.5z\"/></svg>"
 			};
 			return ICONS[name] || ICONS.grid;
 		}
@@ -796,6 +969,76 @@ window.__ModuleLoader__.load({
 			trackLocale(pinBtn, "tb.pin", "title");
 			head.appendChild(pinBtn);
 			panel.appendChild(head);
+			var favBox = document.createElement("div");
+			favBox.className = "ssid-tb-favs";
+			panel.appendChild(favBox);
+			var renderFavs = function() {
+				if (!favBox.isConnected) {
+					if (favUnsub !== null) {
+						favUnsub();
+						favUnsub = null;
+					}
+					return;
+				}
+				favBox.innerHTML = "";
+				favBox.setAttribute("data-fav-sub", favUnsub === null ? "off" : "on");
+				var cur = currentSession();
+				if (cur === null) {
+					if (sessionsSvc === null) favBox.setAttribute("data-fav-state", "no-service");
+					else if (sessionsSnapshot() === null) favBox.setAttribute("data-fav-state", "no-list");
+					else favBox.setAttribute("data-fav-state", "no-current");
+					return;
+				}
+				favBox.setAttribute("data-fav-state", "ok");
+				var curId = cur.id;
+				var snap = sessionsSnapshot();
+				var byId = snap !== null && snap.byId !== void 0 && snap.byId !== null ? snap.byId : {};
+				var mine = favoritesForCwd(favList, cur.cwd).filter(function(f) {
+					return byId[f.id] !== void 0;
+				});
+				var isFav = mine.some(function(f) {
+					return f.id === curId;
+				});
+				var full = !isFav && mine.length >= 8;
+				var star = document.createElement("button");
+				star.type = "button";
+				star.className = "ssid-tb-btn ssid-tb-favstar";
+				star.setAttribute("data-on", isFav ? "1" : "0");
+				if (full) star.setAttribute("data-full", "1");
+				star.innerHTML = toolbarIcon(isFav ? "starOn" : "star") + "<span></span>";
+				var starLabel = isFav ? favText("fav.remove") : full ? favText("fav.full") : favText("fav.add");
+				var starSpan = star.querySelector("span");
+				if (starSpan !== null) starSpan.textContent = starLabel;
+				star.setAttribute("aria-label", starLabel);
+				star.title = starLabel;
+				star.addEventListener("click", function() {
+					if (full) return;
+					if (toggleCurrentFavorite()) renderFavs();
+				});
+				favBox.appendChild(star);
+				for (var fi = 0; fi < mine.length; fi++) {
+					var fav = mine[fi];
+					if (fav.id === cur.id) continue;
+					var row = byId[fav.id];
+					var liveTitle = row !== void 0 && typeof row.displayTitle === "string" && row.displayTitle !== "" ? row.displayTitle : fav.title;
+					var btn = document.createElement("button");
+					btn.type = "button";
+					btn.className = "ssid-tb-btn ssid-tb-fav";
+					btn.setAttribute("data-adapter-id", "dsh-favorites.open:" + fav.id);
+					btn.innerHTML = toolbarIcon("chat") + "<span></span>";
+					var label = favoriteLabel(liveTitle);
+					var span = btn.querySelector("span");
+					if (span !== null) span.textContent = label;
+					btn.setAttribute("aria-label", favText("fav.open") + "：" + liveTitle);
+					btn.title = liveTitle;
+					btn.addEventListener("click", (function(targetId) {
+						return function() {
+							openFavorite(targetId);
+						};
+					})(fav.id));
+					favBox.appendChild(btn);
+				}
+			};
 			var TOOLBAR_KIND_BY_ADAPTER = {
 				"dsh-plugin-center": "plugin",
 				"dsh-better-sidebar.sidebar": "sidebar",
@@ -1024,6 +1267,18 @@ window.__ModuleLoader__.load({
 			root.appendChild(panel);
 			document.body.appendChild(root);
 			document.body.appendChild(ball);
+			if (favUnsub !== null) {
+				favUnsub();
+				favUnsub = null;
+			}
+			var subSvc = sessionsSvc;
+			if (subSvc !== null && subSvc.list !== void 0 && subSvc.list !== null && typeof subSvc.list.subscribe === "function") try {
+				favUnsub = subSvc.list.subscribe(renderFavs);
+			} catch (_e) {
+				favUnsub = null;
+			}
+			renderFavs();
+			favRender = renderFavs;
 			var BALL_SIZE = 36;
 			var BALL_R = 18;
 			var expanded = false;
@@ -1240,6 +1495,12 @@ window.__ModuleLoader__.load({
 			"uiWorkspace"
 		];
 		var sessionsSvc = null;
+		/** 收藏会话全量（跨工作区；悬浮球只展示当前工作区那一份——`favoritesForCwd`）。 */
+		var favList = [];
+		/** 会话列表订阅的退订句柄（工具栏重建时先退订，避免重复回调）。 */
+		var favUnsub = null;
+		/** 收藏区重渲钩子（createToolbar 挂载；语言变化时由 MutationObserver 触发）。 */
+		var favRender = null;
 		var workspacesSvc = null;
 		var uiWorkspaceSvc = null;
 		function buildRegisterBrief(url) {
@@ -1302,7 +1563,9 @@ window.__ModuleLoader__.load({
 			uiWorkspaceSvc = svcCtx.uiWorkspace ?? null;
 			loadState(function() {
 				if (win.__SSID_SHELL__ === true && !qtState.shellVisible) return;
-				createToolbar();
+				loadFavorites(function() {
+					createToolbar();
+				});
 			});
 			var hideIfShell = function() {
 				if (win.__SSID_SHELL__ !== true) return false;
@@ -1323,6 +1586,7 @@ window.__ModuleLoader__.load({
 			mountSmHeaderButton();
 			new MutationObserver(function() {
 				applyLocale();
+				if (favRender !== null) favRender();
 			}).observe(document.documentElement, {
 				attributes: true,
 				attributeFilter: ["lang"]
