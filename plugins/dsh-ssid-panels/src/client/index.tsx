@@ -340,19 +340,20 @@ const ssid = {
 } as const
 
 /**
- * 侧栏 tab 图标：与 better-sidebar 内置 tab 同风格——**彩色**线性图标、14px。
+ * 侧栏 tab 图标：与 better-sidebar / DSH 原生右栏的图标同风格——**彩色**线性图标、22px。
  *
- * 内置那批（文件 #f7ad31 / 终端 #0f1b33 / 浏览器 #2196f3）各自硬编码品牌色、
- * 不跟随主题，尺寸 14（卡片高 68）。我们原先用 15px + `currentColor`，实测下来
- * 图标偏大（卡片高 65）且颜色发灰，与内置那排不在一个观感上——2026-09-14 用户
- * 要求「匹配风格和 better-sidebar 一致的彩色图标」。故尺寸对齐 14、颜色按 tab
- * 语义各给一色。
+ * 尺寸取 22 的依据：原生右栏「开始」页的图标容器是
+ * `.geFEbW_entryIcon { width: 26px; height: 26px; display: flex; align-items: center }`，
+ * 它自带的占位图标是 22px（四周各留 2px）——整列基准就是 22。内置于 better-sidebar
+ * 自绘的底部工作台卡片里另有 12–14px 的一档，我们拿不到按场景分支的入口，以用户实际
+ * 看到的「开始」页为准（2026-09-14 用户指「尺寸 14 不太对，其他都在 22 左右」）。
+ * 颜色按内置风格各自硬编码（内置也不跟随主题，用 currentColor 反而显得比内置"素"）。
  * @param path - 24 格 viewBox 下的描边路径。
  * @param color - 该 tab 的品牌色。
  */
 function tabIcon(path: string, color: string): ReactNode {
   return createElement('svg', {
-    width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none',
+    width: 22, height: 22, viewBox: '0 0 24 24', fill: 'none',
     stroke: color, strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round',
   }, createElement('path', { d: path }))
 }
