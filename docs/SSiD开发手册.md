@@ -43,6 +43,7 @@
 | 2026-09-13 | §5.0 第 0 条（新增）/ 铁律 2.1 / §5.5（新增） | **共享 checkout 是红线**：`deepseek-harness/` 同供 web 与 SSiD 作内核，切 tag／install／build 会连带崩掉运行中的 web 宿主（2026-09-13 实际事故）；隔离改走 `dsh-web-runtime/` 独立副本 + `启动-DSH-Web.bat`。另新增 §5.5「dev 源码模式要求 checkout 自身完整」：paths 映射 / 完整 install / dist 型包 `lib/` 三个条件，以及「先确认单实例锁持有者」的排查纪律 | 用户报告 web 版被连带升级后崩溃；根因与隔离方案见工作区 `AGENTS.md` 铁律 2.1 |
 | 2026-09-14 | §7 坑速查 / §8 | 新增 #17「手动注入的 `<style>` 必须带 `data-plugin` 且值不等于模块 id」（裸注入会被任意模块认领、随它的一次 HMR 重载被删 → 元素在样式没、刷新才恢复；已实测复现——连续两次重载 chat-rail 后 quick-toolbar 的两个样式标签消失、`#ssid-toolbar` 规则数归零）与 #18「CDP 几何测量前先开焦点模拟」（未聚焦窗口冻结过渡时钟，曾把展开态 280px 读成 36px） | 用户报悬浮球样式反复损坏（见 `docs/决策/2026-09-14-插件样式归属与HMR连带删除.md`）|
 | 2026-09-14 | §7 坑速查 | 新增 #19「第三方插件的 DOM 锚点必须按运行态实测」——better-sidebar v0.19.0 适配时按源码/README 推断的三个锚点（`data-sidebar-right-expand`、`nArs4W_toggleButton`、`toggleCluster`）实测全部不命中；#20「`createToolbar` 里的壳标志是一次性快照」——`__SSID_SHELL__` 晚于 `apply` 注入，导致 `dsh-plugin-center` 按钮在 SSiD 壳里不渲染、「壳环境恒渲染」兜底失效 | better-sidebar v0.19.x 升级适配（`dsh-quick-toolbar` 8f41e12 / SSiD ab55900）|
+| 2026-09-14 | §7 坑 #2 扩充 | 补入「读含中文的 `package.json` 必须用 node」：PS 5.1 按 ANSI 解码会吞掉中文后的引号 → JSON 解析失败，且赋值表达式内的变量**保留上一轮值**，静默把别的包版本号当成本包版本（`dsh-dream-skin` 升级校验时实踩） | dsh-dream-skin 9.14.0 → 9.14.1 升级（SSiD 72b5ce0）|
 
 ## 工作区规范（布局 + 放置规则，2026-08-29 整理定稿）
 
@@ -286,7 +287,7 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 ## 7. 常见坑速查（全部来自实测）
 
 1. **BOM**：改任何 profile/模板 JSON 用 node；PowerShell 写文件（Out-File utf8/patch）都带 BOM → git apply 失败、DSH 崩溃。
-2. **PowerShell 5.1**：无 `??`/`?:`（PS7 语法）；管道传 git 输出会转码破坏字节流（用 node 中转）；`@playwright` MCP 等 `.cjs` 必须 node 显式执行（ShellExecute 假执行）。
+2. **PowerShell 5.1**：无 `??`/`?:`（PS7 语法）；管道传 git 输出会转码破坏字节流（用 node 中转）；`@playwright` MCP 等 `.cjs` 必须 node 显式执行（ShellExecute 假执行）。**读含中文的 `package.json` 必须用 node，不能用 `Get-Content -Raw | ConvertFrom-Json`**（2026-09-14 实踩）：PS 5.1 按 ANSI/GBK 解码 UTF-8，中文字符会**吞掉紧随其后的引号** → JSON 语法坏掉、`ConvertFrom-Json` 抛异常；而赋值语句写在 `(...)` 里时**变量保留上一轮的值**，于是循环里静默打印出**别的包的版本号**当成这个包的版本（实测把 `dsh-dream-skin 9.14.1` 显示成 `dsh-pocket`/`dsh-session-manager` 的残留值，差点据此误判升级失败）。清单类校验统一走 node 脚本（`.build/verify-profile-deps.mjs` 即为此写）。
 3. **dev 模式部署**：默认 skip；只有 `SSID_DEV_DEPLOY=1` 才强制（发版预演；预演完恢复正常 dev 启动）。
 4. **旧实例占锁**：boot 失败实例挂住（splash 等待）→ 占 single-instance 锁 → 新实例假退出；**先清进程再重启**。
 5. **worktree 构建**：原 checkout 可能有进行中的调试（探针/修复/未提交改动）——构建/发布用 `git worktree add` 干净 HEAD + 有意合入的补丁。
