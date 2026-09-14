@@ -863,14 +863,16 @@ window.__ModuleLoader__.load({
 				} catch (_e) {}
 				return b;
 			};
-			var ssidShellEnv = typeof window !== "undefined" && window.__SSID_SHELL__ === true;
+			var isShellEnv = function() {
+				return typeof window !== "undefined" && window.__SSID_SHELL__ === true;
+			};
 			var adapterIdSelector = function(adapterId) {
 				return "[data-adapter-id=\"" + adapterId.replace(/"/g, "\\\"") + "\"]";
 			};
 			var renderBuiltins = function() {
 				for (var ai = 0; ai < BUILTIN_ADAPTERS.length; ai++) {
 					var adapter = BUILTIN_ADAPTERS[ai];
-					if (!ssidShellEnv && !adapterVisible(adapter, document)) continue;
+					if (!isShellEnv() && !adapterVisible(adapter, document)) continue;
 					try {
 						if (panel.querySelector(adapterIdSelector(adapter.id)) !== null) continue;
 					} catch (_e) {}
