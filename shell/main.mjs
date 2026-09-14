@@ -931,6 +931,20 @@ async function start() {
     quitting = true
     void kernel.shutdown(0).catch(() => app.exit(0))
   }
+  /**
+   * 整壳重启：窗口、托盘、标题栏全部重建，内核在新进程里重新 boot。
+   *
+   * 与 restartDsh() 的分工：后者在子进程模式下只换内核（快，壳不动），
+   * 这里连壳一起换。托盘菜单把两者并列，让用户自己选重到什么程度。
+   * 与 restartDsh 同样必须定义在 try 块外（块内 const 会让托盘闭包
+   * ReferenceError，2026-08-23 实锤）。
+   */
+  const relaunchShell = () => {
+    safeLog('ssid: 整壳重启（relaunch）\n')
+    app.relaunch({ args: process.argv.slice(1).filter((arg) => !arg.endsWith('worker.cjs')) })
+    quitting = true
+    void kernel.shutdown(0).catch(() => app.exit(0))
+  }
   try {
     safeLog('ssid: phase bootKernel start\n')
     splashStep(2)
@@ -1335,9 +1349,23 @@ async function start() {
           const value = getComputedStyle(document.body).getPropertyValue(name).trim()
           return value === '' ? null : value
         }
+        // 标题栏底色恒定不透明：皮肤插件（dsh-dream-skin 的 shadeTokens2）把
+        // --dsw-specific-sidebar-fill 的 alpha 绑在「壁纸透明度／侧边栏透明度」滑杆上，
+        // 直接沿用会让整条标题栏跟着滑杆变透（用户报告的取值错位）。这里只取色相、
+        // 剥离 alpha —— 与 titlebar.html 里不透明 fallback（--titlebar-bg: #0f141d）同义。
+        const opaque = (value) => {
+          if (typeof value !== 'string' || value === '') return null
+          const rgb = /^rgba?\\(\\s*([0-9.]+)[,\\s]+([0-9.]+)[,\\s]+([0-9.]+)/i.exec(value)
+          if (rgb !== null) return 'rgb(' + rgb[1] + ', ' + rgb[2] + ', ' + rgb[3] + ')'
+          const hex8 = /^#([0-9a-f]{6})[0-9a-f]{2}$/i.exec(value)
+          if (hex8 !== null) return '#' + hex8[1]
+          const hex4 = /^#([0-9a-f])([0-9a-f])([0-9a-f])[0-9a-f]?$/i.exec(value)
+          if (hex4 !== null) return '#' + hex4[1] + hex4[1] + hex4[2] + hex4[2] + hex4[3] + hex4[3]
+          return value
+        }
         const bodyStyle = getComputedStyle(document.body)
         return {
-          bg: readVar('--dsw-specific-sidebar-fill') ?? bodyStyle.backgroundColor,
+          bg: opaque(readVar('--dsw-specific-sidebar-fill') ?? bodyStyle.backgroundColor),
           fg: readVar('--dsw-alias-label-primary') ?? bodyStyle.color,
           muted: readVar('--dsw-alias-label-secondary') ?? bodyStyle.color,
           border: readVar('--dsw-alias-border-l2') ?? 'rgba(128, 148, 168, .25)',
@@ -1517,8 +1545,14 @@ async function start() {
       click: () => { mainView.webContents.reload() },
     },
     {
-      label: '重启',
-      click: () => restartDsh(),
+      // 两项并列：整壳重建 vs 只换内核。用户报「重启按钮应该是重启思灵」，
+      // 而原来那个快路径（只换内核）仍然有用，所以保留成独立一项。
+      label: '重启思灵',
+      click: () => { relaunchShell() },
+    },
+    {
+      label: '重启 DSH 内核',
+      click: () => { restartDsh() },
     },
     {
       // 同一位置反向切换：进了纯净模式必须能出来，否则用户只能手工改启动参数。
