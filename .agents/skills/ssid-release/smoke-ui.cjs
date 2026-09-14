@@ -69,6 +69,21 @@ async function archiveSession(page, title) {
   }
 }
 
+// ---- 关闭「思灵已更新」更新日志弹窗 ----
+// 发版后首次启动必弹（弹窗守卫：条目版本 == 壳版本即弹），它盖在整页之上，
+// 留着会让「输入框 / Context Doctor」这类骨架断言假 FAIL（v0.3.1 实测）。
+async function dismissChangelog(page) {
+  await page.waitForTimeout(800)
+  const shown = await page.getByText('思灵已更新', { exact: false }).count().catch(() => 0)
+  if (shown === 0) return 'not-shown'
+  const btn = page.getByRole('button', { name: '知道了' })
+  const n = await btn.count().catch(() => 0)
+  if (n === 0) return 'shown-but-no-button'
+  await btn.first().click({ timeout: 3000 }).catch(() => {})
+  await page.waitForTimeout(600)
+  return 'dismissed'
+}
+
 // ---- 主流程 ----
 ;(async () => {
   const { chromium } = require(PLAYWRIGHT)
@@ -93,6 +108,9 @@ async function archiveSession(page, title) {
   }
   const outdir = OUTDIR || path.join('H:/MaxNull/WorkStation/.dsh-tmp', 'ssid-smoke', String(Date.now()))
   fs.mkdirSync(outdir, { recursive: true })
+
+  // 先关掉更新日志弹窗再测量（否则骨架断言会被它盖住而假 FAIL）
+  console.log(`[smoke] changelog=${await dismissChangelog(page)}`)
 
   const base = await page.evaluate(() => ({
     hasComposerSeat: !!document.querySelector('[data-composer-seat]'),

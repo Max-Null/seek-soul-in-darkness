@@ -34,7 +34,7 @@ description: "SSiD（思灵）发版流程：版本决策、内置插件对齐�
   # 构建 + vendor 同步（发版链 1.1 的 vendor 步骤含本插件的 lib/src/release-notes.md）
   pnpm --dir plugins/dsh-ssid-panels exec tsdown
   ```
-  - 弹窗规则：每版本只弹一次（localStorage `ssid-changelog-seen`）；条目版本 ≠ 壳版本不弹（守卫，防发版漏同步弹错）。
+  - 弹窗规则：每版本只弹一次，已读状态记在壳的**共享状态文件** `~/.ssid/changelog-seen.json`（**不是** localStorage，也不随 profile 隔离——所以"全新隔离环境"未必会弹，别把它当必然事件）；条目版本 ≠ 壳版本不弹（守卫，防发版漏同步弹错）。
   - 关于 SSiD「更新日志」区离线展示当前版本（包内文件），「检查更新」仅补充在线历史版本。
 
 ## 3. 版本号同步（四处）
@@ -127,6 +127,7 @@ tar -xzf dsh-runtime.tar.gz -C dsh-runtime
      ```
    - **用打包产物自检时必须隔离**（否则打包版会把归档部署进真实 profile）：`--user-data-dir` 给临时目录，并把 `DSH_HOME` / `SSID_LOG_FILE` / `SSID_MCP_CG_WS`（指向空目录，跳过 CodeGraph 首次引导弹窗）指到隔离目录内再启动 `win-unpacked\思灵.exe`。**Windows PowerShell 5.1 的 `Start-Process` 没有 `-Environment` 参数**——先 `$env:DSH_HOME=...` 再 `Start-Process`（子进程继承当前进程环境）。通过判据：日志出现 `runtime deploy needed (archive=<新指纹>)` → `runtime deployed` → `upgrade report: lostPlugins=0` → `bootKernel ok` → `phase start() completed`。
    - **全新隔离环境的断言会「假 FAIL」**：没有工作区也没有 API Key，页面停在工作区选择 + 密钥引导，`输入框` / `Context Doctor` 必然取不到——`bodyHead` 文本即可判定；此时以「骨架座位 + 部署链路 + 启动阶段」为放行依据（v0.3.0 实测）。
+   - **更新日志弹窗会盖住骨架断言**：脚本已自带 `dismissChangelog()`（识别「思灵已更新」再点「知道了」），输出里的 `changelog=dismissed | not-shown` 即其结果；弹不弹取决于壳的共享状态 `~/.ssid/changelog-seen.json`，**隔离环境不一定弹**（v0.3.1 实测：同一份包首跑弹、删状态后二次跑仍不弹），`not-shown` 不是异常。
    - 手动兜底：重启思灵 → 日志 `runtime deploy needed (archive=<ver> proxy=<old>)` → deploy 成功 → boot 正常。
 3. GitHub 交付：
    ```powershell
