@@ -71,8 +71,6 @@ function parseUserAdapters(raw) {
 		value: result.data
 	};
 }
-//#endregion
-//#region src/favorites.ts
 /**
 * 从文件/请求体里取出收藏数组，兼容两种形态：裸数组，或 `{ favorites: [...] }`。
 * 读写两侧必须走同一个提取步骤——只在一侧提取会让「写进去却读不出来」
@@ -105,6 +103,7 @@ function normalizeFavorites(raw) {
 		out.push({
 			id,
 			title,
+			workspaceId: typeof r.workspaceId === "string" ? r.workspaceId : "",
 			cwd: typeof r.cwd === "string" ? r.cwd : "",
 			at: typeof r.at === "number" && Number.isFinite(r.at) ? r.at : 0
 		});

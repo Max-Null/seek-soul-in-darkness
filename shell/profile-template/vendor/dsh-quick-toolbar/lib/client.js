@@ -287,6 +287,7 @@ function normalizeFavorites(raw) {
 		out.push({
 			id,
 			title,
+			workspaceId: typeof r.workspaceId === "string" ? r.workspaceId : "",
 			cwd: typeof r.cwd === "string" ? r.cwd : "",
 			at: typeof r.at === "number" && Number.isFinite(r.at) ? r.at : 0
 		});
@@ -296,11 +297,11 @@ function normalizeFavorites(raw) {
 /**
 * 取某个工作区的收藏（悬浮球实际展示的那一份）。
 * @param list - 全量收藏。
-* @param cwd - 当前会话的工作目录；`undefined` 与空串等价（无 cwd 的会话归一组）。
+* @param workspaceId - 当前会话所属工作区 id；`undefined` 与空串等价（都表示未分组）。
 */
-function favoritesForCwd(list, cwd) {
-	const key = cwd === void 0 ? "" : cwd;
-	return list.filter((f) => f.cwd === key);
+function favoritesForWorkspace(list, workspaceId) {
+	const key = workspaceId === void 0 ? "" : workspaceId;
+	return list.filter((f) => f.workspaceId === key);
 }
 /**
 * 新增一条收藏（列表已含同 id → duplicate；该 cwd 已达上限 → limit）。
@@ -314,7 +315,7 @@ function addFavorite(list, item) {
 		list: [...list],
 		reason: "duplicate"
 	};
-	if (favoritesForCwd(list, item.cwd).length >= 8) return {
+	if (favoritesForWorkspace(list, item.workspaceId).length >= 8) return {
 		ok: false,
 		list: [...list],
 		reason: "limit"
@@ -559,7 +560,35 @@ window.__ModuleLoader__.load({
 				return null;
 			}
 		}
-		/** 当前会话的 id / 工作目录 / 显示名；无当前会话或服务不可用 → null。 */
+		/**
+		* 会话所属工作区 id（`WorkspaceView.workspaceId`）。
+		*
+		* 判据取自工作区的成员表，而不是会话的 cwd —— 与 DSH 自己的分组一致
+		* （`ui-workspace/src/client/tree.ts` 的 `owningGroupKey` 用
+		* `workspace.sessionIds.includes(sessionId)` 反查）。未归入任何工作区 → 空串
+		* （DSH 的 `UNGROUPED_KEY`）。
+		*/
+		function workspaceOf(sessionId) {
+			var svc = workspacesSvc;
+			if (svc === null || svc.list === void 0 || svc.list === null) return "";
+			if (typeof svc.list.getSnapshot !== "function") return "";
+			var snap = null;
+			try {
+				snap = svc.list.getSnapshot() ?? null;
+			} catch (_e) {
+				return "";
+			}
+			if (snap === null) return "";
+			var items = snap.items !== void 0 && snap.items !== null ? snap.items : [];
+			for (var wi = 0; wi < items.length; wi++) {
+				var ws = items[wi];
+				var ids = ws.sessionIds;
+				if (ids === void 0 || ids === null) continue;
+				if (ids.indexOf(sessionId) !== -1) return typeof ws.workspaceId === "string" ? ws.workspaceId : "";
+			}
+			return "";
+		}
+		/** 当前会话的 id / 所属工作区 / 工作目录 / 显示名；无当前会话或服务不可用 → null。 */
 		function currentSession() {
 			var snap = sessionsSnapshot();
 			if (snap === null) return null;
@@ -567,9 +596,11 @@ window.__ModuleLoader__.load({
 			if (id === "") return null;
 			var row = (snap.byId !== void 0 && snap.byId !== null ? snap.byId : {})[id];
 			var title = row !== void 0 && typeof row.displayTitle === "string" && row.displayTitle !== "" ? row.displayTitle : id;
+			var cwd = row !== void 0 && typeof row.cwd === "string" ? row.cwd : "";
 			return {
 				id,
-				cwd: row !== void 0 && typeof row.cwd === "string" ? row.cwd : "",
+				workspaceId: workspaceOf(id),
+				cwd,
 				title
 			};
 		}
@@ -600,7 +631,7 @@ window.__ModuleLoader__.load({
 			var cur = currentSession();
 			if (cur === null) return false;
 			var curId = cur.id;
-			var mine = favoritesForCwd(favList, cur.cwd);
+			var mine = favoritesForWorkspace(favList, cur.workspaceId);
 			if (favList.some(function(f) {
 				return f.id === curId;
 			})) {
@@ -611,6 +642,7 @@ window.__ModuleLoader__.load({
 			var added = addFavorite(favList, {
 				id: curId,
 				title: cur.title,
+				workspaceId: cur.workspaceId,
 				cwd: cur.cwd,
 				at: Date.now()
 			});
@@ -990,10 +1022,11 @@ window.__ModuleLoader__.load({
 					return;
 				}
 				favBox.setAttribute("data-fav-state", "ok");
+				favBox.setAttribute("data-fav-ws", cur.workspaceId === "" ? "(ungrouped)" : cur.workspaceId);
 				var curId = cur.id;
 				var snap = sessionsSnapshot();
 				var byId = snap !== null && snap.byId !== void 0 && snap.byId !== null ? snap.byId : {};
-				var mine = favoritesForCwd(favList, cur.cwd).filter(function(f) {
+				var mine = favoritesForWorkspace(favList, cur.workspaceId).filter(function(f) {
 					return byId[f.id] !== void 0;
 				});
 				var isFav = mine.some(function(f) {
