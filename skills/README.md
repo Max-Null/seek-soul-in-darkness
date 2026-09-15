@@ -47,6 +47,18 @@
 
 ## 更新记录
 
+### 2026-09-15（3 个技能，已同步两处目录）
+
+| 技能 | 行数 | 变更 |
+|---|---|---|
+| `mxy-upgrade-vue3` | 418 → 407 | ① 删掉步骤 4 的重复验证清单——第二次出现在步骤 4.5 之后、无标题且少 2 项；② 描述补 6 个触发词（升级 Vue3 / Vue2 混搭 / Vue2 转 Vue3 / 消除 getCurrentInstance / proxy 改造 / Options API 转 script setup） |
+| `mxy-organize-code` | 240 → 232 | 两处「半截句 + 引用块 + 完整句」的重复要求各收敛为一句（文件数超 15 的确认、Vue2 混搭的询问） |
+| `mxy-commit-review` | 167 → 167 | ① 描述去掉工作流步骤枚举（保留适用范围、触发词与不适用边界）；② 「不再询问是否继续提交」改为当前状态表述 |
+
+- **同步位置**：`skills/` + `shell/profile-template/skills/`（两处逐字节一致）。
+- **触发词覆盖**：4 个技能的 description 现均含触发词句（本次补上 `mxy-upgrade-vue3` 缺的那条）。
+- **未动**：`mxy-git-pull`（本次检查无发现）；`mxy-organize-code` 的 `glob: "!node_modules/**"` 写法已核实有效——DSH 的 glob 工具把 pattern 交给 ripgrep 的 `--glob`，后者支持 `!` 否定。
+
 ### 2026-09-09（4 个技能，已同步两处目录）
 
 | 技能 | 行数 | 变更 |

@@ -1,6 +1,6 @@
 ---
 name: mxy-upgrade-vue3
-description: 将 Vue2 Options API 混搭语法升级为标准 Vue3 <script setup lang="ts"> 语法，消除 getCurrentInstance/proxy 等过渡模式
+description: 将 Vue2 Options API 混搭语法升级为标准 Vue3 <script setup lang="ts"> 语法，消除 getCurrentInstance/proxy 等过渡模式。当用户提到「升级 Vue3」「Vue2 混搭」「Vue2 转 Vue3」「消除 getCurrentInstance」「proxy 改造」「Options API 转 script setup」时使用。
 ---
 
 请对用户指定的文件执行以下步骤。支持的模式与 `mxy-organize-code` 技能一致：
@@ -348,17 +348,6 @@ grep -r "import.*函数名" src --glob "*.vue" --glob "*.ts"
 **运行时验证发现问题时**：定位具体文件 → grep 错误信息中的函数名/变量名 → 检查 import 路径 → 修复 → 刷新浏览器确认 → 继续检查下一个错误。
 
 **验证通过后才能执行 git commit。禁止在运行时验证通过前提交。**
-
-每个文件转换完成后，检查以下项目：
-
-1. **编译宏位置**：`defineProps`/`defineEmits`/`defineOptions`/`withDefaults` 在 `<script setup>` 顶层，不是函数体内
-2. **重复 import**：确认 `getCurrentInstance` 已完整移除；确认 `isMobile`、`ElMessage` 等新增的 import 不重复
-3. **模板变量引用**：模板中所有的变量和函数都在 `<script setup>` 中有对应的定义或 import
-4. **ref 命名规范**：新创建的模板 ref 遵循 `组件名 + Ref` 后缀（`xxxRef`）
-5. **组件名注册**：原 `name: 'Xxx'` 已转为 `defineOptions({ name: 'Xxx' })`
-6. **遗漏的 `proxy.`**：grep `proxy\.` 确认模板和脚本中都不再有未处理的 `proxy.` 引用
-
-**如果验证发现问题，立即修复后再进入下一个文件。**
 
 ## 步骤 5：汇总报告
 
