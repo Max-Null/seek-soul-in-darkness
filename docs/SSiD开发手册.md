@@ -50,6 +50,7 @@
 | 2026-09-14 | §7 坑 #23（新增） | 新增「原生右侧栏的 tab 图标必须是返回 ReactNode 的函数」——传 JSX 元素会被静默忽略、回落占位图标；并记下排查陷阱：工作台卡片与「开始」页是两个不同的 DOM 列表，只看其中一个会误判为已生效 | 用户报「侧栏图标尺寸颜色都不对」|
 | 2026-09-15 | §7 坑 #29（新增） | 新增「皮肤插件把 token 的 alpha 绑在滑杆上」——`dsh-dream-skin` 的 `shadeTokens2` 让 `--dsw-alias-bg-base` / `--dsw-specific-sidebar-fill` 的 alpha 跟「壁纸透明度」联动，直接取用的两处（壳标题栏、插件中心 `.pc-panel`）都跟着变；两类修法 =「剥离 alpha 只取色相」与「不带 alpha 的皮肤基色 × 弹窗权重」，并记下唯一不带 alpha 的皮肤基色 `--dsh-dream-skin-composer-base` | 用户报「插件中心弹窗和壳标题栏的透明度都错误取了壁纸透明度」|
 | 2026-09-15 | §7 坑 #30（新增） | 新增「升级部署的 patch 合并会把下一个顶层条目整行吞掉」——`overridden` 替换区间越界（注释块归属 + `end` 多算一行）吃掉 `- id: connection`，症状是「先 boot 失败（bad indentation）、把 YAML 调合法后插件中心 405 复发」；修复为区间钳制 + 回归用例，并记下「恢复时只补缩进不解决 405」 | 用户报 0.3.1 安装版启动失败与 405 复发（见 `docs/决策/2026-09-15-patch合并越界吞条目.md`）|
+| 2026-09-15 | §7 坑 #31（新增） | 新增「MCP 条目的 `args[0]` 来自环境变量时，CLI 缺失会让整棵插件树加载失败」——启停开关只看索引目录、不看 CLI，组合出「条目启用但 `args[0]=null`」；修复 = 壳层启停判定联动 + 模板 `disabled` 兜底 + 一键恢复脚本 `shell/fix-mcp-startup.ps1`（含四轮演练验证）| 用户新机 zip 版首次启动失败（见 `docs/决策/2026-09-15-MCP条目CLI缺失拖死启动修复.md`）|
 
 ## 工作区规范（布局 + 放置规则，2026-08-29 整理定稿）
 
@@ -348,6 +349,8 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 
 30. **升级部署的 patch 合并会把「下一个顶层条目」整行吞掉**（2026-09-15 实踩，`- id: connection` 被吃掉）：`mergeUserPatch` 的 overridden 分支（用户改过的出厂子条目 → 用用户版本替换模板的该子条目）按 `e.start + c.start .. e.start + c.end` 算替换区间，两处实现细节让它越界——① `splitPatchEntries` 判定顶层条目只看「行首 `- ` 且无前导空白」，注释行归入**当前**条目，于是模板里写在 insert 块之后、`- id: connection` 之前的 26 行缩进 0 注释被计入 insert 条目，条目范围一路延伸到注释块末尾；② `splitChildEntries` 的 `end` 因 `entryText` 尾部的 `join('\n') + '\n'` 多算一行。叠加后，insert 块**最后一个子条目**的替换区间末端正好落在下一个顶层条目那一行 → 整行被替换掉，只剩缩进 2 的 `inject: [webRuntime, webServer]` 被 YAML 解析成 insert 条目的兄弟键（与 `insert` 平级）。触发需第三条同时成立：用户在 MCP 管理页改过那个子条目——升级报告 `~/.ssid/upgrade-report-*.json` 的 `patchMerged.overridden` 会点名它。**症状组合极具误导性**：先 boot 失败（`kernel-child 启动失败 … bad indentation of a mapping entry`），手工把 YAML 调成合法后启动恢复正常，**但插件中心 405 复发**——真正缺的是 `connection` 的 `webServer` 注入（机制见 #12 与 `docs/决策/2026-09-14-插件中心405诊断记录.md`）。**处置**：区间钳制 `end: Math.min(e.start + c.end, e.end)`（`shell/lib/profile-merge.mjs`），配套回归用例在未修复版本上实测 `not ok`（`shell/tests/profile-merge.spec.ts`）。**恢复损坏 profile 的要点**：必须把 `- id: connection` 这条**顶层条目**补回（与 `insert:` 平级），只调缩进不解决 405；校验别靠肉眼——用 profile 自带的 `yaml` 包实解析，判据是「顶层条目数为 2 且其中一条 `id === 'connection'`」（`!!js` 标签先剥掉再解析）。相关：`docs/决策/2026-09-15-patch合并越界吞条目.md`。
 
+31. **MCP 条目的 `args[0]` 来自环境变量时，CLI 缺失会让整棵插件树加载失败**（2026-09-15 新机 zip 版实测）：模板 `mcp-codegraph` 的 `args[0]` 取自壳注入的 `SSID_MCP_CG_CLI`，而壳只在 CLI 实体存在时才注入它（`main.mjs` 的 `existsSync` 分支，缺失时只写一行日志）；启停开关 `SSID_MCP_CG_ENABLE` 当时又只看「索引目录能否解析」——两条判定各管各的，于是「目录可用 + CLI 缺失」的组合会把条目置为启用，`args[0]` 求值为 `null`，而 `dsh-mcp-client` 的 schema 要求 `string[]` → `plugin tree failed to load`、**内核起不来**（报错里能看到 `"args":[null,…]`）。`mcp-playwright` 是同一形状（取自 `SSID_MCP_PW_CLI`），当时连 `disabled` 兜底都没有。**处置**：壳层把 CLI 存在性并入启停判定（`resolveCodeGraphEnable`，`shell/lib/codegraph-adapt.mjs`），模板给两个条目补 `disabled` 兜底（`… !== "1" || !process.env.SSID_MCP_CG_CLI` / `!process.env.SSID_MCP_PW_CLI`）。**降级方向要选对**：停用只牺牲那一个 MCP，远好过整树失败。已装 0.3.1 的机器用 `shell/fix-mcp-startup.ps1`（或同目录 `.cmd`，双击）自助恢复——它检查 CLI、缺则停用对应条目、备份并用思灵自带 node 实解析校验。**排查线索**：`~/.ssid/ssid.log` 里的 `prefab mcp codegraph cli missing`。相关：`docs/决策/2026-09-15-MCP条目CLI缺失拖死启动修复.md`。
+
 ## 8. 文档索引
 
 - 本手册（总览/流程/坑）
@@ -366,6 +369,7 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 - `dsh-anatomy/工程范式/2026-09-10-DSH官方Gates拆解原始报告-E-配对与配置门.md`、`...-F-run-gates编排.md`（上述骨架的原始依据，含逐行行号引用）
 - `docs/决策/2026-09-14-插件样式归属与HMR连带删除.md`（**手动注入 `<style>` 的归属标记规范** + sticky header 遮挡修复 + CDP 焦点模拟测量纪律 + 逐处普查结论：自制插件里仅三处曾是裸注入）
 - `docs/决策/2026-09-15-patch合并越界吞条目.md`（升级部署 patch 合并的区间越界：吞掉 `- id: connection` → boot 失败 → 把 YAML 调合法后 **405 复发**；含真实输入逐字符复现证据与「恢复时只补缩进不解决 405」的要点）
+- `docs/决策/2026-09-15-MCP条目CLI缺失拖死启动修复.md`（MCP 条目 `args[0]` 依赖的 CLI 缺失 → 整棵插件树加载失败；壳层启停判定联动 + 模板 `disabled` 兜底 + `shell/fix-mcp-startup.ps1` 一键恢复脚本）
 
 ## 待办清单（2026-08-30 记）
 

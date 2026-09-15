@@ -220,6 +220,23 @@ export function resolveCodeGraphWorkspace({ envWorkspace, config, sessionRoots =
 }
 
 /**
+ * CodeGraph 条目的启停开关值（模板 patch 的 `disabled` 表达式读 `SSID_MCP_CG_ENABLE`）。
+ *
+ * 两个条件缺一不可：解析到可用的索引目录，**且** CLI 实体真的在 profile 里。
+ * 只看目录的版本会把「目录可用、CLI 缺失」的机器置为启用，而模板 `args[0]` 取自
+ * `SSID_MCP_CG_CLI`——缺失时求值为 `null`，`dsh-mcp-client` 的 schema 要求 `string[]`，
+ * 于是**整棵插件树加载失败、内核起不来**（2026-09-15 新机 zip 版实测）。停用只让
+ * CodeGraph 不可用，不影响其他插件与界面。
+ *
+ * @param {string|null} workspace - resolveCodeGraphWorkspace 的 workspace。
+ * @param {boolean} cliExists - profile 内 codegraph-mcp 的 CLI 是否存在。
+ * @returns {'0'|'1'} 写入 SSID_MCP_CG_ENABLE 的值。
+ */
+export function resolveCodeGraphEnable(workspace, cliExists) {
+  return workspace !== null && cliExists === true ? '1' : '0'
+}
+
+/**
  * 出厂 `args` 追加项：排除清单（每项一个 `--exclude <dir>`）。
  * `--max-files` 不在此列——它按项目规模调，出厂保持引擎默认值。
  * @returns 展开为 argv 的字符串数组。

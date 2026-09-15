@@ -26,7 +26,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { buildUpgradeReport, mergeUserPatch, snapshotProfileConfigs } from './lib/profile-merge.mjs'
-import { CG_CONFIG_FILE, readCodeGraphConfig, resolveCodeGraphWorkspace, writeCodeGraphConfig } from './lib/codegraph-adapt.mjs'
+import { CG_CONFIG_FILE, readCodeGraphConfig, resolveCodeGraphEnable, resolveCodeGraphWorkspace, writeCodeGraphConfig } from './lib/codegraph-adapt.mjs'
 import { startKernelHost } from './host-process.mjs'
 
 // ── 纯净模式启动标志（故障恢复）─────────────────────────────────────────
@@ -1000,10 +1000,14 @@ async function start() {
     // **无法**跟随当前会话工作目录——报告建议 1 不可行，故改为 boot 前解析一次。
     // 见 docs/决策/2026-09-09-CodeGraph-MCP-默认索引目录修复.md。
     const mcpCgCli = join(profileDir, 'node_modules', '@astudioplus', 'codegraph-mcp', 'bin', 'codegraph-mcp.js')
-    if (existsSync(mcpCgCli)) {
+    const mcpCgCliExists = existsSync(mcpCgCli)
+    if (mcpCgCliExists) {
       process.env.SSID_MCP_CG_CLI = mcpCgCli
       safeLog(`ssid: prefab mcp codegraph cli=${mcpCgCli}\n`)
     } else {
+      // CLI 缺失时条目必须停用（由下面的 resolveCodeGraphEnable 消费这一事实）：
+      // 模板 args[0] 取自 SSID_MCP_CG_CLI，缺失即求值为 null，会让整棵插件树加载
+      // 失败、内核起不来——停用只牺牲 CodeGraph，不牺牲整个界面。
       safeLog(`ssid: prefab mcp codegraph cli missing (profile not redeployed yet?): ${mcpCgCli}\n`)
     }
     /** 首次引导：让用户选一个项目目录（可跳过）。返回绝对路径或 null。 */
@@ -1057,10 +1061,13 @@ async function start() {
     // cwd 必须非空：空字符串经 dsh-mcp-client 直接传给 spawn，实测 ENOENT。
     // 未适配时给一个占位目录，条目本身由 SSID_MCP_CG_ENABLE 停用、不会启动。
     process.env.SSID_MCP_CG_WS = cgWorkspace ?? join(homedir(), '.ssid')
-    process.env.SSID_MCP_CG_ENABLE = cgWorkspace === null ? '0' : '1'
+    // 目录与 CLI 都就位才算启用：只判目录会让「目录可用、CLI 缺失」的机器把条目置为
+    // 启用，而模板 args[0] 随之求值为 null，整棵插件树加载失败（2026-09-15 新机实测）。
+    const cgEnable = resolveCodeGraphEnable(cgWorkspace, mcpCgCliExists)
+    process.env.SSID_MCP_CG_ENABLE = cgEnable
     safeLog(
       `ssid: codegraph workspace=${cgWorkspace ?? '(none)'} source=${cgSource}`
-      + ` enabled=${cgWorkspace === null ? '0' : '1'}\n`,
+      + ` cli=${mcpCgCliExists ? 'present' : 'missing'} enabled=${cgEnable}\n`,
     )
     // preferBundled: 打包版强制用内置闭包（忽略用户环境的 DSH_CHECKOUT，
     // 避免标题栏版本与归档不一致——pitfalls #5 幽灵依赖的根治）。

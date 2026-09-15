@@ -18,6 +18,7 @@ import {
   isUsableWorkspace,
   readArtifactCwd,
   readCodeGraphConfig,
+  resolveCodeGraphEnable,
   resolveCodeGraphWorkspace,
   writeCodeGraphConfig,
 } from '../lib/codegraph-adapt.mjs'
@@ -146,4 +147,14 @@ test('codeGraphProtectionArgs：排除清单展开为成对 argv，含报告要�
   assert.equal(args.filter((a) => a === '--exclude').length, CG_EXCLUDE_DIRS.length)
   // 空/非法项被跳过
   assert.deepEqual(codeGraphProtectionArgs(['a', '', null as unknown as string]), ['--exclude', 'a'])
+})
+
+test('resolveCodeGraphEnable：目录可用但 CLI 缺失时必须停用', () => {
+  assert.equal(resolveCodeGraphEnable('D:/proj', true), '1', '目录与 CLI 都在才启用')
+  // 本次缺陷：只判目录时条目仍启用，而模板 args[0] 取自缺失的 SSID_MCP_CG_CLI，
+  // 求值为 null —— mcp-client 的 schema 要求 string[]，于是整棵插件树加载失败、
+  // 内核起不来（2026-09-15 新机 zip 版实测）。
+  assert.equal(resolveCodeGraphEnable('D:/proj', false), '0', 'CLI 缺失必须停用')
+  assert.equal(resolveCodeGraphEnable(null, true), '0', '目录未适配时停用')
+  assert.equal(resolveCodeGraphEnable(null, false), '0')
 })
