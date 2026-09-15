@@ -49,6 +49,19 @@
         ".git/**"
       ]
     },
+    "dsh-ssid-pwsh-retry": {
+      "mode": "full",
+      "source": "plugins/dsh-ssid-pwsh-retry",
+      "include": [
+        "**"
+      ],
+      "exclude": [
+        "node_modules/**",
+        "**/*.tsbuildinfo",
+        "**/*.log",
+        ".git/**"
+      ]
+    },
     "dsh-quick-toolbar": {
       "mode": "vendor-only",
       "$sourceNote": "源头在 max-null-plugins/dsh-quick-toolbar（SSiD 仓库之外），本门只做三处 vendor 互比",

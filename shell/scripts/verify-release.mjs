@@ -235,7 +235,7 @@ for (const [label, name] of [['§5-3', '@max-null/dsh-plugin-center'], ['§5-4',
     if (j) {
       const deps = Object.keys(j.dependencies ?? {});
       gate.info(`§5-6 顶层 dependencies ${deps.length} 个`);
-      const EXPECT_PRESENT = ['@playwright/mcp'];
+      const EXPECT_PRESENT = ['@playwright/mcp', '@astudioplus/codegraph-mcp'];
       const missing = EXPECT_PRESENT.filter((d) => !deps.includes(d));
       if (missing.length) gate.violation(ARCHIVE, null, `§5-6 dependencies 缺本轮应新增的包：${missing.join(', ')}`);
       else gate.info(`§5-6 应含包齐备 ✓（${EXPECT_PRESENT.join(', ')}）`);

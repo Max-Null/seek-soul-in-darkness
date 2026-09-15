@@ -51,6 +51,7 @@
 | 2026-09-15 | §7 坑 #29（新增） | 新增「皮肤插件把 token 的 alpha 绑在滑杆上」——`dsh-dream-skin` 的 `shadeTokens2` 让 `--dsw-alias-bg-base` / `--dsw-specific-sidebar-fill` 的 alpha 跟「壁纸透明度」联动，直接取用的两处（壳标题栏、插件中心 `.pc-panel`）都跟着变；两类修法 =「剥离 alpha 只取色相」与「不带 alpha 的皮肤基色 × 弹窗权重」，并记下唯一不带 alpha 的皮肤基色 `--dsh-dream-skin-composer-base` | 用户报「插件中心弹窗和壳标题栏的透明度都错误取了壁纸透明度」|
 | 2026-09-15 | §7 坑 #30（新增） | 新增「升级部署的 patch 合并会把下一个顶层条目整行吞掉」——`overridden` 替换区间越界（注释块归属 + `end` 多算一行）吃掉 `- id: connection`，症状是「先 boot 失败（bad indentation）、把 YAML 调合法后插件中心 405 复发」；修复为区间钳制 + 回归用例，并记下「恢复时只补缩进不解决 405」 | 用户报 0.3.1 安装版启动失败与 405 复发（见 `docs/决策/2026-09-15-patch合并越界吞条目.md`）|
 | 2026-09-15 | §7 坑 #31（新增） | 新增「MCP 条目的 `args[0]` 来自环境变量时，CLI 缺失会让整棵插件树加载失败」——启停开关只看索引目录、不看 CLI，组合出「条目启用但 `args[0]=null`」；修复 = 壳层启停判定联动 + 模板 `disabled` 兜底 + 一键恢复脚本 `shell/fix-mcp-startup.ps1`（含四轮演练验证）| 用户新机 zip 版首次启动失败（见 `docs/决策/2026-09-15-MCP条目CLI缺失拖死启动修复.md`）|
+| 2026-09-15 | §7 坑 #32（新增） | 新增「部署后的完整性校验不能只验浅层路径——归档尾部才是最容易缺的那一段」——校验点 `@max-null/dsh-memory` 位于归档 82% 处、codegraph CLI 在 97% 处，中断解压能通过校验并留下尾部缺失的环境；修复 = 校验改为清单式四项 + `verify-release` 补 codegraph | 用户新机 zip 版首次启动失败的上游成因（见 `docs/决策/2026-09-15-部署校验清单化与codegraph缺失.md`）|
 
 ## 工作区规范（布局 + 放置规则，2026-08-29 整理定稿）
 
@@ -351,6 +352,8 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 
 31. **MCP 条目的 `args[0]` 来自环境变量时，CLI 缺失会让整棵插件树加载失败**（2026-09-15 新机 zip 版实测）：模板 `mcp-codegraph` 的 `args[0]` 取自壳注入的 `SSID_MCP_CG_CLI`，而壳只在 CLI 实体存在时才注入它（`main.mjs` 的 `existsSync` 分支，缺失时只写一行日志）；启停开关 `SSID_MCP_CG_ENABLE` 当时又只看「索引目录能否解析」——两条判定各管各的，于是「目录可用 + CLI 缺失」的组合会把条目置为启用，`args[0]` 求值为 `null`，而 `dsh-mcp-client` 的 schema 要求 `string[]` → `plugin tree failed to load`、**内核起不来**（报错里能看到 `"args":[null,…]`）。`mcp-playwright` 是同一形状（取自 `SSID_MCP_PW_CLI`），当时连 `disabled` 兜底都没有。**处置**：壳层把 CLI 存在性并入启停判定（`resolveCodeGraphEnable`，`shell/lib/codegraph-adapt.mjs`），模板给两个条目补 `disabled` 兜底（`… !== "1" || !process.env.SSID_MCP_CG_CLI` / `!process.env.SSID_MCP_PW_CLI`）。**降级方向要选对**：停用只牺牲那一个 MCP，远好过整树失败。已装 0.3.1 的机器用 `shell/fix-mcp-startup.ps1`（或同目录 `.cmd`，双击）自助恢复——它检查 CLI、缺则停用对应条目、备份并用思灵自带 node 实解析校验。**排查线索**：`~/.ssid/ssid.log` 里的 `prefab mcp codegraph cli missing`。相关：`docs/决策/2026-09-15-MCP条目CLI缺失拖死启动修复.md`。
 
+32. **部署后的完整性校验不能只验浅层路径——归档尾部才是最容易缺的那一段**（2026-09-15 新机 zip 版实测）：`main.mjs` 原先只做一次 `existsSync(join(tmpDir,'node_modules','@max-null','dsh-memory'))`，而该路径在归档 73,775 条里的 **#60,793（82%）**，`@astudioplus/codegraph-mcp/bin/codegraph-mcp.js` 在 **#71,539（97%）**——中断发生在两者之间的解压**能通过校验**，留下「头部齐、尾部缺」的 profile：MCP 条目 `args[0]` 依赖的 CLI 不在，壳据此不注入 `SSID_MCP_CG_CLI`，接上坑 #31 的整树失败。**处置**：校验改为清单式（内核 / `dsh-memory` / playwright cli / codegraph cli 四项逐项 `existsSync`，缺任一项即报出缺了哪些并中止部署），`verify-release.mjs` 的 `EXPECT_PRESENT` 补上 `@astudioplus/codegraph-mcp`。**通用教训**：凡「用一个代表点校验整份产物」的写法，先问那个点位于产物的百分之几——校验点的价值由它身后剩余的体积决定，不由它自己是否重要决定。相关：`docs/决策/2026-09-15-部署校验清单化与codegraph缺失.md`。
+
 ## 8. 文档索引
 
 - 本手册（总览/流程/坑）
@@ -370,6 +373,8 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 - `docs/决策/2026-09-14-插件样式归属与HMR连带删除.md`（**手动注入 `<style>` 的归属标记规范** + sticky header 遮挡修复 + CDP 焦点模拟测量纪律 + 逐处普查结论：自制插件里仅三处曾是裸注入）
 - `docs/决策/2026-09-15-patch合并越界吞条目.md`（升级部署 patch 合并的区间越界：吞掉 `- id: connection` → boot 失败 → 把 YAML 调合法后 **405 复发**；含真实输入逐字符复现证据与「恢复时只补缩进不解决 405」的要点）
 - `docs/决策/2026-09-15-MCP条目CLI缺失拖死启动修复.md`（MCP 条目 `args[0]` 依赖的 CLI 缺失 → 整棵插件树加载失败；壳层启停判定联动 + 模板 `disabled` 兜底 + `shell/fix-mcp-startup.ps1` 一键恢复脚本）
+- `docs/决策/2026-09-15-部署校验清单化与codegraph缺失.md`（部署后校验原先只验归档 82% 处的浅层路径 → 中断解压可通过校验、留下尾部缺失的环境；改为清单式，`verify-release` 补 codegraph）
+- `docs/决策/2026-09-15-pwsh-spawn-EPERM-重试插件决定.md`、`docs/排查/2026-09-15-pwsh-spawn-EPERM-上游issue草稿.md`（DSH 进程创建层的间歇性 `spawn EPERM`：SSiD 侧一次透明重试的取舍与代价 + 待提上游的 issue 稿）
 
 ## 待办清单（2026-08-30 记）
 
@@ -527,7 +532,8 @@ slot 冲突/界面错误；切换不生效 → scope 绑定/namespace 拼写；�
 ## 10. 内置专属插件规范（2026-08-30 定稿）
 
 ### 定位
-- 内置插件 **dsh-ssid-panels / dsh-ssid-zh-ui**：**脱离 SSiD 生态无法独立使用** → **不单独建库、不发布 npm**。
+- 内置插件 **dsh-ssid-panels / dsh-ssid-zh-ui / dsh-ssid-pwsh-retry**：**脱离 SSiD 生态无法独立使用** → **不单独建库、不发布 npm**。
+- **dsh-ssid-pwsh-retry**（2026-09-15 新增）：包装 `tools/execute`，对 pwsh 工具的 `spawn EPERM` 做一次透明重试（等待 300ms 后重新 dispatch）。挂载点必须在 `bundles` **末尾**——Cordis 的 waterfall 用 `cbs.shift()` 逐个消耗监听器，`next()` 不可重放，只有链尾的包装器重新 `next()` 才会再次真正 dispatch。带单测（7 项）。
 - 源码在壳库 **`plugins/`**（源头）→ 三处 vendor 同步（`~/.dsh/profiles/{web,ssid}/vendor` + `shell/profile-template/vendor`），四份**逐文件**指纹一致（源与 vendor 为全等副本，连 `src/`、`tests/`、`docs/` 都同步；**不要**按"整目录摘要相等"比）。
 - **dsh-quick-toolbar（原 dsh-header-unify）已于 2026-08-30 迁出独立**（仓库 `max-null-plugins/dsh-quick-toolbar`；独立化设计见该仓库 `doc/设计/2026-08-30-quick-toolbar-独立化设计方案.md`）；SSiD 侧仍 vendor 集成——同步链 = 独立仓库构建产物 → 三处 vendor（正式发布 npm 后切官方路径）。
   - 与另两个内置插件不同，它的 vendor 是**精简副本**：只收 `lib/` + `cordis.patch.yml` + `package.json`，源码/测试/截图/README/LICENSE 都不进 vendor。按"整目录相等"核会报出 39 处假差异。

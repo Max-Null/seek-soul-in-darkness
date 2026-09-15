@@ -1,0 +1,8 @@
+# @max-null/dsh-ssid-pwsh-retry bundle patch: one insert over the profile root.
+# Wraps the `tools/execute` waterfall so a pwsh call that failed with Windows
+# `spawn EPERM` is dispatched once more after a short delay. Loading last keeps
+# this wrapper closest to the real dispatch, which is what makes the second
+# `next()` re-run the tool instead of skipping later wrappers.
+- insert:
+    - id: dsh-ssid-pwsh-retry
+      name: '@max-null/dsh-ssid-pwsh-retry'

@@ -595,10 +595,23 @@ async function start() {
         },
       )
       if (cancelRequested) throw new DeployCanceled()
-      // 校验闭包完整性（解压半截/损坏立即失败，不碰旧版）
+      // 校验闭包完整性（解压半截/损坏立即失败，不碰旧版）。
+      // 必须按清单逐项验，且清单要覆盖归档尾部：只验一个浅层路径时，中断发生在它之后、
+      // 尾部之前的解压仍会「校验通过」，留下头部齐、尾部缺的 profile——而缺的恰是 MCP
+      // 条目 args[0] 依赖的 CLI（2026-09-15 新机实测：@astudioplus/codegraph-mcp 在归档
+      // 97% 处，而当时唯一的校验点 @max-null/dsh-memory 在 82% 处）。
       splashStep(1)
-      if (!existsSync(join(tmpDir, 'node_modules', '@max-null', 'dsh-memory'))) {
-        throw new Error('解压结果缺少 @max-null/dsh-memory，部署中止')
+      const requiredPaths = [
+        ['@deepseek-ai', 'dsh'],                                      // 内核本体
+        ['@max-null', 'dsh-memory'],                                  // 内置记忆插件
+        ['@playwright', 'mcp', 'cli.js'],                             // mcp-playwright 条目的 args[0]
+        ['@astudioplus', 'codegraph-mcp', 'bin', 'codegraph-mcp.js'], // mcp-codegraph 条目的 args[0]
+      ]
+      const missingPaths = requiredPaths.filter(
+        (segments) => !existsSync(join(tmpDir, 'node_modules', ...segments)),
+      )
+      if (missingPaths.length > 0) {
+        throw new Error(`解压结果缺少必需路径：${missingPaths.map((s) => s.join('/')).join('、')}，部署中止`)
       }
       // 原子落位（v0.1.5 修复 EPERM 占用问题）：
       // - 旧版先 rename 到 .deploy.old（而非先 rmSync 删除）：rename 是原子
