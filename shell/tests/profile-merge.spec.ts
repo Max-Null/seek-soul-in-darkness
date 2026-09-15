@@ -233,7 +233,7 @@ ${CG_BASE_ENTRY}`
 
 const PATCH_OURS = PATCH_BASE.replace(
   `cwd: !!js 'process.env.SSID_MCP_CG_WS || ""'`,
-  `cwd: 'D:\\Project\\ai-platform'`,
+  `cwd: 'C:/work/my-project'`,
 )
 
 const PATCH_THEIRS = PATCH_BASE.replace(
@@ -249,7 +249,7 @@ test('mergeUserPatch：用户改过的出厂子条目保留用户版本（v0.3.0
   const { text, overridden, merged } = mergeUserPatch(PATCH_OURS, PATCH_THEIRS, PATCH_BASE)
   assert.deepEqual(overridden, ['mcp-codegraph'])
   assert.equal(merged, 1)
-  assert.ok(text.includes("cwd: 'D:\\Project\\ai-platform'"), '用户改的 cwd 必须保留')
+  assert.ok(text.includes("cwd: 'C:/work/my-project'"), '用户改的 cwd 必须保留')
   assert.ok(!text.includes('--exclude'), '该子条目整体以用户版本为准（不被模板新版打回）')
   assert.ok(text.includes('mcp-playwright'), '未改动的子条目仍在')
   assert.ok(text.includes('serverName: playwright'), '未改动的子条目用模板原文')
@@ -260,7 +260,7 @@ test('mergeUserPatch：用户没改过的子条目采用模板新版（模板升
   assert.deepEqual(overridden, [])
   assert.equal(merged, 0)
   assert.ok(text.includes('--exclude'), '模板新增参数生效')
-  assert.ok(!text.includes('ai-platform'), '用户没有改动时不引入旧值')
+  assert.ok(!text.includes('my-project'), '用户没有改动时不引入旧值')
 })
 
 test('mergeUserPatch：无 base 时退化为只保留用户新增（v0.2.1 行为）', () => {
@@ -278,7 +278,7 @@ test('mergeUserPatch：用户改动 + 用户新增子条目同时生效', () => 
   const { text, overridden, ids } = mergeUserPatch(ours, PATCH_THEIRS, PATCH_BASE)
   assert.deepEqual(overridden, ['mcp-codegraph'])
   assert.deepEqual(ids, ['mcp-user-extra'])
-  assert.ok(text.includes("cwd: 'D:\\Project\\ai-platform'"))
+  assert.ok(text.includes("cwd: 'C:/work/my-project'"))
   assert.ok(text.includes('mcp-user-extra'))
   assert.equal(text.match(/^- /gm)?.length ?? 0, 1, '仍为单顶层 insert 块')
 })
@@ -287,6 +287,37 @@ test('mergeUserPatch：空/损坏输入退回模板原文（绝不写坏 patch�
   assert.equal(mergeUserPatch('', TEMPLATE_PATCH).text, TEMPLATE_PATCH)
   assert.equal(mergeUserPatch(null, TEMPLATE_PATCH).text, TEMPLATE_PATCH)
   assert.equal(mergeUserPatch(undefined, TEMPLATE_PATCH).text, TEMPLATE_PATCH)
+})
+
+// ── insert 块之后的注释块：替换区间不得越界（2026-09-15 实测）──────────────
+// 真实模板把 connection 的长注释（缩进 0）写在 insert 块之后、条目之前，于是它被
+// splitPatchEntries 归入 insert 条目，令「块内最后一个子条目」的范围跨过条目边界；
+// 该子条目被用户改过时，overridden 的替换区间会整行吃掉 `- id: connection` ——patch
+// 成非法 YAML（内核 boot 报 bad indentation of a mapping entry），手工修好后又因
+// connection 缺 webServer 注入复发插件中心 405。
+const PATCH_WITH_TRAILING_NOTE = `- insert:
+    - id: mcp-playwright
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: playwright
+${CG_BASE_ENTRY}# ── connection 行：补回 webServer 注入（405 的修复点）────────────
+#
+# 注释块紧跟在 insert 块之后、下一个顶层条目之前（真实模板此处是一段多行说明注释）。
+- id: connection
+  inject: [webRuntime, webServer]
+`
+
+test('mergeUserPatch：insert 块后的注释块不得让替换区间吞掉下一个顶层条目', () => {
+  const ours = PATCH_WITH_TRAILING_NOTE.replace(
+    `cwd: !!js 'process.env.SSID_MCP_CG_WS || ""'`,
+    `cwd: 'C:/work/my-project'`,
+  )
+  const { text, overridden } = mergeUserPatch(ours, PATCH_WITH_TRAILING_NOTE, PATCH_WITH_TRAILING_NOTE)
+  assert.deepEqual(overridden, ['mcp-codegraph'], '用户改过的子条目按三方合并触发替换')
+  assert.ok(text.includes("cwd: 'C:/work/my-project'"), '用户改动保留')
+  assert.ok(text.includes('- id: connection'), '下一个顶层条目必须完整保留（曾被整行吞掉）')
+  assert.ok(text.includes('inject: [webRuntime, webServer]'), 'connection 的 inject 必须保留')
+  assert.equal(text.match(/^- /gm)?.length ?? 0, 2, '顶层条目仍为「insert + connection」两条')
 })
 
 test('computeUserPluginDelta：用户插件（模板外依赖/捆绑）被识别为丢失', () => {

@@ -266,7 +266,11 @@ export function mergeUserPatch(oldText, templateText, baseText = '') {
       if (!isInsertEntry(e)) continue
       for (const c of splitChildEntries(e.text)) {
         if (c.id === null || !overridden.has(c.id)) continue
-        edits.push({ start: e.start + c.start, end: e.start + c.end, text: overridden.get(c.id) })
+        // end 必须钳制在本条目内：splitChildEntries 的 end 会因条目文本尾部的换行
+        // 多算一行，而 insert 条目与下一个顶层条目之间常隔着缩进 0 的注释块——
+        // 越界时替换会整行吞掉下一个顶层条目（2026-09-15 实测：`- id: connection`
+        // 被吃掉，patch 成非法 YAML，内核 boot 报 bad indentation）。
+        edits.push({ start: e.start + c.start, end: Math.min(e.start + c.end, e.end), text: overridden.get(c.id) })
       }
     }
     edits.sort((a, b) => b.start - a.start)

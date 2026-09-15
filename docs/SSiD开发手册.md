@@ -49,6 +49,7 @@
 | 2026-09-14 | §7 坑 #22（新增） | 新增「排查期的模拟点击别留在启动路径上」——壳的 `[sidebar-diag]` 启动 8 秒后点底栏做开合验证，用户侧表现为「SSiD 启动后下方栏自动展开」；改为纯只读快照 | 用户报障「下侧栏为啥默认展开」|
 | 2026-09-14 | §7 坑 #23（新增） | 新增「原生右侧栏的 tab 图标必须是返回 ReactNode 的函数」——传 JSX 元素会被静默忽略、回落占位图标；并记下排查陷阱：工作台卡片与「开始」页是两个不同的 DOM 列表，只看其中一个会误判为已生效 | 用户报「侧栏图标尺寸颜色都不对」|
 | 2026-09-15 | §7 坑 #29（新增） | 新增「皮肤插件把 token 的 alpha 绑在滑杆上」——`dsh-dream-skin` 的 `shadeTokens2` 让 `--dsw-alias-bg-base` / `--dsw-specific-sidebar-fill` 的 alpha 跟「壁纸透明度」联动，直接取用的两处（壳标题栏、插件中心 `.pc-panel`）都跟着变；两类修法 =「剥离 alpha 只取色相」与「不带 alpha 的皮肤基色 × 弹窗权重」，并记下唯一不带 alpha 的皮肤基色 `--dsh-dream-skin-composer-base` | 用户报「插件中心弹窗和壳标题栏的透明度都错误取了壁纸透明度」|
+| 2026-09-15 | §7 坑 #30（新增） | 新增「升级部署的 patch 合并会把下一个顶层条目整行吞掉」——`overridden` 替换区间越界（注释块归属 + `end` 多算一行）吃掉 `- id: connection`，症状是「先 boot 失败（bad indentation）、把 YAML 调合法后插件中心 405 复发」；修复为区间钳制 + 回归用例，并记下「恢复时只补缩进不解决 405」 | 用户报 0.3.1 安装版启动失败与 405 复发（见 `docs/决策/2026-09-15-patch合并越界吞条目.md`）|
 
 ## 工作区规范（布局 + 放置规则，2026-08-29 整理定稿）
 
@@ -345,6 +346,8 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 
 29. **皮肤插件把 token 的 alpha 绑在滑杆上——消费方直接取 token 就会「跟着滑杆变」**（2026-09-15 实踩，SSiD 标题栏 + 插件中心弹窗）：`dsh-dream-skin` 的 `shadeTokens2`（`lib/client.js:4097-4117`）把三个 token 的 alpha 绑到设置滑杆上——`--dsw-alias-bg-base` ←「壁纸透明度」（`canvasAlpha`）、`--dsw-specific-sidebar-fill` ←「侧边栏透明度」（`sidebarLink` 打开时就是 `canvasAlpha`）、`--dsh-dream-skin-composer-base` ←**三者中唯一不带 alpha 的皮肤基色**（它专为输入框玻璃而设，注释写明 "Mixing the washed --dsw-alias-bg-base instead would compound the alphas"——即不让壁纸滑杆偷偷改输入框）；另有一个只作用于官方提问卡 `.Mbwy4a_card` 的 `--dsh-dream-skin-modal-fill`（弹窗填充权重 %）。**受害点两处，都是把"带 alpha 的 token"直接当自己的底色**：① 壳标题栏（`main.mjs` 的 `syncTitlebarTheme` 取 `--dsw-specific-sidebar-fill`）跟着壁纸/侧边栏滑杆变透，而 `titlebar.html` 的 fallback（`#0f141d`）本是不透明——语义不一致；② 插件中心弹窗（`.pc-panel` 用 `--dsw-alias-bg-base`）跟着壁纸变透，而用户调「弹窗不透明度」对它完全无效。**两类修法要分开**：要求"恒定"的（标题栏）读 token 后**剥离 alpha、只取色相**（`rgba?()` 正则取前三通道；`#rrggbbaa` 截前六位）；要求"跟随某个滑杆"的（弹窗）用 `color-mix(in srgb, var(--dsh-dream-skin-composer-base, var(--dsw-alias-bg-base)) var(--dsh-dream-skin-modal-fill, 100%), transparent)`，**必须拿不带 alpha 的基色做 mix**，否则 `canvasAlpha × fill%` 两个 alpha 会复合（该插件自己修 composer 时踩过同一个坑）。无皮肤时变量缺省，公式退化为 `bg-base × 100%` = 原值，行为不变。**通用自查**：凡消费 `--dsw-alias-bg-base` / `--dsw-specific-sidebar-fill` 当底色的地方都问一句「这个 alpha 归谁管」；要皮肤的原始色请用 `--dsh-dream-skin-composer-base`，不要用被洗过的 active 值。**修复落点**：壳侧 `main.mjs` 的 `opaque()`（随 `7e3bb79` 一并提交；改的是主进程代码，**重启壳才生效**）+ 插件中心 `client/index.tsx` 的 `color-mix` 底色（`dsh-plugin-center` 仓库 `c780cdc`，client 半端 HMR 即生效）。
 
+30. **升级部署的 patch 合并会把「下一个顶层条目」整行吞掉**（2026-09-15 实踩，`- id: connection` 被吃掉）：`mergeUserPatch` 的 overridden 分支（用户改过的出厂子条目 → 用用户版本替换模板的该子条目）按 `e.start + c.start .. e.start + c.end` 算替换区间，两处实现细节让它越界——① `splitPatchEntries` 判定顶层条目只看「行首 `- ` 且无前导空白」，注释行归入**当前**条目，于是模板里写在 insert 块之后、`- id: connection` 之前的 26 行缩进 0 注释被计入 insert 条目，条目范围一路延伸到注释块末尾；② `splitChildEntries` 的 `end` 因 `entryText` 尾部的 `join('\n') + '\n'` 多算一行。叠加后，insert 块**最后一个子条目**的替换区间末端正好落在下一个顶层条目那一行 → 整行被替换掉，只剩缩进 2 的 `inject: [webRuntime, webServer]` 被 YAML 解析成 insert 条目的兄弟键（与 `insert` 平级）。触发需第三条同时成立：用户在 MCP 管理页改过那个子条目——升级报告 `~/.ssid/upgrade-report-*.json` 的 `patchMerged.overridden` 会点名它。**症状组合极具误导性**：先 boot 失败（`kernel-child 启动失败 … bad indentation of a mapping entry`），手工把 YAML 调成合法后启动恢复正常，**但插件中心 405 复发**——真正缺的是 `connection` 的 `webServer` 注入（机制见 #12 与 `docs/决策/2026-09-14-插件中心405诊断记录.md`）。**处置**：区间钳制 `end: Math.min(e.start + c.end, e.end)`（`shell/lib/profile-merge.mjs`），配套回归用例在未修复版本上实测 `not ok`（`shell/tests/profile-merge.spec.ts`）。**恢复损坏 profile 的要点**：必须把 `- id: connection` 这条**顶层条目**补回（与 `insert:` 平级），只调缩进不解决 405；校验别靠肉眼——用 profile 自带的 `yaml` 包实解析，判据是「顶层条目数为 2 且其中一条 `id === 'connection'`」（`!!js` 标签先剥掉再解析）。相关：`docs/决策/2026-09-15-patch合并越界吞条目.md`。
+
 ## 8. 文档索引
 
 - 本手册（总览/流程/坑）
@@ -362,6 +365,7 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 - `docs/决策/2026-09-10-SSiD-check-rules骨架建议.md`（**待办 #5 的骨架**：四项检查的判定契约 + 编排器取舍 + 首次体检实测）
 - `dsh-anatomy/工程范式/2026-09-10-DSH官方Gates拆解原始报告-E-配对与配置门.md`、`...-F-run-gates编排.md`（上述骨架的原始依据，含逐行行号引用）
 - `docs/决策/2026-09-14-插件样式归属与HMR连带删除.md`（**手动注入 `<style>` 的归属标记规范** + sticky header 遮挡修复 + CDP 焦点模拟测量纪律 + 逐处普查结论：自制插件里仅三处曾是裸注入）
+- `docs/决策/2026-09-15-patch合并越界吞条目.md`（升级部署 patch 合并的区间越界：吞掉 `- id: connection` → boot 失败 → 把 YAML 调合法后 **405 复发**；含真实输入逐字符复现证据与「恢复时只补缩进不解决 405」的要点）
 
 ## 待办清单（2026-08-30 记）
 
