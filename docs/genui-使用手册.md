@@ -1,6 +1,6 @@
 # GenUI 使用手册
 
-> 版本：v1.0 ｜ 适用：DeepSeek Harness Web GUI（dsh web）
+> 版本：v1.1 ｜ 适用：DeepSeek Harness Web GUI（dsh web）
 > 依据：genui 技能规范（SKILL.md）+ `@changfenhuang/dsh-genui` 客户端实现源码验证（lib/client.js、lib/index.js）
 
 ---
@@ -173,6 +173,7 @@ graph TD
 - 插件只修标点级小错（字符串内半角引号、尾随逗号）；**缺括号/错括号等结构错误不修**，直接红横幅降级。
 - 不要在 JSON 字符串里放 markdown；超长表格拆成多个组件分开发。
 - 不要嵌套围栏（dsh-ui 里不要再包 ``` 代码围栏）。
+- **文字字段不换行**：文字类字段（`text.content`、`callout.title` / `content`、`card.title`、`list[]` 的 `title` / `desc`、`keyvalue[]` 的 `value`、`steps[]` / `timeline[]` 的 `desc`）都是单行容器——`\n` 被空白规则折叠成空格，`<br>` 按规格字面显示。**要多行只能拆节点**（`list` 多条、多个 `text`、`card` 子节点）。上游缺口见 issue #177。
 
 ---
 
@@ -195,6 +196,9 @@ A：状态持久化按「会话 + 内容指纹」保存，这是设计行为；�
 
 **Q6：为什么我的自定义图表没出现？**
 A：只允许白名单组件类型；未知 type 会被忽略/报错；坏 spec 会降级为代码块。
+
+**Q7：我在 `callout` / `text` 里写 `<br>` 或 `\n` 想换行，为什么没用？**
+A：两条路都堵着，且各自都有明确来由：`<br>` 字面显示，是因为行内富文本**全程不产生 HTML**（`#148` 的设计原则——标记只生成 React 元素，`innerHTML` 不参与）；`\n` 不换行，是因为所有文字容器都没有保留换行的 `white-space`（`GenuiBlock.module.css` 里 12 处 `white-space` 全是 `nowrap`，全库无一处 `pre-line` / `pre-wrap`）。**替代做法是拆节点**：两条要点写成 `list` 两项，两段话写成两个 `text` 或 `card` 子节点。该缺口已报上游 issue #177（首选修法：给文字类补 `white-space: pre-line`）。
 
 ---
 
