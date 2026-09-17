@@ -1,74 +1,72 @@
-# v0.3.2 思灵（SSiD）
+# v0.3.3 思灵（SSiD）
 
-> 状态：**已发布**（2026-09-16）。按 `git log v0.3.1..HEAD` 分组。
-> 本版是补丁版：两个能让思灵起不来的启动级修复，加一个新内置插件与部署期的完整性加固。
-
-## 修复
-
-- **升级部署的 patch 合并会吞掉下一个顶层条目**（0.3.1 安装版实测）：`mergeUserPatch` 的
-  「用户改过的出厂子条目」分支按注释块归属与 `end` 计数算出越界区间，把 `- id: connection`
-  整行替换掉。症状是 boot 报 `bad indentation`，而手工把 YAML 调成合法后**插件中心 405 复发**
-  ——真正缺的是 `connection` 的 `webServer` 注入。修复为区间钳制
-  `Math.min(e.start + c.end, e.end)`，并补了与真实模板同构的回归用例。
-- **MCP 条目的 CLI 缺失会拖死整棵插件树**（新机 zip 版实测）：模板 `mcp-codegraph` 与
-  `mcp-playwright` 的 `args[0]` 取自壳注入的环境变量，而壳只在 CLI 实体存在时才注入它。
-  CLI 缺失时 `args[0]` 求值为 `null`，而 `dsh-mcp-client` 的 schema 要求 `string[]`，于是
-  `plugin tree failed to load`、内核起不来。修复分两层：壳层把 CLI 存在性并入启停判定
-  （`resolveCodeGraphEnable`），模板给两个条目补 `disabled` 兜底。
-- **部署后的完整性校验由单点改为清单式**：原先只验归档 82% 处的 `@max-null/dsh-memory`，
-  而 `@astudioplus/codegraph-mcp` 在 97% 尾部——中断发生在两者之间的解压能通过校验，留下
-  「头部齐、尾部缺」的 profile，正是上一条故障的上游成因。现在逐项核对内核、记忆插件与
-  两个 MCP CLI；`verify-release` 的必查清单也补上了 codegraph。
-- **3 个 mxy 技能修掉重复段落与描述缺失**（`skills/` 与 `profile-template/skills/` 两处同步）。
+> 状态：**待发布**（2026-09-18）。按 `git log v0.3.2..HEAD` 分组。
+> 本版是补丁版：一个新内置插件、一批预制插件对齐 npm 最新，加一条让门禁终于能维持住的修正。
 
 ## 新增
 
-- **内置插件 `dsh-ssid-pwsh-retry`**：Windows 上 pwsh 工具偶发 `spawn EPERM` 时**透明重试一次**
-  ——等待 300ms 后重新 dispatch，只对 `pwsh` 工具与这一种错误生效，已中止的调用不重试。
-  根治在 DSH 的进程创建层，本插件是 SSiD 侧的缓解；重试意味着非幂等命令可能执行两次。
-- **`shell/fix-mcp-startup.ps1`（配双击入口 `.cmd`）**：给已装 0.3.1 的机器自助恢复启动——
-  检查两个 MCP CLI、缺则停用对应条目、改动前备份、再用思灵自带 node 实解析校验，可重复运行。
+- **内置插件 `dsh-ssid-env`（运行环境自述）**：往系统提示里加一节，说明当前跑在思灵壳里
+  而不是裸 DSH web，并给出判据——**非 SSiD 环境下它自己沉默**，不污染普通 web 会话。
+  同批定下「一个适配面一个插件、不合并」的分合判断：合并能省的成本已被 manifest +
+  `sync:vendor` + `check-vendor-sync` 这套工具吸收，代价（独立回滚、故障隔离、
+  `pwsh-retry` 必须挂在 bundles 末尾的加载顺序语义）却无法自动化。
+- **`shell/scripts/heal-workspace-registry.mjs`**：工作区登记的补录工具。侧栏工作区分组
+  比实际少（会话掉出 `WorkStation` 分组）时的对账脚本，来源见 `docs/排查/2026-09-17-多实例共用storages.md`。
 
 ## 内置升级
 
-- **@max-null/dsh-memory 0.6.1 → 0.7.0（静默记忆机制第一版）**：写入即生效，不再逐条等人工放行；
-  命中密钥/凭据规则的记忆写入即**隔离**（不进检索也不进注入，由人放行）；命中两次自动升常驻、
-  30 天未再命中自动撤下，**人工动过的开关双向豁免**；记忆可绑**有效性锚点**（环境变量 / 工具清单 /
-  插件版本），所绑值变化即标 `stale` 并撤常驻；新增查询日志与来源字段，面板从「审核队列」变为
-  「审计台」（隔离区 / 常驻 / 冷数据分组）。旧存储照常读写，启动时一次性迁移——旧 `suggested`
-  逐条过危险检测后放行或隔离，迁移前自动备份。
-- **@max-null/dsh-skills 0.1.0 → 0.1.1**：包内 8 个 skill 的现状数字改为命令现取（原先写死的
-  计数已经过时）、修掉一处死链与重复说明段；新增 `prepack` 清 `__pycache__`——npm 的 `files`
-  白名单优先于 `.gitignore`，0.1.0 实测把一个 `.pyc` 打进了 tarball。
-- **第三方预制插件对齐 npm 最新**（沿用「第三方更新到 npm 最新」的既定规则，四者
-  peerDependencies 与 engines 均未变）：`@changfenhuang/dsh-genui` 0.10.0 → 0.11.0
-  （新增 `katex` 依赖，公式渲染）、`@playwright/mcp` 0.0.80 → 0.0.81（底层 playwright
-  1.63 → 1.64 alpha）、`dsh-context` 0.52.1 → 0.52.2、`dsh-dream-skin` 9.14.2 → 9.15.2。
+- **`@max-null/dsh-tone-layer` 0.1.0（首次进发布版）**：语气层，按会话上下文调整回复口吻。
+- **`@max-null/dsh-memory` 0.7.0 → 0.9.1**：静默记忆机制继续推进（写入即生效、命中凭据规则
+  即隔离、锚点失效自动撤常驻）。
+- **`@max-null/dsh-plugin-center` 0.2.20 → 0.3.0**、**`@max-null/dsh-skill-mcp-center` 0.5.0 → 0.5.1**、
+  **`@max-null/dsh-skills` 0.1.1 → 0.1.2**、**`ds-harness-remote` 0.4.13 → 0.4.14**。
+- **预制第三方对齐 npm 最新**：`dsh-context` 0.52.2 → **0.53.3**（本版显式改 pin——
+  声明写的是 `^0.x` 形态，**不跨 minor**，不显式改就仍会解析回旧版）、
+  `dsh-dream-skin` 9.15.2 → 9.16.0。归档前的 33 项依赖已逐条与 npm latest 比对，一致。
 
 ## 工程与门禁
 
-- **`ssid-release` skill**：发版冒烟脚本新增 `dismissChangelog()`（识别「思灵已更新」并关掉，
-  否则更新日志弹窗会盖住骨架断言造成假 FAIL）；更正弹窗已读状态的实际位置——它在壳的共享
-  状态文件 `~/.ssid/changelog-seen.json`，不随 profile 隔离。
-- **手册 §7 新增坑 #30、#31、#32**（patch 合并越界、MCP CLI 缺失、部署校验点必须覆盖归档尾部），
-  §8 索引同步；决策库索引重建。
-- 新增三份记录：pwsh 工具间歇性 `spawn EPERM` 排查记录、OpenClaw 2.0 调查报告、
-  记忆机制「自动生效 + 后审核」改造计划（后者含 4 项待拍板决策）。
+- **`check-vendor-sync` 改为对行尾码免疫**（本次实测逼出来的修正）：指纹原先逐字节算，
+  而「四份 vendor 逐文件一致」这条要求在 Windows 上**结构性不可维持**——源与模板是 git
+  检出（`core.autocrlf=true` → CRLF），profile 里 `file:./vendor/<pkg>` 的实体却由 pnpm
+  物化（行尾归一成 LF）。于是门稳定报 6 处「漂移」，而内容逐份全等；每次 `pnpm install`
+  又把它造回来，真漂移反而淹没在假信号里。现在指纹只对**可解码 UTF-8 文本**归一 CRLF / 孤立 CR，
+  二进制逐字节不变，内容差异（末尾换行、空格、正文）与从前一样照报。新增
+  `scripts/check-vendor-sync.spec.mjs` 守住这四条。
+- **`sync-vendor` 与门共用同一实现**，因此同步结论同步受益：本版实跑 dry-run
+  已无假差异。
+- **手册 §7 新增坑 #36**（vendor 四份一致必须对行尾免疫，判据与处置见该条）；#35 为压缩阈值
+  生效层在 preset、host 层那条被 `web-app` 禁用；另登记三条排查纪律、插件安装链、
+  `dsh-ssid-env` 与 `dsh-skills 0.1.2`；决策库索引重建（89 篇）。
+- **新增三份上游观察记录**：genui 文字换行缺口、`connection-rpc` 通道注册缺陷、
+  `ds-harness-remote` 授权失效调查。
+
+## 修复
+
+- **会话取证扫描工具 + 长会话输出退化的根因记录**：压缩阈值与「清醒区」错配
+  （`docs/排查/`、工具 `shell/scripts/session-degeneration-scan.mjs`）。
+- **DSH 内核崩溃退出排查记录**：原子写 rename 的 EPERM 家族（`docs/排查/`）。
 
 ## 更新说明
 
-- 老用户安装 v0.3.2：启动时版本指纹不一致 → 自动重部署运行环境（约 30 秒，可取消）。
-- 本版起，运行环境解压不完整会让部署**明确失败并报出缺哪些路径**，不再带着半截环境启动。
-- 已装 0.3.1 且遇到启动失败的机器，可先用 `shell/fix-mcp-startup.ps1` 恢复，再升级到本版。
+- 老用户安装 v0.3.3：启动时版本指纹不一致 → 自动重部署运行环境（约 30 秒，可取消）。
+- 本版**新增一个内置插件**（`dsh-ssid-env`）与**一个新预制插件**（`dsh-tone-layer`），
+  重部署后两者随归档一起落位，不需要手动安装。
+- `dsh-context` 从 0.52.2 直接跳到 0.53.3（跨了两个 minor），其面板「上下文」标签的行为以
+  0.53.3 为准。
+- 已装 v0.3.2 的用户可直接增量更新；低于 v0.3.0 的建议走完整安装包。
 
 ## 下载与校验
 
 - 优先使用免安装版（zip）：解压即用，绕过安装器/签名拦截；NSIS 安装版报
   「不支持的 16 位应用程序」= 下载文件损坏（非兼容问题），删后重下或换 zip。
 - 资产（GitHub Release 页）：
-  - `ssid-shell-0.3.2-win.zip`（410.9 MB）
-  - `ssid-shell-setup-0.3.2.exe`（361.0 MB）
-  - 附 `latest.yml` 与 `ssid-shell-setup-0.3.2.exe.blockmap`（在线增量更新所需）
-- SHA256（`certutil -hashfile <文件> SHA256`）：
-  - `ssid-shell-0.3.2-win.zip`：`8C9CF229C0D7B7977C297EECCDF22F0C8BEFD998DF098AC34624DC8A4435924C`
-  - `ssid-shell-setup-0.3.2.exe`：`096CB086BD80642D5D0A9DFBD52B8D59B1C97F1DDA757B09C6EAEF14C0749FAA`
+  - `ssid-shell-0.3.3-win.zip`（411.0 MB）
+  - `ssid-shell-setup-0.3.3.exe`（361.1 MB）
+  - 附 `latest.yml` 与 `ssid-shell-setup-0.3.3.exe.blockmap`（在线增量更新所需）
+- SHA256（`certutil -hashfile <文件> SHA256`）——**以 `docs/release-notes-v0.3.3.md` 与 Release 页为准**：
+  - `ssid-shell-0.3.3-win.zip`：（见 Release 页）
+  - `ssid-shell-setup-0.3.3.exe`：（见 Release 页）
+- 说明：**包内这份不着录校验和**。安装包的哈希取决于内嵌归档，而归档里又装着一份更新日志
+  ——三者互相依赖，把最终哈希写进包内会**再次改变**哈希。因此这里只给占位符（v0.3.2 起即如此），
+  真实校验和见仓库 `docs/release-notes-v0.3.3.md` 与 GitHub Release 页。

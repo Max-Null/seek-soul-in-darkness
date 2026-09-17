@@ -64,9 +64,9 @@
   - `ssid-shell-0.3.3-win.zip`（411.0 MB）
   - `ssid-shell-setup-0.3.3.exe`（361.1 MB）
   - 附 `latest.yml` 与 `ssid-shell-setup-0.3.3.exe.blockmap`（在线增量更新所需）
-- SHA256（`certutil -hashfile <文件> SHA256`）——**以 `docs/release-notes-v0.3.3.md` 与 Release 页为准**：
-  - `ssid-shell-0.3.3-win.zip`：（见 Release 页）
-  - `ssid-shell-setup-0.3.3.exe`：（见 Release 页）
-- 说明：**包内这份不着录校验和**。安装包的哈希取决于内嵌归档，而归档里又装着一份更新日志
-  ——三者互相依赖，把最终哈希写进包内会**再次改变**哈希。因此这里只给占位符（v0.3.2 起即如此），
-  真实校验和见仓库 `docs/release-notes-v0.3.3.md` 与 GitHub Release 页。
+- SHA256（`certutil -hashfile <文件> SHA256`）——**以本页与 Release 页为准**：
+  - `ssid-shell-0.3.3-win.zip`：`723A2B1EB7518BEA52DC9D40D4C40064E07F8C607DC2A30FDF307489F5DE937B`
+  - `ssid-shell-setup-0.3.3.exe`：`EC300FA7A8DA92841F19B8DC7BD59E80A1734A9D013CF0ECF5D09E85E9924FDA`
+- 说明：**包内那份「更新日志」（关于 SSiD）不着录校验和**。安装包的哈希取决于内嵌归档，
+  而归档里又装着一份更新日志——三者互相依赖，把最终哈希写进包内会**再次改变**哈希。因此
+  包内只给占位符（v0.3.2 起即如此），真实校验和以本页与 GitHub Release 页为准。
