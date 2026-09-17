@@ -1,6 +1,7 @@
 # v0.3.3 思灵（SSiD）
 
-> 状态：**待发布**（2026-09-18）。按 `git log v0.3.2..HEAD` 分组。
+> 状态：**已发布**（2026-09-18）。按 `git log v0.3.2..HEAD` 分组。
+> 归档指纹 `0.3.3-0.1.5-rc.2-586fb1bf` · Windows 三层内核哈希 `a9ea6f602e69e772`。
 > 本版是补丁版：一个新内置插件、一批预制插件对齐 npm 最新，加一条让门禁终于能维持住的修正。
 
 ## 新增
@@ -60,10 +61,11 @@
 
 - 优先使用免安装版（zip）：解压即用，绕过安装器/签名拦截；NSIS 安装版报
   「不支持的 16 位应用程序」= 下载文件损坏（非兼容问题），删后重下或换 zip。
-- 资产（GitHub Release 页）：
-  - `ssid-shell-0.3.3-win.zip`（411.0 MB）
-  - `ssid-shell-setup-0.3.3.exe`（361.1 MB）
-  - 附 `latest.yml` 与 `ssid-shell-setup-0.3.3.exe.blockmap`（在线增量更新所需）
+- 资产（GitHub Release 页，本版起 Windows 与 macOS 同发布）：
+  - `ssid-shell-0.3.3-win.zip`（411.0 MB）、`ssid-shell-setup-0.3.3.exe`（361.1 MB）
+  - macOS（arm64，CI 产出）：`ssid-shell-0.3.3-arm64.dmg`（384.5 MB）、
+    `ssid-shell-0.3.3-arm64-mac.zip`（383.4 MB）
+  - 附各平台的 `latest.yml` / `latest-mac.yml` 与 blockmap（在线增量更新所需）
 - SHA256（`certutil -hashfile <文件> SHA256`）——**以本页与 Release 页为准**：
   - `ssid-shell-0.3.3-win.zip`：`723A2B1EB7518BEA52DC9D40D4C40064E07F8C607DC2A30FDF307489F5DE937B`
   - `ssid-shell-setup-0.3.3.exe`：`EC300FA7A8DA92841F19B8DC7BD59E80A1734A9D013CF0ECF5D09E85E9924FDA`
