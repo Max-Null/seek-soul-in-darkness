@@ -8,22 +8,23 @@
     "@max-null/dsh-capture": "file:./vendor/dsh-capture",
     "@max-null/dsh-chat-rail": "0.6.4",
     "@max-null/dsh-chinese-thinking": "0.3.0",
+    "@max-null/dsh-tone-layer": "0.1.0",
     "@max-null/dsh-draft-polish": "0.2.3",
     "@max-null/dsh-guardian": "0.2.0",
     "@max-null/dsh-habit": "0.2.0",
-    "@max-null/dsh-memory": "0.7.0",
+    "@max-null/dsh-memory": "0.7.3",
     "@max-null/dsh-node-appearance": "0.4.0",
-    "@max-null/dsh-plugin-center": "0.2.20",
-    "@max-null/dsh-skill-mcp-center": "0.5.0",
+    "@max-null/dsh-plugin-center": "0.3.0",
+    "@max-null/dsh-skill-mcp-center": "0.5.1",
     "@max-null/dsh-ssid-panels": "file:./vendor/dsh-ssid-panels",
     "@max-null/dsh-ssid-zh-ui": "file:./vendor/dsh-ssid-zh-ui",
     "@max-null/dsh-ssid-pwsh-retry": "file:./vendor/dsh-ssid-pwsh-retry",
     "@playwright/mcp": "0.0.81",
-    "ds-harness-remote": "0.4.13",
+    "ds-harness-remote": "0.4.14",
     "dsh-better-sidebar": "0.19.1",
-    "dsh-context": "0.52.2",
+    "dsh-context": "0.53.1",
     "dsh-context-doctor": "file:./vendor/dsh-context-doctor",
-    "dsh-dream-skin": "9.15.2",
+    "dsh-dream-skin": "9.16.0",
     "dsh-excel-panel": "0.6.1",
     "dsh-pocket": "2.10.6",
     "dsh-session-manager": "0.4.11",
@@ -32,7 +33,8 @@
     "dsh-wechat": "0.9.6",
     "@astudioplus/codegraph-mcp": "0.20.1",
     "@max-null/dsh-quick-toolbar": "file:./vendor/dsh-quick-toolbar",
-    "@max-null/dsh-skills": "0.1.1"
+    "@max-null/dsh-skills": "0.1.2",
+    "@max-null/dsh-ssid-env": "file:./vendor/dsh-ssid-env"
   },
   "dsh": {
     "profile": {
@@ -41,6 +43,7 @@
         "@deepseek-ai/dsh-web-app",
         "@max-null/dsh-memory",
         "@max-null/dsh-chinese-thinking",
+        "@max-null/dsh-tone-layer",
         "@max-null/dsh-chat-rail",
         "@max-null/dsh-guardian",
         "@max-null/dsh-habit",
@@ -67,7 +70,8 @@
         "dsh-session-manager",
         "@huanlin/dsh-plugin-better-sidebar-plugin-office",
         "@max-null/dsh-skills",
-        "@max-null/dsh-ssid-pwsh-retry"
+        "@max-null/dsh-ssid-pwsh-retry",
+        "@max-null/dsh-ssid-env"
       ],
       "patchReload": "live"
     }
