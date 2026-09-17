@@ -42,6 +42,28 @@ export function matchAny(rel, patterns, defaultVal) {
   return patterns.some((p) => globToRe(p).test(rel));
 }
 
+/**
+ * 归一化行尾：CRLF 与孤立 CR 都折成 LF。**只对可解码的 UTF-8 文本生效** ——
+ * 含 NUL 或非 UTF-8 字节的缓冲区原样返回（二进制不做文本解释）。
+ *
+ * 为什么要归一：指纹比的是「这份 vendor 与源是不是同一份东西」，而 vendor 各份的落盘路径
+ * 不同 —— 源与 template 是 git 检出（`core.autocrlf=true` 下为 CRLF），profile 里
+ * `file:./vendor/<pkg>` 的实体则由 **pnpm 物化**（行尾归一成 LF）。行尾码不是内容：
+ * 它既不进 JS/YAML 的语义，也不是任何人手改出来的，却被字节哈希放大成「漂移」。
+ * 实测（2026-09-18 v0.3.3 发版）：`check-vendor-sync` 报的 6 处违规全是行尾码之差，
+ * 内容逐份全等；且每次 `pnpm install` 都会把这个差异造回来 —— 门若对此敏感，
+ * 它报的就是一个永远修不干净的假信号，真漂移反而淹没在里面。
+ *
+ * 代价：源侧行尾被手工改写而内容不变时不再报漂移。这是有意的取舍 —— 行尾对插件运行无影响，
+ * 而不报这一点换来的是一条**能长期维持**的门。
+ */
+export function normalizeEol(buf) {
+  if (buf.includes(0)) return buf;
+  const text = buf.toString('utf8');
+  if (text.includes('\uFFFD')) return buf;   // 非法 UTF-8 序列 → 按二进制处理
+  return Buffer.from(text.replace(/\r\n?/g, '\n'), 'utf8');
+}
+
 /** 逐文件建「相对路径 → sha256」映射；目录不存在返回 null。 */
 export function fingerprint(dir, spec) {
   const out = new Map();
@@ -60,7 +82,7 @@ export function fingerprint(dir, spec) {
       } else if (e.isFile()) {
         if (!matchAny(childRel, include, true)) continue;
         if (matchAny(childRel, exclude, false)) continue;
-        out.set(childRel, crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex'));
+        out.set(childRel, crypto.createHash('sha256').update(normalizeEol(fs.readFileSync(full))).digest('hex'));
       }
     }
   })(dir, '');
