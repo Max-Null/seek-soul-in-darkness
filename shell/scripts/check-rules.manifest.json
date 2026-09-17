@@ -62,6 +62,21 @@
         ".git/**"
       ]
     },
+    "dsh-ssid-env": {
+      "mode": "full",
+      "source": "plugins/dsh-ssid-env",
+      "$excludeNote": "REPORT.md 是源侧的事故记录，不进 vendor：它既不参与插件运行，也不该随归档发到用户机上。排除后源与三处 vendor 的比对面仍逐文件一致。",
+      "include": [
+        "**"
+      ],
+      "exclude": [
+        "REPORT.md",
+        "node_modules/**",
+        "**/*.tsbuildinfo",
+        "**/*.log",
+        ".git/**"
+      ]
+    },
     "dsh-quick-toolbar": {
       "mode": "vendor-only",
       "$sourceNote": "源头在 max-null-plugins/dsh-quick-toolbar（SSiD 仓库之外），本门只做三处 vendor 互比",

@@ -1,0 +1,7 @@
+# @max-null/dsh-ssid-env bundle patch: one insert over the profile root.
+# Contributes a single system-prompt section describing the SSiD runtime so the
+# agent can tell this environment apart from a bare DSH web instance. The plugin
+# stays silent when the SSiD boot identifiers are absent.
+- insert:
+    - id: dsh-ssid-env
+      name: '@max-null/dsh-ssid-env'
