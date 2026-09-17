@@ -63,8 +63,8 @@
   「不支持的 16 位应用程序」= 下载文件损坏（非兼容问题），删后重下或换 zip。
 - 资产（GitHub Release 页，本版起 Windows 与 macOS 同发布）：
   - `ssid-shell-0.3.3-win.zip`（411.0 MB）、`ssid-shell-setup-0.3.3.exe`（361.1 MB）
-  - macOS（arm64，CI 产出）：`ssid-shell-0.3.3-arm64.dmg`（384.5 MB）、
-    `ssid-shell-0.3.3-arm64-mac.zip`（383.4 MB）
+  - macOS（arm64，CI 产出）：`ssid-shell-0.3.3-arm64.dmg`（384.6 MB）、
+    `ssid-shell-0.3.3-arm64-mac.zip`（383.5 MB）
   - 附各平台的 `latest.yml` / `latest-mac.yml` 与 blockmap（在线增量更新所需）
 - SHA256（`certutil -hashfile <文件> SHA256`）——**以本页与 Release 页为准**：
   - `ssid-shell-0.3.3-win.zip`：`723A2B1EB7518BEA52DC9D40D4C40064E07F8C607DC2A30FDF307489F5DE937B`
