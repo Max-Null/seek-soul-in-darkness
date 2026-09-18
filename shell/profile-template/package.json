@@ -12,7 +12,7 @@
     "@max-null/dsh-draft-polish": "0.2.3",
     "@max-null/dsh-guardian": "0.2.0",
     "@max-null/dsh-habit": "0.2.0",
-    "@max-null/dsh-memory": "0.9.1",
+    "@max-null/dsh-memory": "0.10.0",
     "@max-null/dsh-node-appearance": "0.4.0",
     "@max-null/dsh-plugin-center": "0.3.0",
     "@max-null/dsh-skill-mcp-center": "0.5.1",
