@@ -73,11 +73,16 @@ function resolveProfileDir(name: string, home: string): string {
 }
 // 纯 ESM JS 工具（lib/profile-merge.mjs，无类型声明；noImplicitAny=false 容忍）
 import { shouldDropPending } from './lib/profile-merge.mjs'
+import { resolveProfileName, sessionsRootDirName } from './lib/profile-name.mjs'
 
 /** 诊断前缀。 */
 const BIN_NAME = 'ssid'
-/** SSiD 自己的 profile 名（聚合平台要有独立 profile 目录）。 */
-const PROFILE_NAME = 'ssid'
+/**
+ * SSiD 自己的 profile 名（聚合平台要有独立 profile 目录）。
+ * 默认 `ssid`，与历史路径逐字一致；`SSID_PROFILE_NAME` 可覆盖，用于并行开隔离
+ * 实例（见 lib/profile-name.mjs）。
+ */
+const PROFILE_NAME = resolveProfileName()
 /** SSiD profile 的 bundle 层 = DSH 官方 web 的两个 bundle。 */
 const PROFILE_BUNDLES = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app']
 /** profile 目录名（与 dsh-app-boot 的 PROFILES_DIR 同值）。 */
@@ -571,7 +576,9 @@ export async function bootKernel(
     // 预设（2026-08-23 用户拍板）：无配置文件＝默认开启独立会话存储（新装机
     // 即与手动 dsh web 隔离），首次启动落盘成显式配置，用户仍可随时关闭。
     const sessionRootConfigPath = join(homedir(), '.ssid', 'session-root.json')
-    const isolatedSessionsRoot = join(home, 'sessions-ssid')
+    // 隔离根名跟随 profile 名：并行实例各落一份会话日志，否则两个宿主并发写
+    // 同一份 JSONL 会反复造成 seq gap（见 lib/profile-name.mjs）。
+    const isolatedSessionsRoot = join(home, sessionsRootDirName(PROFILE_NAME))
     const sharedSessionsRoot = join(home, 'sessions')
     let isolatedSessionRoot = true
     try {

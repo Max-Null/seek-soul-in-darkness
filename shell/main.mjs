@@ -26,6 +26,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { buildUpgradeReport, mergeUserPatch, snapshotProfileConfigs } from './lib/profile-merge.mjs'
+import { resolveProfileName, sessionsRootDirName } from './lib/profile-name.mjs'
 import { CG_CONFIG_FILE, readCodeGraphConfig, resolveCodeGraphEnable, resolveCodeGraphWorkspace, writeCodeGraphConfig } from './lib/codegraph-adapt.mjs'
 import { startKernelHost } from './host-process.mjs'
 
@@ -97,6 +98,11 @@ const safeLog = (text) => {
 /** App name / window title. */
 const PRODUCT_NAME = 'SSiD'
 const WINDOW_TITLE = '思灵 (SSiD)'
+/**
+ * profile 名：默认 `ssid`（与历史路径逐字一致），`SSID_PROFILE_NAME` 可覆盖。
+ * 与 kernel.ts 的同名常量同源，两边都取自 lib/profile-name.mjs。
+ */
+const PROFILE_NAME = resolveProfileName()
 
 const asset = (name) => fileURLToPath(new URL(`./assets/${name}`, import.meta.url))
 
@@ -295,7 +301,7 @@ async function start() {
   // 已初始化（本机 profile 有插件）则直接跳过；否则从安装包模板铺设并
   // 跑系统 pnpm install（约 430MB 依赖，几分钟）。缺失 pnpm 时提示引导。
   const dshHome = process.env.DSH_HOME ?? join(homedir(), '.dsh')
-  const profileDir = join(dshHome, 'profiles', 'ssid')
+  const profileDir = join(dshHome, 'profiles', PROFILE_NAME)
   // 隔离设计（2026-09-05）：profile 就绪信号 = 内核本体（@deepseek-ai/dsh）实体存在，
   // 而非预设插件（@max-null/dsh-memory）——此前以预设插件为探针，导致"清插件的纯净
   // 环境"触发归档自动回灌预设全家桶（清→依赖报错→npm→预设回来→报错 死循环）。
@@ -1052,8 +1058,8 @@ async function start() {
     const cgResolved = resolveCodeGraphWorkspace({
       envWorkspace: process.env.SSID_MCP_CG_WS,
       config: cgConfig,
-      // 隔离根在前：会话存储隔离开启时（出厂预设）会话都落在 sessions-ssid。
-      sessionRoots: [join(dshHome, 'sessions-ssid'), join(dshHome, 'sessions')],
+      // 隔离根在前：会话存储隔离开启时（出厂预设）会话都落在隔离根。
+      sessionRoots: [join(dshHome, sessionsRootDirName(PROFILE_NAME)), join(dshHome, 'sessions')],
     })
     let cgWorkspace = cgResolved.workspace
     let cgSource = cgResolved.source

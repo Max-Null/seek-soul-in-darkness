@@ -30,7 +30,14 @@ const createMissing = args.has('--new-workspaces')
 
 const dshHome = process.env.DSH_HOME ?? join(homedir(), '.dsh')
 const registryFile = join(dshHome, 'storages', 'workspace.json')
-const sessionRoots = ['sessions-ssid', 'sessions']
+/**
+ * 会话存储根（相对 `$DSH_HOME` 的目录名）：扫所有 `sessions` / `sessions-<profile>`
+ * 目录，而不是列两个固定名 —— 会话根名跟随 profile 名，列死的写法会让并行实例
+ * （`sessions-ssid-dev`）的会话漏出对账范围。备份后缀（`sessions.bak-*`）不算。
+ */
+const sessionRoots = readdirSync(dshHome, { withFileTypes: true })
+  .filter((entry) => entry.isDirectory() && /^sessions(-[A-Za-z0-9._-]+)?$/.test(entry.name))
+  .map((entry) => entry.name)
 
 /** 归一化 cwd：Windows 大小写不敏感，尾随分隔符不算另一个目录。 */
 const norm = (path) => String(path).replace(/[\\/]+$/, '').toLowerCase()

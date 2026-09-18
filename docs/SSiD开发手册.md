@@ -56,6 +56,7 @@
 | 2026-09-18 | §7 坑 #34（补三条排查纪律） | 实跑与重启复验后补齐三条纪律：①会话目录名前缀不一致 → 认 header 的 `id`；②**日志文件名有两种**（`session.jsonl.zstd` / **v3 起 `session.v3.jsonl.zstd`**），只认前者漏掉 52 个会话、少补 33 条；③**登记 id 必须带 `session-` 前缀**（DSH 内部统一 `session-<uuid>`，可见性过滤逐字比较；v3 header 自带前缀而旧格式是裸 uuid）——第一版脚本去前缀，补入的 198 条里 **214 处 id 在侧栏不可见**（WorkStation 显示 8 条而非 145 条，且不报错）。同日的 0.7.3 发版复用「不停机装插件实体」那条链 | 用户报「侧栏分组与会话数对不上」并附截图；见 `docs/决策/2026-09-17-工作区登记对账.md` |
 | 2026-09-17 | §10 定位（新增两条） | 新增内置插件 **`dsh-ssid-env`**（运行环境自述：让模型知道自己在 SSiD 而非裸 DSH web，判据可复核、非 SSiD 时沉默）+ 定下**分合判断**（一个适配面一个插件，不合并——合并能省的成本已被 manifest + `sync:vendor` + `check-vendor-sync` 吸收，代价却无法自动化）；同时指出 SSiD 启动路径**没有 patch watcher**，改 profile patch 或加插件都必须重启 | 用户要求「让模型直接知道当前不是裸 DSH web」；分合讨论见 `docs/决策/2026-09-17-内置插件分合与运行环境自述.md` |
 | 2026-09-18 | §7 坑 #35（新增） | 新增「**配置写了不等于会生效**——在 `disabled: true` 的条目上写配置永远不加载」：判据只有 `dsh --profile <p> --dump-config`（看有没有被 `patched by ...` 标注、有没有躺在 `disabled` 下面）；**YAML 合法 + 字段名对 + 取值在合法域，三条都成立也证明不了会加载**。同条记下：压缩阈值这类参数实际由 **agent preset** 决定，`agent-presets.default` 只管**新建会话** | `docs/排查/2026-09-18-长会话输出退化.md` §五（处置部分的三层结构与判据） |
+| 2026-09-18 | §3（新增 `SSID_PROFILE_NAME`） | **profile 名参数化**：profile 目录与隔离会话根都从 `shell/lib/profile-name.mjs` 派生（默认 `ssid`，与历史路径逐字一致），并行实例各有各的 profile 与 `sessions-<名>`；同条记下隔离三件套的完整用法与「无 GUI 冒烟」先行验证法 | 用户提议「profile 放 `profiles/ssid-dev`」→ 查证壳里 profile 名写死（`kernel.ts` / `main.mjs`），遂参数化（见 `docs/决策/2026-09-18-profile名参数化.md`） |
 | 2026-09-18 | §7 坑 #36（新增） | 新增「**「vendor 四份逐文件一致」在 Windows 上必须对行尾码免疫**」：`check-vendor-sync` 按字节算指纹，而源/模板是 git 检出（CRLF）、profile 里的实体由 **pnpm 物化**（LF）——门稳定报 6 处「内容漂移」而四份内容全等，且每轮 `pnpm install` 都会把它造回来，属**结构性不可维持**的假信号。指纹改为只对可解码 UTF-8 文本归一 CRLF/孤立 CR（二进制逐字节），并补 `scripts/check-vendor-sync.spec.mjs` 四条自测；同批把 dev profile 的 `dsh-context` 0.53.1 拉平到 0.53.3 | v0.3.3 发版前置核查（用户要求「确认插件是否最新、SSiD 端修改是否都处理好了」） |
 
 ## 工作区规范（布局 + 放置规则，2026-08-29 整理定稿）
@@ -189,6 +190,11 @@ seek-soul-in-darkness/
 | `SSID_MCP_NODE`/`SSID_MCP_PW_CLI` | 预制 Playwright MCP 运行时 | main.mjs 自动注入；smoke 裸跑需手动设（否则 mcp 行 args 为 null 启动失败） |
 | `SSID_MCP_CG_CLI`/`SSID_MCP_CG_WS`/`SSID_MCP_CG_ENABLE` | 预制 CodeGraph MCP：cli 路径 / 索引目录 / 是否启用 | main.mjs 自动解析注入（优先级：env → `~/.ssid/codegraph.json` → 最近会话探测 → 停用）；smoke 裸跑同样需手动设 `SSID_MCP_CG_CLI` |
 | `DSH_HOME` | DSH 家目录（默认 `~/.dsh`） | 换机/测试隔离 |
+| `SSID_PROFILE_NAME` | profile 名（默认 `ssid`）：同时决定 `$DSH_HOME/profiles/<名>` 与隔离会话根 `sessions-<名>` | 并行开隔离实例；非法值（含路径分隔符、或为 `.`/`..`/`node_modules`）启动即报错 |
+
+**并行开第二个实例（隔离三件套，2026-09-13 首验 / 2026-09-18 参数化）**：`--user-data-dir=<独立目录>`（独立单实例锁）+ `DSH_HOME=<独立目录>`（独立 profile、storages、会话根）+ `SSID_LOG_FILE=<独立文件>`（独立日志），与运行中的实例零冲突。profile 目录用 junction 指回真实的那份即可零拷贝共用插件实体（`node_modules` 一个 junction 就够，配置文件拷副本，写入因此落副本）。`SSID_PROFILE_NAME` 让"第二个实例"有自己的名字与自己的会话根，不必再借用 `ssid`。
+
+**无 GUI 的先行验证**：`DSH_HOME=<隔离> SSID_PROFILE_NAME=<名> npm run smoke`——不起 Electron、不占单实例锁，隔离 home 里会落下 `profiles/<名>`、`storages/`，而真实环境分毫不动（实测见 `docs/决策/2026-09-18-profile名参数化.md`）。
 
 ## 4. 插件升级流程（本次教训：**双处声明**）
 

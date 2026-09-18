@@ -28,12 +28,13 @@ import {
 import { provideCmdline } from '../dsh-runtime/node_modules/@deepseek-ai/dsh-cmdline/lib/index.js'
 import { resolveDshHome } from '../dsh-runtime/node_modules/@deepseek-ai/dsh-home-paths/lib/index.js'
 import { DSH_LAUNCH_ENVIRONMENT_KEY } from '../dsh-runtime/node_modules/@deepseek-ai/dsh-launch-environment/lib/index.js'
+import { resolveProfileName } from '../lib/profile-name.mjs'
 
 // 脚本位于 shell/scripts/，runtime 闭包在同级 shell/dsh-runtime/
 const RUNTIME_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'dsh-runtime')
 const HERE = RUNTIME_DIR
 const BIN_NAME = 'ssid'
-const PROFILE_NAME = 'ssid'
+const PROFILE_NAME = resolveProfileName()
 const PROFILE_BUNDLES = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app']
 const ROOT_CONFIG_FILENAME = 'cordis.yml'
 const TELEMETRY_ROW_ID = 'session-telemetry-otel'
