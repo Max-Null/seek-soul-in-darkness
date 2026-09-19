@@ -11,7 +11,7 @@
  * 且内核崩溃不会拖死 UI，可独立重启。
  */
 import { spawn } from 'node:child_process'
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, renameSync, statSync } from 'node:fs'
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -26,7 +26,16 @@ const HERE = dirname(fileURLToPath(import.meta.url))
  * 「插件中心 405」正是这样一个被藏住的错误，只能靠外部探测反推根因。
  * 与 ssid.log 同目录，便于并排对照。
  */
-const CHILD_LOG_PATH = process.env.SSID_KERNEL_CHILD_LOG ?? join(homedir(), '.ssid', 'kernel-child.log')
+const CHILD_LOG_PATH = process.env.SSID_KERNEL_CHILD_LOG
+  // **隔离实例只设 SSID_LOG_FILE 时，子进程日志必须跟着走。** 否则内核日志落进**默认
+  // 实例**的 kernel-child.log，两个实例的输出混在一个文件里：出问题时看到的「另一个实例
+  // 的行」会被当成当前实例的行为，反过来也一样（2026-09-20 实测：隔离实例的
+  // `[dsh-remote] deviceId` 出现在生产日志尾部）。
+  // 派生规则 `<name>.log` → `<name>.kernel.log`：同目录、名字可对照，且**不用多设一个
+  // 环境变量**——隔离三件套里设了 DSH_HOME / user-data-dir / 日志，日志这一个就该管到两处。
+  ?? (process.env.SSID_LOG_FILE === undefined
+    ? join(homedir(), '.ssid', 'kernel-child.log')
+    : `${process.env.SSID_LOG_FILE.replace(/\.log$/i, '')}.kernel.log`)
 
 /**
  * 子进程日志的上限。内核每次 boot 都会打不少输出（codegraph MCP 是 DEBUG 级），
@@ -175,6 +184,34 @@ export function startKernelHost({
       if (settled) return
       settled = true
       clearTimeout(timer)
+      // 把「这一刻的内核地址」落成一个文件，供本地工具直接读。
+      //
+      // **为什么要落盘**：内核的 web 地址带一次性 token，只经 IPC 到达主进程——GUI 之外
+      // 的任何人（测试脚本、诊断工具、另一个 agent 会话）都拿不到它，只能带
+      // `--remote-debugging-port` 开 CDP、读 cookie、再反推地址。2026-09-20 实测走完这一整
+      // 圈只为拿一个 URL。而**壳本来就知道**：ready 消息里就带着它。
+      //
+      // **为什么放 $DSH_HOME**：隔离实例已经用 DSH_HOME 划了自己的地盘，落在这里天然带一份、
+      // 不会串到默认实例；而且用时只要知道 DSH_HOME 就能找到，不必再引入第四个隔离变量。
+      //
+      // 失败不阻断启动：这只是诊断便利，拿不到就退回老办法。
+      try {
+        const dshHome = process.env.DSH_HOME ?? join(homedir(), '.dsh')
+        mkdirSync(dshHome, { recursive: true })
+        writeFileSync(join(dshHome, 'ssid-runtime.json'), `${JSON.stringify({
+          pid: msg.pid ?? null,
+          port: msg.port,
+          url: msg.url,
+          dshVersion: msg.dshVersion ?? null,
+          profile: process.env.SSID_PROFILE_NAME ?? 'ssid',
+          dshHome,
+          logFile: process.env.SSID_LOG_FILE ?? null,
+          kernelLogFile: CHILD_LOG_PATH,
+          startedAt: new Date().toISOString(),
+        }, null, 2)}\n`)
+      } catch (cause) {
+        log(`ssid: 写 ssid-runtime.json 失败 ${String(cause)}\n`)
+      }
       resolveReady({ port: msg.port, url: msg.url, dshVersion: msg.dshVersion, pid: msg.pid })
       return
     }
