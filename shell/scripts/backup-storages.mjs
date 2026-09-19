@@ -9,6 +9,12 @@
  *
  * 本脚本不修根因，只保证「丢了还能捞回来」。只读源文件、只写备份目录。
  *
+ * **覆盖范围（2026-09-19 补齐）**：`~/.dsh` 那半边只覆盖 global 记忆（`memory.json`，
+ * 实测 55 KB / 18 条）；记忆的**主体**其实在**工作区**里——dsh-memory 的 project 命名空间
+ * 落在 `<工作区>/.dsh/storages/memory_project_<hash>.json`（实测 212 KB / 108 条），
+ * 此前完全不在扫描范围内。工作区路径取自 `~/.dsh/storages/workspace.json` 的
+ * `tables.workspaces[*].path`，备份到 `_workspaces/<盘符>/<路径…>/`。
+ *
  * 用法：
  *   node scripts/backup-storages.mjs                 # 备份一份、保留最近 10 份
  *   node scripts/backup-storages.mjs --keep 20       # 改保留份数
@@ -35,12 +41,44 @@ const argOf = (name, fallback) => {
 const KEEP = Number(argOf('keep', '10'))
 const DRY_RUN = process.argv.includes('--dry-run')
 
-/** 收集要备份的文件：storages 下的 json 与小目录，加上 ~/.dsh 根的自建存储。 */
+/** 值得快照的状态文件：排除可重建的大文件与历史遗留副本（`.bak-` / `.polluted-` / `.pre-`）。 */
+const isStateJson = name =>
+  name.endsWith('.json')
+  && !EXCLUDE_FILES.has(name)
+  && !name.includes('.bak-')
+  && !name.includes('.polluted-')
+  && !name.includes('.pre-')
+
+/** 备份目录内的相对路径：去掉盘符冒号后按层级摊开，保持可读。 */
+const workspaceKey = dir =>
+  path.join('_workspaces', ...dir.replace(/^([A-Za-z]):/, '$1').split(/[\\/]/).filter(Boolean))
+
+/**
+ * 工作区路径清单——来自 `~/.dsh/storages/workspace.json` 的 `tables.workspaces[*].path`。
+ * 读不出来就返回空数组：工作区那半边缺席，不该让 `~/.dsh` 这半边跟着一起失败。
+ */
+function workspacePaths() {
+  const file = path.join(STORAGES, 'workspace.json')
+  if (!fs.existsSync(file)) return []
+  try {
+    const doc = JSON.parse(fs.readFileSync(file, 'utf8'))
+    const workspaces = doc?.tables?.workspaces ?? {}
+    const out = []
+    for (const record of Object.values(workspaces)) {
+      if (typeof record?.path === 'string' && record.path !== '') out.push(record.path)
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
+/** 收集要备份的文件：storages 下的 json 与小目录、~/.dsh 根的自建存储、各工作区的记忆。 */
 function collect() {
   const files = []
   if (fs.existsSync(STORAGES)) {
     for (const entry of fs.readdirSync(STORAGES, { withFileTypes: true })) {
-      if (entry.isFile() && entry.name.endsWith('.json') && !EXCLUDE_FILES.has(entry.name) && !entry.name.includes('.bak-') && !entry.name.includes('.polluted-') && !entry.name.includes('.pre-')) {
+      if (entry.isFile() && isStateJson(entry.name)) {
         files.push({ from: path.join(STORAGES, entry.name), to: entry.name })
       }
       if (entry.isDirectory() && !EXCLUDE_DIRS.has(entry.name)) {
@@ -52,8 +90,18 @@ function collect() {
     }
   }
   for (const entry of fs.readdirSync(DSH, { withFileTypes: true })) {
-    if (entry.isFile() && entry.name.endsWith('.json') && !entry.name.startsWith('.')) {
+    if (entry.isFile() && isStateJson(entry.name) && !entry.name.startsWith('.')) {
       files.push({ from: path.join(DSH, entry.name), to: path.join('_home', entry.name) })
+    }
+  }
+  // 工作区记忆（dsh-memory 的 project 命名空间）——记忆的主体在这里，不在 ~/.dsh
+  for (const workspace of workspacePaths()) {
+    const storages = path.join(workspace, '.dsh', 'storages')
+    if (!fs.existsSync(storages)) continue
+    for (const entry of fs.readdirSync(storages, { withFileTypes: true })) {
+      if (entry.isFile() && isStateJson(entry.name)) {
+        files.push({ from: path.join(storages, entry.name), to: path.join(workspaceKey(workspace), entry.name) })
+      }
     }
   }
   return files
