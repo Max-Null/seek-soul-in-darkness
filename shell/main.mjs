@@ -1666,6 +1666,12 @@ async function start() {
 
   /** 生成遮罩的注入脚本。文案与浓度按**当时**的配置生成——改了 notify.json，
    *  下一次开启即生效，不必重启壳。 */
+  // 文字用「白字 + 一圈黑晕」而不是深色底板：底板会把正中间那块内容挡住，而
+  // 「看得见底下的动静」正是遮罩存在的意义。光晕只作用在笔画周围——暗背景上
+  // 白字本来就清楚（黑晕融进背景），亮背景上靠这圈晕把字从浅灰里抠出轮廓。
+  // 多层是为了做出柔和的过渡：单层硬阴影在大字号下会有明显锯齿边。
+  // 定义在这里（而不是注入脚本内部）是为了能作为常量插值进下面的模板。
+  const MASK_TEXT_HALO = 'text-shadow:0 0 3px rgba(0,0,0,.92),0 0 6px rgba(0,0,0,.82),0 0 12px rgba(0,0,0,.68),0 0 22px rgba(0,0,0,.5),0 1px 2px rgba(0,0,0,.9)'
   const buildMaskScript = (text, alpha, blur) => `(() => {
   const ID = ${JSON.stringify(MASK_DOM_ID)}
   const old = document.getElementById(ID)
@@ -1682,11 +1688,12 @@ async function start() {
     'gap:22px', 'color:#eaf1f8', 'user-select:none', 'cursor:default',
     'font-family:"Microsoft YaHei UI","Segoe UI",system-ui,sans-serif'].join(';')
   const mk = (tag, css, txt) => { const el = document.createElement(tag); el.style.cssText = css; if (txt) el.textContent = txt; return el }
-  const title = mk('div', 'max-width:82%;padding:0 24px;font-size:34px;font-weight:600;line-height:1.5;letter-spacing:2px;text-align:center;word-break:break-word;text-shadow:0 2px 18px rgba(0,0,0,.8),0 1px 3px rgba(0,0,0,.95)', ${JSON.stringify(text)})
-  const hint = mk('div', 'font-size:13px;letter-spacing:.5px;opacity:.62;text-shadow:0 1px 8px rgba(0,0,0,.85)', '按住下方按钮 2 秒解除')
-  const btn = mk('button', 'position:relative;margin-top:6px;padding:12px 32px;overflow:hidden;font:inherit;font-size:15px;color:inherit;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.24);border-radius:999px;box-shadow:0 2px 14px rgba(0,0,0,.4);cursor:pointer;user-select:none')
+  const title = mk('div', 'max-width:82%;padding:0 24px;font-size:34px;font-weight:600;line-height:1.5;letter-spacing:2px;text-align:center;word-break:break-word;color:#fff;${MASK_TEXT_HALO}', ${JSON.stringify(text)})
+  const hint = mk('div', 'font-size:13px;letter-spacing:.5px;color:rgba(255,255,255,.92);${MASK_TEXT_HALO}', '按住下方按钮 2 秒解除')
+  // 按钮保留半透明底板：它是控件，需要明确的可点边界；它小，不挡动静。
+  const btn = mk('button', 'position:relative;margin-top:6px;padding:12px 32px;overflow:hidden;font:inherit;font-size:15px;color:#fff;background:rgba(8,11,18,.55);border:1px solid rgba(255,255,255,.28);border-radius:999px;box-shadow:0 2px 14px rgba(0,0,0,.4);cursor:pointer;user-select:none;${MASK_TEXT_HALO}')
   btn.type = 'button'
-  const fill = mk('div', 'position:absolute;inset:0;width:0;background:rgba(90,160,255,.38);pointer-events:none')
+  const fill = mk('div', 'position:absolute;inset:0;width:0;background:rgba(90,160,255,.5);pointer-events:none')
   const label = mk('span', 'position:relative', '按住解除')
   btn.appendChild(fill); btn.appendChild(label)
   // 长按满 2 秒才解除；单击什么都不做——防的是路过的人随手点掉。
