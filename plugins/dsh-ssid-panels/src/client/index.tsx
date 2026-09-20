@@ -163,6 +163,8 @@ const STRINGS = {
     maskHotkeyDesc: 'Electron accelerator 语法，如 Control+Alt+M；保存后立即生效',
     maskLookTitle: '遮罩观感',
     maskLookDesc: '浓度越小越透（看得见底下的动静）· 模糊半径越大越糊（越读不出内容）',
+    maskPasscodeTitle: '解除口令',
+    maskPasscodeDesc: '留空则不设防（长按 2 秒直接解除）。设了之后托盘、快捷键、长按三个入口都要求输入口令。它不是安全边界——口令明文存在 notify.json 里，忘了就改文件删掉这一项',
     saved: '✓ 已保存',
     saveFail: '保存失败：',
     sessionRootTitle: '会话存储',
@@ -266,6 +268,8 @@ const STRINGS = {
     maskHotkeyDesc: 'Electron accelerator syntax, e.g. Control+Alt+M; takes effect immediately',
     maskLookTitle: 'Mask look',
     maskLookDesc: 'Opacity: lower is more see-through · Blur radius: higher is less readable',
+    maskPasscodeTitle: 'Release passcode',
+    maskPasscodeDesc: 'Empty = no lock (hold 2s releases). When set, the tray item, the shortcut and the hold button all require it. Not a security boundary — stored in plain text in notify.json; forgot it? edit the file and remove the key',
     saved: '✓ Saved',
     saveFail: 'Save failed: ',
     sessionRootTitle: 'Session storage',
@@ -561,7 +565,7 @@ interface NotifyConfig {
   approval: boolean
   keepAwake: boolean
   keepAwakeTailMs: number
-  mask: { text: string, hotkey: string, alpha: number, blur: number }
+  mask: { text: string, hotkey: string, alpha: number, blur: number, passcode: string }
 }
 
 /** 纯开关的键（有嵌套的 mask 不在其中，它走输入行）。 */
@@ -686,6 +690,15 @@ function NotifySettings(): ReactNode {
         if (!Number.isFinite(alpha) || !Number.isFinite(blur)) return
         save({ mask: { alpha, blur } })
       },
+    }),
+    // 口令可以清空（= 不设防），所以这里不像别的输入框那样拦空值。
+    inputRow({
+      labelKey: 'maskPasscodeTitle',
+      descKey: 'maskPasscodeDesc',
+      value: config.mask.passcode,
+      placeholder: '（留空 = 不设防）',
+      width: 200,
+      commit: (raw) => { save({ mask: { passcode: raw } }) },
     }),
     msg === ''
       ? null

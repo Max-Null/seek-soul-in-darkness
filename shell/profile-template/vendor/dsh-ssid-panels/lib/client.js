@@ -165,6 +165,8 @@ window.__ModuleLoader__.load({
 				maskHotkeyDesc: "Electron accelerator 语法，如 Control+Alt+M；保存后立即生效",
 				maskLookTitle: "遮罩观感",
 				maskLookDesc: "浓度越小越透（看得见底下的动静）· 模糊半径越大越糊（越读不出内容）",
+				maskPasscodeTitle: "解除口令",
+				maskPasscodeDesc: "留空则不设防（长按 2 秒直接解除）。设了之后托盘、快捷键、长按三个入口都要求输入口令。它不是安全边界——口令明文存在 notify.json 里，忘了就改文件删掉这一项",
 				saved: "✓ 已保存",
 				saveFail: "保存失败：",
 				sessionRootTitle: "会话存储",
@@ -268,6 +270,8 @@ window.__ModuleLoader__.load({
 				maskHotkeyDesc: "Electron accelerator syntax, e.g. Control+Alt+M; takes effect immediately",
 				maskLookTitle: "Mask look",
 				maskLookDesc: "Opacity: lower is more see-through · Blur radius: higher is less readable",
+				maskPasscodeTitle: "Release passcode",
+				maskPasscodeDesc: "Empty = no lock (hold 2s releases). When set, the tray item, the shortcut and the hold button all require it. Not a security boundary — stored in plain text in notify.json; forgot it? edit the file and remove the key",
 				saved: "✓ Saved",
 				saveFail: "Save failed: ",
 				sessionRootTitle: "Session storage",
@@ -740,6 +744,15 @@ window.__ModuleLoader__.load({
 						alpha,
 						blur
 					} });
+				}
+			}), inputRow({
+				labelKey: "maskPasscodeTitle",
+				descKey: "maskPasscodeDesc",
+				value: config.mask.passcode,
+				placeholder: "（留空 = 不设防）",
+				width: 200,
+				commit: (raw) => {
+					save({ mask: { passcode: raw } });
 				}
 			}), msg === "" ? null : (0, react.createElement)("div", { style: {
 				fontSize: 12,

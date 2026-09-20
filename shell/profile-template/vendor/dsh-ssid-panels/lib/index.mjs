@@ -642,7 +642,8 @@ const NOTIFY_DEFAULTS = {
 		text: "程序执行中，勿动",
 		hotkey: "Control+Alt+M",
 		alpha: .12,
-		blur: 10
+		blur: 10,
+		passcode: ""
 	}
 };
 function readNotifyConfig() {
@@ -932,6 +933,7 @@ function apply(ctx) {
 				const patch = maskPatch;
 				if (typeof patch["text"] === "string") next.mask.text = patch["text"];
 				if (typeof patch["hotkey"] === "string") next.mask.hotkey = patch["hotkey"].trim();
+				if (typeof patch["passcode"] === "string") next.mask.passcode = patch["passcode"];
 				const alpha = patch["alpha"];
 				if (typeof alpha === "number" && Number.isFinite(alpha)) next.mask.alpha = Math.min(1, Math.max(0, alpha));
 				const blur = patch["blur"];

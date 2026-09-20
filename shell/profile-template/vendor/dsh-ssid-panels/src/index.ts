@@ -198,8 +198,10 @@ const NOTIFY_DEFAULTS = {
   keepAwake: true,
   keepAwakeTailMs: 60000,
   // 盖在思灵窗口上的毛玻璃提示层：alpha 越小越透（看得见底下的动静），
-  // blur 越大越糊（越读不出内容）。
-  mask: { text: '程序执行中，勿动', hotkey: 'Control+Alt+M', alpha: 0.12, blur: 10 },
+  // blur 越大越糊（越读不出内容）。passcode 是解除口令，空串 = 不设防。
+  // 注意它不是安全边界——明文存这个文件里，能读文件的人就能读到；它挡的是
+  // 「知道要长按但不愿翻配置」的人。
+  mask: { text: '程序执行中，勿动', hotkey: 'Control+Alt+M', alpha: 0.12, blur: 10, passcode: '' },
 }
 type NotifyConfig = typeof NOTIFY_DEFAULTS
 
@@ -501,6 +503,9 @@ export function apply(ctx: Context): void {
         const patch = maskPatch as Record<string, unknown>
         if (typeof patch['text'] === 'string') next.mask.text = patch['text']
         if (typeof patch['hotkey'] === 'string') next.mask.hotkey = patch['hotkey'].trim()
+        // 口令原样存：不 trim、不做任何"看起来更安全"的处理——它不是安全边界，
+        // 假装加密只会让人误以为它挡得住读文件的人（逃生通道也依赖它是明文可改）。
+        if (typeof patch['passcode'] === 'string') next.mask.passcode = patch['passcode']
         // 浓度两个值都要夹到合法域：越界的 alpha 会让遮罩全透明或全黑，越界的
         // blur 直接把面板拖垮——写入前挡掉比事后排查便宜。
         const alpha = patch['alpha']

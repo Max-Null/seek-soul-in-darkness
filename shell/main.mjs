@@ -987,7 +987,12 @@ async function start() {
     // alpha / blur 是遮罩观感的两个旋钮（都是「越小越透、越大越糊」的反面）：
     //   alpha 越小越透（看得见底下的动静），blur 越大越糊（越读不出内容）。
     // 0.12 / 10px 的落点是「布局轮廓看得出来、一个字都读不出」。改完下次开启生效。
-    mask: { text: '程序执行中，勿动', hotkey: 'Control+Alt+M', alpha: 0.12, blur: 10 },
+    //
+    // passcode 是**解除口令**，空串 = 不设防（长按 2 秒直接解除）。非空时三个
+    // 解除入口（托盘项 / 全局快捷键 / 长按按钮）都只把口令输入框调出来，比对
+    // 通过才解除。注意它**不是安全边界**：明文存在这个文件里，能读文件的人就
+    // 能读到；它挡的是「知道要长按但不愿翻配置」的人。
+    mask: { text: '程序执行中，勿动', hotkey: 'Control+Alt+M', alpha: 0.12, blur: 10, passcode: '' },
   }
   const readNotifyConfig = () => {
     try {
@@ -1672,7 +1677,7 @@ async function start() {
   // 多层是为了做出柔和的过渡：单层硬阴影在大字号下会有明显锯齿边。
   // 定义在这里（而不是注入脚本内部）是为了能作为常量插值进下面的模板。
   const MASK_TEXT_HALO = 'text-shadow:0 0 3px rgba(0,0,0,.92),0 0 6px rgba(0,0,0,.82),0 0 12px rgba(0,0,0,.68),0 0 22px rgba(0,0,0,.5),0 1px 2px rgba(0,0,0,.9)'
-  const buildMaskScript = (text, alpha, blur) => `(() => {
+  const buildMaskScript = (text, alpha, blur, passcode) => `(() => {
   const ID = ${JSON.stringify(MASK_DOM_ID)}
   const old = document.getElementById(ID)
   if (old) old.remove()
@@ -1688,33 +1693,71 @@ async function start() {
     'gap:22px', 'color:#eaf1f8', 'user-select:none', 'cursor:default',
     'font-family:"Microsoft YaHei UI","Segoe UI",system-ui,sans-serif'].join(';')
   const mk = (tag, css, txt) => { const el = document.createElement(tag); el.style.cssText = css; if (txt) el.textContent = txt; return el }
+  const PASSCODE = ${JSON.stringify(passcode)}
+  const LOCKED = PASSCODE !== ''
   const title = mk('div', 'max-width:82%;padding:0 24px;font-size:34px;font-weight:600;line-height:1.5;letter-spacing:2px;text-align:center;word-break:break-word;color:#fff;${MASK_TEXT_HALO}', ${JSON.stringify(text)})
-  const hint = mk('div', 'font-size:13px;letter-spacing:.5px;color:rgba(255,255,255,.92);${MASK_TEXT_HALO}', '按住下方按钮 2 秒解除')
+  // 提示语按有没有口令分叉：不说清楚的话，用户会以为长按就能解，然后卡在那里。
+  const hint = mk('div', 'font-size:13px;letter-spacing:.5px;color:rgba(255,255,255,.92);${MASK_TEXT_HALO}', LOCKED ? '按住下方按钮 2 秒，再输入口令解除' : '按住下方按钮 2 秒解除')
   // 按钮保留半透明底板：它是控件，需要明确的可点边界；它小，不挡动静。
   const btn = mk('button', 'position:relative;margin-top:6px;padding:12px 32px;overflow:hidden;font:inherit;font-size:15px;color:#fff;background:rgba(8,11,18,.55);border:1px solid rgba(255,255,255,.28);border-radius:999px;box-shadow:0 2px 14px rgba(0,0,0,.4);cursor:pointer;user-select:none;${MASK_TEXT_HALO}')
   btn.type = 'button'
   const fill = mk('div', 'position:absolute;inset:0;width:0;background:rgba(90,160,255,.5);pointer-events:none')
   const label = mk('span', 'position:relative', '按住解除')
   btn.appendChild(fill); btn.appendChild(label)
-  // 长按满 2 秒才解除；单击什么都不做——防的是路过的人随手点掉。
+
+  // 口令输入区：初始隐藏，有口令时长按满 2 秒才现身。
+  const panel = mk('div', 'display:none;flex-direction:column;align-items:center;gap:8px;margin-top:4px')
+  const input = mk('input', 'width:220px;height:38px;padding:0 14px;border-radius:10px;border:1px solid rgba(255,255,255,.35);background:rgba(8,11,18,.62);color:#fff;font:inherit;font-size:16px;letter-spacing:2px;text-align:center;outline:none;${MASK_TEXT_HALO}')
+  input.type = 'password'
+  input.autocomplete = 'off'
+  input.placeholder = '口令'
+  const err = mk('div', 'display:none;font-size:12px;color:#ffb4b4;${MASK_TEXT_HALO}', '口令不对')
+  const go = mk('button', 'padding:8px 22px;font:inherit;font-size:14px;color:#fff;background:rgba(8,11,18,.55);border:1px solid rgba(255,255,255,.28);border-radius:999px;cursor:pointer;${MASK_TEXT_HALO}', '解除')
+  go.type = 'button'
+  panel.appendChild(input); panel.appendChild(err); panel.appendChild(go)
+
+  const release = () => { console.log('__SSID_MASK_RELEASE__') }
+  const submit = () => {
+    if (input.value === PASSCODE) { release(); return }
+    err.style.display = 'block'
+    input.value = ''
+    input.focus()
+  }
+  const openPanel = () => {
+    panel.style.display = 'flex'
+    err.style.display = 'none'
+    input.focus()
+  }
+  // 供壳调用：托盘项与全局快捷键在有口令时**只负责把输入框调出来**，不直接解除
+  // ——否则口令形同虚设（托盘一点就开了）。
+  window.__ssidMaskPrompt = openPanel
+
+  // 长按满 2 秒：无口令直接解除；有口令则请出输入框。
   const HOLD = 2000
   let raf = null, began = 0
   const stop = () => { if (raf !== null) { cancelAnimationFrame(raf); raf = null } fill.style.width = '0%' }
   const tick = () => {
     const ratio = Math.min(1, (performance.now() - began) / HOLD)
     fill.style.width = (ratio * 100) + '%'
-    if (ratio >= 1) { stop(); console.log('__SSID_MASK_RELEASE__'); return }
+    if (ratio >= 1) { stop(); if (LOCKED) openPanel(); else release(); return }
     raf = requestAnimationFrame(tick)
   }
   btn.addEventListener('mousedown', (e) => { e.preventDefault(); if (raf !== null) return; began = performance.now(); raf = requestAnimationFrame(tick) })
   btn.addEventListener('mouseup', stop)
   btn.addEventListener('mouseleave', stop)
   btn.addEventListener('click', (e) => e.preventDefault())
+  go.addEventListener('click', submit)
+  input.addEventListener('keydown', (e) => {
+    // 输入框里的按键必须放行，并且拦住冒泡——下面那条 keydown 拦截是按
+    // 「target 是不是输入框」来区分的，不该让这里的事件再走一遍它。
+    e.stopPropagation()
+    if (e.key === 'Enter') submit()
+  })
   window.addEventListener('blur', stop)
-  d.appendChild(title); d.appendChild(hint); d.appendChild(btn)
-  // 误触防线：键盘 / 右键 / 拖拽一律挡掉。全局快捷键是系统级的，不受影响。
+  d.appendChild(title); d.appendChild(hint); d.appendChild(btn); d.appendChild(panel)
+  // 误触防线：键盘 / 右键 / 拖拽一律挡掉——**输入框除外**，否则口令根本打不进去。
   d.addEventListener('contextmenu', (e) => e.preventDefault())
-  d.addEventListener('keydown', (e) => e.preventDefault())
+  d.addEventListener('keydown', (e) => { if (e.target === input) return; e.preventDefault() })
   d.addEventListener('dragstart', (e) => e.preventDefault())
   document.body.appendChild(d)
   return true
@@ -1733,10 +1776,23 @@ async function start() {
         String(cfg.text ?? ''),
         Number.isFinite(alpha) ? alpha : 0.12,
         Number.isFinite(blur) ? blur : 10,
+        String(cfg.passcode ?? ''),
       ))
       .catch((error) => {
         safeLog(`[mask] inject failed: ${error instanceof Error ? error.message : String(error)}\n`)
       })
+  }
+
+  /** 当前生效的解除口令；空串 = 不设防。每次现读，所以设置页改完下一次解除即生效。 */
+  const maskPasscode = () => String(readNotifyConfig().mask.passcode ?? '')
+
+  /** 有口令时，托盘项与全局快捷键**只把口令输入框调出来**，不直接解除——否则
+   *  口令形同虚设（托盘一点就开了）。真正的比对在页面里做，对了才回传解除信号。 */
+  const requestMaskPasscode = () => {
+    if (!maskActive || mainView.webContents.isDestroyed()) return
+    void mainView.webContents
+      .executeJavaScript('window.__ssidMaskPrompt && window.__ssidMaskPrompt()')
+      .catch(() => {})
   }
 
   const hideMask = (why) => {
@@ -1760,8 +1816,9 @@ async function start() {
   }
 
   const toggleMask = () => {
-    if (maskActive) { hideMask('toggle'); return }
-    showMask()
+    if (!maskActive) { showMask(); return }
+    if (maskPasscode() !== '') { requestMaskPasscode(); return }
+    hideMask('toggle')
   }
 
   // 页面重载（刷新 / 重启内核）会把注入的节点冲掉——只要壳认为还盖着，就补回去。
@@ -1787,7 +1844,11 @@ async function start() {
       click: () => { startScreenshotCapture() },
     },
     {
-      label: maskActive ? '解除执行中遮罩' : '显示执行中遮罩',
+      // 有口令时这一项不是「解除」而是「请出输入框」——文案要跟着说清楚，
+      // 否则用户点了没反应会以为坏了。
+      label: !maskActive
+        ? '显示执行中遮罩'
+        : (maskPasscode() !== '' ? '执行中遮罩（需口令解除）' : '解除执行中遮罩'),
       click: () => { toggleMask() },
     },
     { type: 'separator' },
