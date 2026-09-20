@@ -8,7 +8,7 @@
     "start": "electron .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "smoke": "node --import tsx/esm boot-smoke.ts",
-    "test": "node --import tsx/esm --test tests/profile-merge.spec.ts tests/codegraph-adapt.spec.ts tests/kernel-child-bridge.spec.ts tests/profile-name.spec.ts scripts/check-bom.spec.mjs scripts/check-legacy-names.spec.mjs scripts/check-cot-leakage.spec.mjs scripts/check-loader-external.spec.mjs scripts/check-plugin-peers.spec.mjs scripts/check-vendor-sync.spec.mjs scripts/sync-vendor.spec.mjs",
+    "test": "node --import tsx/esm --test tests/profile-merge.spec.ts tests/codegraph-adapt.spec.ts tests/kernel-child-bridge.spec.ts tests/profile-name.spec.ts tests/keep-awake.spec.mjs scripts/check-bom.spec.mjs scripts/check-legacy-names.spec.mjs scripts/check-cot-leakage.spec.mjs scripts/check-loader-external.spec.mjs scripts/check-plugin-peers.spec.mjs scripts/check-vendor-sync.spec.mjs scripts/sync-vendor.spec.mjs",
     "test:check-rules": "node --test scripts/check-bom.spec.mjs scripts/check-legacy-names.spec.mjs scripts/check-cot-leakage.spec.mjs scripts/check-loader-external.spec.mjs scripts/check-plugin-peers.spec.mjs scripts/check-vendor-sync.spec.mjs",
     "test:profile-merge": "node --import tsx/esm --test tests/profile-merge.spec.ts",
     "test:codegraph-adapt": "node --import tsx/esm --test tests/codegraph-adapt.spec.ts",

@@ -59,6 +59,7 @@
 | 2026-09-18 | §3（新增 `SSID_PROFILE_NAME`） | **profile 名参数化**：profile 目录与隔离会话根都从 `shell/lib/profile-name.mjs` 派生（默认 `ssid`，与历史路径逐字一致），并行实例各有各的 profile 与 `sessions-<名>`；同条记下隔离三件套的完整用法与「无 GUI 冒烟」先行验证法 | 用户提议「profile 放 `profiles/ssid-dev`」→ 查证壳里 profile 名写死（`kernel.ts` / `main.mjs`），遂参数化（见 `docs/决策/2026-09-18-profile名参数化.md`） |
 | 2026-09-18 | §7 坑 #36（新增） | 新增「**「vendor 四份逐文件一致」在 Windows 上必须对行尾码免疫**」：`check-vendor-sync` 按字节算指纹，而源/模板是 git 检出（CRLF）、profile 里的实体由 **pnpm 物化**（LF）——门稳定报 6 处「内容漂移」而四份内容全等，且每轮 `pnpm install` 都会把它造回来，属**结构性不可维持**的假信号。指纹改为只对可解码 UTF-8 文本归一 CRLF/孤立 CR（二进制逐字节），并补 `scripts/check-vendor-sync.spec.mjs` 四条自测；同批把 dev profile 的 `dsh-context` 0.53.1 拉平到 0.53.3 | v0.3.3 发版前置核查（用户要求「确认插件是否最新、SSiD 端修改是否都处理好了」） |
 | 2026-09-21 | §7 坑 #37（新增） | 新增「**读者要据此挑动作时，「差异」的方向不是修饰、是判据本身**」——`check-profile-sync` 判定 3（同名不同版）原只报「声明不同」，而 B 落后于 A 是可预期的稳态、**B 超前于 A** 才是坑（部署会被归档包覆盖，必须补进 template）；不分方向会把读者推向 `pnpm install`，对后者**恰是错的**（静默降回、抹掉必须保住的声明）。处置 = 判定 3 引入 `compareVersions`（复用 `lib/profile-merge.mjs` 既有语义，`file:`/`git:` 等非 semver 退回中性文案）；同条记下验证纪律——**超前那一支必须用临时 `DSH_HOME` 造例**，真实 profile 只会给出落后 | 用户提议「升级 skill 和门」→ 查证发现该文件开头第 11 行的方向区分要求只落到了判定 2 |
+| 2026-09-21 | §3（新增「壳侧配置文件」小节）/ §7 坑 #38（新增） | 新增**执行期间保持系统不唤醒**（`powerSaveBlocker('prevent-display-sleep')` + 现成的 `turn/start`/`turn/end` 事件：任意 `reasonKind` 都释放、并发计数、结束后留 60s 尾巴、内核退出兜底、遮罩持有正交）与**执行中遮罩**（只盖思灵窗口、托盘 + 全局快捷键双入口、遮罩上长按 2 秒解除以防随手点掉、开遮罩自动保活、文案可配）。判据陷阱记入坑 #38：保活与完成通知共用同一批事件但语义相反（**触发** vs **释放**），照抄通知的 `completed` 判定会让出错或手动停止之后永不释放。状态机抽到 `shell/lib/keep-awake.mjs` + `tests/keep-awake.spec.mjs` 九条单测（并发、尾巴撤换、多余 end、配置关闭）。**同批实测**：`Control+Alt+L` / `Control+Shift+L` / `Control+Shift+F12` 在本机均已被别的程序占用，默认快捷键取实测空闲的 `Control+Alt+M`；`applyGlobalHotkeys()` 收编为唯一注册入口（`unregisterAll()` 是全局动作），`mask` 嵌套配置按层合并 | 用户提出「有会话进行时保持电脑不息屏」+「设置了目标去吃饭时希望跑完而不是睡眠」+「点击后出现遮罩显示『程序执行中，勿动』，文案可自定义」 |
 
 ## 工作区规范（布局 + 放置规则，2026-08-29 整理定稿）
 
@@ -196,6 +197,19 @@ seek-soul-in-darkness/
 **并行开第二个实例（隔离三件套，2026-09-13 首验 / 2026-09-18 参数化）**：`--user-data-dir=<独立目录>`（独立单实例锁）+ `DSH_HOME=<独立目录>`（独立 profile、storages、会话根）+ `SSID_LOG_FILE=<独立文件>`（独立日志），与运行中的实例零冲突。profile 目录用 junction 指回真实的那份即可零拷贝共用插件实体（`node_modules` 一个 junction 就够，配置文件拷副本，写入因此落副本）。`SSID_PROFILE_NAME` 让"第二个实例"有自己的名字与自己的会话根，不必再借用 `ssid`。
 
 **无 GUI 的先行验证**：`DSH_HOME=<隔离> SSID_PROFILE_NAME=<名> npm run smoke`——不起 Electron、不占单实例锁，隔离 home 里会落下 `profiles/<名>`、`storages/`，而真实环境分毫不动（实测见 `docs/决策/2026-09-18-profile名参数化.md`）。
+
+### 壳侧配置文件（`~/.ssid/*.json`）
+
+| 文件 | 键（默认值） | 作用 |
+|---|---|---|
+| `notify.json` | `enabled`(true) / `replyDone` / `question` / `approval` | 窗口失焦时的 Windows 通知与音效；**文件不存在 = 全开** |
+| 同上 | `keepAwake`(true) / `keepAwakeTailMs`(60000) | 执行期间保持系统不睡眠、屏幕不息（判据陷阱见 §7 坑 #38）。尾巴 = 「一轮结束之后仍保持多久」，用来覆盖目标模式的轮次空隙——没有它，连续轮次会在缝隙里释放又立刻重开 |
+| 同上 | `mask.text`（「程序执行中，勿动」）/ `mask.hotkey`(`Control+Alt+M`) | 执行中遮罩的文案与切换快捷键。**改完要重启壳**（快捷键只在启动时注册一次） |
+| `screenshot.json` | `hideWindow`(true) / `hotkey`(`Control+Shift+A`) | 截图引用 |
+
+`mask` 是**嵌套对象**：读取时按「默认值 ← 用户值」逐层合并——浅合并在「用户只配了 `text`」时会把 `hotkey` 整条丢掉。
+
+**全局快捷键集中注册**：`applyGlobalHotkeys()` 是唯一入口。`globalShortcut.unregisterAll()` 是全局动作，各自为政会让后注册的把先注册的**静默抹掉**（保存截图设置那一步就足以让遮罩快捷键失效）。注册失败只落日志、不阻断启动——被别的软件占用是常态，本机实测 `Control+Alt+L`、`Control+Shift+L`、`Control+Shift+F12` 均已被占，默认值因此取实测空闲的 `Control+Alt+M`。
 
 ## 4. 插件升级流程（本次教训：**双处声明**）
 
@@ -386,6 +400,8 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 36. **「vendor 四份逐文件一致」在 Windows 上必须对行尾码免疫，否则是一条永远修不干净的门**（2026-09-18 v0.3.3 发版实测）：`check-vendor-sync` 原先按**字节**算 sha256，于是报出 6 处「内容漂移」——而逐份复核（归一化后取指纹 + 逐字节 CRLF/LF 计数）显示**四份内容完全相等**，差的只是行尾码：源与 `profile-template` 是 git 检出（`core.autocrlf=true` → **CRLF**），而 `~/.dsh/profiles/<p>/{vendor,node_modules}` 里那些实体是 **pnpm 物化**写出来的（**LF**）。判据是两处副本的**字节数与时间戳完全相同**（`vendor/<pkg>/x` 与 `node_modules/@max-null/<pkg>/x` 同为 3152 B、同一秒）——`sync-vendor` 用的是 `copyFileSync`（保留 CRLF），所以写 LF 的只可能是 pnpm 那一步。**结论**：这条硬性要求在此结构下**不可维持**——每次 `pnpm install` 都会把差异造回来，门报的是假信号，真漂移反而被淹没；而 `sync:vendor --apply` 修完下一轮 install 又打回 LF。**处置**：`lib/vendor-fingerprint.mjs` 的指纹改为只对**可解码 UTF-8 文本**归一 CRLF / 孤立 CR（含 NUL 或非法 UTF-8 序列的缓冲区按二进制逐字节算），内容差异（行尾之外的任何改动、末尾换行、空白）与从前一样照报；同步器与门共用该实现，因此两侧结论一致（`node scripts/sync-vendor.mjs` 的 dry-run 同时从 5 处假差异回到「全部一致」）。新增 `scripts/check-vendor-sync.spec.mjs` 四条自测守住这个语义。**同批的第二处假红**：`check-profile-sync` 报 `dsh-context` A=0.53.3 / B=0.53.1 —— dev profile 落后于 template，处置是 `pnpm install` 把它拉平（`Packages: +1 -71`，66 项声明改后逐项在位、bundles 33 项全在）。**顺带记下 web 侧的处置**：`sync:vendor --apply --web` 会覆盖 `~/.dsh/profiles/web/vendor` 里那份 `release-notes.md`（纯文档字节，对运行中的宿主无影响），而 `dsh-ssid-pwsh-retry` / `dsh-ssid-env` 在 web 侧**本就该缺**（SSiD 专属，门按 `profiles` 字段跳过），报「目标不存在」是设计如此。
 
 37. **读者要据此挑动作时，「差异」的方向不是修饰、是判据本身**（2026-09-21 修 `check-profile-sync`）：判定 3（两处同名不同版）原本只报「声明不同」，而**同一句话在两个方向上要求的动作恰好相反**——B 落后于 A 是可预期的稳态（部署时按 A 补上，多半不用动手），**B 超前于 A** 才是坑（下次部署会被归档包覆盖，必须补进 `profile-template`，铁律 5）。不分方向的文案把读者推向 `pnpm install`，而它对后者**恰恰是错的**：会把本机独有的新版本静默降回，正好抹掉那条必须保住的声明，代价要到下一次发版才显形（对照 #36：那次假红同样难以分辨，但错得安全）。该文件开头第 11 行本就写着「两个方向都要报，但文案必须区分」，判定 2（只在一侧存在）早已照做、判定 3 没做——**规则写在注释里，不会自动扩散到下一个同类分支**。**处置**：判定 3 引入 `compareVersions`，复用 `shell/lib/profile-merge.mjs` 的既有语义（含 pre-release；`file:`/`git:` 等非 semver 形态返回 `null` → 退回中性文案，不假装知道方向）。**验证要造例**：真实 profile 只会给出「落后」那一支，超前那支得用临时 `DSH_HOME` 造一份假 profile，两个方向各自命中才算测过。**通用判据**：写「A 与 B 不一致」这类检查前先问——读者会据此改哪一边？答案随方向变的，方向就必须进文案。
+
+38. **共用信号 ≠ 共用判据：把判定条件照抄到语义相反的地方，会静默走向反面**（2026-09-21 实现「执行期间不息屏」实测）：保活与完成通知共用同一批 `turn/start` / `turn/end` 事件，但**判据必须相反**——通知只挑 `reasonKind === 'completed'`（只有正常完成才值得打扰用户），保活要「**任何** `turn/end` 都释放」：`error` / `aborted`(user·parent·disposed·legacy·hook) / `interrupted` / `blocked` / `max-tokens` / `plugin-*` 都从这条路走。照抄通知的判定，结果是**出错或用户手动停止之后永不释放**，屏幕再也关不掉（最坏是烧屏）。同一处的第二个坑：`noteTurnEnd()` 必须排在「没记到 start 就 `return`」那个短路**之前**——该短路对通知无害（没 start 就没用时），对计数却是致命的（只加不减 = 永久持有）。**处置**：状态机抽到 `shell/lib/keep-awake.mjs`，副作用（`start`/`stop`/`readConfig`/计时器）全部注入，配 `tests/keep-awake.spec.mjs` 九条单测覆盖并发 turn、尾巴期内再起一轮、多余的 `turn/end`、配置关闭；这些序列靠手点界面凑不出来。**通用判据**：复用一段信号之前先问「我这边的语义是**触发**还是**释放**」——两者相反时，判定条件必须重写而不能沿用。相关：`docs/SSiD开发手册.md` §3「壳侧配置文件」、`shell/main.mjs` 的两个 `turn` 分支。
 
 ## 8. 文档索引
 

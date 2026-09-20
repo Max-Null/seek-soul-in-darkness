@@ -19,13 +19,14 @@
  */
 
 import { register } from 'tsx/esm/api'
-import { app, BrowserView, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, Notification, screen, Tray } from 'electron'
+import { app, BrowserView, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, Notification, powerSaveBlocker, screen, Tray } from 'electron'
 import { spawn, spawnSync } from 'node:child_process'
 import { appendFileSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { buildUpgradeReport, mergeUserPatch, snapshotProfileConfigs } from './lib/profile-merge.mjs'
+import { createKeepAwake } from './lib/keep-awake.mjs'
 import { resolveProfileName, sessionsRootDirName } from './lib/profile-name.mjs'
 import { CG_CONFIG_FILE, readCodeGraphConfig, resolveCodeGraphEnable, resolveCodeGraphWorkspace, writeCodeGraphConfig } from './lib/codegraph-adapt.mjs'
 import { startKernelHost } from './host-process.mjs'
@@ -964,6 +965,62 @@ async function start() {
     quitting = true
     void kernel.shutdown(0).catch(() => app.exit(0))
   }
+
+  // ── 壳层行为开关（~/.ssid/notify.json）─────────────────────────────────
+  // 一个文件管「壳在后台替你做的事」：通知场景 + 保活 + 遮罩文案。
+  //
+  // **必须定义在 try 块外**：内核子进程的 onExit（try 内）与托盘菜单、遮罩
+  // （try 外）都要用；try 内的 const 对后者是块级作用域，会 ReferenceError
+  // （2026-08-23 实锤两次，见上方 restartDsh / relaunchShell 的注释）。
+  const NOTIFY_CONFIG_PATH = join(homedir(), '.ssid', 'notify.json')
+  const DEFAULT_NOTIFY = {
+    enabled: true,          // 通知总开关
+    replyDone: true,
+    question: true,
+    approval: true,
+    keepAwake: true,        // 执行期间保持系统不睡眠、屏幕不息
+    keepAwakeTailMs: 60000, // 一轮结束后仍保持多久（覆盖目标模式的轮次空隙）
+    // 默认快捷键实测取 Control+Alt+M：本机上 Control+Alt+L 与 Control+Shift+L
+    // 都已被别的程序占用（globalShortcut.register 返回 false），注册失败会打
+    // 日志但功能静默不可用——所以默认值要挑实测空闲的组合。
+    mask: { text: '程序执行中，勿动', hotkey: 'Control+Alt+M' },
+  }
+  const readNotifyConfig = () => {
+    try {
+      const parsed = JSON.parse(readFileSync(NOTIFY_CONFIG_PATH, 'utf8'))
+      const base = parsed !== null && typeof parsed === 'object' ? parsed : {}
+      const mask = base.mask !== null && typeof base.mask === 'object' ? base.mask : {}
+      // mask 是嵌套对象：浅合并在「用户只配了 text」时会把 hotkey 整条丢掉，
+      // 故单独合并这一层。
+      return { ...DEFAULT_NOTIFY, ...base, mask: { ...DEFAULT_NOTIFY.mask, ...mask } }
+    } catch {
+      return { ...DEFAULT_NOTIFY, mask: { ...DEFAULT_NOTIFY.mask } }
+    }
+  }
+
+  // ── 保持系统唤醒（2026-09-21）──────────────────────────────────────────
+  // 场景：长任务或目标执行期间离开电脑（吃饭），Windows 按「无输入空闲」判定
+  // 息屏、进而睡眠，正在跑的执行会被打断。
+  //
+  // **与通知共用同一批 turn 事件，判据却相反**：通知只挑 reasonKind ===
+  // 'completed'（只有正常完成才值得打扰你），保活要「任何 turn/end 都释放」
+  // —— error / aborted(user·parent·disposed·legacy·hook) / interrupted /
+  // blocked / max-tokens / plugin-* 都从这条路走；照抄通知的判定会让出错或
+  // 手动停止之后**永不释放**，屏幕再也关不掉。
+  //
+  // 两个持有来源各自独立，任一需要就保活：执行中的 turn（多会话可并发，故
+  // 计数）、遮罩开启（屏幕黑了提示就白挂）。turn 全部结束后留一段尾巴——目标
+  // 模式的连续轮次之间有缝隙，没尾巴会在缝隙里释放又立刻重开。
+  // 状态机本体在 lib/keep-awake.mjs（纯逻辑，配 tests/keep-awake.spec.mjs 九条
+  // 单测）——并发计数、尾巴撤换、配置关闭这些序列在真实环境里凑不出来，只能靠
+  // 单测编排。这里只负责把 Electron 的 blocker 与 notify.json 接进去。
+  const keepAwake = createKeepAwake({
+    start: () => powerSaveBlocker.start('prevent-display-sleep'),
+    stop: (id) => { powerSaveBlocker.stop(id) },
+    readConfig: readNotifyConfig,
+    log: (text) => { safeLog(`ssid: ${text}`) },
+  })
+
   try {
     safeLog('ssid: phase bootKernel start\n')
     splashStep(2)
@@ -1121,13 +1178,16 @@ async function start() {
           },
           onExit: ({ code, signal }) => {
             safeLog(`ssid: kernel-child 退出 code=${String(code)} signal=${String(signal)}\n`)
+            // 内核没了就再没有 turn/end 可等：不在这里释放，保活会一直挂到壳退出
+            // ——用户看到的是「跑着跑着屏幕永远不关」。
+            keepAwake.releaseTurns('kernel-child exit')
           },
           capabilities: {
             restart: { invoke: () => { restartDsh() } },
             update: createShellUpdater(),
             screenshot: {
               trigger: () => { void startScreenshotCapture() },
-              apply: () => applyScreenshotHotkey(),
+              apply: () => applyGlobalHotkeys(),
             },
           },
         })
@@ -1165,7 +1225,7 @@ async function start() {
         update: createShellUpdater(),
         screenshot: {
           trigger: () => { void startScreenshotCapture() },
-          apply: () => applyScreenshotHotkey(),
+          apply: () => applyGlobalHotkeys(),
         },
       })
     }
@@ -1453,21 +1513,12 @@ async function start() {
   setInterval(() => { void syncTitlebarTheme() }, 5000)
 
   // ── 通知体系（2026-08-18）：窗口失焦时 Windows 通知 + 音效，配置驱动 ────
-  // 配置 ~/.ssid/notify.json：{ enabled, replyDone, question, approval }；
-  // 文件不存在 = 默认全开。场景：
+  // 配置 ~/.ssid/notify.json（读取函数与默认值见上方「壳层行为开关」——它被
+  // 提前到 try 外，因为内核 onExit 也要用它做保活兜底）；文件不存在 = 默认全开。
+  // 场景：
   //   replyDone：session/event 的 turn/end（completed，事件自带 time 计时）
   //   approval：session/event 的 approval/asked（授权审计事件）
   //   question：userQuestions.ask 包装（同进程服务，无 session 事件可监听）
-  const NOTIFY_CONFIG_PATH = join(homedir(), '.ssid', 'notify.json')
-  const DEFAULT_NOTIFY = { enabled: true, replyDone: true, question: true, approval: true }
-  const readNotifyConfig = () => {
-    try {
-      const parsed = JSON.parse(readFileSync(NOTIFY_CONFIG_PATH, 'utf8'))
-      return { ...DEFAULT_NOTIFY, ...(typeof parsed === 'object' && parsed !== null ? parsed : {}) }
-    } catch {
-      return { ...DEFAULT_NOTIFY }
-    }
-  }
   const playNotificationSound = () => {
     try {
       spawn('powershell', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', '[System.Media.SystemSounds]::Asterisk.Play()'], {
@@ -1505,9 +1556,16 @@ async function start() {
       const p = payload ?? {}
       if (name === 'turn/start') {
         childTurnStarts.set(String(p.turn ?? ''), Number(p.nowMs) || Date.now())
+        keepAwake.noteTurnStart()
         return
       }
-      if (name === 'turn/end' && p.reasonKind === 'completed') {
+      // 保活与通知在这里分道：保活**任何** reasonKind 都要递减计数，通知只在
+      // completed 时播报。keepAwake.noteTurnEnd() 必须无条件执行——它前面若先做
+      // 「start 没记录就 return」的短路，丢过 turn/start 的回合会让计数只加不减，
+      // 保活再也释放不掉。
+      if (name === 'turn/end') {
+        keepAwake.noteTurnEnd()
+        if (p.reasonKind !== 'completed') return
         const key = String(p.turn ?? '')
         const start = childTurnStarts.get(key)
         childTurnStarts.delete(key)
@@ -1534,9 +1592,13 @@ async function start() {
       const data = event?.data
       if (type === 'turn/start') {
         turnStartTimes.set(String(data?.turn ?? ''), event.time)
+        keepAwake.noteTurnStart()
         return
       }
-      if (type === 'turn/end' && data?.reason?.kind === 'completed') {
+      // 与子进程分支同理：保活无条件递减，通知只播报 completed。
+      if (type === 'turn/end') {
+        keepAwake.noteTurnEnd()
+        if (data?.reason?.kind !== 'completed') return
         const start = turnStartTimes.get(String(data?.turn ?? ''))
         turnStartTimes.delete(String(data?.turn ?? ''))
         if (start === undefined) return
@@ -1558,20 +1620,132 @@ async function start() {
     }
   }
 
+  // 遮罩的状态一变，托盘那项的文案就得跟着变（菜单是构建时快照）。tray 真正的
+  // 创建在下面，这里先声明成 null：`const` 处在 TDZ 时连 typeof 都会抛
+  // ReferenceError，所以必须提前声明而不是靠 typeof 兜底。
+  let tray = null
+
+  // ── 执行中遮罩（2026-09-21）────────────────────────────────────────────
+  // 去吃饭时盖住思灵窗口：自己回来不误触，路过的人也一眼看懂现在别动。
+  // **只盖本窗口，不铺屏**——铺满屏幕是「锁电脑」，那是另一件事。
+  //
+  // 开启有托盘项与全局快捷键两个入口，都走 toggleMask()，状态只有一份；解除
+  // 除了这两处，还有遮罩上那个**长按 2 秒**的按钮（单击无效，防随手点掉）。
+  // 遮罩自己是一个保活持有来源：屏幕黑了，挂着的提示也就白挂了。
+  let maskWin = null
+  let maskActive = false
+
+  /** 托盘那项要在「显示/解除」之间切换文案。三处解除入口（托盘、快捷键、长按
+   *  按钮）都会走到这里，所以在 show/hide 里调，而不是只在 toggleMask 里调。 */
+  const syncMaskTray = () => {
+    if (tray !== null) tray.setContextMenu(buildTrayMenu())
+  }
+
+  /** 遮罩跟随主窗口；最小化/隐藏交给 parent 关系自动处理。 */
+  const followMask = () => {
+    if (maskWin === null || maskWin.isDestroyed()) return
+    maskWin.setBounds(win.getBounds())
+  }
+
+  const hideMask = () => {
+    maskActive = false
+    keepAwake.setMask(false)
+    if (maskWin !== null && !maskWin.isDestroyed()) maskWin.hide()
+    syncMaskTray()
+    safeLog('ssid: mask off\n')
+  }
+
+  const showMask = (text) => {
+    if (maskWin === null || maskWin.isDestroyed()) {
+      maskWin = new BrowserWindow({
+        parent: win,
+        frame: false,
+        show: false,
+        resizable: false,
+        movable: false,
+        minimizable: false,
+        maximizable: false,
+        fullscreenable: false,
+        skipTaskbar: true,
+        backgroundColor: '#0f141d',
+        webPreferences: {
+          sandbox: true,
+          contextIsolation: true,
+          preload: fileURLToPath(new URL('./mask-preload.cjs', import.meta.url)),
+        },
+      })
+      // 无边框窗口的 Windows 系统右键菜单：DOM 层已挡，这里兜底一次。
+      maskWin.webContents.on('context-menu', (event) => event.preventDefault())
+      maskWin.webContents.on('render-process-gone', (_event, details) => {
+        safeLog(`[mask] renderer gone reason=${details?.reason} exitCode=${details?.exitCode}\n`)
+      })
+      maskWin.on('closed', () => {
+        maskWin = null
+        // 被外部销毁（系统强制 / 父窗口关闭）：状态与保活都要跟着收，否则壳
+        // 会自以为还盖着，屏幕永远不关。
+        if (maskActive) {
+          maskActive = false
+          keepAwake.setMask(false)
+          syncMaskTray()
+        }
+      })
+      void maskWin.loadFile(fileURLToPath(new URL('./mask.html', import.meta.url)))
+    }
+    maskActive = true
+    keepAwake.setMask(true)
+    followMask()
+    if (!maskWin.isVisible()) maskWin.show()
+    maskWin.focus()
+    // 文案要等页面加载完才注入得进去：首次创建时 isLoading() 必为真，走
+    // did-finish-load；此后重复开启是即时注入。
+    const inject = () => {
+      if (maskWin === null || maskWin.isDestroyed()) return
+      void maskWin.webContents
+        .executeJavaScript(`window.__setMaskText(${JSON.stringify(String(text ?? ''))})`)
+        .catch((error) => {
+          safeLog(`[mask] text inject failed: ${error instanceof Error ? error.message : String(error)}\n`)
+        })
+    }
+    if (maskWin.webContents.isLoading()) maskWin.webContents.once('did-finish-load', inject)
+    else inject()
+    syncMaskTray()
+    safeLog(`ssid: mask on text=${JSON.stringify(String(text ?? ''))}\n`)
+  }
+
+  const toggleMask = () => {
+    if (maskActive) { hideMask(); return }
+    showMask(readNotifyConfig().mask.text)
+  }
+
+  win.on('resize', followMask)
+  win.on('move', followMask)
+  ipcMain.on('ssid:mask:release', (event) => {
+    // 只认遮罩窗口自己发来的解除请求，别让主视图页里的脚本关掉它。
+    if (maskWin === null || maskWin.isDestroyed() || event.sender.id !== maskWin.webContents.id) return
+    safeLog(`[mask] release by hold sender=${event.sender.id}\n`)
+    hideMask()
+  })
+
   // ── tray: close-to-tray, tray menu (show / quit) ────────────────────────
   safeLog('ssid: phase tray create start\n')
-  const tray = new Tray(nativeImage.createFromPath(asset('tray.png')))
+  tray = new Tray(nativeImage.createFromPath(asset('tray.png')))
   safeLog('ssid: phase tray ok\n')
   tray.setToolTip(WINDOW_TITLE)
   // 纯净模式（故障恢复）：只加载官方 bundle 的插件行，用来救「第三方插件把
   // boot 弄坏、设置页进不去」的环境。放托盘是因为菜单本身不依赖内核状态；
   // 数据（会话/设置/记忆/storage）一律不动，用户看到的是同一个思灵。
   const safeMode = process.env.SSID_SAFE_MODE === '1'
-  tray.setContextMenu(Menu.buildFromTemplate([
+  /** 托盘菜单。抽成函数是因为「执行中遮罩」那项要随状态改文案——菜单是构建时
+   *  快照，状态变了不重建就会显示相反的动作（调用点见 syncMaskTray）。 */
+  const buildTrayMenu = () => Menu.buildFromTemplate([
     { label: '显示思灵', click: () => { win.show(); win.focus() } },
     {
       label: '截图引用',
       click: () => { startScreenshotCapture() },
+    },
+    {
+      label: maskActive ? '解除执行中遮罩' : '显示执行中遮罩',
+      click: () => { toggleMask() },
     },
     { type: 'separator' },
     {
@@ -1596,7 +1770,8 @@ async function start() {
     },
     { type: 'separator' },
     { label: '退出', click: () => app.quit() },
-  ]))
+  ])
+  tray.setContextMenu(buildTrayMenu())
   tray.on('click', () => { win.show(); win.focus() })
 
   // ── 快捷截图引用：托盘/全局快捷键 → 全屏冻结帧 → 逐屏框选浮层 → 裁剪 ──
@@ -1796,18 +1971,29 @@ async function start() {
     }
   }
 
-  /** 按当前配置重新注册全局快捷键（配置保存后由 host 半经服务触发）。
-   *  @returns 是否注册成功（false = 快捷键被其他软件占用）。 */
-  const applyScreenshotHotkey = () => {
+  /** 按当前配置重新注册**全部**全局快捷键（配置保存后由 host 半经服务触发）。
+   *
+   *  必须是「一处注册所有」：`globalShortcut.unregisterAll()` 是全局动作，
+   *  各自为政会让后注册的把先前注册的静默抹掉——保存截图设置那一步就足以
+   *  让遮罩快捷键失效。新增全局快捷键都往这里加。
+   *
+   *  @returns 截图快捷键是否注册成功（false = 被其他软件占用）。 */
+  const applyGlobalHotkeys = () => {
     globalShortcut.unregisterAll()
     const { hotkey } = readScreenshotConfig()
-    const ok = globalShortcut.register(hotkey, () => { void startScreenshotCapture() })
-    safeLog(`ssid: screenshot hotkey ${hotkey} ${ok ? 'OK' : 'conflict'}\n`)
-    return ok
+    const shotOk = globalShortcut.register(hotkey, () => { void startScreenshotCapture() })
+    safeLog(`ssid: screenshot hotkey ${hotkey} ${shotOk ? 'OK' : 'conflict'}\n`)
+
+    const { hotkey: maskHotkey } = readNotifyConfig().mask
+    if (typeof maskHotkey === 'string' && maskHotkey.trim() !== '') {
+      const maskOk = globalShortcut.register(maskHotkey, () => { toggleMask() })
+      safeLog(`ssid: mask hotkey ${maskHotkey} ${maskOk ? 'OK' : 'conflict'}\n`)
+    }
+    return shotOk
   }
 
   // 全局快捷键注册失败（被其他软件占用）不阻断启动。
-  applyScreenshotHotkey()
+  applyGlobalHotkeys()
   app.on('will-quit', () => globalShortcut.unregisterAll())
 
   let quitting = false

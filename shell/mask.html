@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>思灵 · 执行中</title>
+<style>
+  /* 遮罩只盖思灵窗口，不铺屏：目的是自己回来别误触，以及让路过的人一眼看懂
+     现在别动。文案由主进程注入（~/.ssid/notify.json 的 mask.text）。 */
+  :root { color-scheme: dark; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 22px;
+    background: #0f141d;
+    color: #e6edf3;
+    font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif;
+    user-select: none;
+    cursor: default;
+    overflow: hidden;
+  }
+  #text {
+    max-width: 82%;
+    padding: 0 24px;
+    font-size: 34px;
+    font-weight: 600;
+    line-height: 1.5;
+    letter-spacing: 2px;
+    text-align: center;
+    word-break: break-word;
+  }
+  #hint {
+    font-size: 13px;
+    letter-spacing: .5px;
+    opacity: .42;
+  }
+  #release {
+    position: relative;
+    margin-top: 6px;
+    padding: 12px 32px;
+    overflow: hidden;
+    font: inherit;
+    font-size: 15px;
+    color: inherit;
+    background: rgba(255, 255, 255, .07);
+    border: 1px solid rgba(255, 255, 255, .16);
+    border-radius: 999px;
+    cursor: pointer;
+    user-select: none;
+  }
+  #release:hover { background: rgba(255, 255, 255, .11); }
+  /* 长按进度：按住多久一眼可见，松手回零——比干等两秒有把握。 */
+  #fill {
+    position: absolute;
+    inset: 0;
+    width: 0;
+    background: rgba(90, 160, 255, .38);
+    pointer-events: none;
+  }
+  #release > span { position: relative; }
+</style>
+</head>
+<body>
+  <div id="text">程序执行中，勿动</div>
+  <div id="hint">按住下方按钮 2 秒解除</div>
+  <button id="release" type="button"><div id="fill"></div><span>按住解除</span></button>
+<script>
+  const HOLD_MS = 2000
+  const textEl = document.getElementById('text')
+  const button = document.getElementById('release')
+  const fill = document.getElementById('fill')
+  let raf = null
+  let startedAt = 0
+
+  /** 主进程注入自定义文案（notify.json 的 mask.text）。 */
+  window.__setMaskText = (value) => {
+    if (typeof value === 'string' && value.trim() !== '') textEl.textContent = value
+  }
+
+  const stop = () => {
+    if (raf !== null) { cancelAnimationFrame(raf); raf = null }
+    fill.style.width = '0%'
+  }
+  const tick = () => {
+    const ratio = Math.min(1, (performance.now() - startedAt) / HOLD_MS)
+    fill.style.width = `${ratio * 100}%`
+    if (ratio >= 1) {
+      stop()
+      window.ssidMask.release()
+      return
+    }
+    raf = requestAnimationFrame(tick)
+  }
+  const begin = (event) => {
+    event.preventDefault()
+    if (raf !== null) return
+    startedAt = performance.now()
+    raf = requestAnimationFrame(tick)
+  }
+
+  button.addEventListener('mousedown', begin)
+  button.addEventListener('mouseup', stop)
+  button.addEventListener('mouseleave', stop)
+  // 误触防线：单击什么都不做（只有按住满 2 秒才触发），键盘与右键一并挡掉。
+  button.addEventListener('click', (event) => event.preventDefault())
+  button.addEventListener('contextmenu', (event) => event.preventDefault())
+  document.addEventListener('contextmenu', (event) => event.preventDefault())
+  document.addEventListener('keydown', (event) => event.preventDefault())
+  document.addEventListener('dragstart', (event) => event.preventDefault())
+  window.addEventListener('blur', stop)
+</script>
+</body>
+</html>
