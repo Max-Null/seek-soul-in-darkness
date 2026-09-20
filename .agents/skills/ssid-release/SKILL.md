@@ -7,6 +7,7 @@ description: "SSiD（思灵）发版流程：版本决策、内置插件对齐�
 
 > 发版 = 版本号 + 内置插件对齐 + 归档 + 更新日志 + tag/Release **五件事一次做完**，漏一项即未完成。
 > 仓库：`H:\MaxNull\WorkStation\seek-soul-in-darkness`（远端 `Max-Null/seek-soul-in-darkness`）。
+> **本文件是正本**（受 git 管理），但**实际生效的是用户级副本 `~/.dsh/skills/ssid-release/`**——SSiD 发版在 WorkStation 根的会话里做，那时项目根是 WorkStation、扫不到 SSiD 仓库的 `.agents/skills/`。**改完正本必须同步过去**（`Copy-Item .agents/skills/ssid-release/* ~/.dsh/skills/ssid-release/ -Force`），否则改了不生效，且没有任何提示。
 
 ## 0. 版本决策
 
