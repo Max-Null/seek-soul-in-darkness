@@ -5,6 +5,7 @@
     "@changfenhuang/dsh-genui": "0.11.0",
     "@huanlin/dsh-plugin-better-sidebar-plugin-office": "0.2.0",
     "@max-null/dsh-achievements": "0.1.2",
+    "@max-null/dsh-allostasis": "0.1.0",
     "@max-null/dsh-capture": "file:./vendor/dsh-capture",
     "@max-null/dsh-chat-rail": "0.6.4",
     "@max-null/dsh-chinese-thinking": "0.3.0",
@@ -71,7 +72,8 @@
         "@huanlin/dsh-plugin-better-sidebar-plugin-office",
         "@max-null/dsh-skills",
         "@max-null/dsh-ssid-pwsh-retry",
-        "@max-null/dsh-ssid-env"
+        "@max-null/dsh-ssid-env",
+        "@max-null/dsh-allostasis"
       ],
       "patchReload": "live"
     }
