@@ -22,6 +22,8 @@ import { fileURLToPath } from 'node:url';
 import { createGate } from './lib/gate-report.mjs';
 // 判定 3 的方向区分复用本仓库自己的 semver 语义（含 pre-release；无法解析返回 null）。
 import { compareVersions } from '../lib/profile-merge.mjs';
+// 判定 6 复用同一套 patch 解析（顶层条目 / insert 子条目切分），不另写 YAML 解析。
+import { splitPatchEntries, splitChildEntries } from '../lib/profile-merge.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SHELL = path.resolve(HERE, '..');
@@ -110,6 +112,53 @@ for (const prof of profiles) {
     const target = path.resolve(path.dirname(TEMPLATE_PKG), v.slice(5));
     if (!fs.existsSync(target)) {
       gate.violation(TEMPLATE_PKG, null, `「${n}」指向 ${v}，但该目录不存在`);
+    }
+  }
+
+  // ── 判定 6：cordis.patch.yml 的条目覆盖（模板 → 运行时）──
+  //
+  // 为什么需要它：dev 裸跑不部署（main.mjs 的 devSkipDeploy），**模板改了 patch
+  // 不会自动流到运行时**。2026-09-21 实测：模板已把 Playwright 拆成无头/有头两条目
+  // 并加了 CLI 缺失护栏，本机运行时还是单条、无护栏 —— 而判定 1~5 只看 package.json，
+  // 完全看不到这一层（那次是用户凭印象发现的）。
+  //
+  // 判据（方向：模板有 → 运行时须有；反方向的「本机增量」是正常的，不报）：
+  //   a. 模板的条目 id 运行时缺 → 落后。部署时会补上，但**在补齐之前功能就是缺的**
+  //      （那一版缺的是「同时开有头+无头浏览器」）。
+  //   b. 同 id 条目模板带 disabled、运行时不带 → **护栏缺失**，比 a 更该管：那条
+  //      args 一旦求值出 null，dsh-mcp-client 的 schema 拒绝 string[]，整棵插件树
+  //      加载失败、内核起不来（见 docs/决策/2026-09-15-MCP条目CLI缺失拖死启动修复.md）。
+  const tplPatchPath = path.join(SHELL, 'profile-template', 'cordis.patch.yml');
+  const runPatchPath = path.join(DSH_HOME, 'profiles', prof, 'cordis.patch.yml');
+  if (fs.existsSync(tplPatchPath) && fs.existsSync(runPatchPath)) {
+    /** 收集「条目 id → { disabled }」。insert 块的 id 在子条目上，故两块分别展开。 */
+    const collectPatchEntries = (file) => {
+      const map = new Map();
+      for (const entry of splitPatchEntries(fs.readFileSync(file, 'utf8'))) {
+        const first = String(entry.text ?? '').split('\n')[0] ?? '';
+        const remember = (id, text) => {
+          if (typeof id === 'string' && id.length > 0) map.set(id, { disabled: /^\s+disabled:/m.test(text) });
+        };
+        if (/^-\s+insert:/.test(first)) {
+          for (const child of splitChildEntries(entry.text)) remember(child.id, child.text);
+        } else {
+          remember(entry.id, entry.text);
+        }
+      }
+      return map;
+    };
+    const tplEntries = collectPatchEntries(tplPatchPath);
+    const runEntries = collectPatchEntries(runPatchPath);
+    gate.info(`cordis.patch.yml：模板 ${tplEntries.size} 个条目 id，运行时 ${runEntries.size} 个`);
+    for (const [id, meta] of tplEntries) {
+      gate.inspect();
+      if (!runEntries.has(id)) {
+        gate.violation(runPatchPath, null, `patch 条目「${id}」只在模板有：运行时还没同步 —— dev 不部署，得手工搬（判定 6 注释）`);
+        continue;
+      }
+      if (meta.disabled && !runEntries.get(id).disabled) {
+        gate.violation(runPatchPath, null, `patch 条目「${id}」缺 disabled 护栏（模板有、运行时没有）⚠ 该条目的 args 一旦求值出 null 会让整棵插件树加载失败、内核起不来`);
+      }
     }
   }
 }

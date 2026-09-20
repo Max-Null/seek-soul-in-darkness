@@ -1,8 +1,15 @@
 # Playwright MCP 双实例共用 profile（2026-09-20）
 
-> 状态：**已修复**（出厂模板拆成有头/无头两条互不干扰的条目 + 本机 profile 同步；随下一版出包）
+> 状态：**已修复**（出厂模板拆成有头/无头两条互不干扰的条目；随下一版出包）
 > 关联：`docs/决策/2026-08-24-Playwright-MCP-预制-实施方案.md`、
 > `docs/决策/2026-09-15-MCP条目CLI缺失拖死启动修复.md`、`shell/fix-mcp-startup.ps1`
+>
+> **落地范围（2026-09-21 补记）**：本次改动只落到 `shell/profile-template/`
+> （发版基准）+ **做本改动那台机器**的 profile。**dev 裸跑不部署**（`main.mjs` 的
+> `devSkipDeploy`），所以其他机器的运行时 profile **不会自动跟上** —— 本开发机的
+> `~/.dsh/profiles/ssid/cordis.patch.yml` 当时仍是单条且无 CLI 护栏，是隔天凭印象
+> 发现的。现已手工同步，并给 `check-profile-sync` 加了判定 6（patch 条目覆盖 +
+> `disabled` 护栏）把它变成机械可查。详见第七节之后的补记。
 
 ## 一、现象
 
@@ -115,3 +122,36 @@ if (!browserName) {
   那里的消费者是别人，本机实测：`ai-da` 的 `playwright-core@1.60.0` 要 **rev=1223**、nvm 全局
   `playwright@1.62.1` 要 **rev=1234**。
 - 因此清理磁盘**不能**把 `ms-playwright\` 当 MCP 缓存删：删掉 `chromium-1223`（412 MB）会打断 ai-da 侧的浏览器使用。
+
+## 八、补记：落到开发机 + 变成机械可查（2026-09-21）
+
+上面第八节之前的记录是在**另一台机器**（报错路径里的 `C:\Users\21030442\`）上做的，
+`profile 迁移`一节说的「本机」指那台。**开发机（`MaxNull`）的运行时 profile 从未同步**，
+隔天凭印象发现时它还是单条 `mcp-playwright` 且没有 CLI 护栏。补齐动作与验证：
+
+**同步**（`~/.dsh/profiles/ssid/cordis.patch.yml`）：
+- 单条 `mcp-playwright` → `mcp-playwright-headless` / `mcp-playwright-headed` 两条，
+  各带 `--user-data-dir`（`…\ms-playwright-mcp\headless` / `…\headed`）与
+  `disabled: !!js '!process.env.SSID_MCP_PW_CLI'` 护栏；
+- `mcp-codegraph` 的 `disabled` 补上 `|| !process.env.SSID_MCP_CG_CLI` 那半段护栏；
+- 头部注释跟上（运行时浏览器实为系统 Chrome）；
+- **清掉一行悬空 `inject`**：它位于 `insert` 块与 `connection` 条目之间、缩进 2 空格，
+  YAML 会把它并到 `insert` 块的字段上 —— 等于让整个 MCP 插入块去等 `webRuntime`/`webServer`
+  就绪。`git log -S` 查 template 各版本该行始终与 `- id: connection` 1:1，故它是**旧合并
+  逻辑的残骸**（那条逻辑「曾把下一个顶层条目整行吞掉」，`767eaa8` 已修，见
+  `shell/tests/profile-merge.spec.ts:310`）。用当前 `mergeUserPatch` 复现纯升级路径
+  **不再产生**该残骸 —— 是历史残留，不是活 bug。
+
+**实测（隔离实例 + 真实 MCP 进程）**：
+- 并发探针用配置里的确切 args 各起一个 `@playwright/mcp`、并发 `browser_navigate`：
+  **新配置 2/2 通过**；对照（两个都不传 `--user-data-dir`、同 roots）**1/2 失败**，
+  复现冲突。失败文案此时是 `Target page, context or browser has been closed`
+  （`@playwright/mcp` 升到 0.0.82 后与原记录里的 `Browser is already in use` 不同，
+  指向同一个冲突）。
+- 探针后 `ms-playwright-mcp\headless`（9.4 MB）与 `\headed`（13.4 MB）如实建出，
+  证明新配置真在用这两个目录。
+- 隔离实例启动无 `Failed to load plugins`。
+
+**防复发**：`check-profile-sync` 新增**判定 6** —— 比 `cordis.patch.yml` 的条目覆盖：
+模板有的条目 id 运行时缺了要报；同 id 条目模板带 `disabled` 而运行时不带（**护栏缺失**）
+更要报。两条判据都用临时 `DSH_HOME` 造场景反向验证过（缺条目 → 报 2 处；删护栏 → 报 1 处）。
