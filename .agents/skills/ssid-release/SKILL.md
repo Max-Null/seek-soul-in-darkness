@@ -165,8 +165,8 @@ tar -xzf dsh-runtime.tar.gz -C dsh-runtime
 - cordis.patch.yml insert 子条目必须带显式 `id`（无 id = 随机 id，插件中心禁用失效 + 垃圾行累积）。
 - 绿屏/断电后：先检查归档与后台任务，不要直接复用疑似半成品。
 - **gh 上传大文件**：早期（v0.1.14/mac）实测 256MB+ 会挂，但 **2026-09-14 v0.3.0 实测 359.8 MB 的 exe 与 409.7 MB 的 zip 经 `gh release upload` 各 1-2 分钟正常传完**——先直接试 gh，失败再回退 `curl -F` 直传 uploads API（见文末 v0.2.0 条）。
-- **归档里的 release-notes 是发版时快照**：发布后再改 `docs/release-notes-*.md`（例如回填 hash、把「待发布」改成「已发布」）不会同步进归档内那份——对外以 GitHub Release 页与 `docs/` 为准，或接受「下次归档自然带上」。v0.3.0 即如此。
-- **改完 release notes 要重走弹窗同步链**（§2）：Copy 到 panels → 单测 → tsdown → `sync-vendor --apply --web`，否则 `check-vendor-sync` 会报 vendor 三处漂移。
+- **归档里的 release-notes 是发版时快照；包内那份必须停在发版前那一版**：发布后回填 `docs/release-notes-*.md`（补 SHA256、把「待发布」改成「已发布」）**只改 docs 与 GitHub Release 页，不要再走下面的同步链**。原因是**哈希自指**——安装包的 SHA256 取决于内嵌归档，而归档里又装着一份更新日志，把最终哈希写进包内会**再次改变**哈希。所以包内那份从 v0.3.2 起只给占位符，真实校验和以 Release 页与 `docs/` 为准（v0.3.0/0.3.3/0.4.0 皆如此）。
+- **改完 release notes 要重走弹窗同步链**（§2）：Copy 到 panels → 单测 → tsdown → `sync-vendor --apply --web`，否则 `check-vendor-sync` 会报 vendor 三处漂移。**这条只适用于「发包前」**——发包后回填按上一条办（只改 docs 与 Release 页），否则同步链会把带最终哈希的版本写进包内与 vendor，踩上哈希自指。
 
 ## 已验证经验（2026-08-26 v0.1.13 收货）
 
