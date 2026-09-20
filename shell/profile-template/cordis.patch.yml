@@ -2,7 +2,8 @@
 # a top-level YAML array of loader patch entries (id-targeted config
 # overrides, disables, and insert lists; `!!js` expressions allowed).
 #
-# SSiD 预制 MCP：Playwright MCP（浏览器自动化，默认启用）+ CodeGraph MCP
+# SSiD 预制 MCP：Playwright MCP ×2（浏览器自动化，默认启用；无头/有头各一条，
+# 各带独立 user-data-dir，可同时开浏览器）+ CodeGraph MCP
 # （语义代码图：callers/impact/上下文，代码索引；索引目录按需适配，见下）。
 # 运行时由 shell/main.mjs 注入 env（与 SSID_PNPM 同模式）：
 #   SSID_MCP_NODE      — 打包内置 node.exe → NVM v22.22.2 → PATH（electron 的
@@ -18,18 +19,39 @@
 # （方案与命令详见 docs/决策/2026-08-24-Playwright-MCP-预制-实施方案.md；
 #  CodeGraph 索引目录适配见 docs/决策/2026-09-09-CodeGraph-MCP-默认索引目录修复.md）。
 - insert:
-    - id: mcp-playwright
+    - id: mcp-playwright-headless
       name: '@deepseek-ai/dsh-mcp-client'
       # CLI 缺失时停用：args[0] 取自 SSID_MCP_PW_CLI，缺失即求值为 null，而
       # dsh-mcp-client 的 schema 要求 string[] —— 会让整棵插件树加载失败、内核起不来。
       disabled: !!js '!process.env.SSID_MCP_PW_CLI'
       config:
-        serverName: playwright
+        serverName: playwright-headless
         transport: stdio
         command: !!js 'process.env.SSID_MCP_NODE || "node"'
         args:
           - !!js 'process.env.SSID_MCP_PW_CLI'
           - '--headless'
+          # user-data-dir 必须显式给（2026-09-20 修复，勿删）：@playwright/mcp 的默认目录是
+          #   %LOCALAPPDATA%\ms-playwright-mcp\mcp-<browser>-<sha256(MCP roots 工作区)[0:7]>
+          # 而 roots 由 MCP 客户端按会话工作区上报 —— 同一会话里的两个 Playwright MCP
+          # 必然算出**同一个**目录，第二个启动浏览器即失败：
+          #   "Browser is already in use for ...\mcp-chrome-<hash>, use --isolated ..."
+          # 显式路径优先级高于该 hash（playwright-core/lib/coreBundle.js 的
+          # createPersistentBrowser：config.browser.userDataDir ?? createUserDataDir(...)）。
+          # 有头/无头是**启动参数**、无法热改，故固定为两条互不干扰的条目。
+          - !!js '"--user-data-dir=" + (process.env.LOCALAPPDATA || process.env.USERPROFILE) + "\\ms-playwright-mcp\\headless"'
+    - id: mcp-playwright-headed
+      name: '@deepseek-ai/dsh-mcp-client'
+      # 有头实例：需要人工观察、扫码/验证码登录时用（工具前缀 mcp__playwright-headed__*）。
+      # 与上一条同一个 CLI、同一份 pin 依赖，仅 user-data-dir 不同 → 两者可同时开浏览器。
+      disabled: !!js '!process.env.SSID_MCP_PW_CLI'
+      config:
+        serverName: playwright-headed
+        transport: stdio
+        command: !!js 'process.env.SSID_MCP_NODE || "node"'
+        args:
+          - !!js 'process.env.SSID_MCP_PW_CLI'
+          - !!js '"--user-data-dir=" + (process.env.LOCALAPPDATA || process.env.USERPROFILE) + "\\ms-playwright-mcp\\headed"'
     - id: mcp-codegraph
       name: '@deepseek-ai/dsh-mcp-client'
       # 未适配到可用目录时停用：出厂不再默认指向用户主目录（v0.2.1 的行为），

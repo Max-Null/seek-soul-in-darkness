@@ -1,12 +1,13 @@
-﻿<#
+<#
   思灵（SSiD）启动失败一键修复 —— MCP 条目 CLI 缺失拖死内核
 
   症状（启动失败弹窗里能看到）：
     kernel-child 启动失败：ssid: plugin tree failed to load: ... invalid config:
     ... "args":[null,"--exclude",...] ...
 
-  原因：出厂模板里 mcp-codegraph / mcp-playwright 的 args[0] 取自壳注入的环境变量
-  （SSID_MCP_CG_CLI / SSID_MCP_PW_CLI），而壳只在对应 CLI 实体确实存在时才注入它们。
+  原因：出厂模板里 mcp-codegraph / mcp-playwright-headless / mcp-playwright-headed 的
+  args[0] 取自壳注入的环境变量（SSID_MCP_CG_CLI / SSID_MCP_PW_CLI），而壳只在对应 CLI
+  实体确实存在时才注入它们。
   CLI 缺失时该值求值为 null，而 dsh-mcp-client 的 schema 要求 string[]，
   于是整棵插件树加载失败、思灵起不来（不是那台机器坏了，也不是装错了）。
 
@@ -45,15 +46,17 @@ if (-not (Test-Path $patchPath)) {
 }
 
 # 目标条目 → 它的 args[0] 所依赖的 CLI 实体（路径与 shell/main.mjs 的注入逻辑一致）
+# 注意 Ids 是数组：两条 Playwright 条目（无头/有头）共用同一个 CLI，CLI 缺失时两条
+# 都会以同样的方式把内核拖死，必须一起停用。
 $targets = @(
   @{
-    Id    = 'mcp-codegraph'
+    Ids   = @('mcp-codegraph')
     Label = 'CodeGraph 代码索引'
     Cli   = (Join-Path $ProfileDir 'node_modules\@astudioplus\codegraph-mcp\bin\codegraph-mcp.js')
   },
   @{
-    Id    = 'mcp-playwright'
-    Label = 'Playwright 浏览器自动化'
+    Ids   = @('mcp-playwright-headless', 'mcp-playwright-headed')
+    Label = 'Playwright 浏览器自动化（无头 + 有头）'
     Cli   = (Join-Path $ProfileDir 'node_modules\@playwright\mcp\cli.js')
   }
 )
@@ -62,11 +65,12 @@ Write-Host ''
 Write-Host '第一步：检查两个 MCP 的 CLI 是否到位'
 $needFix = @()
 foreach ($t in $targets) {
+  $label = "{0}（{1}）" -f ($t.Ids -join ' + '), $t.Label
   $exists = Test-Path -LiteralPath $t.Cli
   if ($exists) {
-    Write-Host ("  ✓ {0}（{1}）：CLI 存在" -f $t.Id, $t.Label) -ForegroundColor Green
+    Write-Host ("  ✓ {0}：CLI 存在" -f $label) -ForegroundColor Green
   } else {
-    Write-Host ("  ✗ {0}（{1}）：CLI 缺失 → 需要停用该条目" -f $t.Id, $t.Label) -ForegroundColor Yellow
+    Write-Host ("  ✗ {0}：CLI 缺失 → 需要停用该条目" -f $label) -ForegroundColor Yellow
     $needFix += $t
   }
 }
@@ -86,6 +90,8 @@ $lines.AddRange([string[]]($raw -split "`r?`n"))
 
 Write-Host ''
 Write-Host '第二步：停用 CLI 缺失的条目（原值会随备份保留）'
+# 摊平成「一条目一项」：后面按 id 定位并改 disabled，共用 CLI 的条目各改各的
+$needFix = @($needFix | ForEach-Object { foreach ($id in $_.Ids) { @{ Id = $id } } })
 $changed = @()
 foreach ($t in $needFix) {
   $idPattern = '^(\s*)-\s+id:\s*' + [regex]::Escape($t.Id) + '\s*$'
