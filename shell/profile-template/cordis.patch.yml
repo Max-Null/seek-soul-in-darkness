@@ -15,7 +15,10 @@
 #                        用户主目录**（主目录没有代码仓库，会让首次调用扫描 AppData
 #                        卡死超时、结果与项目无关——2026-09-09 用户反馈）
 #   SSID_MCP_CG_ENABLE — '1' = 已适配到可用目录；否则条目停用（不启动引擎进程）
-# 浏览器二进制不随安装包发布：首次使用需 `playwright install chromium`
+# 运行时浏览器：默认 `browserName=chromium` + `channel=chrome`（源码 validateBrowserConfig 的默认值）
+# → 实际启动的是**系统安装的 Google Chrome**，不是 Playwright 自带的 Chromium（profile 目录名
+#   `mcp-chrome-<hash>` 就来自这个 channel）。因此本机需装有 Google Chrome；只有改用
+#   `--browser firefox` / `webkit` 等自带浏览器时，才需要 `playwright install <browser>`。
 # （方案与命令详见 docs/决策/2026-08-24-Playwright-MCP-预制-实施方案.md；
 #  CodeGraph 索引目录适配见 docs/决策/2026-09-09-CodeGraph-MCP-默认索引目录修复.md）。
 - insert:

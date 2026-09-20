@@ -79,7 +79,39 @@ const clientInfo = { cwd: firstRootPath(clientRoots), clientName: … };
 ## 六、遗留
 
 - 两个 profile 的登录态**各管各的**：在无头里登录不会同步到有头，反之亦然。
-- 历史 hash 目录（`mcp-chrome-935f885` 等 5 个，约 1.4 GB）是旧行为留下的，可自行清理；
-  新配置不再产生新的 hash 目录。
+- 历史 hash 目录**已清理**（2026-09-20）：`ms-playwright-mcp\` 下 5 个 `mcp-chrome-<hash>` 共 1.43 GB，
+  外加 `ms-playwright\` 下 2 个老布局同类残留 152 MB。新配置不再产生新的 hash 目录。
 - 已装旧版的机器需**重启思灵**才用得上新条目。重启前旧进程仍按老参数跑 —— 此时若调用 playwright 工具，
   会重新生成一个空的 `mcp-chrome-<hash>` 目录（不影响修复，重启后即弃用）。
+
+## 七、附：运行时用的是**系统 Chrome**，不是自带 Chromium（2026-09-20 实测）
+
+清理磁盘时顺手坐实了一件容易误判的事：`@playwright/mcp` 默认**不启动 Playwright 自带的 Chromium**，
+而是走 `chrome` channel —— 即**本机安装的 Google Chrome**。
+
+源码依据（`playwright-core/lib/coreBundle.js` 的 `validateBrowserConfig`）：
+
+```js
+let browserName = browser.browserName;
+if (!browserName) {
+  browserName = "chromium";
+  if (browser.launchOptions.channel === void 0)
+    browser.launchOptions.channel = "chrome";
+}
+```
+
+实测证据：MCP 拉起的进程是 `"C:\Program Files\Google\Chrome\Application\chrome.exe" --headless
+--user-data-dir=…`，其父进程正是 `cli.js --headless --user-data-dir=…\headless`。两处自洽：
+`createUserDataDir` 里 `browserToken = launchOptions.channel ?? browserName` 取到 `chrome`，
+目录名 `mcp-chrome-<hash>` 里那个 `chrome` 就是这么来的。
+
+**三个推论**：
+
+- 模板头部原先那句「浏览器二进制不随安装包发布：首次使用需 `playwright install chromium`」是**误导**：
+  它只对 `--browser firefox` / `webkit` 这类自带浏览器成立，**默认路径需要的是本机装有 Google Chrome**。
+  2026-09-20 已改正模板与本机 profile 的该条注释。
+- `%LOCALAPPDATA%\ms-playwright\` 下的浏览器本体**不是这个 MCP 在用**：本 profile 的 `playwright-core`
+  虽在 `browsers.json` 里声明 chromium rev=1244、而本机根本没有 1244，却照常工作 —— 正因为它走 chrome channel。
+  那里的消费者是别人，本机实测：`ai-da` 的 `playwright-core@1.60.0` 要 **rev=1223**、nvm 全局
+  `playwright@1.62.1` 要 **rev=1234**。
+- 因此清理磁盘**不能**把 `ms-playwright\` 当 MCP 缓存删：删掉 `chromium-1223`（412 MB）会打断 ai-da 侧的浏览器使用。
