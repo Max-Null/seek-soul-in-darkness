@@ -185,16 +185,36 @@ function isTrusted(request: { headers: Record<string, string | string[] | undefi
 type ApiMethod = (payload: unknown) => Promise<unknown> | unknown
 
 // ── 通知配置（2026-08-18）：壳层主进程读同一文件驱动失焦通知 ─────────────
+// 2026-09-21 起这个文件同时管「执行期间保活」与「执行中遮罩」——三者都是壳在
+// 后台替你做的事。壳侧（shell/main.mjs）读的是同一份，**两边的默认值与嵌套
+// 合并语义必须逐字一致**，否则设置页显示的值与壳实际用的值会分叉。
 const NOTIFY_CONFIG_PATH = join(homedir(), '.ssid', 'notify.json')
-const NOTIFY_DEFAULTS = { enabled: true, replyDone: true, question: true, approval: true }
+const NOTIFY_DEFAULTS = {
+  enabled: true,
+  replyDone: true,
+  question: true,
+  approval: true,
+  // 执行期间保持系统不睡眠、屏幕不息（含一轮结束后的尾巴）。
+  keepAwake: true,
+  keepAwakeTailMs: 60000,
+  // 盖在思灵窗口上的毛玻璃提示层：alpha 越小越透（看得见底下的动静），
+  // blur 越大越糊（越读不出内容）。
+  mask: { text: '程序执行中，勿动', hotkey: 'Control+Alt+M', alpha: 0.12, blur: 10 },
+}
 type NotifyConfig = typeof NOTIFY_DEFAULTS
 
 function readNotifyConfig(): NotifyConfig {
   try {
     const parsed = JSON.parse(readFileSync(NOTIFY_CONFIG_PATH, 'utf8')) as unknown
-    return { ...NOTIFY_DEFAULTS, ...(typeof parsed === 'object' && parsed !== null ? parsed : {}) }
+    const base = typeof parsed === 'object' && parsed !== null ? parsed as Record<string, unknown> : {}
+    const mask = typeof base['mask'] === 'object' && base['mask'] !== null
+      ? base['mask'] as Record<string, unknown>
+      : {}
+    // mask 是嵌套对象：浅合并在「用户只配了 text」时会把 hotkey 整条丢掉，
+    // 故单独合并这一层。
+    return { ...NOTIFY_DEFAULTS, ...base, mask: { ...NOTIFY_DEFAULTS.mask, ...mask } } as NotifyConfig
   } catch {
-    return { ...NOTIFY_DEFAULTS }
+    return { ...NOTIFY_DEFAULTS, mask: { ...NOTIFY_DEFAULTS.mask } }
   }
 }
 
@@ -467,9 +487,26 @@ export function apply(ctx: Context): void {
     'notify.set': (payload) => {
       const record = payload as Record<string, unknown> | null
       const next = readNotifyConfig()
-      for (const key of ['enabled', 'replyDone', 'question', 'approval'] as const) {
+      for (const key of ['enabled', 'replyDone', 'question', 'approval', 'keepAwake'] as const) {
         const value = record?.[key]
         if (typeof value === 'boolean') next[key] = value
+      }
+      const tail = record?.['keepAwakeTailMs']
+      if (typeof tail === 'number' && Number.isFinite(tail) && tail >= 0) {
+        next.keepAwakeTailMs = Math.round(tail)
+      }
+      // mask 是嵌套对象：逐键写入，没提到的键保持原值（前端只提交改动的那一项）。
+      const maskPatch = record?.['mask']
+      if (typeof maskPatch === 'object' && maskPatch !== null) {
+        const patch = maskPatch as Record<string, unknown>
+        if (typeof patch['text'] === 'string') next.mask.text = patch['text']
+        if (typeof patch['hotkey'] === 'string') next.mask.hotkey = patch['hotkey'].trim()
+        // 浓度两个值都要夹到合法域：越界的 alpha 会让遮罩全透明或全黑，越界的
+        // blur 直接把面板拖垮——写入前挡掉比事后排查便宜。
+        const alpha = patch['alpha']
+        if (typeof alpha === 'number' && Number.isFinite(alpha)) next.mask.alpha = Math.min(1, Math.max(0, alpha))
+        const blur = patch['blur']
+        if (typeof blur === 'number' && Number.isFinite(blur)) next.mask.blur = Math.min(64, Math.max(0, Math.round(blur)))
       }
       mkdirSync(dirname(NOTIFY_CONFIG_PATH), { recursive: true })
       writeFileSync(NOTIFY_CONFIG_PATH, JSON.stringify(next, null, 2) + '\n')

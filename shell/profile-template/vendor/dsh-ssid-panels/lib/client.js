@@ -154,6 +154,19 @@ window.__ModuleLoader__.load({
 				notifyQuestionDesc: "AI 向你提问、需要回复时通知",
 				notifyApproval: "授权申请",
 				notifyApprovalDesc: "工具请求授权、需要处理时通知",
+				keepAwakeTitle: "执行期间保持唤醒",
+				keepAwakeDesc: "会话或目标执行时阻止系统睡眠、屏幕不息；一轮结束后仍保持一段时间，覆盖多轮之间的空隙",
+				keepAwakeTailTitle: "结束后的保持时长",
+				keepAwakeTailDesc: "一轮结束到释放之间留多少毫秒；目标模式的多轮之间有缝隙，留一段可避免闪断",
+				maskTitle: "执行中遮罩",
+				maskTextTitle: "遮罩文案",
+				maskTextDesc: "开启遮罩后盖在思灵窗口上的提示语（入口：托盘菜单项，或下面那个全局快捷键）",
+				maskHotkeyTitle: "遮罩快捷键",
+				maskHotkeyDesc: "Electron accelerator 语法，如 Control+Alt+M；保存后立即生效",
+				maskLookTitle: "遮罩观感",
+				maskLookDesc: "浓度越小越透（看得见底下的动静）· 模糊半径越大越糊（越读不出内容）",
+				saved: "✓ 已保存",
+				saveFail: "保存失败：",
 				sessionRootTitle: "会话存储",
 				sessionRootIsolated: "独立会话存储",
 				sessionRootIsolatedDesc: "与手动 dsh web 的会话目录隔离，避免两个宿主并发写坏会话日志；重启 SSiD 后生效",
@@ -244,6 +257,19 @@ window.__ModuleLoader__.load({
 				notifyQuestionDesc: "Notify when the AI asks you a question",
 				notifyApproval: "Approvals",
 				notifyApprovalDesc: "Notify when a tool requests approval",
+				keepAwakeTitle: "Stay awake while running",
+				keepAwakeDesc: "Block system sleep and display-off while a session or goal runs; stays on briefly after a turn to cover gaps between rounds",
+				keepAwakeTailTitle: "Hold after a turn ends",
+				keepAwakeTailDesc: "Milliseconds to keep holding after a turn ends; goal mode has gaps between rounds",
+				maskTitle: "In-progress mask",
+				maskTextTitle: "Mask text",
+				maskTextDesc: "The message overlaid on the SSiD window while the mask is on (via the tray item or the shortcut below)",
+				maskHotkeyTitle: "Mask shortcut",
+				maskHotkeyDesc: "Electron accelerator syntax, e.g. Control+Alt+M; takes effect immediately",
+				maskLookTitle: "Mask look",
+				maskLookDesc: "Opacity: lower is more see-through · Blur radius: higher is less readable",
+				saved: "✓ Saved",
+				saveFail: "Save failed: ",
 				sessionRootTitle: "Session storage",
 				sessionRootIsolated: "Isolate session storage",
 				sessionRootIsolatedDesc: "Separate the session directory from the manual dsh web, so two hosts cannot corrupt the same log; takes effect after restarting SSiD",
@@ -532,27 +558,100 @@ window.__ModuleLoader__.load({
 				textAlign: "center"
 			} }, updated === null ? t("notQueried") : t("lastUpdated", { t: updated }))));
 		}
+		/** 延迟提交的文本框：输入时不打扰，回车或失焦才提交。
+		*
+		*  用受控 + 本地草稿，而不是 defaultValue：后者只在挂载时取一次值，服务端回写
+		*  之后（或别处改了同一份配置）输入框会停在旧值上。editing 期间不接受外部值，
+		*  否则正在输入时被一次回写覆盖。 */
+		function DraftInput(props) {
+			const [draft, setDraft] = (0, react.useState)(props.value);
+			const [editing, setEditing] = (0, react.useState)(false);
+			(0, react.useEffect)(() => {
+				if (!editing) setDraft(props.value);
+			}, [props.value, editing]);
+			return (0, react.createElement)("input", {
+				type: "text",
+				value: draft,
+				placeholder: props.placeholder,
+				spellCheck: false,
+				onFocus: () => {
+					setEditing(true);
+				},
+				onChange: (e) => {
+					setDraft(e.target.value);
+				},
+				onKeyDown: (e) => {
+					if (e.key === "Enter") e.currentTarget.blur();
+				},
+				onBlur: () => {
+					setEditing(false);
+					if (draft !== props.value) props.onCommit(draft);
+				},
+				style: {
+					flex: "none",
+					width: props.width,
+					height: 34,
+					padding: "0 12px",
+					border: "1px solid var(--dsw-alias-border-l2)",
+					borderRadius: 8,
+					background: "var(--dsw-alias-bg-layer-3)",
+					font: "inherit",
+					fontSize: 13,
+					color: "var(--dsw-alias-label-primary)"
+				}
+			});
+		}
 		function NotifySettings() {
 			const t = useT();
 			const [config, setConfig] = (0, react.useState)(null);
+			const [msg, setMsg] = (0, react.useState)("");
 			(0, react.useEffect)(() => {
 				api("notify.get").then((value) => {
 					setConfig(value);
 				}, () => {});
 			}, []);
-			const toggle = async (key) => {
+			/** 统一写入：乐观交给返回值（服务端回的是合并后的完整配置），失败回滚。
+			*  patch 只带改动的字段——服务端按字段逐项合并，不认识的键原样保留。 */
+			const save = (patch) => {
 				if (config === null) return;
-				const next = {
-					...config,
-					[key]: !config[key]
-				};
-				setConfig(next);
-				api("notify.set", next).then((value) => {
+				const before = config;
+				setMsg("");
+				api("notify.set", patch).then((value) => {
 					setConfig(value);
-				}, () => {
-					setConfig(config);
+					setMsg(t("saved"));
+				}, (error) => {
+					setConfig(before);
+					setMsg(t("saveFail") + (error instanceof Error ? error.message : String(error)));
 				});
 			};
+			const toggle = (key) => {
+				if (config === null) return;
+				save({ [key]: !config[key] });
+			};
+			const switchBtn = (on, onClick, label) => (0, react.createElement)("button", {
+				type: "button",
+				"aria-label": label,
+				onClick,
+				style: {
+					width: 40,
+					height: 22,
+					borderRadius: 11,
+					border: "none",
+					cursor: "pointer",
+					padding: 0,
+					flex: "none",
+					background: on ? "var(--dsw-alias-state-business-primary, #4FC3F7)" : "var(--dsw-alias-border-l4, rgba(0,0,0,.16))",
+					transition: "background .15s"
+				}
+			}, (0, react.createElement)("span", { style: {
+				display: "block",
+				width: 16,
+				height: 16,
+				borderRadius: 8,
+				background: "#fff",
+				marginLeft: on ? 22 : 2,
+				transition: "margin-left .15s"
+			} }));
 			const row = (key, labelKey, descKey) => (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: {
 				display: "flex",
 				alignItems: "center",
@@ -569,35 +668,85 @@ window.__ModuleLoader__.load({
 			} }, t(labelKey)), (0, react.createElement)("span", { style: {
 				...ssid.muted,
 				fontSize: 12
-			} }, t(descKey))), (0, react.createElement)("button", {
-				type: "button",
-				style: {
-					width: 40,
-					height: 22,
-					borderRadius: 11,
-					border: "none",
-					cursor: "pointer",
-					padding: 0,
-					background: config !== null && config[key] ? "var(--dsw-alias-state-business-primary, #4FC3F7)" : "var(--dsw-alias-border-l4, rgba(0,0,0,.16))",
-					transition: "background .15s"
-				},
-				onClick: () => {
-					toggle(key);
-				}
-			}, (0, react.createElement)("span", { style: {
-				display: "block",
-				width: 16,
-				height: 16,
-				borderRadius: 8,
-				background: "#fff",
-				marginLeft: config !== null && config[key] ? 22 : 2,
-				transition: "margin-left .15s"
-			} }))));
+			} }, t(descKey))), switchBtn(config !== null && config[key], () => {
+				toggle(key);
+			}, t(labelKey))));
+			/** 数字/文本输入行：回车或失焦才提交，与截图设置同一套手感。 */
+			const inputRow = (opts) => (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: {
+				display: "flex",
+				alignItems: "center",
+				gap: 10
+			} }, (0, react.createElement)("div", { style: {
+				flex: 1,
+				display: "flex",
+				flexDirection: "column",
+				gap: 4
+			} }, (0, react.createElement)("span", { style: {
+				fontSize: 13,
+				fontWeight: 500,
+				color: "var(--dsw-alias-label-primary, #d8e0ea)"
+			} }, t(opts.labelKey)), (0, react.createElement)("span", { style: {
+				...ssid.muted,
+				fontSize: 12
+			} }, t(opts.descKey))), (0, react.createElement)(DraftInput, {
+				value: opts.value,
+				placeholder: opts.placeholder,
+				width: opts.width ?? 200,
+				onCommit: opts.commit
+			})));
+			if (config === null) return null;
 			return (0, react.createElement)("div", { style: {
 				display: "flex",
 				flexDirection: "column",
 				gap: 8
-			} }, row("enabled", "notifyEnabled", "notifyEnabledDesc"), row("replyDone", "notifyReplyDone", "notifyReplyDoneDesc"), row("question", "notifyQuestion", "notifyQuestionDesc"), row("approval", "notifyApproval", "notifyApprovalDesc"));
+			} }, row("enabled", "notifyEnabled", "notifyEnabledDesc"), row("replyDone", "notifyReplyDone", "notifyReplyDoneDesc"), row("question", "notifyQuestion", "notifyQuestionDesc"), row("approval", "notifyApproval", "notifyApprovalDesc"), row("keepAwake", "keepAwakeTitle", "keepAwakeDesc"), inputRow({
+				labelKey: "keepAwakeTailTitle",
+				descKey: "keepAwakeTailDesc",
+				value: String(config.keepAwakeTailMs),
+				width: 140,
+				commit: (raw) => {
+					const ms = Number(raw.trim());
+					if (!Number.isFinite(ms) || ms < 0) return;
+					save({ keepAwakeTailMs: Math.round(ms) });
+				}
+			}), inputRow({
+				labelKey: "maskTextTitle",
+				descKey: "maskTextDesc",
+				value: config.mask.text,
+				width: 260,
+				commit: (raw) => {
+					if (raw.trim() !== "") save({ mask: { text: raw } });
+				}
+			}), inputRow({
+				labelKey: "maskHotkeyTitle",
+				descKey: "maskHotkeyDesc",
+				value: config.mask.hotkey,
+				placeholder: "Control+Alt+M",
+				commit: (raw) => {
+					const v = raw.trim();
+					if (v !== "") save({ mask: { hotkey: v } });
+				}
+			}), inputRow({
+				labelKey: "maskLookTitle",
+				descKey: "maskLookDesc",
+				value: `${String(config.mask.alpha)} / ${String(config.mask.blur)}`,
+				placeholder: "0.12 / 10",
+				width: 140,
+				commit: (raw) => {
+					const [alpha, blur] = raw.split("/").map((part) => Number(part.trim()));
+					if (alpha === void 0 || blur === void 0) return;
+					if (!Number.isFinite(alpha) || !Number.isFinite(blur)) return;
+					save({ mask: {
+						alpha,
+						blur
+					} });
+				}
+			}), msg === "" ? null : (0, react.createElement)("div", { style: {
+				fontSize: 12,
+				lineHeight: 1.5,
+				paddingLeft: 2,
+				color: msg.startsWith("✓") ? "var(--dsw-alias-state-success-primary, #4ade80)" : "var(--dsw-alias-state-error-primary, #f87171)"
+			} }, msg));
 		}
 		/** 自绘确认弹窗（2026-08-22，替代原生 window.confirm，与插件中心同款样式；
 		*  重启确认与「清空独立根」的二次确认共用，danger 时确认按钮红色）。 */

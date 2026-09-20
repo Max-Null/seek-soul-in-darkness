@@ -635,17 +635,34 @@ const NOTIFY_DEFAULTS = {
 	enabled: true,
 	replyDone: true,
 	question: true,
-	approval: true
+	approval: true,
+	keepAwake: true,
+	keepAwakeTailMs: 6e4,
+	mask: {
+		text: "程序执行中，勿动",
+		hotkey: "Control+Alt+M",
+		alpha: .12,
+		blur: 10
+	}
 };
 function readNotifyConfig() {
 	try {
 		const parsed = JSON.parse(readFileSync(NOTIFY_CONFIG_PATH, "utf8"));
+		const base = typeof parsed === "object" && parsed !== null ? parsed : {};
+		const mask = typeof base["mask"] === "object" && base["mask"] !== null ? base["mask"] : {};
 		return {
 			...NOTIFY_DEFAULTS,
-			...typeof parsed === "object" && parsed !== null ? parsed : {}
+			...base,
+			mask: {
+				...NOTIFY_DEFAULTS.mask,
+				...mask
+			}
 		};
 	} catch {
-		return { ...NOTIFY_DEFAULTS };
+		return {
+			...NOTIFY_DEFAULTS,
+			mask: { ...NOTIFY_DEFAULTS.mask }
+		};
 	}
 }
 const CHANGELOG_SEEN_PATH = join(homedir(), ".ssid", "changelog-seen.json");
@@ -902,10 +919,23 @@ function apply(ctx) {
 				"enabled",
 				"replyDone",
 				"question",
-				"approval"
+				"approval",
+				"keepAwake"
 			]) {
 				const value = record?.[key];
 				if (typeof value === "boolean") next[key] = value;
+			}
+			const tail = record?.["keepAwakeTailMs"];
+			if (typeof tail === "number" && Number.isFinite(tail) && tail >= 0) next.keepAwakeTailMs = Math.round(tail);
+			const maskPatch = record?.["mask"];
+			if (typeof maskPatch === "object" && maskPatch !== null) {
+				const patch = maskPatch;
+				if (typeof patch["text"] === "string") next.mask.text = patch["text"];
+				if (typeof patch["hotkey"] === "string") next.mask.hotkey = patch["hotkey"].trim();
+				const alpha = patch["alpha"];
+				if (typeof alpha === "number" && Number.isFinite(alpha)) next.mask.alpha = Math.min(1, Math.max(0, alpha));
+				const blur = patch["blur"];
+				if (typeof blur === "number" && Number.isFinite(blur)) next.mask.blur = Math.min(64, Math.max(0, Math.round(blur)));
 			}
 			mkdirSync(dirname(NOTIFY_CONFIG_PATH), { recursive: true });
 			writeFileSync(NOTIFY_CONFIG_PATH, JSON.stringify(next, null, 2) + "\n");
