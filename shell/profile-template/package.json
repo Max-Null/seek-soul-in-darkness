@@ -15,7 +15,7 @@
     "@max-null/dsh-habit": "0.2.0",
     "@max-null/dsh-memory": "0.11.0",
     "@max-null/dsh-node-appearance": "0.5.0",
-    "@max-null/dsh-plugin-center": "0.4.0",
+    "@max-null/dsh-plugin-center": "0.4.1",
     "@max-null/dsh-skill-mcp-center": "0.5.1",
     "@max-null/dsh-ssid-panels": "file:./vendor/dsh-ssid-panels",
     "@max-null/dsh-ssid-zh-ui": "file:./vendor/dsh-ssid-zh-ui",
