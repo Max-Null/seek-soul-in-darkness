@@ -20,6 +20,8 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createGate } from './lib/gate-report.mjs';
+// 判定 3 的方向区分复用本仓库自己的 semver 语义（含 pre-release；无法解析返回 null）。
+import { compareVersions } from '../lib/profile-merge.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SHELL = path.resolve(HERE, '..');
@@ -76,7 +78,17 @@ for (const prof of profiles) {
         gate.violation(bpPath, null, `「${n}」只在 B 有 ⚠ B 超前于 A —— 下次部署会被归档包覆盖，必须补进 profile-template（铁律 5 双处声明）`);
       }
     } else if (aDeps[n] !== bDeps[n]) {
-      gate.violation(bpPath, null, `「${n}」版本失配：A=${aDeps[n]}  B=${bDeps[n]}`);
+      // 方向区分（本文件开头第 11 行：两个方向都要报，但文案必须区分，否则读者
+      // 无法判断该不该动手）。compareVersions 对非 semver 形态（file: / git: 等）
+      // 返回 null —— 那类退回中性文案，不假装知道方向。
+      const cmp = compareVersions(aDeps[n], bDeps[n]);
+      if (cmp === null) {
+        gate.violation(bpPath, null, `「${n}」声明不同：A=${aDeps[n]}  B=${bDeps[n]}（非 semver 形态，无法判方向）`);
+      } else if (cmp > 0) {
+        gate.violation(bpPath, null, `「${n}」版本失配：B 落后于 A（A=${aDeps[n]}  B=${bDeps[n]}）—— 可预期的稳态，部署后会按 A 补上；要立刻拉平就跑 pnpm install`);
+      } else {
+        gate.violation(bpPath, null, `「${n}」版本失配：⚠ B 超前于 A（A=${aDeps[n]}  B=${bDeps[n]}）—— 下次部署会被归档包覆盖，必须补进 profile-template（铁律 5 双处声明）`);
+      }
     }
   }
 

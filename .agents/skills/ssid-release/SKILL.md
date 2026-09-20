@@ -20,6 +20,10 @@ description: "SSiD（思灵）发版流程：版本决策、内置插件对齐�
   - 源码 bump 后必须同步 vendor：`lib/*`（构建产物）+ **package.json 版本号**（漏了 = 插件中心持续误报更新）；
   - `git diff --no-index <源>/lib <vendor>/lib` 一致；源仓库 git 干净。
 - **npm 预置插件**（profile-template/package.json）：`^0.x.y` **不跨 minor**——要新 minor 必须显式改 pin；插件 npm 发布必须在归档重建之前（归档按 pin 解析）。
+- **`check-profile-sync` 报版本失配时，先判方向再动手**（同名不同版；判据详见手册 §7 坑 #37）：
+  - **B 落后于 A**（运行时 pin 旧于 template）= 可预期的稳态，部署时会按 template 补上，通常不必动；要立刻拉平就 `pnpm install`。
+  - **B 超前于 A** ⚠（运行时 pin 新于 template）= 下次部署会被归档包覆盖，**必须补进 `profile-template`**（铁律 5 双处声明）；此时 `pnpm install` 是**反方向**动作，会把本机独有的版本静默降回。
+  - `file:` / `git:` 这类非 semver 形态判不出方向，门给中性文案——须人工核对。
 - **peers**：`pnpm peers check` 失败项若为宿主官方 peer（@deepseek-ai/dsh-*），hoisted 布局下为既有特征，运行时由 cordis loader 注入，`prepare-runtime.mjs` 的 MISSING_PEERS 无需补；新引入第三方插件的 peer 先 semver 判定再下结论。
 
 ## 2. 更新日志
