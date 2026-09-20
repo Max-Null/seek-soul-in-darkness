@@ -63,6 +63,7 @@
 | 2026-09-21 | §3（新增 `mask.alpha` / `mask.blur`）/ §7 坑 #39（新增） | **执行中遮罩改为注入 DSH 页面实现**：初版独立窗口无论怎么调都做不出毛玻璃——Windows acrylic 的不透明度与半径被 DWM 定死（只剩均匀浅灰、连「有东西在动」都看不出），透明窗口 + 页面 `backdrop-filter` 又取不到窗口背后的 backdrop，三条路逐一实测（详见坑 #39）。改为注入页面内的全屏层后，同页面 backdrop-filter 半径完全可控，`alpha`（越小越透）与 `blur`（越大越糊）两个旋钮进 `notify.json`，默认 0.12 / 10px = 「布局轮廓看得出来、一个字读不出」。代价：遮罩依附页面（`dom-ready` 按状态补注）、解除信号改走 `console-message` 回传（主视图页无 preload，拿不到 `ipcRenderer`）；`mask.html` / `mask-preload.cjs` 随之删除 | 用户「不用全黑，做成个毛玻璃吧，这样还能隐约看到会话在进行」→ 三轮目视调参（「透明度拉高，模糊度高一点」→「模糊度降一降，透明度再高一点」）|
 | 2026-09-21 | §3（补设置页入口）/ 插件 `dsh-ssid-panels` | **保活与遮罩进设置页**：设置 → 关于 SSiD → 「通知设置」区新增 6 行——保持唤醒开关、结束后的保持时长、遮罩文案、遮罩快捷键、遮罩观感（`alpha / blur`）；host 半 `notify.set` 改为**逐字段合并**（只提交改动项即可，`alpha` 夹 `[0,1]`、`blur` 夹 `[0,64]`），`NOTIFY_DEFAULTS` 与壳侧逐字对齐（两边读同一份文件，默认值与嵌套合并语义必须一致）。输入框抽了 `DraftInput`——受控 + 本地草稿，因为 `defaultValue` 只在挂载时取值，服务端回写后输入框会停在旧值；编辑期间不接受外部值，否则正在输入时会被一次回写覆盖 | 用户「我怎么做设置呢？这个得有个开关，和编辑文字的地方吧？」 |
 | 2026-09-21 | §3（新增 `mask.passcode`）/ 壳 + 插件 | **遮罩解除口令**（用户选「三个入口都走它」）：留空 = 不设防（长按 2 秒直接解除，向后兼容）；非空时**托盘项、全局快捷键、长按按钮都只把口令输入框调出来**，比对通过才解除——只给按钮加口令是没用的，托盘一点就开了。设置页同区加「解除口令」输入框。实现上两处要点：① 密钥在注入脚本里被写成常量、页面对比后照旧用 `console.log('__SSID_MASK_RELEASE__')` 回传（不新增通道）；② 遮罩上那条 keydown 拦截必须**放行输入框**，否则口令根本打不进去。**它不是安全边界**——明文存 notify.json，能读文件的人就能读到；挡的是「知道要长按但不愿翻配置」的人，逃生通道就是改文件删掉它 | 用户「我们要不要设置密码？」→ 拆解威胁模型后给出三选项，用户选「加口令，三个入口都走它」 |
+| 2026-09-21 | §9 截图规范第 5 条 | 豁免的「当前适用」补入 **dsh-tone-layer**、**dsh-allostasis**——两个纯提示注入类插件此前已在用豁免写法（README 引用 §9 并注明无界面元素），但没登记进清单；同条把 2026-08-30 的缺口快照标注为历史（该批已于 09-12 补齐，旧快照与待办表互相矛盾） | dsh-allostasis 发布前核对截图要求，用户裁决「接受这个豁免理由」 |
 
 ## 工作区规范（布局 + 放置规则，2026-08-29 整理定稿）
 
@@ -502,10 +503,10 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 - ✅ 达标：dsh-chat-rail、dsh-node-appearance
 - ⚠️ 半规范（图未进 shots / 空段 / 散落）：dsh-capture、dsh-draft-polish、dsh-plugin-center
   - ✅ 上述三处已于 2026-09-12 补齐（dsh-capture 归位 7 张、dsh-draft-polish 填充空段、dsh-plugin-center 归位 3 张）。
-5. **无 UI 插件豁免**（2026-09-12 补）：**行为/提示注入/Provider 类**插件（不新增任何按钮、面板或设置项）**不适用**第 3 条的「入口与面板」截图要求；改为在 `## 截图` 段用文字说明「装完会多出/变成什么」的行为效果，并注明本插件无界面元素。当前适用：dsh-chinese-thinking、dsh-guardian、dsh-habit、dsh-skills。
+5. **无 UI 插件豁免**（2026-09-12 补）：**行为/提示注入/Provider 类**插件（不新增任何按钮、面板或设置项）**不适用**第 3 条的「入口与面板」截图要求；改为在 `## 截图` 段用文字说明「装完会多出/变成什么」的行为效果，并注明本插件无界面元素。当前适用：dsh-chinese-thinking、dsh-guardian、dsh-habit、dsh-skills、dsh-tone-layer、dsh-allostasis。
 6. **标题允许双语**（2026-09-12 补）：`## 截图` 段标题可写作 `## Screenshots / 截图` 等**含「截图」**的形式（便于英文读者定位）；校验按「h2 标题含『截图』」判定，不强制纯中文。
 7. **`files` 字段必须含 `docs/shots`**（2026-09-12 补）：截图目录移入 `docs/shots/` 后，若 `package.json` 的 `files` 未列入该路径，**截图不会随 npm 包发布**（README 在 npm 页面上会显示裂图）。这是易漏项，新增截图时一并检查。
-- ❌ 缺：dsh-chinese-thinking、dsh-guardian、dsh-habit、dsh-memory、dsh-skill-mcp-center、dsh-ssid-achievements（dsh-assistant-center 开发中，README 待建）
+- ~~❌ 缺：dsh-chinese-thinking、dsh-guardian、dsh-habit、dsh-memory、dsh-skill-mcp-center、dsh-ssid-achievements~~ —— 此清单是 2026-08-30 的快照，上列缺口已于 2026-09-12 全部补齐（新截 5 个 + 归位 2 个 + 豁免 4 个，见本文待办表第 4 项）；保留删除线是为了不与上方「现状缺口」标题下的结论互相矛盾。
 
 ### 样式与视觉一致性（DSH 风格对齐，2026-08-30）
 
