@@ -72,6 +72,24 @@ const BUILTIN_ADAPTERS = [
 		hide: true
 	},
 	{
+		id: "ds-harness-remote",
+		button: ".dshRemoteModeButton",
+		buttonTexts: ["Remote", "远程"],
+		icon: { source: "from-button" },
+		label: "Remote",
+		act: { kind: "click" },
+		hide: true
+	},
+	{
+		id: "dsh-context",
+		button: ".lc-ov-entry",
+		buttonTexts: ["上下文洞察", "Context insight"],
+		icon: { source: "from-button" },
+		label: "上下文洞察",
+		act: { kind: "click" },
+		hide: true
+	},
+	{
 		id: "dsh-settings",
 		button: "button[aria-label=\"设置\"], button[aria-label=\"Settings\"]",
 		buttonTexts: ["设置", "Settings"],
@@ -785,7 +803,9 @@ window.__ModuleLoader__.load({
 		*/
 		function isSmPanelOpen() {
 			var p = document.querySelector(".sm-panel");
-			return p !== null && p.offsetParent !== null;
+			if (p === null) return false;
+			var r = p.getBoundingClientRect();
+			return r.width > 0 && r.height > 0;
 		}
 		function clickSmPanelClose() {
 			var p = document.querySelector(".sm-panel");
@@ -1191,7 +1211,14 @@ window.__ModuleLoader__.load({
 					if (origBtn !== null) {
 						origBtn.style.display = "none";
 						var wrapper = origBtn.parentElement;
-						if (wrapper !== null && wrapper !== document.body && wrapper.children.length === 1) wrapper.style.display = "none";
+						if (wrapper !== null && wrapper !== document.body && wrapper.children.length === 1) {
+							wrapper.style.minHeight = "0";
+							wrapper.style.height = "0";
+							wrapper.style.padding = "0";
+							wrapper.style.margin = "0";
+							wrapper.style.border = "none";
+							wrapper.style.overflow = "visible";
+						}
 					}
 				} catch (_e) {}
 				return b;
