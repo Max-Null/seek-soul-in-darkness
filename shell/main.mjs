@@ -1238,6 +1238,14 @@ async function start() {
   // BrowserView A: official DSH loopback UI (replaces the splash page).
   // addBrowserView（不是 setBrowserView）——setBrowserView 会移除上面的 titleBar。
   const mainView = new BrowserView({ webPreferences: { sandbox: true, contextIsolation: true } })
+  // 不透明垫底（与窗口 backgroundColor 同色）：DSH 页面的底色令牌被皮肤插件
+  // 洗成了半透明（DSH 原生底色并不透明），而 splash 页面至今留在 content 层
+  // （addBrowserView 只是把 DSH 叠上去，并没有真的替换 splash）。BrowserView
+  // 一旦是透明表面，splash 就会从 DSH 底下渗上来——composer 卡片挂着全尺寸
+  // backdrop-filter 时尤其明显（实测：启动画面的 logo / 步骤清单 /「取消更新」
+  // 按钮穿透到输入框区域）。
+  // 与壁纸效果无关：壁纸是 dream-skin 注入在 DSH 页面内部的层，不在窗口下层。
+  mainView.setBackgroundColor('#0f141d')
   win.addBrowserView(mainView)
   safeLog(`ssid: mainView webContentsId=${mainView.webContents.id} (main window contentId=${win.webContents.id})\n`)
 
