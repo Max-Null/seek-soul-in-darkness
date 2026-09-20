@@ -983,7 +983,11 @@ async function start() {
     // 默认快捷键实测取 Control+Alt+M：本机上 Control+Alt+L 与 Control+Shift+L
     // 都已被别的程序占用（globalShortcut.register 返回 false），注册失败会打
     // 日志但功能静默不可用——所以默认值要挑实测空闲的组合。
-    mask: { text: '程序执行中，勿动', hotkey: 'Control+Alt+M' },
+    //
+    // alpha / blur 是遮罩观感的两个旋钮（都是「越小越透、越大越糊」的反面）：
+    //   alpha 越小越透（看得见底下的动静），blur 越大越糊（越读不出内容）。
+    // 0.12 / 10px 的落点是「布局轮廓看得出来、一个字都读不出」。改完下次开启生效。
+    mask: { text: '程序执行中，勿动', hotkey: 'Control+Alt+M', alpha: 0.12, blur: 10 },
   }
   const readNotifyConfig = () => {
     try {
@@ -1351,6 +1355,12 @@ async function start() {
       requestThemeSync()
       return
     }
+    // 遮罩上的长按按钮解除：主视图页没有 preload（拿不到 ipcRenderer），所以走
+    // 页面 console → 壳这条路回传，与 [theme-sync] 同一套标记模式。
+    if (message.includes('__SSID_MASK_RELEASE__')) {
+      hideMask('hold')
+      return
+    }
     safeLog(`[main-ui:${details.level}] ${message}\n`)
   })
   // F12 打开官方 UI 的 devtools（打包版默认禁用，排查问题时需要）。
@@ -1632,7 +1642,17 @@ async function start() {
   // 开启有托盘项与全局快捷键两个入口，都走 toggleMask()，状态只有一份；解除
   // 除了这两处，还有遮罩上那个**长按 2 秒**的按钮（单击无效，防随手点掉）。
   // 遮罩自己是一个保活持有来源：屏幕黑了，挂着的提示也就白挂了。
-  let maskWin = null
+  // 实现方式是**注入 DSH 页面内部**，不是独立窗口。原因是毛玻璃：能真正模糊到
+  // 底下内容的只有**同一页面内**的 backdrop-filter，跨窗口一律无效。三条路都实测过：
+  //   ① Windows acrylic（backgroundMaterial）——DWM 把不透明度和模糊半径都定死，
+  //      只剩一片均匀的浅灰，连「有东西在动」都看不出来，backgroundColor 的 alpha
+  //      也盖不过它的材质色；
+  //   ② 透明窗口 + 页面 backdrop-filter ——窗口背后不在它的合成树里，取不到 backdrop，
+  //      实测内容原样清晰透出；
+  //   ③ 独立窗口的任何变体 ——同上。
+  //
+  // 代价是遮罩依附页面：页面重载（刷新 / 重启内核）会把它冲掉，所以 dom-ready 时
+  // 要按 maskActive 补回去。解除信号也改走页面 → console-message 回传。
   let maskActive = false
 
   /** 托盘那项要在「显示/解除」之间切换文案。三处解除入口（托盘、快捷键、长按
@@ -1641,89 +1661,105 @@ async function start() {
     if (tray !== null) tray.setContextMenu(buildTrayMenu())
   }
 
-  /** 遮罩跟随主窗口；最小化/隐藏交给 parent 关系自动处理。 */
-  const followMask = () => {
-    if (maskWin === null || maskWin.isDestroyed()) return
-    maskWin.setBounds(win.getBounds())
+  /** 注入节点的 id：既是删除时的抓手，也是「页面重载后要不要补」的判据。 */
+  const MASK_DOM_ID = 'ssid-shell-mask'
+
+  /** 生成遮罩的注入脚本。文案与浓度按**当时**的配置生成——改了 notify.json，
+   *  下一次开启即生效，不必重启壳。 */
+  const buildMaskScript = (text, alpha, blur) => `(() => {
+  const ID = ${JSON.stringify(MASK_DOM_ID)}
+  const old = document.getElementById(ID)
+  if (old) old.remove()
+  const d = document.createElement('div')
+  d.id = ID
+  // 归属标记：手动注入的节点要能被认出是壳的手笔，别被插件的 HMR 当成自己的
+  // 东西顺手删掉（与手册 §7 坑 #17 同一类问题）。
+  d.setAttribute('data-plugin', 'ssid-shell-mask')
+  d.style.cssText = ['position:fixed', 'inset:0', 'z-index:2147483647',
+    'background:rgba(9,12,20,${alpha})',
+    'backdrop-filter:blur(${blur}px)', '-webkit-backdrop-filter:blur(${blur}px)',
+    'display:flex', 'flex-direction:column', 'align-items:center', 'justify-content:center',
+    'gap:22px', 'color:#eaf1f8', 'user-select:none', 'cursor:default',
+    'font-family:"Microsoft YaHei UI","Segoe UI",system-ui,sans-serif'].join(';')
+  const mk = (tag, css, txt) => { const el = document.createElement(tag); el.style.cssText = css; if (txt) el.textContent = txt; return el }
+  const title = mk('div', 'max-width:82%;padding:0 24px;font-size:34px;font-weight:600;line-height:1.5;letter-spacing:2px;text-align:center;word-break:break-word;text-shadow:0 2px 18px rgba(0,0,0,.8),0 1px 3px rgba(0,0,0,.95)', ${JSON.stringify(text)})
+  const hint = mk('div', 'font-size:13px;letter-spacing:.5px;opacity:.62;text-shadow:0 1px 8px rgba(0,0,0,.85)', '按住下方按钮 2 秒解除')
+  const btn = mk('button', 'position:relative;margin-top:6px;padding:12px 32px;overflow:hidden;font:inherit;font-size:15px;color:inherit;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.24);border-radius:999px;box-shadow:0 2px 14px rgba(0,0,0,.4);cursor:pointer;user-select:none')
+  btn.type = 'button'
+  const fill = mk('div', 'position:absolute;inset:0;width:0;background:rgba(90,160,255,.38);pointer-events:none')
+  const label = mk('span', 'position:relative', '按住解除')
+  btn.appendChild(fill); btn.appendChild(label)
+  // 长按满 2 秒才解除；单击什么都不做——防的是路过的人随手点掉。
+  const HOLD = 2000
+  let raf = null, began = 0
+  const stop = () => { if (raf !== null) { cancelAnimationFrame(raf); raf = null } fill.style.width = '0%' }
+  const tick = () => {
+    const ratio = Math.min(1, (performance.now() - began) / HOLD)
+    fill.style.width = (ratio * 100) + '%'
+    if (ratio >= 1) { stop(); console.log('__SSID_MASK_RELEASE__'); return }
+    raf = requestAnimationFrame(tick)
+  }
+  btn.addEventListener('mousedown', (e) => { e.preventDefault(); if (raf !== null) return; began = performance.now(); raf = requestAnimationFrame(tick) })
+  btn.addEventListener('mouseup', stop)
+  btn.addEventListener('mouseleave', stop)
+  btn.addEventListener('click', (e) => e.preventDefault())
+  window.addEventListener('blur', stop)
+  d.appendChild(title); d.appendChild(hint); d.appendChild(btn)
+  // 误触防线：键盘 / 右键 / 拖拽一律挡掉。全局快捷键是系统级的，不受影响。
+  d.addEventListener('contextmenu', (e) => e.preventDefault())
+  d.addEventListener('keydown', (e) => e.preventDefault())
+  d.addEventListener('dragstart', (e) => e.preventDefault())
+  document.body.appendChild(d)
+  return true
+})()`
+
+  const removeMaskScript = `(() => { const el = document.getElementById(${JSON.stringify(MASK_DOM_ID)}); if (el) el.remove(); return true })()`
+
+  /** 把遮罩画上去。幂等——脚本本身会先删旧的再建新的，所以重复调用安全。 */
+  const paintMask = () => {
+    if (mainView.webContents.isDestroyed()) return
+    const cfg = readNotifyConfig().mask
+    const alpha = Number(cfg.alpha)
+    const blur = Number(cfg.blur)
+    void mainView.webContents
+      .executeJavaScript(buildMaskScript(
+        String(cfg.text ?? ''),
+        Number.isFinite(alpha) ? alpha : 0.12,
+        Number.isFinite(blur) ? blur : 10,
+      ))
+      .catch((error) => {
+        safeLog(`[mask] inject failed: ${error instanceof Error ? error.message : String(error)}\n`)
+      })
   }
 
-  const hideMask = () => {
+  const hideMask = (why) => {
+    if (!maskActive) return
     maskActive = false
     keepAwake.setMask(false)
-    if (maskWin !== null && !maskWin.isDestroyed()) maskWin.hide()
+    if (!mainView.webContents.isDestroyed()) {
+      void mainView.webContents.executeJavaScript(removeMaskScript).catch(() => {})
+    }
     syncMaskTray()
-    safeLog('ssid: mask off\n')
+    safeLog(`ssid: mask off${why === undefined ? '' : ` (${why})`}\n`)
   }
 
-  const showMask = (text) => {
-    if (maskWin === null || maskWin.isDestroyed()) {
-      maskWin = new BrowserWindow({
-        parent: win,
-        frame: false,
-        show: false,
-        resizable: false,
-        movable: false,
-        minimizable: false,
-        maximizable: false,
-        fullscreenable: false,
-        skipTaskbar: true,
-        backgroundColor: '#0f141d',
-        webPreferences: {
-          sandbox: true,
-          contextIsolation: true,
-          preload: fileURLToPath(new URL('./mask-preload.cjs', import.meta.url)),
-        },
-      })
-      // 无边框窗口的 Windows 系统右键菜单：DOM 层已挡，这里兜底一次。
-      maskWin.webContents.on('context-menu', (event) => event.preventDefault())
-      maskWin.webContents.on('render-process-gone', (_event, details) => {
-        safeLog(`[mask] renderer gone reason=${details?.reason} exitCode=${details?.exitCode}\n`)
-      })
-      maskWin.on('closed', () => {
-        maskWin = null
-        // 被外部销毁（系统强制 / 父窗口关闭）：状态与保活都要跟着收，否则壳
-        // 会自以为还盖着，屏幕永远不关。
-        if (maskActive) {
-          maskActive = false
-          keepAwake.setMask(false)
-          syncMaskTray()
-        }
-      })
-      void maskWin.loadFile(fileURLToPath(new URL('./mask.html', import.meta.url)))
-    }
+  const showMask = () => {
     maskActive = true
     keepAwake.setMask(true)
-    followMask()
-    if (!maskWin.isVisible()) maskWin.show()
-    maskWin.focus()
-    // 文案要等页面加载完才注入得进去：首次创建时 isLoading() 必为真，走
-    // did-finish-load；此后重复开启是即时注入。
-    const inject = () => {
-      if (maskWin === null || maskWin.isDestroyed()) return
-      void maskWin.webContents
-        .executeJavaScript(`window.__setMaskText(${JSON.stringify(String(text ?? ''))})`)
-        .catch((error) => {
-          safeLog(`[mask] text inject failed: ${error instanceof Error ? error.message : String(error)}\n`)
-        })
-    }
-    if (maskWin.webContents.isLoading()) maskWin.webContents.once('did-finish-load', inject)
-    else inject()
+    paintMask()
     syncMaskTray()
-    safeLog(`ssid: mask on text=${JSON.stringify(String(text ?? ''))}\n`)
+    win.focus()
+    safeLog(`ssid: mask on text=${JSON.stringify(String(readNotifyConfig().mask.text ?? ''))}\n`)
   }
 
   const toggleMask = () => {
-    if (maskActive) { hideMask(); return }
-    showMask(readNotifyConfig().mask.text)
+    if (maskActive) { hideMask('toggle'); return }
+    showMask()
   }
 
-  win.on('resize', followMask)
-  win.on('move', followMask)
-  ipcMain.on('ssid:mask:release', (event) => {
-    // 只认遮罩窗口自己发来的解除请求，别让主视图页里的脚本关掉它。
-    if (maskWin === null || maskWin.isDestroyed() || event.sender.id !== maskWin.webContents.id) return
-    safeLog(`[mask] release by hold sender=${event.sender.id}\n`)
-    hideMask()
+  // 页面重载（刷新 / 重启内核）会把注入的节点冲掉——只要壳认为还盖着，就补回去。
+  mainView.webContents.on('dom-ready', () => {
+    if (maskActive) paintMask()
   })
 
   // ── tray: close-to-tray, tray menu (show / quit) ────────────────────────
