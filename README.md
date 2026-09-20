@@ -47,6 +47,18 @@ SSiD 是 fractal 的 **DSH 基座版**——基于 [DeepSeek Harness](https://gi
 - **壳**：自研（Electron，参考 anywhere-labs 架构）
 - **插件**：预制插件全家桶（中文思考、跨会话记忆、Guardian 状态引擎、自学习习惯引擎、皮肤）+ 侧栏生态（dsh-better-sidebar 及扩展）
 
+## 截图
+
+| 执行中遮罩：看得见动静、读不出内容 | 解除口令：长按 2 秒后再输入 |
+|---|---|
+| ![执行中遮罩](docs/shots/mask-glass-1.png) | ![解除口令](docs/shots/mask-passcode-1.png) |
+
+**设置位置：设置 → 关于 SSiD → 通知设置**（文案、模糊浓度、解除口令都可改，也能整个关掉）：
+
+![遮罩设置](docs/shots/mask-settings-1.png)
+
+> **执行中遮罩**——会话或目标正在跑的时候，从托盘菜单（或按 `Control+Alt+M`）给窗口盖一层毛玻璃：**底下看得见有动静，但读不出内容**。离开电脑去吃饭时挂着正合适；期间同时阻止系统睡眠与息屏，跑完自动恢复。解除要长按 2 秒（防手滑），也可以再设一道口令。
+
 ## 现状
 
 **最新版本：v0.2.1**（2026-09-07，[Release Notes](docs/release-notes-v0.2.1.md)）：预制微信桥（dsh-wechat 0.9.1，扫码绑定）+ CodeGraph MCP 0.20.1、免安装版（zip）交付形态（Win10 家庭版等安装器受阻场景的正解：解压即用）、升级部署「用户层保留」护栏（用户自装插件 / MCP 不再被升级覆盖）、归档构建修正。v0.2.0（[Notes](docs/release-notes-v0.2.0.md)，原 v0.1.18 未分发内容并入重打）为 **DSH rc.1 内核升级** + 插件基线升级 + 在线更新网络链修复。v0.1.x 系列演进（自研壳 + 侧栏生态 + 预制插件、标题栏统一按钮组、插件中心、预设技能包 14 技能、会话存储隔离等）见各版本 [Release Notes](docs/) 与 [Release 页面](https://github.com/Max-Null/seek-soul-in-darkness/releases)。
