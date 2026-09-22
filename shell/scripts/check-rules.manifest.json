@@ -14,8 +14,10 @@
   ],
   "$profilesNote": "只比 ssid。~/.dsh/profiles/web 是 web 开发环境，vendor 包集合不同（实测多一个 dsh-dream-skin）。",
   "profileSync": {
-    "exemptOnlyInB": {},
-    "$note": "（空 —— 2026-09-12 @max-null/dsh-skills 已转 npm 0.1.0，豁免撤销）"
+    "exemptOnlyInB": {
+      "@dsh-pet/bridge": "桌面宠物的 install_bridge() 往运行时 profile 写的 link: 依赖（指向桌宠自己的安装目录）。**不能**补进模板：归档是给所有用户装的，link 目标在别人机器上不存在，补上它会让内核起不来（手册 §7 坑 #42）。它只在本机运行时成立，属于有意不入模板的运行时增量"
+    },
+    "$note": "2026-09-12 @max-null/dsh-skills 转 npm 0.1.0 后豁免撤销；2026-09-23 登记 @dsh-pet/bridge（理由见上）。豁免会被 check-profile-sync 自洁：登记项不再出现时会打印「已过期」提示，可据此移除。"
   },
   "vendorCopies": {
     "tpl": "shell/profile-template/vendor",

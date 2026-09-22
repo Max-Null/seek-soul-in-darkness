@@ -47,6 +47,8 @@ const manifest = JSON.parse(fs.readFileSync(MANIFEST, 'utf8'));
 const profiles = manifest.profiles ?? ['ssid'];
 /** 已知临时态白名单（manifest 声明）：命中时降级为 info 但仍然打印，不静默。 */
 const exemptOnlyInB = manifest.profileSync?.exemptOnlyInB ?? {};
+/** 所有受检 profile 里实际出现过的非内核依赖名；循环后用来给豁免登记自洁。 */
+const seenInB = new Set();
 
 console.log(`  A（发版基准）= ${path.relative(REPO, TEMPLATE_PKG)}`);
 console.log(`  B（运行时）  = ${path.join(DSH_HOME, 'profiles', '<name>', 'package.json')}`);
@@ -64,6 +66,7 @@ for (const prof of profiles) {
   }
   const B = JSON.parse(fs.readFileSync(bpPath, 'utf8'));
   const bDeps = B.dependencies ?? {};
+  for (const n of Object.keys(bDeps)) if (!isKernel(n)) seenInB.add(n);
   gate.info(`B[${prof}] dependencies ${Object.keys(bDeps).length} 个（含内核族 ${Object.keys(bDeps).filter(isKernel).length} 个，已排除）`);
 
   // ── 判定 1/2/3：依赖集的方向性差异与版本失配 ──
@@ -160,6 +163,15 @@ for (const prof of profiles) {
         gate.violation(runPatchPath, null, `patch 条目「${id}」缺 disabled 护栏（模板有、运行时没有）⚠ 该条目的 args 一旦求值出 null 会让整棵插件树加载失败、内核起不来`);
       }
     }
+  }
+}
+
+// 豁免登记自洁：登记的项若在所有受检 profile 里都不再出现，它已经是一条死豁免。
+// 「不静默」是这条纪律的两面 —— 命中时要打印，失效时也要，否则白名单只会越积越旧。
+for (const name of Object.keys(exemptOnlyInB)) {
+  gate.inspect();
+  if (!seenInB.has(name)) {
+    gate.info(`豁免已过期：「${name}」在所有受检 profile 里都不再出现 —— 可从 manifest 的 profileSync.exemptOnlyInB 移除`);
   }
 }
 
