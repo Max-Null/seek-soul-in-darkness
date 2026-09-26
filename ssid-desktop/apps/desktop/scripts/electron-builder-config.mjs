@@ -105,6 +105,9 @@ export function createElectronBuilderConfig(
   // electron-builder merges extraMetadata into the packaged manifest, so a build version here reaches
   // the artifact names, the update feed, and the installed app.getVersion() the updater compares against.
   const productVersion = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')).version
+  // 运行时描述里写的是它内嵌的 dsh 版本（见 prepare-dsh.ts 的 desktopRelease），不是思灵的
+  // 产品版本 —— 自 1.0.0 起两者独立，下面校验运行时树的完整性必须用对是哪一个。
+  const dshVersion = JSON.parse(readFileSync(fileURLToPath(new URL('../../../package.json', import.meta.url)), 'utf8')).version
   const buildVersion = resolveDesktopBuildVersion(env, productVersion)
   const packaged = resolveDesktopBuildCommit(env)
   return {
@@ -211,10 +214,10 @@ export function createElectronBuilderConfig(
         await writeMacOSAppUpdateConfig(resourcesDir, resolveMacOSAppUpdateFeed(context.packager.config.publish),
           context.packager.appInfo.updaterCacheDirName)
       }
-      // The bundled runtime declares whichever version prepared it: the product version for an ordinary
-      // release, and a rewritten one for installed-update qualification.
+      // The bundled runtime declares whichever version prepared it: the bundled dsh version for an
+      // ordinary release, and a rewritten one for installed-update qualification.
       await verifyDesktopRuntime(buildPaths.dsh,
-        preparedRuntimeVersion ?? productVersion, { platform: resolvedPlatform, arch: resolvedArch })
+        preparedRuntimeVersion ?? dshVersion, { platform: resolvedPlatform, arch: resolvedArch })
       // Unsigned Windows builds skip electron-builder's afterSign hook.
       if (packagesWindows && unsigned) await verifyWindowsAsarUnpack(buildPaths.dsh, resourcesDir, windowsCode)
     },
