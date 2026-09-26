@@ -67,9 +67,15 @@ function resolveLauncher(isPackaged) {
   }
   // dev：Electron 自带的 Node 当运行时，tsx 负责转译 TS。
   // cwd 设为 shell/ 以便子进程解析到 shell/node_modules/tsx。
+  // SSID_KERNEL_INSPECT=1 时挂 Node inspector（端口随机，内核自己打印到
+  // kernel.log）：`--import` 与 `--inspect` 同属 Node 的 CLI 选项，放进 args
+  // 才可靠——实测 NODE_OPTIONS 在这条 Electron-as-Node 路径上不生效。
   return {
     command: process.execPath,
-    args: ['--import', 'tsx/esm', join(HERE, 'kernel-child.ts')],
+    args: [
+      ...(process.env.SSID_KERNEL_INSPECT === '1' ? ['--inspect=0'] : []),
+      '--import', 'tsx/esm', join(HERE, 'kernel-child.ts'),
+    ],
   }
 }
 

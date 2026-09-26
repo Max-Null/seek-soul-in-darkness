@@ -134,6 +134,15 @@ async function main(): Promise<void> {
     console.error('ssid: kernel-child 未提供 userQuestions，AI 提问通知不可用')
   }
 
+  // 调试挂载点：宿主进程的 Node inspector（`SSID_KERNEL_INSPECT=1` 时挂上，见
+  // host-process.mjs）只暴露模块作用域，而 `kernel` 是 main() 的局部变量，观测不到。
+  // 挂到 globalThis 后可以用 CDP 直接问活体内核的状态（服务是否就绪、preset 挂载
+  // 诊断、loader 行是否 ACTIVE），不必靠改代码重启的慢循环。无行为副作用。
+  ;(globalThis as { __ssid_kernel?: unknown }).__ssid_kernel = kernel
+  if (typeof process.debugPort === 'number' && process.debugPort > 0) {
+    console.error(`ssid: kernel-child inspector ws://127.0.0.1:${String(process.debugPort)}/`)
+  }
+
   // ── 内核诊断探针（按需，见 kernel-probe.ts）─────────────────────────────
   // 默认零输出：只有显式设 `SSID_KERNEL_PROBE=1` 才加载并运行。2026-09-14 的 405
   // 排查靠它定位（结论见 docs/决策/2026-09-14-插件中心405诊断记录.md），所以保留

@@ -91,6 +91,15 @@ const PROFILES_DIR = 'profiles'
 const DSH_HOME_DIR_NAME = '.dsh'
 /** profile 自己的 patch 文件名（与 dsh-app-boot 的 PROFILE_PATCH_FILENAME 同值）。 */
 const PROFILE_PATCH_FILENAME = 'cordis.patch.yml'
+/**
+ * 壳自己的运行时 overlay 文件名（落在 profile 目录内）。
+ *
+ * agent-presets 的 shipped root 是运行期才知道的路径，没法写进用户配置，
+ * 但它必须出现在 boot 与之后每次 reconcile 都读到的同一份 patches 里——
+ * 否则 cordis 会因 entry config 变化重跑 plugin（见 bootKernel 里的说明）。
+ * 官方 `readProfilePatches` 认 `profileContext.overlays`，所以把它做成 overlay 文件。
+ */
+const RUNTIME_OVERLAY_FILENAME = '.ssid-runtime.patch.yml'
 /** 空 root config 文件名（官方约定 cordis.yml）。 */
 const ROOT_CONFIG_FILENAME = 'cordis.yml'
 /** 会话遥测 row id（官方 profile-boot 的 DSH_TELEMETRY_DISABLED 开关目标）。 */
@@ -501,10 +510,14 @@ export async function bootKernel(
     if (!existsSync(join(profileDir, 'package.json'))) {
       dsh.initProfile(profileDir, PROFILE_BUNDLES)
     }
-    // 必须先 heal：resolver 之后的 bare 解析会用到 profiles/node_modules 平面
-    // symlink；master 内核 API 是 options 对象 + async（0.1.2-alpha.1 起）。
-    await dsh.healProfilesModuleFallback({ installAnchor, home })
     const profile = dsh.loadProfile(BIN_NAME, PROFILE_NAME, installAnchor, home)
+    // 0.1.7 起模块解析改为「运行时拦截」：旧的落盘平面 symlink 机制
+    // （healProfilesModuleFallback，0.1.2-alpha.1 至 0.1.6 为 options 对象 + async）
+    // 已被 createRuntimeResolution 取代——后者只在内存里算出完整包表
+    // （entries: name → packageDir），不写任何文件。故顺序由「先 heal 再 loadProfile」
+    // 反转为「先 loadProfile 再算 resolution」：包表需要 profile 作为入参。
+    // 该包表随后在 boot 的 prepare 回调里交给 PluginPackages 安装（见下方 boot 调用）。
+    const resolution = await dsh.createRuntimeResolution({ installAnchor, profile, home })
 
     const rootConfig = join(profile.dir, ROOT_CONFIG_FILENAME)
     writeFileSync(rootConfig, '[]\n')
@@ -533,39 +546,55 @@ export async function bootKernel(
     const homePatches = safeMode
       ? []
       : (dsh.loadOptionalPatches(BIN_NAME, join(home, PROFILE_PATCH_FILENAME)) ?? [])
-    const patches: PatchOptions[] = [
+    // ── 交给内核的 patches：与官方同源 ─────────────────────────────────────
+    // 「boot 用的 patches」与「之后每次 reconcile 重算的 patches」必须一致，
+    // 否则 cordis 会判定 entry config 变化并重新执行 entry——session-controller
+    // 于是二次构造，撞上 file-upload 的单槽 agentResolver，服务消失、建不了会话。
+    // reconcile（hmr / config-editor）走官方 `readProfilePatches`，它只认 profile
+    // 层 + profile patch + home patch + `profileContext.overlays`；SSiD 原先自己
+    // 拼一份、再在内存里额外 push agent-presets 注入与遥测行，那两条 reconcile
+    // 重读时看不到，两侧必然不同。现在把注入落成 overlay 文件，并直接复用官方
+    // 同一个函数算 patches，boot 与 reconcile 从此读同一份内容。
+    const basePatches: PatchOptions[] = [
       ...layers.flatMap(layer => layer.patches),
       ...(safeMode ? [] : profile.patches),
       ...homePatches,
     ]
+
+    // agent-presets 注入要保留既有 config（如 default），先从 base 里取值。
+    const baseRows = new Map<string, { config?: unknown }>()
+    for (const row of dsh.composeEntries([structuredClone(basePatches)])) {
+      if (typeof row.id === 'string') baseRows.set(row.id, row)
+    }
+    const runtimeOverlayPath = join(profile.dir, RUNTIME_OVERLAY_FILENAME)
+    const overlayRows: PatchOptions[] = []
+    const presetsRow = baseRows.get('agent-presets')
+    if (presetsRow !== undefined) {
+      overlayRows.push({
+        id: 'agent-presets',
+        config: {
+          ...(typeof presetsRow.config === 'object' && presetsRow.config !== null && !Array.isArray(presetsRow.config)
+            ? presetsRow.config as Record<string, unknown>
+            : {}),
+          roots: [{ path: runtime.agentPresetsRoot, trust: 'system' }],
+        },
+      })
+    }
+    // overlay 的落盘与最终 patches 的计算，推迟到下面的会话隔离覆盖之后——
+    // 那条覆盖也要进同一个 overlay，两者必须一起写、一起被读到。
 
     // SHIPPED agent-presets root（源码版 apps/cli/config/agent-presets，
     // 内置版 @deepseek-ai/dsh/config/agent-presets，含 standard preset）——
     // 官方 profile-boot 的 composeProfile 注入它，web bundle 的
     // agent-presets row 默认 default: standard，缺了这个 root 会报
     // agent-preset-not-found。
-    const rows = new Map<string, { config?: unknown }>()
-    for (const row of dsh.composeEntries([patches])) {
-      if (typeof row.id === 'string') rows.set(row.id, row)
-    }
-    const presets = rows.get('agent-presets')
-    if (presets !== undefined) {
-      const shippedRoot = runtime.agentPresetsRoot
-      patches.push({
-        id: 'agent-presets',
-        config: {
-          ...(typeof presets.config === 'object' && presets.config !== null && !Array.isArray(presets.config)
-            ? presets.config as Record<string, unknown>
-            : {}),
-          roots: [{ path: shippedRoot, trust: 'system' }],
-        },
-      })
-    }
+    // agent-presets 注入与遥测行都已在上面交给官方 readProfilePatches 统一处理。
 
-    // 遥测开关（官方 profile-boot 的 resolveTelemetryPatch）。
-    if ((process.env.DSH_TELEMETRY_DISABLED ?? '') !== '' && rows.has(TELEMETRY_ROW_ID)) {
-      patches.push({ id: TELEMETRY_ROW_ID, disabled: true })
-    }
+    // 注意：`patches` 一旦被任何「应用补丁」的调用碰过就会被**就地**改写
+    // （键序变化，见上面 composeEntries 处的说明），所以下面每一处交给内核的
+    // 场合都必须喂克隆——boot 的 `mountRootInclude` 与之后每次 reconcile 若吃到
+    // 不同状态的输入，生成的规范化 rows 键序就会不同，cordis 便会判定 config
+    // 变化并重新执行 entry（session-controller 二次构造、撞上 file-upload 单槽）。
 
     // ── 会话存储隔离开关（设置页「关于 SSiD」可切换，重启生效）────────────
     // 与手动 dsh web 共享 ~/.dsh/sessions 时，两个宿主并发写同一 JSONL 日志
@@ -593,11 +622,29 @@ export async function bootKernel(
     // （清单 mtime > bootedAt ⇒ 本次运行中改过存储，侧栏列表尚未重建）。
     process.env.SSID_BOOTED_AT = String(Date.now())
     if (isolatedSessionRoot) {
-      patches.push({
+      overlayRows.push({
         id: 'session-persistence-jsonl',
         config: { root: isolatedSessionsRoot },
       })
     }
+    // ── overlay 落盘 + 最终 patches（与官方 profile-boot 同一函数）───────────
+    // 内容用 JSON 写：YAML 是 JSON 的超集，官方解析器照读不误。
+    writeFileSync(runtimeOverlayPath, `${JSON.stringify(overlayRows, null, 2)}\n`, 'utf8')
+    const profileContext = {
+      name: PROFILE_NAME,
+      dir: profile.dir,
+      patchPath: join(profile.dir, PROFILE_PATCH_FILENAME),
+      installAnchor,
+      cwd: process.cwd(),
+      home,
+      startedBundles: PROFILE_BUNDLES,
+      overlays: [runtimeOverlayPath],
+      telemetryDisabledEnv: process.env.DSH_TELEMETRY_DISABLED,
+    }
+    // 遥测行由 readProfilePatches 内部按同一判据补齐，所以这里不再自行 push 任何条目。
+    const patches: PatchOptions[] = safeMode
+      ? basePatches
+      : dsh.readProfilePatches(BIN_NAME, profileContext as never, profile as never)
     try {
       if (!existsSync(sessionRootConfigPath)) {
         // 预设落地：首次启动把「默认隔离」写成显式配置（设置页因此可见/可关）。
@@ -619,8 +666,28 @@ export async function bootKernel(
     }
 
     const environment = dsh.loadLayeredEnv(BIN_NAME)
-    const ctx = await dsh.boot(BIN_NAME, rootConfig, structuredClone(patches), (hostCtx) => {
+    // 启动就绪信号。官方 runProfile 经 provideCmdline 的 `ready` 把它交给内核
+    // （`@deepseek-ai/dsh/lib/profile-boot.js:279`），壳自建 boot 起初漏了这一步；
+    // 缺它的后果不是「少一个服务」，而是整条设置写入链路失效（见 createAppReady 注释）。
+    const appReady = createAppReady()
+    // boot 吃克隆：`mountRootInclude` 会就地把补丁应用结果写回传入的条目，
+    // 若直接传 `patches`，本进程内那份就被改写，之后任何基于原件的比较/重算
+    // 都与 boot 时不同（见 composeEntries 处的说明）。
+    const ctx = await dsh.boot(BIN_NAME, rootConfig, structuredClone(patches), async (hostCtx) => {
       hostCtx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, environment)
+      // 0.1.7：profile 语境标志。官方只在 `dsh` CLI 启动的 profile 里 provide 它
+      // （app-boot 的 ProfileContext 注释原文「Present only in a profile launched by dsh」）；
+      // 壳自建 boot 必须自己补上。缺它的后果：base bundle 里 settings / config-editor /
+      // hmr / plugin-manager 四个门控行（`disabled: !!js "!ctx.get('profileContext')"`）
+      // 全部不激活，且 preset 的 standing mount 拿不到 profile 语境——实测表现为
+      // persona 在全局重复注册 "deployment:persona-prefix" 导致会话创建失败。
+      // 复用上面算 patches 用的同一个对象：它带着运行时 overlay，而 reconcile
+      // 正是靠这份 profileContext 重算 patches——两侧必须同源，否则 entry 会被重跑。
+      hostCtx.provide('profileContext', profileContext)
+      // 0.1.7：profile 的模块解析表由 PluginPackages 承载。必须在任何 config-tree
+      // entry mount 之前装上，否则插件包的 bare specifier 无从解析（官方 profile-boot
+      // 在同一位置做同样的事）。
+      await hostCtx.plugin(dsh.PluginPackages, { resolution })
       // 壳层「重启 DSH」能力（main.mjs 的 restartDsh：app.relaunch +
       // kernel.shutdown），dsh-ssid-panels 设置页经 ctx.get(SSID_SHELL_RESTART_KEY)
       // 调用；bootKernel 未传 restart 时（裸跑/测试）不提供。
@@ -632,6 +699,10 @@ export async function bootKernel(
         // 必须关闭，否则每次启动弹系统浏览器（--no-open 由 web-startup 解析）。
         args: ['--host', '127.0.0.1', '--port', '0', '--no-open'],
         exit,
+        // 与官方 profile-boot 一致地交出就绪信号：provideCmdline 只在传了它时
+        // 才 provide `appReady`（`dsh-cmdline/lib/index.js:31`），而 dsh-hmr
+        // 起步时强制要求该服务存在。
+        ready: appReady.service,
       })
     })
 
@@ -639,6 +710,11 @@ export async function bootKernel(
     if (webServer === undefined) {
       throw new Error('ssid: booted tree has no webServer service')
     }
+
+    // 启动就绪提交：与官方 profile-boot 同一判据、同一时机（boot 完成、fiber 活跃、
+    // loader 就位之后，见 `profile-boot.js:283`）。dsh-hmr 等挂在 onReady 上的
+    // 组件此刻才起步——官方路径下 hmr 正是这样变 ACTIVE 的。
+    if (ctx.fiber.state === 2 && ctx.get('loader') !== undefined) appReady.commit()
 
     // master 内核（0.1.2-alpha.1）web 服务带浏览器认证 token：不带 token 的
     // 请求返回 401，BrowserView 必须用 connection.authenticatedUrl 的完整 URL
@@ -663,5 +739,58 @@ export async function bootKernel(
   } catch (cause) {
     releaseResolver()
     throw cause
+  }
+}
+
+/**
+ * 启动就绪信号的等价实现（官方 `createAppReady` 未导出，此处按同语义重写）。
+ *
+ * 官方 `runProfile` 把它经 `provideCmdline` 的 `ready` 交给内核
+ * （`@deepseek-ai/dsh/lib/profile-boot.js:279` 传入、`:283` 提交）。壳自建 boot
+ * 起初漏了这一步，而缺它的后果不是「少一个服务」，是**整条设置写入链路失效**：
+ *
+ *   `dsh-hmr` 起步时 `const ready = ctx.get("appReady");`
+ *   `if (ready === void 0) throw new Error("Profile HMR requires application readiness")`
+ *   （`dsh-hmr/lib/index.js:341`）→ hmr 行 FAILED → `ctx.get('hmr')` 为 undefined
+ *   → `dsh-config-editor` 的 `edit()` 落到 `hmr === void 0 ? run() : hmr.runExclusive(run)`
+ *   的**裸 `run()` 分支**（`index.js:127`）→ 那次 reconcile 触发 entry 重新执行
+ *   → `session-controller` 构造函数二次执行，而旧实例的 `ctx.effect` disposer
+ *   尚未运行 → 撞上 file-upload 的单槽 `agentResolver` → FAILED、服务消失、
+ *   会话建不出来。
+ *
+ * 实测依据（2026-09-24，同一份闭包、同一次 `settings.update()`）：官方
+ * `runProfile` 路径写入后 `session-controller` 仍 ACTIVE、服务 present；
+ * 壳自建 boot 路径必然 FAILED。
+ *
+ * 语义：提交前注册的 listener 排队，提交时一次性清空；提交后注册的立即执行；
+ * 启动失败或外部终止时永不提交（官方注释原文 "A failed or externally
+ * terminated startup never calls it"）。
+ * @returns 交给 `provideCmdline` 的 `ready` 服务，以及由启动方调用的提交函数。
+ */
+function createAppReady(): {
+  service: { onReady: (listener: () => void) => () => void }
+  commit: () => void
+} {
+  let ready = false
+  const listeners = new Set<() => void>()
+  return {
+    service: {
+      onReady(listener) {
+        if (ready) {
+          listener()
+          return () => {}
+        }
+        listeners.add(listener)
+        return () => {
+          listeners.delete(listener)
+        }
+      },
+    },
+    commit() {
+      if (ready) return
+      ready = true
+      for (const listener of [...listeners]) listener()
+      listeners.clear()
+    },
   }
 }

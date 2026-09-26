@@ -73,6 +73,12 @@
 
 | 2026-09-23 | §7 坑 #44（新增） | **文档里写裸的双左花括号会让 GitHub Pages 构建失败或静默吞内容**：本仓库 Pages 是 `legacy` 模式、从仓库根跑 Jekyll，所有 `.md` / `.html` 都过一遍 Liquid；**未闭合**即整个构建失败（本次被一篇新落的调研文档打红），**成对闭合**则不报错但静默渲染成空（另一处引官方 persona 原句的决策记录一直在被吞）。写法改用 `<code>&#123;&#123;</code>`；**行内代码里放 HTML 实体无效**，必须换成 `<code>` 标签。**这条坑与 dsh-memory 0.11.1 修的是同一个字形的两种宿主**（DSH 严格插值 → Liquid），结论一致：往渲染链里放可写文本就必须在出口中和 | 用户邮件报告 Pages 构建失败（run `35774788193`） |
 
+| 2026-09-26 | §7 坑 #45 #46（新增）/ §8 | **fork 壳补齐四项缺口并实机验证**：① **截图服务跨进程接线**——此前后端 `/api/ssid/screenshot/get` 返回 `shellAvailable:false`、设置卡两行被 `return null`，看着像「设置项没了」；② **保活 keep-awake 跨进程接线**（`turn/start`/`turn/end` 在 Host 子进程、`powerSaveBlocker` 在主进程）；③ **预制 MCP 两半成对落地**（profile patch 条目 + 壳注入 env，只补一半等于没补）；④ **CodeGraph 索引目录适配**（移植时修掉「写死 `session.jsonl.zstd`」——dev 的会话是 `session.v4.jsonl.zstd`，探测恒失败、误弹首次引导窗）。**结论：`profile-merge` 不移植**（坑 #46）——前提在 fork 下不存在。**顺带发现一个真缺口**：fork 的打包链不带 profile 归档，新装机如何得到思灵的插件集尚无答案，需单独立项，不要当成这项的一部分做掉。四项均在 dev 壳取到实机证据（含进程、日志、模型回话三类），详见 `ssid-shell-fork/SSID-CHANGES.md` 改动 25–28 | 用户拍板「直接定为目标将这些问题全都处理」|
+
+| 2026-09-26 | §7 坑 #47（新增）/ 变更记录外 | **思灵插件集交付链定形为 A′ 并落地壳侧**：fork 的打包链不带自建壳的 `dsh-runtime.tar.gz`，新装机拿不到插件集。先用四组对照实验**证伪**「放进随包闭包就行」——`resolveBundleDir` 的「安装锚点优先」**只覆盖 bundle 的 patch 文件**，插件本体与 client 半走运行时解析表（installAnchor 的**依赖图 BFS** + profile scope），而 installAnchor 是官方 npm 包，其依赖图里不会有 `@max-null/*`；实测把实体只放锚点、或只放 installAnchor 的解析链上，都是**静默不加载**（应用照常启动、`Failed to load plugins` 一次都不出现，只有渲染进程的 client 清单少一行）。**A′ = 实体随包一份 + profile 里放目录链接**，落在既有的 `RuntimeResolution.linkedRoots` 通道上。壳侧 `apps/desktop/src/ssid/profile-seed.ts` 已落地（幂等、用户优先、`link:` 声明防 pnpm 覆盖）。**实机**：全新 `DSH_HOME` 首启 `linked=30 kept=0 missing=0 bundlesAdded=30`，client 清单与 dev 基线**逐项相同**；第二次启动 `linked=0 kept=30`、`package.json` 哈希**逐字节未变**。同轮修掉一个自己埋的缺陷（见坑 #47）。**待做**：打包链（插件集进 `extraResources`）属发版链改动，需拍板 | 用户选定 A 交付形态并授权推进（A′ 是 A 的修正：原描述把 bundle 解析误当成了插件解析）|
+
+| 2026-09-26 | §7 坑 #48 #49 #50（新增）/ 变更记录外 | **随包插件集（A′）落地**：`prepare-ssid-plugins.ts` 从发版基准产出 `32 bundles / 584 packages`（含 7 个不发 npm 的 vendor 包、MCP CLI 与 codegraph 引擎），首启由 `profile-seed.ts` 建 584 个目录链接、补 `dsh.profile.bundles`、写 `link:` 声明（幂等、用户层优先）。**三次崩溃逼出三个真问题**：① 包**必须放 `node_modules/` 下** —— 平铺会让传递依赖解析失败、插件树静默不加载（撞上坑 #42 同一条教训）；② 插件集**不能带内核包** —— 会盖掉安装锚点那份，内核自己的 26 个插件 `failed to import`；③ **不能把内核版本号套到所有 `@deepseek-ai/*`**（版本线不统一，见坑 #49）。修完 `pending` 从 3 降到 1，**MCP CLI 交付打通**（`playwright=true codegraph=true`，此前一直是 false）。**剩余 1 个是内容问题**（坑 #48：同名同版本不同内容）—— 根因是**发版基准落后于 dev 已验证状态**（vendor 7 vs 21 个包、13 个 `@max-null/*` 在 template 用 npm 版本），**回填清单已列**）→ 当日试做回填：复验**确实通过**（零崩溃零 pending），但 `check:rules` 三门报红，查清**形态错了** —— 发版基准的正规声明是「**不发 npm 的包**用 `file:./vendor/…`、**发 npm 的包用版本号**」（对照安装版运行时 profile 的 69 条声明），而我把 13 个发 npm 的包也改成了 `file:`，那是 dev profile 的手工形态；`plugin-peers` 另报 template 的目标内核仍是 **0.1.5-rc.2** 而 vendor 是给 0.1.7 编的。**已整目录回退**（备份 `.ssid-build/template-backup-20260926-225631/`；`git diff shell/profile-template` 只剩一行既有改动），`plugin-peers` 随即转绿。**正确路径待拍板**：这类包的 npm 版本是**旧适配**（要 0.1.5 的 `settingsScope`）、dev vendor 里的新适配**还没发布** → 需要 `npm publish`（F2A，用户手动）后再提 template 的版本号 | 用户选定 A 后授权推进打包链（template 回填是我判断可做、做错后已如实回退）|
+
 ## 工作区规范（布局 + 放置规则，2026-08-29 整理定稿）
 
 ### 布局（H:\MaxNull\WorkStation）
@@ -432,9 +438,22 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 
 44. **文档里写裸的双左花括号会让 GitHub Pages 构建失败或静默吞内容**（2026-09-23 实踩：Pages 构建被我一篇新落的调研文档打红，而这条坑正是我们自己在 dsh-memory 里刚修过的同类问题，只是宿主从 DSH 严格插值换成了 Liquid）：本仓库的 Pages 是 `legacy` 模式、**从仓库根跑 Jekyll**，因此所有 `.md` / `.html` 都过一遍 Liquid（`.mjs` / `.js.map` 不过，所以源码里的 JSDoc 类型花括号无害）。Liquid 把**连续两个左花括号**当变量起始：**未闭合**时直接 `Liquid syntax error: Variable '…' was not properly terminated`，让**整个构建失败**（本次元凶是一个把它当字面量写的行内代码）；**成对闭合**时不报错，但会**静默渲染成空字符串**——文档悄悄缺字，比报错更隐蔽（本仓库另有一处引官方 persona 原句的决策记录，一直在被吞）。**只有双左花括号敏感，双右花括号单独无害。** **写法**：要表达这个字面量时写 `<code>&#123;&#123;</code>`（HTML 实体 + `<code>` 标签）——Liquid 看不见实体里的字符，GitHub 网页与站点两侧都渲染成目标字形；**行内代码里放 HTML 实体无效**（代码跨度内不解析实体），所以必须换成 `<code>` 标签而不是反引号。**排查**：`gh run view <run-id> --log-failed` 直接点名文件与行号；`gh run watch <id> --exit-status` 等结果（失败返回非零）。**未根治**：`docs/决策/index.html` 的内嵌 JSON 里仍有成对形态（由 `build-index.mjs` 生成，要根治得在生成器里转义）——它不报错，只在线上站点里静默缺字。
 
+45. **fork 有两个副本（交付副本 / 运行副本），改动只落在一侧会静默漂移**（2026-09-26 实测）：`ssid-shell-fork/`（**交付源码副本**，非 git 仓库，只含 `apps/desktop` + `apps/desktop-host`）与 `.ssid-build/checkout`（**运行副本**，dev 实际构建与启动的那一个）。2026-09-26 核对发现：改动 24 那一轮全在 checkout 里做，fork 落后 **6 个文件有差异 + 5 个新文件只在 checkout**（`screenshot.ts` / `mask.ts` / `main.ts` / `host-process.ts` / `desktop-host/index.ts` / `titlebar.ts`，以及新文件 `keep-awake.ts` / `mcp-env.ts` / `codegraph-adapt.ts` / `ssid-keep-awake.ts` / `ssid-screenshot.ts`）——**没有任何门会报这个错**，只有主动比对才看得见。**判据**：收尾对 `apps/desktop/src`、`apps/desktop/scripts`、`apps/desktop-host/src` **逐文件比哈希**（`Get-FileHash`），必须零漂移；`lib/` 是构建产物、**不参与比对**——fork 那份是历史构建，里面还留着上游早已删除的模块产物（`preload.cjs` / `seed-store.js` / `wire.js`），拿它判断「改动是否落地」必然得出错误结论。**坑中坑**：**不要用 `git diff --no-index` 递归整个 `apps/`** —— checkout 里 `.desktop-build/development/project/node_modules` 的深路径会超 Windows 上限，git 直接 `Could not access ...` 并退出码 1，看着像 diff 本身失败。
+
+46. **移植一个功能前，先确认它防的那个问题在新架构下还存不存在**（2026-09-26 核查 `profile-merge`）：自建壳的 `shell/lib/profile-merge.mjs`（升级时保留用户层）防的是「`deployRuntime` 用归档对 profile 根**整体覆盖**」——`node_modules` 整体替换，`package.json` / `cordis.patch.yml` / `pnpm-lock.yaml` / `vendor/` 逐个 `rmSync + rename`（引文见 `docs/决策/2026-09-07-升级部署覆盖用户层修复.md:10`）。判断 fork 要不要移植它，不能靠「自建壳有、fork 没有」，得去找**覆盖**这个前提：① **fork 壳里没有任何归档部署代码**——`.ssid-build/checkout` 全仓搜 `dsh-runtime.tar.gz` / `deployRuntime` / `profile-template`，命中的全是 `dsh-runtimes/dsh-primary-runtime`（那是 python/node/pnpm 工具链，与 profile 无关）；② **官方基座的 profile 初始化是纯增量**——`packages/boot/app-boot/src/profile.ts:236-239` 的注释与实现都写着 *“Existing files are never touched, so re-running is a no-op on an initialized profile.”*，三个文件各自 `if (!existsSync(...))` 才写。⇒ 结论是**不移植**，用户层天然被保留。**但「前提不成立」不等于「没事可做」**：同一轮核查顺带挖出真缺口——`initProfile` 写的是 `dependencies: {}` + 两个官方 bundle 且**不跑包管理器**，而 fork 的打包配置（`electron-builder-config.mjs` 的 `extraResources`）只带 primary-runtime 与图标、**不带 profile 归档**，于是「新装机如何得到思灵的插件集」在 fork 链路里根本没有答案。**通用判据**：先把「它防的是什么」写成一句话，再去新架构里找那个前提；找不到前提时不要直接收工，接着问**「那个危害现在由谁承担、由谁交付」**——问题通常不是消失，而是换了形态。
+
+47. **在启动路径上 `await` 一个等人操作的对话框，等于让无人值守启动永久挂起**（2026-09-26 实踩，我自己埋的）：CodeGraph 索引目录的首次引导原本放在 `installSsidMcpEnv({ promptWorkspace })` 的 await 链上——MCP 的 env 必须在 Host 子进程启动**前**注入，而对话框要等人点击。触发条件平常得可怕：**全新的 `DSH_HOME`（没有任何会话可供探测）+ `~/.ssid/codegraph.json` 缺席**。实测现象：日志停在 `ssid: mcp codegraph cli missing` 之后不再前进，**没有报错、没有超时**，进程活着、9229/9222 都在 LISTEN，但 **Host 永不 spawn**（9230 一直 free）——界面上只剩一个等待点击的对话框。脚本/CI/远程启动会**永久**卡在这里，而现场留下的证据是「什么都没有」，极易误判成内核启动失败。**判据**：把「启动必须走过的 await」逐条列出来，问每一句「如果这一步永远不返回，现场会留下什么」——留下的若是「什么都没有」，就是这种坑。**处置**：引导挪到 Host 就绪、窗口可见之后，**调用方 `void` 不 await**，结果写进配置、下次启动生效；窗口不可见时干脆不问（那正是无人值守场景）。纯判据与落盘抽成 `apps/desktop/src/ssid/codegraph-guide.ts`，`mcp-env.ts` 只解析、不交互。**更一般的教训**：**「需要人回答」和「启动必须完成」是互斥的两件事**，任何一次把前者塞进后者的改动都不会立刻报错，只会在没人看着的时候静默挂住。
+
+48. **同名同版本、内容不同：跨渠道取包时版本号不再是判据**（2026-09-26 实测）：为 fork 版做「随包插件集」时，我从**发版基准**（`shell/profile-template`）装包 —— 它对 13 个 `@max-null/*` 写的是 **npm 版本号**，而 dev profile 用的是 **`file:./vendor/*`**。两者**版本号一模一样**（如 `dsh-node-appearance` 都是 `0.5.0`），**内容却不同**：npm 那份的 `dsh.client.inject` 要 `@deepseek-ai/dsh-client-ui-settings-plugins`、host 半调 `ctx.settingsScope`；vendor 那份要 `dsh-client-ui-plugin-manager`、不碰 `settingsScope`。而 **`settingsScope` 在 dev 内核源码里零命中**（`packages/*/*/src` 全仓搜索）—— 它属于 0.1.5 线的机制，0.1.7 已换掉。结果：从 npm 装出来的插件集在这台机器上 `pending (waiting for service: settingsScope)`，**壳直接拒绝启动**，而 dev profile 一路正常。**判据**：一个包只要存在两条来源渠道（registry / 本地 vendor / 手工同步的构建产物），比较就**必须落到内容**（哈希、或 `inject` / `exports` 这类会随内核演进的声明），**不能只看版本号**。相关：坑 #36（vendor 指纹要对行尾免疫）、铁律 5（插件双处声明）。**另一面**：这件事不是孤例 —— 同一个 template 的 vendor 只有 7 个包、dev profile 有 21 个，第三方包版本也整体落后（better-sidebar 0.19.1 vs 0.21.1、dream-skin 9.16 vs 9.23…）。**发版基准不会自己跟上 dev**，得有人回填。
+
+49. **内核包的版本线不是一条：想自己拼一份「内核闭包」会撞上一整张对照表**（2026-09-26 实测）：给插件集补装内核 peer 时，我按「内核版本 `0.1.7-rc.2`」统一填版本，连撞两次 `ERR_PNPM_NO_MATCHING_VERSION` —— `@deepseek-ai/cordis` 走 **4.x** 自己的线（那不是内核版本，是 cordis 的 rescope 版本）、`@deepseek-ai/dsh-client-runtime` 走 **0.1.1-rc.x**，只有 `dsh-tools` / `dsh-settings` 那一批才与 `@deepseek-ai/dsh` 同版。**这正是自建壳 profile 里那 313 条 `overrides` 在解决的事**：内核各包的版本对应关系是内核自己维护的（官方 lockfile / overrides），外面的人按名字猜不出来。**判据**：需要「与内核同版的一套包」时，**照抄内核给的清单**（overrides / lockfile / 闭包），不要用「主版本号 + 包名前缀」去推。**推论**：fork 版下插件要用的内核包应当**由安装锚点提供**（`<runtimeDir>/node_modules/@deepseek-ai/*`，dev 下 325 个包），插件集只该管插件侧的传递依赖 —— 我们往里塞内核包的那次，直接让内核自己的 26 个插件 `failed to import`（profile 的内核包盖掉了锚点的）。
+
+50. **「复验通过」不等于「形态正确」：拿一个能跑的组合去改基准之前，先跑基准自己的门**（2026-09-26 实踩，我做错又回退）：起因是 `profile-template` 的组合装出来必崩（`dsh-node-appearance` 等 `settingsScope`），而 dev profile 的组合能跑 —— 于是我判定「以 dev 为准把 template 对齐」，把 dev vendor 的 13 个包拷进去、7 个版本对齐、13 条依赖从 npm 版本改成 `file:./vendor/…`。**复验确实通过**：全新 `DSH_HOME`、`linked=615`、零崩溃零 pending。**但形态是错的。** 改完才跑 `check:rules`，三门报红，其中 `profile-sync` 的报错直接把正解摆了出来 —— 它比的是 template（A）与**安装版运行时**（B）的声明，而 B 那 69 条里写着规矩：**不发 npm 的包**（`dsh-capture` / `dsh-ssid-panels` / `dsh-context-doctor`…）用 `file:./vendor/…`、**发 npm 的包**（`dsh-achievements` `0.1.2`、`dsh-memory` `0.12.1`…）用 **npm 版本号**。我把 13 个发 npm 的包也改成了 `file:` —— 那是 **dev profile 长期手工同步出来的偏离态**，不是发版形态。另有一门报 template 的目标内核仍是 `0.1.5-rc.2` 而 vendor 是给 `0.1.7-rc.2` 编的（peer 写 `^0.1.7-rc.2`），套进旧基座必然不覆盖。**处置**：从备份整目录回退，`git diff shell/profile-template` 只剩一行既有改动。**三条判据**：①「跑通了」证明的是**这个组合能工作**，不是**这个形态符合仓库规矩** —— 两个不同的问题，前者可以用一次启动验完，后者只有门知道；② **改基准前先跑它自己的门**（`check:rules`），我这次改完才跑，于是先红后查、白做一轮；③ **看到「dev 能跑、基准不能跑」，先问「dev 是不是长期手工维护的偏离态」** —— dev profile 里那 13 个 `file:` 声明与 21 个 vendor 副本就是偏离的痕迹。真正的病根也不是声明形态，而是**版本没发**：npm 上那份是旧适配，dev vendor 里的新适配还没 `publish`。
+
 ## 8. 文档索引
 
 - 本手册（总览/流程/坑）
+- `ssid-shell-fork/SSID-CHANGES.md`（**fork 改动清单**：对上游每条改动的文件/行/原因 + dev 实机验证证据。改动 21–28 覆盖 dev profile 解耦、第三方插件接入、设置槽位迁移到 `plugins.bundle.config`、截图/保活/MCP/CodeGraph 四项功能补全，以及**「`profile-merge` 为何不移植」**与 fork 双副本同步纪律）
 - `docs/决策/2026-08-29-SSiD升级执行指南.md`（升级执行方案——§1.1 版版本对照表仍在参考价值）
 - `docs/决策/2026-08-29-SSiD升级执行记录.md`（本次升级全过程与修复记录）
 - `docs/决策/2026-08-29-DSH-master插件适配测试报告.md`（插件 × master 适配矩阵、根因、PR 追踪）
@@ -537,26 +556,41 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 - 我们的插件与**侧边栏插件**（dsh-better-sidebar / dsh-sidebar-qa 等）**耦合度高**——**目前没有计划移除侧边栏插件**。
 - 插件开发**勿假设侧边栏会被移除**（不做「无侧边栏退化」设计）；耦合点（如依赖 better-sidebar 的挂载/布局）属于稳定依赖。
 
-### 插件设置卡片标准（「设置——插件」页，2026-09-06 定稿·开发标准）
+### 插件设置卡片标准（插件详情页 `plugins.bundle.config`，2026-09-06 定稿·2026-09-26 随内核 0.1.7 改写）
+
+**槽位变更（0.1.7 起，本节规范的依据）**：`settings.plugin.item` 已从内核**删除**（依据：
+`packages/client/ui-plugin-manager/src/client/config-ledger.ts:40` 只认
+`plugins.item` / `plugins.bundle.config` / `plugins.row.config`；官方 `dsh-cordis-client-runner`
+的注册清单里七个 `plugins.*` 槽俱全、独缺此项）。挂到已删除的槽 = 注册到未声明的 slot，
+**卡片完全不渲染**（2026-09-26 实测：`dsh-capture` 的设置卡即因此消失）。
 
 **适用判定**：
-- **参数少（单卡一屏能放下）→ 设置——插件页卡片**（本规范的默认做法，免自建独立设置页）；
+- **参数少（单卡一屏能放下）→ 插件详情页卡片**（本规范的默认做法，免自建独立设置页）；
 - **有独立管理界面/复杂交互**（插件中心、记忆管理、侧边卡片等）→ 独立页面，**不在此列**。
-- 先例：dsh-node-appearance（首个）；@max-null/dsh-chat-rail（对比模式开关）；dsh-capture（行为设置，迁移中）。
+- 先例：@max-null/dsh-node-appearance、@max-null/dsh-chat-rail、@max-null/dsh-capture、
+  @max-null/dsh-draft-polish。
 
-**三件套**（缺一即卡片不显示/不生效）：
+**前提**：插件自身必须是 bundle——`package.json` 声明
+`"dsh": { "bundle": { "patch": "./cordis.patch.yml" } }`。缺它则 `plugins.bundle.config` 不渲染。
 
-1. **host**：`ctx.inject(['settings'])` → `settings.installSection(ctx, NS, Config, config, { setSource, onChange })`
-   - `NS` = 设置 namespace（如 `'dsh-capture'`）；`Config` 用 **schemastery `z`**（`z.object({...})` + 默认值=配置缺省）；
-   - `config` 传初值（host 现有配置读取）；`setSource` = 值落盘回调（**保持单一数据源**，如 screenshot.json）；
-     `onChange` = 应用回调（如热键重注册）；
-   - ⚠️ **installSection 是「served namespaces」的唯一声明**——缺失则列表不显示
-     （官方 tab-store 渲染 = Host served namespaces ∩ 注册卡片 key 的交集）。
-2. **client**：`settingsScope.bind<{...}>({ namespace: NS })`（官方 ui-settings 服务）+ 注册
-   **`settings.plugin.item` keyed 卡片**（key = NS）：`ctx.slots.inject('settings.plugin.item' as never,
-   () => ctx.slots.register({ name: 'settings.plugin.item', key: NS, inject: () => face }, Card))`；
-   卡片读 scope（`useSyncExternalStore(scope.subscribe, () => scope.getSnapshot())`）、写 `scope.set`
-   （持久化由官方 settings 服务处理——免自建 API）。
+**两条实现路线**（按数据来源选，二者都只注册该槽）：
+
+1. **走官方 configForms（推荐——设置是 host 的 `Config`）**：
+   - host：`Config` 用 **schemastery `z`**（`z.object({...})` + 默认值=配置缺省）；
+   - client：`ctx.configForms.get<T>(NS)` 取表单面（与旧 `settingsScope` 面几乎同形：
+     `getSnapshot()` / `subscribe()` / `set(field, value)`，另有 `mutate(ops, rev)` 与 `unset(field)`）；
+   - 注册：`ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({ name: 'plugins.bundle.config', key: PKG_NAME, inject: () => face }, Card))`。
+   - ⚠️ `key` 是 **bundle 的包名**（`config-ledger` 的 `keysOf('plugins.bundle.config')` 直接取
+     `entry.options.key`）；若要按行挂配置则用 `plugins.row.config` + key = `包名#行id`。
+     `NS`（Host 插件 entry id，与 `cordis.patch.yml` 的行 id 同值）只在 `configForms.get(NS)` 用。
+   - ⚠️ 该槽只渲染 `view: 'page'`（卡片在 summary 下返回 null）。
+   - ⚠️ 对象字段（如 `colors`）不能走 `set(field, value)`（只接受 scalar），改用
+     `mutate([{ op: 'set', path: ['colors'], value }])`。
+2. **自管理数据的卡片**（设置存在插件自有配置/API 里，不经过 host `Config`）：同上注册，
+   但不必碰 `configForms`——卡片自己 fetch/save（注册不提供 `inject`）。
+   - 先例：dsh-capture（走 `/api/ssid/screenshot/*`）、dsh-draft-polish（走 `/draft-polish/api/config`）。
+   - 旧文档说的「host 必须 `settings.installSection`」是 **0.1.2-rc.1 的历史做法**，0.1.7 下
+     `settingsScope` / `installSection` 均已不在 client 服务面（`settingsScope` 在 client 包里 0 命中）。
 3. **卡片视觉**（官方 PluginCard chrome token——对齐 node-appearance `card.module.css`）：
    - 壳：`border:1px solid var(--dsw-alias-border-l2); border-radius:12px; background:var(--dsw-alias-bg-layer-3);`
      hover `border-color:var(--dsw-alias-label-dimmed)`；
@@ -564,16 +598,19 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
      + **官方 chevron**（`IconChevronDownOutline14` 同款 fill path，viewBox `0 0 14 14`——**勿自绘 stroke 箭头**）；
    - 展开态 `.xCardOpen`：`background:var(--dsw-alias-bg-layer-2); border-color:var(--dsw-alias-label-dimmed)`；
    - body（`border-top` 分隔）：行 = rowLabel 13px/500 + hint 12px 灰 + 家族开关（40×22 胶囊，`.on` `#4FC3F7`）；
+   - **默认展开**：卡片是该插件唯一设置入口，折叠态会让用户以为「设置不见了」——除非有明确理由，
+     初始 `open = true`（2026-09-26 用户反馈后定）；
    - 文案中英双语；只用 DSH token（无硬编码色值）。
 
-**依赖注意事项**：host peer `@deepseek-ai/dsh-settings`（**建议精确 pin `0.1.2-alpha.5`**——rc.1 的传递依赖
-`dsh-invariants@">=0.1.2 <0.2.0-0"` 无匹配（官方发布链 bug：0.1.2-x 全 prerelease；且 pnpm 11 单包
-`pnpm-workspace.yaml overrides` 不生效，只认多包 workspace root——chat-rail 以精确 peer pin 规避）；
+**依赖注意事项**：client 侧 peer/dev 成对声明需 `@deepseek-ai/dsh-client-ui-plugin-manager`
+（提供 `plugins.bundle.config` 的 SlotMap 合并）与 `@deepseek-ai/dsh-client-ui-settings`
+（`configForms` 所在），版本对齐当前内核（0.1.7 档为 `^0.1.7-rc.2`）；
 `@deepseek-ai/schemastery`（`z`；dependencies）。
 
-**排查清单**：卡片缺失 → ① host 有 installSection（served）？② 卡片 key 是否 = NS？③ console 有无
-slot 冲突/界面错误；切换不生效 → scope 绑定/namespace 拼写；显示为裸行/无卡片壳 → 未用官方卡片
-样式（检查上述视觉段）。
+**排查清单**：卡片缺失 → ① package.json 有 `dsh.bundle.patch`？② 注册的槽名是否仍是已删除的
+`settings.plugin.item`？③ `key` 是否 = 包名（不是 NS、不是行 id）？④ console 有无 slot 冲突/界面错误；
+切换不生效 → `configForms.get(NS)` 的 NS 与 `cordis.patch.yml` 行 id 是否一致；
+显示为裸行/无卡片壳 → 未用官方卡片样式（检查上述视觉段）。
 
 ### host 侧通信通道（2026-09-12 升格自决策 §12）
 
