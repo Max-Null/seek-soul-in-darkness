@@ -140,11 +140,9 @@ function writeReleaseRecord(
   artifactsRoot: string,
 ): void {
   const desktopVersion = packageVersion(join(APP_ROOT, 'package.json'), 'desktop package')
-  const dshVersion = packageVersion(join(REPOSITORY_ROOT, 'package.json'), 'dsh package')
-  if (desktopVersion !== dshVersion) {
-    throw new Error(`desktop package: desktop version ${desktopVersion} does not match dsh version ${dshVersion}`)
-  }
-  const buildVersion = resolveDesktopBuildVersion(environment, dshVersion)
+  // 发版记录写的是思灵自己的产品版本。自 1.0.0 起它与内嵌的 dsh 版本独立：
+  // 产品版本决定安装包与更新源的版本号，dsh 版本只描述运行时（见 prepare-dsh.ts）。
+  const buildVersion = resolveDesktopBuildVersion(environment, desktopVersion)
   const packaged = resolveDesktopBuildCommit(environment)
   const update = resolveDesktopAutoUpdateConfig(environment, target.platform, target.arch)
   const recordPath = join(artifactsRoot, desktopBuildRecordFilename(target.name))

@@ -51,15 +51,14 @@ function manifestVersion(path: string, subject: string): string {
 }
 
 function desktopRelease(): DesktopRelease {
-  const version = manifestVersion(join(APP_ROOT, 'package.json'), 'desktop package')
+  // 运行时描述用的是它实际装载的 dsh 版本，不是思灵自己的产品版本 ——
+  // 自 1.0.0 起两者独立：产品版本决定安装包与更新源的版本号（见 package-target.ts），
+  // dsh 版本描述这个运行时里装的是哪个内核。
   const dshVersion = manifestVersion(resolve(APP_ROOT, '..', '..', 'package.json'), 'root dsh package')
-  if (version !== dshVersion) {
-    throw new Error(`desktop runtime: Electron ${version} must bind the same version of @deepseek-ai/dsh, found ${dshVersion}`)
-  }
   const runtime = JSON.parse(readFileSync(join(RUNTIME_ROOT, 'versions.json'), 'utf8')) as Record<string, unknown>
   return parseDesktopRelease({
     schemaVersion: 1,
-    version,
+    version: dshVersion,
     hostProtocolVersion: DESKTOP_HOST_PROTOCOL_VERSION,
     nodeVersion: runtime.node,
     pnpmVersion: runtime.pnpm,
