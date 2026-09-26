@@ -14,11 +14,14 @@
   ],
   "$profilesNote": "只比 ssid。~/.dsh/profiles/web 是 web 开发环境，vendor 包集合不同（实测多一个 dsh-dream-skin）。",
   "profileSync": {
+    "exemptFrozenInB": {
+      "@max-null/dsh-node-appearance": "换壳过渡期：B（安装版 profile，内核 0.1.5-rc.2）已冻结、不再接受部署 —— 用户明确不改动安装版。A（发版基准）已转向 0.1.7 内核，该包 0.6.0 是 0.1.7 适配（inject 要 dsh-client-ui-plugin-manager），0.5.0 是 0.1.5 适配（要 dsh-client-ui-settings-plugins、host 半调 ctx.settingsScope），两者不可互换 —— 强行把 B 拉平会让安装版崩。撤销条件：安装版被 fork 版取代、B 换成新壳的 profile 之后移除本条，那时「B 落后于 A」重新等于「一次未完成的部署」。"
+    },
     "exemptOnlyInB": {
       "@dsh-pet/bridge": "桌面宠物的 install_bridge() 往运行时 profile 写的 link: 依赖（指向桌宠自己的安装目录）。**不能**补进模板：归档是给所有用户装的，link 目标在别人机器上不存在，补上它会让内核起不来（手册 §7 坑 #42）。它只在本机运行时成立，属于有意不入模板的运行时增量",
       "dsh-plugin-zhihu-search": "用户从 GitHub 自装的第三方插件（`github:klarkxy/zhihu-search`），不属于思灵出厂预置 —— 补进模板等于给所有用户预装它。有意不入模板，属于本机运行时增量。"
     },
-    "$note": "2026-09-12 @max-null/dsh-skills 转 npm 0.1.0 后豁免撤销；2026-09-23 登记 @dsh-pet/bridge（理由见上）。豁免会被 check-profile-sync 自洁：登记项不再出现时会打印「已过期」提示，可据此移除。"
+    "$note": "2026-09-12 @max-null/dsh-skills 转 npm 0.1.0 后豁免撤销；2026-09-23 登记 @dsh-pet/bridge（理由见上）；2026-09-27 新增 exemptFrozenInB 类别（B 侧已冻结：A 领先不再算「欠一次部署」）。豁免会被 check-profile-sync 自洁：登记项不再出现时会打印「已过期」提示，可据此移除 —— 但 exemptFrozenInB 的项在 B 里始终存在、不会自动过期，撤销靠理由里写明的条件。"
   },
   "vendorCopies": {
     "tpl": "shell/profile-template/vendor",

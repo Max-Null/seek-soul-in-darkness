@@ -47,6 +47,12 @@ const manifest = JSON.parse(fs.readFileSync(MANIFEST, 'utf8'));
 const profiles = manifest.profiles ?? ['ssid'];
 /** 已知临时态白名单（manifest 声明）：命中时降级为 info 但仍然打印，不静默。 */
 const exemptOnlyInB = manifest.profileSync?.exemptOnlyInB ?? {};
+/**
+ * 「A 领先、B 已冻结」白名单：B 侧 profile 不再接受部署时（换壳过渡期里安装版冻结在旧内核，
+ * 不会再装新版插件），「B 落后于 A」就不是「一次未完成的部署」而是**稳态** —— 与
+ * `exemptOnlyInB` 是同一类豁免的两个方向。理由与撤销条件写在 manifest 里，换壳完成后连同登记一并移除。
+ */
+const exemptFrozenInB = manifest.profileSync?.exemptFrozenInB ?? {};
 /** 所有受检 profile 里实际出现过的非内核依赖名；循环后用来给豁免登记自洁。 */
 const seenInB = new Set();
 
@@ -75,7 +81,11 @@ for (const prof of profiles) {
     gate.inspect();
     const inA = n in aDeps, inB = n in bDeps;
     if (inA && !inB) {
-      gate.violation(bpPath, null, `「${n}」只在 A 有：B 尚未声明，部署后会自动补上（可预期的稳态，未必需要动手）`);
+      if (exemptFrozenInB[n]) {
+        gate.info(`豁免（manifest 已登记 B 侧冻结）：「${n}」只在 A 有 —— ${exemptFrozenInB[n]}`);
+      } else {
+        gate.violation(bpPath, null, `「${n}」只在 A 有：B 尚未声明，部署后会自动补上（可预期的稳态，未必需要动手）`);
+      }
     } else if (!inA && inB) {
       if (exemptOnlyInB[n]) {
         gate.info(`豁免（manifest 已登记的临时态）：「${n}」只在 B 有 —— ${exemptOnlyInB[n]}`);
@@ -90,7 +100,11 @@ for (const prof of profiles) {
       if (cmp === null) {
         gate.violation(bpPath, null, `「${n}」声明不同：A=${aDeps[n]}  B=${bDeps[n]}（非 semver 形态，无法判方向）`);
       } else if (cmp > 0) {
-        gate.violation(bpPath, null, `「${n}」版本失配：B 落后于 A（A=${aDeps[n]}  B=${bDeps[n]}）—— 可预期的稳态，部署后会按 A 补上；要立刻拉平就跑 pnpm install`);
+        if (exemptFrozenInB[n]) {
+          gate.info(`豁免（manifest 已登记 B 侧冻结）：「${n}」B 落后于 A（A=${aDeps[n]}  B=${bDeps[n]}）—— ${exemptFrozenInB[n]}`);
+        } else {
+          gate.violation(bpPath, null, `「${n}」版本失配：B 落后于 A（A=${aDeps[n]}  B=${bDeps[n]}）—— 可预期的稳态，部署后会按 A 补上；要立刻拉平就跑 pnpm install`);
+        }
       } else {
         gate.violation(bpPath, null, `「${n}」版本失配：⚠ B 超前于 A（A=${aDeps[n]}  B=${bDeps[n]}）—— 下次部署会被归档包覆盖，必须补进 profile-template（铁律 5 双处声明）`);
       }
@@ -168,10 +182,12 @@ for (const prof of profiles) {
 
 // 豁免登记自洁：登记的项若在所有受检 profile 里都不再出现，它已经是一条死豁免。
 // 「不静默」是这条纪律的两面 —— 命中时要打印，失效时也要，否则白名单只会越积越旧。
-for (const name of Object.keys(exemptOnlyInB)) {
-  gate.inspect();
-  if (!seenInB.has(name)) {
-    gate.info(`豁免已过期：「${name}」在所有受检 profile 里都不再出现 —— 可从 manifest 的 profileSync.exemptOnlyInB 移除`);
+for (const [key, exempt] of [['exemptOnlyInB', exemptOnlyInB], ['exemptFrozenInB', exemptFrozenInB]]) {
+  for (const name of Object.keys(exempt)) {
+    gate.inspect();
+    if (!seenInB.has(name)) {
+      gate.info(`豁免已过期：「${name}」在所有受检 profile 里都不再出现 —— 可从 manifest 的 profileSync.${key} 移除`);
+    }
   }
 }
 
