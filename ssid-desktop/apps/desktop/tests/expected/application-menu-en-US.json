@@ -1,0 +1,18 @@
+[
+  {
+    "role": "hide",
+    "label": "Hide 思灵"
+  },
+  {
+    "role": "hideOthers",
+    "label": "Hide Others"
+  },
+  {
+    "role": "unhide",
+    "label": "Show All"
+  },
+  {
+    "role": "quit",
+    "label": "Quit 思灵"
+  }
+]

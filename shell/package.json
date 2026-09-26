@@ -2,21 +2,11 @@
   "name": "ssid-shell",
   "version": "0.4.0",
   "private": true,
-  "description": "SSiD 壳（思灵）：Electron 补丁层，boot 隔壁 DSH 官方 UI（无边框自绘标题栏 + 托盘）",
+  "description": "SSiD（思灵）：发版基准 + 门禁 + 同步脚本。自建壳的运行时已于 tag v0.4.0-selfbuilt / 分支 archive/selfbuilt-shell 归档，本目录只保留仍在维护的部分 —— profile-template/（发版基准，被 prepare-ssid-plugins.ts 引用）与 scripts/（check:rules 七个门与发版脚本）。",
   "type": "module",
   "scripts": {
-    "start": "electron .",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
-    "smoke": "node --import tsx/esm boot-smoke.ts",
-    "test": "node --import tsx/esm --test tests/profile-merge.spec.ts tests/codegraph-adapt.spec.ts tests/kernel-child-bridge.spec.ts tests/profile-name.spec.ts tests/keep-awake.spec.mjs scripts/check-bom.spec.mjs scripts/check-legacy-names.spec.mjs scripts/check-cot-leakage.spec.mjs scripts/check-loader-external.spec.mjs scripts/check-plugin-peers.spec.mjs scripts/check-vendor-sync.spec.mjs scripts/sync-vendor.spec.mjs",
+    "test": "node --test scripts/check-bom.spec.mjs scripts/check-legacy-names.spec.mjs scripts/check-cot-leakage.spec.mjs scripts/check-loader-external.spec.mjs scripts/check-plugin-peers.spec.mjs scripts/check-vendor-sync.spec.mjs scripts/sync-vendor.spec.mjs",
     "test:check-rules": "node --test scripts/check-bom.spec.mjs scripts/check-legacy-names.spec.mjs scripts/check-cot-leakage.spec.mjs scripts/check-loader-external.spec.mjs scripts/check-plugin-peers.spec.mjs scripts/check-vendor-sync.spec.mjs",
-    "test:profile-merge": "node --import tsx/esm --test tests/profile-merge.spec.ts",
-    "test:codegraph-adapt": "node --import tsx/esm --test tests/codegraph-adapt.spec.ts",
-    "test:kernel-child-bridge": "node --import tsx/esm --test tests/kernel-child-bridge.spec.ts",
-    "pack": "npm run bundle-kernel && npm run bundle-kernel-child && electron-builder --win",
-    "bundle-kernel": "esbuild kernel.ts --bundle --platform=node --format=esm --outfile=kernel.bundle.mjs --external:node:* --external:*.node --external:@deepseek-ai/* --alias:resolve.exports=./node_modules/resolve.exports",
-    "bundle-kernel-child": "esbuild kernel-child.ts --bundle --platform=node --format=esm --outfile=kernel-child.bundle.mjs --external:node:* --external:*.node --external:@deepseek-ai/* --alias:resolve.exports=./node_modules/resolve.exports",
-    "pack:mac": "npm run bundle-kernel && npm run bundle-kernel-child && electron-builder --mac",
     "check:bom": "node scripts/check-bom.mjs",
     "check:profile-sync": "node scripts/check-profile-sync.mjs",
     "check:vendor-sync": "node scripts/check-vendor-sync.mjs",
@@ -25,131 +15,8 @@
     "check:cot": "node scripts/check-cot-leakage.mjs",
     "check:loader-external": "node scripts/check-loader-external.mjs",
     "check:plugin-peers": "node scripts/check-plugin-peers.mjs",
-    "verify:shipped": "node scripts/verify-shipped-kernel.mjs",
     "sync:vendor": "node scripts/sync-vendor.mjs",
     "verify:release": "node scripts/verify-release.mjs"
   },
-  "main": "main.mjs",
-  "author": "MaxNull",
-  "build": {
-    "appId": "com.maxnull.ssid",
-    "productName": "思灵",
-    "electronDist": "node_modules/electron/dist",
-    "directories": {
-      "output": "dist-electron"
-    },
-    "files": [
-      "**/*",
-      "!dsh-runtime/**",
-      "!scripts/**",
-      "!build/**",
-      "!dist-electron/**",
-      "!dist-electron-016/**",
-      "!tests/**",
-      "!boot-smoke.ts",
-      "!tsconfig.json",
-      "!*.tar.gz",
-      "!.tmp-*",
-      "!*.png",
-      "!kernel-child.bundle.mjs",
-      "!*.bak",
-      "!*.bak-*",
-      "!*.pre-*"
-    ],
-    "asarUnpack": [
-      "node_modules/tsx/**",
-      "node_modules/@esbuild/**",
-      "node_modules/pnpm/**"
-    ],
-    "afterPack": "scripts/after-pack.cjs",
-    "extraResources": [
-      {
-        "from": "dsh-runtime.tar.gz",
-        "to": "dsh-runtime.tar.gz"
-      },
-      {
-        "from": "kernel-child.bundle.mjs",
-        "to": "kernel-child.bundle.mjs"
-      }
-    ],
-    "electronLanguages": [
-      "en-US",
-      "zh-CN"
-    ],
-    "npmRebuild": false,
-    "nsis": {
-      "artifactName": "ssid-shell-setup-${version}.${ext}",
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "思灵",
-      "include": "build/installer.nsh"
-    },
-    "win": {
-      "target": [
-        "nsis",
-        "zip"
-      ],
-      "artifactName": "ssid-shell-${version}-win.${ext}",
-      "icon": "assets/icon.png",
-      "signAndEditExecutable": true
-    },
-    "publish": {
-      "provider": "github",
-      "owner": "Max-Null",
-      "repo": "seek-soul-in-darkness",
-      "releaseType": "release"
-    },
-    "mac": {
-      "target": [
-        "dmg",
-        "zip"
-      ],
-      "artifactName": "ssid-shell-${version}-${arch}-mac.${ext}",
-      "icon": "assets/icon.icns",
-      "category": "public.app-category.productivity",
-      "darkModeSupport": true,
-      "identity": "-"
-    },
-    "dmg": {
-      "artifactName": "ssid-shell-${version}-${arch}.${ext}",
-      "window": {
-        "width": 540,
-        "height": 400
-      },
-      "contents": [
-        {
-          "x": 130,
-          "y": 230
-        },
-        {
-          "x": 130,
-          "y": 320,
-          "type": "file",
-          "path": "ssid-mac-launcher.command",
-          "name": "打开思灵.command"
-        },
-        {
-          "x": 410,
-          "y": 230,
-          "type": "link",
-          "path": "/Applications"
-        }
-      ]
-    }
-  },
-  "dependencies": {
-    "electron-updater": "^6.8.9",
-    "pnpm": "11.21.0",
-    "tsx": "^4.0.0"
-  },
-  "devDependencies": {
-    "@types/node": "^26.0.0",
-    "electron": "44.0.0",
-    "electron-builder": "^26.0.0",
-    "typescript": "^6.0.3",
-    "esbuild": "^0.28.2",
-    "resolve.exports": "^2.0.3"
-  }
+  "author": "MaxNull"
 }

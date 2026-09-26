@@ -34,7 +34,10 @@ const MODES = [
   { id: 'profile-sync', label: 'profile 与 template 声明对比', script: 'check-profile-sync.mjs' },
   { id: 'bom', label: 'BOM 扫描', script: 'check-bom.mjs' },
   { id: 'legacy-names', label: '旧名残留（硬域）', script: 'check-legacy-names.mjs' },
-  { id: 'loader-external', label: 'bundle 不得内联 DSH', script: 'check-loader-external.mjs' },
+  // 自建壳的 kernel bundle 约束随自建壳一起下架：这门检查 kernel.bundle.mjs /
+  // kernel-child.bundle.mjs 与进包产物，并要求 package.json 里有 bundle-kernel
+  // 脚本 —— 三者在 tag v0.4.0-selfbuilt 之后都不在 main 上了，留着只会对一个
+  // 已归档的对象报红。脚本仍在 scripts/check-loader-external.mjs，需要时可单独跑。
   { id: 'plugin-peers', label: '插件 peerDeps 覆盖性', script: 'check-plugin-peers.mjs' },
   { id: 'dsh-clean', label: 'DSH 源码只引用不改', script: 'check-dsh-checkout-clean.mjs' },
 ];
