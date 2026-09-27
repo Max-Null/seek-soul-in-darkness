@@ -1,230 +1,184 @@
 ---
 name: ssid-release
-description: "SSiD（思灵）发版流程：版本决策、内置插件对齐（vendor/npm/pin 陷阱）、release notes、版本号四处同步、prepare-runtime 归档重建（有缓存约 9 分钟）、npm run verify:release 归档抽查、npm run pack 打包与 verify:shipped 三层校验、打包产物实机冒烟、GitHub tag/Release 交付。触发词：用户说『发版/发布思灵/SSiD 发版/ssid 收尾/SSiD 版本升级收尾/思灵打包/发布安装包』或提到 vX.Y.Z 版本发布时使用。依据 docs/发版流程规范.md（v0.1.12 复盘），实操细节见本文档末尾的已验证经验。"
+description: "SSiD（思灵）发版流程（fork 版 / v1.0.0 起）：版本决策、插件集与 vendor 对齐、更新日志、打包（package-target 阶段链）、冒烟、GitHub tag/Release 交付。触发词：用户说『发版/发布思灵/SSiD 发版/ssid 收尾/SSiD 版本升级收尾/思灵打包/发布安装包』或提到 vX.Y.Z 版本发布时使用。注意：自建壳（≤0.4.0）的 bundle-kernel + dsh-runtime.tar.gz 归档流程已归档，不要照搬。"
 ---
 
-# SSiD 发版流程（v0.1.12 起固化）
+# SSiD 发版流程（fork 版 · v1.0.0 起）
 
-> 发版 = 版本号 + 内置插件对齐 + 归档 + 更新日志 + tag/Release **五件事一次做完**，漏一项即未完成。
-> 仓库：`H:\MaxNull\WorkStation\seek-soul-in-darkness`（远端 `Max-Null/seek-soul-in-darkness`）。
-> **本文件是正本**（受 git 管理），但**实际生效的是用户级副本 `~/.dsh/skills/ssid-release/`**——SSiD 发版在 WorkStation 根的会话里做，那时项目根是 WorkStation、扫不到 SSiD 仓库的 `.agents/skills/`。**改完正本必须同步过去**（`Copy-Item .agents/skills/ssid-release/* ~/.dsh/skills/ssid-release/ -Force`），否则改了不生效，且没有任何提示。
+> **换代提示**：壳已从自建壳（≤0.4.0）换成官方 `dsh-desktop-host` 基座。本文写 **fork 版**流程；自建壳那套（`bundle-kernel`、`dsh-runtime.tar.gz` 归档、`verify:shipped`）**已随运行时归档**，只在文末附录留作历史。
+>
+> **⚠️ 1.0.0 尚未发布过**：凡标 **【待验证】** 的，是从代码里读到的、但还没实际走完一次的步骤——不要当成既成事实。
+>
+> **构建在哪**：**开发主轴** `H:\MaxNull\WorkStation\.ssid-build\checkout`（分支 `ssid-desktop-fork`，带 DSH 全历史）。本文的相对路径都相对它。`seek-soul-in-darkness/ssid-desktop/` 是**对外快照**，不是构建处。
+>
+> **正本与生效副本**：正本在 `seek-soul-in-darkness/.agents/skills/ssid-release/`（受 git 管），**实际生效的是用户级副本 `~/.dsh/skills/ssid-release/`**——发版常在 WorkStation 根的会话里做，那里扫不到仓库的 `.agents/skills/`。**改完正本必须同步过去**（`Copy-Item .agents/skills/ssid-release/* ~/.dsh/skills/ssid-release/ -Force`），否则改了不生效且没有任何提示。
 
 ## 0. 版本决策
 
-- 未外发版本（无 GitHub Release）合并重打，不单独发版（v0.1.10/0.1.11 先例）。
-- patch = 修复+攒小改；minor = 功能增强；破坏性/大重构 = major。
-  **判据是「有没有新的用户可见能力」，不是「改了多少行」**：v0.4.0 即例——三层修复（悬浮球会话管理、splash 渗透、备份漏工作区记忆）加三块新功能（执行期保活、执行中遮罩、遮罩口令）再加一个新预制插件，patch 装不下，进位 minor。反过来，一次改了几十个文件但全是内部整理（门禁、文档、pin 对齐）也不该因此进位。
-- 定版日期写进发布说明；「更新说明」节必须含老用户升级行为（自动重部署 ~30s 等）。
+- 未外发版本（无 GitHub Release）合并重打，不单独发版。
+- patch = 修复 + 攒小改；minor = 功能增强；破坏性 / 大重构 = major。**判据是「有没有新的用户可见能力」，不是「改了多少行」**：一次改几十个文件但全是内部整理（门禁、文档、pin 对齐）不该进位；三层修复加三块新功能则 patch 装不下。
+- 定版日期写进发布说明；「更新说明」节必须含老用户升级行为。
 
-## 1. 内置插件对齐（发版前必做）
+## 1. 版本号：先问「这个号是谁的」
 
-- **vendor 定制插件**：**别照抄旧列表，先 `ls shell/profile-template/vendor` 看实际**——旧文档里那两个例子都已失效：`open-sea-skin` 于 v0.1.16 移除、`dsh-genui` 已切回 npm 声明。**当前 7 个**：`dsh-capture`、`dsh-context-doctor`、`dsh-quick-toolbar`、`dsh-ssid-env`、`dsh-ssid-panels`、`dsh-ssid-pwsh-retry`、`dsh-ssid-zh-ui`（2026-09-21 v0.4.0 核对）。
-  - 源码 bump 后必须同步 vendor：`lib/*`（构建产物）+ **package.json 版本号**（漏了 = 插件中心持续误报更新）；
+换底座后**产品版本与内核版本是两条线**，而代码里有**三处**强制它们相等。**三处的位置与完整判据见 `docs/SSiD开发手册.md` 坑 #55**——其中最容易漏的是 `prepare-dsh.ts` 的 `desktopRelease`：它把 `release.version` 当作「要装的 dsh 版本」用（`readDesktopCorePackageSet(BUILD_ROOT, release.version)`），跟着改成产品版本会让内核去 npm 找一个不存在的 `@deepseek-ai/dsh@1.0.0`。
+
+速记判据——**逐个问「这个版本号是谁的」**：
+
+| 描述谁 | 载体 | 跟谁 |
+|---|---|---|
+| **运行时**（内嵌内核、node/pnpm） | `prepare-dsh.ts` 的 `desktopRelease` | **DSH 版本** |
+| **产品**（安装包名、`latest.yml`、发版记录、GitHub tag） | `apps/desktop/package.json` 的 `version` | **思灵自己** |
+
+- 构建版本可选：`DSH_DESKTOP_BUILD_VERSION`（测试构建用，形如 `1.0.0-test.20260928.1`）——**不进 manifests**，只进 electron-builder、更新 feed 与上传校验。生产发布不发它。
+- **`artifactName` 与更新源要一起改**：`electron-builder-config.mjs` 的 `artifactName` 同时决定安装包文件名**与 `latest.yml` 里的 `url`/`path`**，只改一个会让自动更新指向不存在的文件（坑 #55 附带条 ⓑ）。
+- **验证要在打包链真正跑的那条命令下做**：链上用的是**根级 `tsconfig.host.json`**（开了 `TS6133`「声明但未读取」），而 `apps/desktop` 自己的 `tsc -b` 不会报——不然会跑到打包第 7 分钟才失败，白跑一轮（坑 #55 附带条 ⓐ）。
+
+## 2. 内置插件与 vendor 对齐（发版前必做）
+
+- **vendor 定制插件**：**别照抄列表，先 `ls shell/profile-template/vendor` 看实际**。当前 7 个：`dsh-capture`、`dsh-context-doctor`、`dsh-quick-toolbar`、`dsh-ssid-env`、`dsh-ssid-panels`、`dsh-ssid-pwsh-retry`、`dsh-ssid-zh-ui`。
+  - 源码 bump 后必须同步 vendor：`lib/*`（构建产物）+ **package.json 版本号**（漏了 = 插件中心持续误报更新）。
   - `git diff --no-index <源>/lib <vendor>/lib` 一致；源仓库 git 干净。
-  - 注意其中 `dsh-quick-toolbar` 是**精简副本**（只收 `lib/` + `cordis.patch.yml` + `package.json`），别按「整目录相等」比。
-- **npm 预置插件**（profile-template/package.json）：声明是**精确 pin**（2026-09-21 实测：33 条非内核声明无一带范围符），所以**要新版本必须显式改那一行**——`pnpm install` 不会替你升。插件 npm 发布必须在归档重建之前（归档按 pin 解析）。
-- **`check-profile-sync` 报版本失配时，先判方向再动手**（同名不同版；判据详见手册 §7 坑 #37）：
-  - **B 落后于 A**（运行时 pin 旧于 template）= 可预期的稳态，部署时会按 template 补上，通常不必动；要立刻拉平就 `pnpm install`。
-  - **B 超前于 A** ⚠（运行时 pin 新于 template）= 下次部署会被归档包覆盖，**必须补进 `profile-template`**（铁律 5 双处声明）；此时 `pnpm install` 是**反方向**动作，会把本机独有的版本静默降回。
-  - `file:` / `git:` 这类非 semver 形态判不出方向，门给中性文案——须人工核对。
-- **peers**：`pnpm peers check` 失败项若为宿主官方 peer（@deepseek-ai/dsh-*），hoisted 布局下为既有特征，运行时由 cordis loader 注入，`prepare-runtime.mjs` 的 MISSING_PEERS 无需补；新引入第三方插件的 peer 先 semver 判定再下结论。
+  - `dsh-quick-toolbar` 是**精简副本**（只收 `lib/` + `cordis.patch.yml` + `package.json`），别按「整目录相等」比。
+  - `npm run sync:vendor`（默认 dry-run，`--apply` 才写盘）与 `check-vendor-sync` 共用同一份指纹实现。
+- **出厂插件的声明源只有一个**：`shell/profile-template/package.json` 的 `dependencies` + `dsh.profile.bundles`。打包时 `prepare:ssid-plugins` 把它变成「随包插件集」；**运行时 profile 的依赖是 `link:` 指向插件集，由首启 seed 自动维护，不要手改**（链路详见手册 §4）。
+- 声明是**精确 pin（无 `^`）**，要新版本必须显式改那一行。
+- `check-profile-sync` 报失配时先判方向：**B 落后于 A** 是可预期稳态；**B 超前于 A** 才是下次部署会被覆盖的坑。**注意**：fork 形态下 B 侧的出厂插件本就是 `link:`（不是版本号），门已把这种形态认成预期、降级为 info——若它仍报「非 semver 形态」，先确认那条不是插件集来源。
 
-## 2. 更新日志
+## 3. 更新日志
 
 - `docs/release-notes-vX.Y.Z.md`，格式沿用惯例（内置升级 / 新增 / 调整 / 修复 / 更新说明）。
-- 分组依据 `git log --oneline v上版本..HEAD` 提炼，不凭记忆。
-- **同步内置弹窗/关于页资源**（更新日志功能在 dsh-ssid-panels 插件内：启动弹窗 + 关于 SSiD「更新日志」区共用）：
+- 分组依据 `git log --oneline v上版本..HEAD` 提炼，**不凭记忆**。
+- **同步内置弹窗/关于页资源**（更新日志功能在 `dsh-ssid-panels` 内：启动弹窗 + 关于 SSiD「更新日志」区共用）：
+
   ```powershell
   Copy-Item docs/release-notes-vX.Y.Z.md plugins/dsh-ssid-panels/release-notes.md -Force
-  # 守卫校验：首行 # vX.Y.Z 必须 == shell/package.json version（不一致不弹不显示）
+  # 守卫校验：首行 # vX.Y.Z 必须 == 产品版本（不一致不弹不显示）
   node --import tsx/esm --test plugins/dsh-ssid-panels/tests/release-notes.test.ts
-  # 构建 + vendor 同步（发版链 1.1 的 vendor 步骤含本插件的 lib/src/release-notes.md）
+  # 构建 + vendor 同步（含本插件的 lib/src/release-notes.md）
   pnpm --dir plugins/dsh-ssid-panels exec tsdown
   ```
-  - 弹窗规则：每版本只弹一次，已读状态记在壳的**共享状态文件** `~/.ssid/changelog-seen.json`（**不是** localStorage，也不随 profile 隔离——所以"全新隔离环境"未必会弹，别把它当必然事件）；条目版本 ≠ 壳版本不弹（守卫，防发版漏同步弹错）。
-  - 关于 SSiD「更新日志」区离线展示当前版本（包内文件），「检查更新」仅补充在线历史版本。
 
-## 3. 版本号同步（四处）
+  - 弹窗每版本只弹一次，已读状态记在 `~/.ssid/changelog-seen.json`（**不是** localStorage，也不随 profile 隔离——所以「全新隔离环境」未必会弹）。
+- **发版回填 notes 别把哈希同步进包内**：安装包的 SHA256 取决于内嵌内容，而包里又装着更新日志，把最终哈希写进包内会**再次改变**哈希。发包**前**走上面的同步链；发包**后**回填只改 `docs/` 与 GitHub Release 页。
 
-`shell/package.json` version（bump，prepare-runtime 的 ssidVer 来源）· `.runtime-version`（归档内，自动生成勿手改）· profile 内 `.runtime-version`（deploy 自动对齐）· GitHub tag `vX.Y.Z`（与 package.json 严格一致）。
-
-## 3.5 发版前守卫（必须全绿的轻量环）
-
-**六道检查门**（BOM / 旧名残留 / profile↔模板声明 / vendor 四份一致 / 插件 peerDeps 覆盖性 / DSH 源码只引用不改）：
+## 4. 发版前守卫（必须全绿）
 
 ```powershell
-cd shell
-npm run check:rules          # 7 门全跑，任一失败即 exit 1
+cd H:\MaxNull\WorkStation\seek-soul-in-darkness\shell
+npm run check:rules          # 六门全跑，任一失败即 exit 1
 ```
 
-**两条单测冒烟**：
+六门 = BOM / 旧名残留（硬域）/ profile↔模板声明 / vendor 四份一致 / 插件 peerDeps 覆盖性 / DSH 源码只引用不改。（第 7 门 `loader-external` 已随自建壳下架，脚本仍在，需要时可单独跑。）
+
+两条单测冒烟：
 
 ```powershell
-# 更新器纯逻辑（dev unavailable / 事件流 / install 守卫 / 错误翻译）
-node --test shell/updater-core.test.mjs
-# 更新日志解析（版本守卫 / 分节解析）
-node --import tsx/esm --test plugins/dsh-ssid-panels/tests/release-notes.test.ts
+node --import tsx/esm --test plugins/dsh-ssid-panels/tests/release-notes.test.ts   # 更新日志解析 + 版本守卫
 ```
 
-## 4. 归档重建
+## 5. 打包
 
 ```powershell
-cd shell
-node scripts/prepare-runtime.mjs   # 有 pnpm store 缓存时约 9 分钟（v0.4.0 实测）；首次/无缓存约 25 分钟（v0.3.0）
+cd H:\MaxNull\WorkStation\.ssid-build\checkout
+$env:ELECTRON_MIRROR = "https://npmmirror.com/mirrors/electron/"   # 直连 GitHub 拉 Electron 会挂死且不报错
+pnpm --filter "./apps/desktop" run package:win:x64:unsigned
 ```
 
-- **运行约束**：完成前不要在 ssid profile 上做任何 pnpm 操作（扰动 lockfile）。
-- **耗时构成**（据此安排时段）：`pnpm install`（v0.4.0 走 store 缓存 23.5s；无缓存要重新下载全部 ~1078 包）+ `runtime-integrity.sha256` 生成 65,000+ 条约占 **291–308 秒**（v0.3.0 291s / v0.4.0 307.9s）+ 1018 MB 的 `tar -czf` 再 1-3 分钟。**「25 分钟」是老口径**（sha256 引入前 + 无缓存），有缓存时实测 ~9 分钟；早期文档写的「3-5 分钟」则更早。
-- 完成后完整性检查：归档 **230–232 MB**（v0.3.0 实测 230.5 MB / 73,719 条目；v0.4.0 实测 232.0 MB / 73,945 条目；**明显偏小 = 中断/损坏，必须重跑**）。
-- 产物不入库（`.gitignore`），由安装包内嵌。
+**一条命令跑完 19 个阶段（实测 1142.6 s ≈ 19 分钟）**，编排在 `scripts/package-target.ts`，阶段与耗时（2026-09-28 实测）：
 
-## 5. 归档内容抽查（发布前必须全过）
+| 阶段 | 耗时 |
+|---|---|
+| `build:official`（tsdown 构建整个 monorepo）+ `release:pack --family dsh` | 59.6 s + 121 s |
+| `prepare:primary-runtime` + `prepare:runtime`（含 runtime:\* 子阶段，最长的 `write-descriptor` 65 s、`smoke` 18 s） | 38.4 s + 44.2 s（子阶段合计约 2 分钟） |
+| `prepare:dsh` | **141.3 s** |
+| `prepare:ssid-plugins` | 53.0 s |
+| `electron-builder --win --x64 --publish never` | **656.5 s（≈11 分钟，LZMA 压缩是大头）** |
+| `smoke-packaged-runtime.ts --unsigned`（**打包后自动冒烟**） | 56.1 s |
 
-**首选机械化**——脚本自己解包核对，且刻意不做部署与 boot（那两步会改变运行环境）：
+- **产物**：`apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/`
+  - `ssid-<产品版本>-win-x64-unsigned.exe`（实测 1.0.0 为 **427.6 MB**）
+  - 同名 `.blockmap`（增量更新的差分）
+  - **`latest.yml`**（更新 feed；provider 见下）
+- **`--publish never`**：electron-builder 不发布，发布是独立步骤（见 §7）。
+- **日志与结果**：`.desktop-build/packaging-runs/<时间戳>/` 下的 `stdout.log`（**真因在这里，不是 `events.jsonl`**）与 `result.json`（逐阶段耗时与成败）。**排查打包失败别用 `Select-Object -Last N` 截断输出**——warning 与编码错误会被切掉，只剩调用栈。
+- **更新源**（`electron-builder-config.mjs`）：没配 COS 凭据时写 **`provider: github, owner: Max-Null, repo: seek-soul-in-darkness`**；配了 COS 则保持官方的 `generic`（那是官方自身流程）。
+- **签名**：用户已拍板**不买证书**，接受 SmartScreen 拦截。`publisherName` 无证书时为 `undefined`。**【待验证】未签名包能否通过 `electron-updater` 的 NSIS 校验**——代码上应当跳过校验，但没有实测证据。
+
+## 6. 冒烟
+
+打包链**自带一步**（`smoke-packaged-runtime.ts`，约 56 秒）——它跑完才写 `windows-package` 阶段结果，若那一步失败就是打包失败。
+
+**用打包产物手工自检时必须隔离**（否则打包版会把改动写进真实 profile）：
 
 ```powershell
-cd shell
-npm run verify:release        # 覆盖旧 §5-1…§5-8 的绝大部分
-# 加 --npm-latest 才联网核对「plugin-center == npm 最新」（默认跳过，避免发布前意外联网）
+$env:DSH_HOME = "<隔离目录>"
+$env:SSID_MCP_CG_WS = "<空目录>"      # 跳过 CodeGraph 首次引导
+# 启动 <隔离目录>/.../win-unpacked/思灵.exe
 ```
 
-- 输出 `✓ 通过：0 处违规` 即通过；它会打印 `.runtime-version`、清单条数与自洽性、plugin-center / better-sidebar 版本、capture 功能标记、顶层依赖数、vendor 包一致性（v0.4.0 实测报「比对 6 个 vendor 包，全部一致」，不是旧文档写的四个）。
-- **§5-2 的 open-sea-skin 检查已是历史**（2026-09-21 v0.4.0 实测）：脚本现在把它输出成「该定制已于 v0.1.16 移除，**属预期**」，不再计违规；体积上限也已放宽（v0.3.0 230.5 MB / v0.4.0 232.0 MB 都在容忍内）。旧文档说它「是假提示、脚本待修」，那两处都已不成立。
-- **`--npm-latest` 有个已知小缺口**（2026-09-21 实测）：它走 `spawnSync('npm', …)`，npm 不在 PATH 时会静默跳过该子项（输出 `§5-3 npm view 失败（网络或未登录），跳过该子项：spawnSync npm ENOENT`）。**跳过不等于通过**——要核对「plugin-center == npm 最新」就自己 `npm view` 一次，或确认 npm 在 PATH。
+> Windows PowerShell 5.1 的 `Start-Process` **没有 `-Environment` 参数**——先设 `$env:` 再 `Start-Process`（子进程继承当前进程环境）。
+>
+> **全新隔离环境的断言会「假 FAIL」**：没有工作区也没有 API Key，页面停在工作区选择 + 密钥引导，输入框一类断言必然取不到——此时以「骨架 + 启动阶段」为放行依据。
+>
+> **单实例锁**：若已有实例在跑，新进程会 `single-instance lock FAILED -> quit`（正常退出，非崩溃）。
 
-**手工兜底**（脚本报可疑项、或需要眼见为实时）：
+**NSIS 冒烟**（改过安装器脚本时先跑它，别等打包）：
 
 ```powershell
-New-Item -ItemType Directory dsh-runtime            # prepare-runtime 已删源目录，-C 目标必须先存在
-tar -xzf dsh-runtime.tar.gz -C dsh-runtime
-# 1) .runtime-version == <ssidVer>-<dshVer>-<指纹>
-# 2) @max-null/dsh-plugin-center version == npm 最新
-# 3) dsh-better-sidebar version == pin 预期
-# 4) @max-null/dsh-capture/lib/client.js 含最新功能标记
-# 5) package.json dependencies 含本轮新增（逐项核对本版本 release notes）
-# 6) vendor 包 package.json 版本号与源仓库一致
-# 7) release-notes.md 首行 `# vX.Y.Z` == 归档 ssid 版本（启动更新日志弹窗守卫）
+pwsh -NoProfile -File apps\desktop\scripts\smoke-installer-directories.ps1 `
+  -Makensis "<...>\nsis-3.0.4.1\Bin\makensis.exe" `
+  -SevenZip "<...>\unsigned-artifacts\.nsis-directory-installer\7za.exe" `
+  -FrameLibrary "<...>\installer-ui\window-frame.dll"
 ```
 
-## 6. 打包与发布
+**必须用 pwsh**（PS 5.1 缺 `CreateTempSubdirectory`）。它有三个场景：`first` / `upgrade` / `locked`。
 
-1. `npm run pack`（**已含** `bundle-kernel` + `bundle-kernel-child` + electron-builder NSIS/zip；不要再单独跑 `bundle-kernel`，否则漏掉子进程 bundle）：
-   - 日志 `[after-pack] dsh-runtime.tar.gz OK (232.0 MB)` = 归档已内嵌；`[after-pack] node.exe -> resources/node/node.exe` = 子进程内核用的 node 已落位；
-   - 产物（`artifactName` 早已是英文，**不需要**再复制中文名副本）：`dist-electron/ssid-shell-setup-<ver>.exe`（+ `.blockmap`）、`ssid-shell-<ver>-win.zip`、`latest.yml`；
-   - 打包后立刻跑 **`npm run verify:shipped`**：核对仓库根 / `win-unpacked` / `setup.exe` 内层三层的内核哈希是否一致（回答「装进去的内核是不是本次构建的那一份」）。
-2. **本机自动冒烟（推荐，替代人工开思灵核对）**——`.agents/skills/ssid-release/smoke-ui.cjs`：
-   ```powershell
-   # 存在性检查（骨架 / Context Doctor / 输入框），自动发现思灵 web 端口
-   node .agents/skills/ssid-release/smoke-ui.cjs
-   # 检查会话内 dsh-context 标签（对话/轨迹/上下文）
-   node .agents/skills/ssid-release/smoke-ui.cjs --session "会话标题"
-   # 全链路：发消息触发 genui fence/面板 + 宽度对齐断言（消耗一次模型调用）
-   node .agents/skills/ssid-release/smoke-ui.cjs --send "把面板里的仪表盘换成线图并更新会话面板（panel:true）"
-   ```
-   - 依赖：ssid profile 的 playwright（`@playwright/mcp` 自带 chromium）；思灵已启动。
-   - 端口自动发现：遍历 `ssid-shell` 路径进程找监听者（**只对安装版有效**；dev 与 `win-unpacked` 的进程路径不含该串，须显式 `--cdp <port>`，见文末 v0.1.16 条）。
-   - 断言：composerSeat / 输入框 / Context Doctor（hero+会话）/ 会话标签 / genui 面板出现 / **面板宽 ≤800 且 < 座椅宽（非全宽）**。
-   - 交互障碍：模型弹提问卡片时自动选首选项/跳过，然后继续等待面板。
-   - 产物：`<outdir>/1-base.png`、`2-conversation.png`、`3-final.png` + PASS/FAIL 清单（人工核实截图后决定放行）。
-   - **发布完成后清理验证产物**（会话 = 归档；DSH 无删除入口，只有"归档会话"菜单项）：
-     ```powershell
-     # 归档验证会话（逗号分隔标题；归档后从主列表消失，可在归档里恢复）
-     node .agents/skills/ssid-release/smoke-ui.cjs --clean-sessions "验证会话A,验证会话B"
-     # 删除本次冒烟截图目录
-     node .agents/skills/ssid-release/smoke-ui.cjs --clean --outdir H:/MaxNull/WorkStation/.dsh-tmp/ssid-smoke/<时间戳>
-     ```
-   - **用打包产物自检时必须隔离**（否则打包版会把归档部署进真实 profile）：`--user-data-dir` 给临时目录，并把 `DSH_HOME` / `SSID_LOG_FILE` / `SSID_MCP_CG_WS`（指向空目录，跳过 CodeGraph 首次引导弹窗）指到隔离目录内再启动 `win-unpacked\思灵.exe`。**Windows PowerShell 5.1 的 `Start-Process` 没有 `-Environment` 参数**——先 `$env:DSH_HOME=...` 再 `Start-Process`（子进程继承当前进程环境）。通过判据：日志出现 `runtime deploy needed (archive=<新指纹>)` → `runtime deployed` → `upgrade report: lostPlugins=0` → `bootKernel ok` → `phase start() completed`。
-   - **全新隔离环境的断言会「假 FAIL」**：没有工作区也没有 API Key，页面停在工作区选择 + 密钥引导，`输入框` / `Context Doctor` 必然取不到——`bodyHead` 文本即可判定；此时以「骨架座位 + 部署链路 + 启动阶段」为放行依据（v0.3.0 实测）。
-   - **更新日志弹窗会盖住骨架断言**：脚本已自带 `dismissChangelog()`（识别「思灵已更新」再点「知道了」），输出里的 `changelog=dismissed | not-shown` 即其结果；弹不弹取决于壳的共享状态 `~/.ssid/changelog-seen.json`，**隔离环境不一定弹**（v0.3.1 实测：同一份包首跑弹、删状态后二次跑仍不弹），`not-shown` 不是异常。
-   - 手动兜底：重启思灵 → 日志 `runtime deploy needed (archive=<ver> proxy=<old>)` → deploy 成功 → boot 正常。
-3. GitHub 交付：
-   ```powershell
-   git status                                   # 先看清单：确认只有本版该进的东西
-   git add <具名路径>…                          # **不要 `-A`**：发版时它会把未提交的实验代码一起卷进 release commit
-   git commit -m "release: vX.Y.Z ..."; git push
-   git tag vX.Y.Z; git push origin vX.Y.Z
-   gh release create vX.Y.Z -R Max-Null/seek-soul-in-darkness --title "思灵 vX.Y.Z：..." --notes-file docs/release-notes-vX.Y.Z.md --latest
-   # 四个资产（名称均为英文，直接传；v0.3.0 实测 359.8 MB exe / 409.7 MB zip 各 1-2 分钟；
-   # v0.4.0 实测 361.3 MB / 411.3 MB，同量级）
-   gh release upload vX.Y.Z "shell/dist-electron/ssid-shell-setup-X.Y.Z.exe" -R Max-Null/seek-soul-in-darkness
-   gh release upload vX.Y.Z "shell/dist-electron/ssid-shell-X.Y.Z-win.zip" -R Max-Null/seek-soul-in-darkness
-   # 在线增量更新（electron-updater）必须的元数据与差分：
-   gh release upload vX.Y.Z "shell/dist-electron/latest.yml" -R Max-Null/seek-soul-in-darkness
-   gh release upload vX.Y.Z "shell/dist-electron/ssid-shell-setup-X.Y.Z.exe.blockmap" -R Max-Null/seek-soul-in-darkness
-   # 传完核对：资产名必须与 latest.yml 的 url 字段完全一致（不一致 = 增量更新 404）
-   ```
-   - latest.yml 由 electron-builder 生成（build.publish: github provider 已配置）；上传后老用户点「检查更新」即可增量下载（只下变化块）。
-   - 更新链路：electron-updater（shell/updater.mjs）→ dsh-ssid-panels 关于页「检查更新/下载/安装并重启」（/ssid/api/update.* 桥）；dev（未打包）全部返回 unavailable。
-   - **在线更新诊断信息**（实测失败时收集，用户可提供）：
-     - `~/.ssid/updater.log` —— 主进程更新器全程日志（init/状态事件/check/download/installer spawn+exit 码/错误堆栈，同步落盘）
-     - `~/.ssid/ssid.log` —— 壳层日志（启动/阶段）
-     - 思灵 devtools console —— 插件侧 `[ssid-update]` 日志（状态流/API 响应/异常）
-     - DSH 日志（`~/.dsh/logs/`）—— 插件 host `[ssid-update]` 桥接口记录
+## 7. GitHub 交付
 
-## 常见坑（累积）
+```powershell
+git status                                   # 先看清单：确认只有本版该进的东西
+git add <具名路径>…                          # **不要 `-A`**：会把未提交的实验代码一起卷进 release commit
+git commit -m "release: vX.Y.Z ..."; git push
+git tag vX.Y.Z; git push origin vX.Y.Z
+gh release create vX.Y.Z -R Max-Null/seek-soul-in-darkness --title "思灵 vX.Y.Z：..." --notes-file docs/release-notes-vX.Y.Z.md --latest
+```
 
-- vendor package.json 版本号漏同步 → 安装版首启误报「可更新」。
-- 预置插件声明是**精确 pin** → 要新版本必须显式改那一行（详见 §1）。
-- 插件 npm 发布晚于归档重建 → 归档旧版（重打归档 + 重打安装包，两趟）。
-- 归档被进程/电源中断 → 体积异常必重跑；tar 有 partial 列表仍可能损坏。
-- SSiD 内 pnpm add 可能静默 no-op → plugin-center 有版本核对防护，升级说明提示手动命令兜底。
-- cordis.patch.yml insert 子条目必须带显式 `id`（无 id = 随机 id，插件中心禁用失效 + 垃圾行累积）。
-- 绿屏/断电后：先检查归档与后台任务，不要直接复用疑似半成品。
-- **gh 上传大文件**：早期（v0.1.14/mac）实测 256MB+ 会挂，但 **2026-09-14 v0.3.0 实测 359.8 MB 的 exe 与 409.7 MB 的 zip 经 `gh release upload` 各 1-2 分钟正常传完**——先直接试 gh，失败再回退 `curl -F` 直传 uploads API（见文末 v0.2.0 条）。
-- **归档里的 release-notes 是发版时快照；包内那份必须停在发版前那一版**：发布后回填 `docs/release-notes-*.md`（补 SHA256、把「待发布」改成「已发布」）**只改 docs 与 GitHub Release 页，不要再走下面的同步链**。原因是**哈希自指**——安装包的 SHA256 取决于内嵌归档，而归档里又装着一份更新日志，把最终哈希写进包内会**再次改变**哈希。所以包内那份从 v0.3.2 起只给占位符，真实校验和以 Release 页与 `docs/` 为准（v0.3.0/0.3.3/0.4.0 皆如此）。
-- **改完 release notes 要重走弹窗同步链**（§2）：Copy 到 panels → 单测 → tsdown → `sync-vendor --apply --web`，否则 `check-vendor-sync` 会报 vendor 三处漂移。**这条只适用于「发包前」**——发包后回填按上一条办（只改 docs 与 Release 页），否则同步链会把带最终哈希的版本写进包内与 vendor，踩上哈希自指。
+上传资产（**名称必须与 `latest.yml` 的 `url` 字段完全一致，否则增量更新 404**）：
 
-## 已验证经验（2026-08-26 v0.1.13 收货）
+```powershell
+$A = ".ssid-build\checkout\apps\desktop\.desktop-build\targets\win-x64\unsigned-artifacts"
+gh release upload vX.Y.Z "$A\ssid-X.Y.Z-win-x64-unsigned.exe"          -R Max-Null/seek-soul-in-darkness
+gh release upload vX.Y.Z "$A\ssid-X.Y.Z-win-x64-unsigned.exe.blockmap" -R Max-Null/seek-soul-in-darkness
+gh release upload vX.Y.Z "$A\latest.yml"                               -R Max-Null/seek-soul-in-darkness
+gh release view vX.Y.Z -R Max-Null/seek-soul-in-darkness --json assets  # 传完核对资产名
+```
 
-- prepare-runtime 的 node/pnpm 自动发现：node 命中 PATH（v26.2.0）、pnpm 命中 %APPDATA% 全局 cjs，无需 DSH_NODE/PNPM_CMD（缺失时才显式设置）。
-- 第三方插件 vendor 化：复制 npm/git 的 package.json + lib + cordis.patch.yml（+ LICENSE/README）；**含按需 assets 的包必须带 `lib/assets/`**（这条当时以 genui 为例，它后来已切回 npm 声明，见 §1）；`src/` 不复制。
-- 面板修复类 vendor 固化（dsh-genui 0.9.2 + PR #58 修复）在上游合并并 npm 发布后，应切回 npm 声明并删除 vendor 与临时补丁脚本。
-- 发版前置检查：`git status` 干净 + `git log v上版本..HEAD` 分组 + 安装目录归档备份（替换前 `.bak`）。
-- dev profile（`~/.dsh/profiles/ssid`）与发布模板两处同步（依赖/bundles/vendor）；git 只提交模板侧。
+- **git 提交 / 打标 / push / `gh release` 都归开发会话**；**只有 `npm publish` 由用户手动**（铁律 9）。
+- **`gh` 上传大文件**：早期（v0.1.14/mac）实测 256 MB+ 会挂，但 2026-09-14 起 359–411 MB 的资产经 `gh release upload` 各 1–2 分钟正常传完——**先直接试 gh**，失败再回退 `curl -F` 直传 uploads API。
+- **【待验证】完整的更新闭环**（打包 → 发布 → 旧版检测到新版 → 下载 → 安装）需要真实发一版并装旧版，成本高，**尚未走过**。
 
-## 已验证经验（2026-08-27 v0.1.14 收货）
+## 常见坑
 
-- **gh release upload 中文文件名坑**：默认上传带中文/空格本地文件名会被 GitHub 规范化（「思灵 Setup x.y.z.exe」→「Setup.x.y.z.exe」），而 latest.yml 的 url: 引用 electron-builder 的 artifactName（如 ssid-shell-setup-x.y.z.exe）——不一致 = 增量更新 404。规避：打包后复制英文名副本（ssid-shell-setup-<ver>.exe + .blockmap）再上传，上传后 gh release view --json assets 核对资产名与 latest.yml 完全一致。
-- prepare-runtime 输出 200 MB 级归档（0.1.14 为 200.2 MB，新预置增多属正常；v0.4.0 已到 232.0 MB）；抽查 vendor 路径按 `<scope>/<name>` 分辨归属——当时的例子 `@changfenhuang/genui` 已切回 npm，现存的第三方 vendor 只有 `dsh-context-doctor`。
+- vendor 的 `package.json` 版本号漏同步 → 安装版首启误报「可更新」。
+- 插件 npm 发布晚于打包 → 包里的插件是旧版（要重打）。
+- `cordis.patch.yml` 的 `insert` 子条目必须带显式 `id`（无 id = 随机 id，插件中心禁用失效 + 垃圾行累积）。
+- **`splitPatchFile` 的子条目判据必须只认 mapping 起始**（`- 键:`），不认任意 `- \S`：`args:` 下的标量项 `- '--exclude'` 会被误当子条目，拼出非法 YAML，内核 boot 直接报 `bad indentation of a mapping entry`（2026-09-28 真实事故，见手册坑 #30 的新形态注记）。
+- **`npx tsc --noEmit -p apps/desktop/tsconfig.json` 会假绿**——一律以 `tsc -b` 为准，且以**打包链真正跑的那条命令**（根级 `tsconfig.host.json`）为准。
+- **NSIS 脚本（含非 ASCII）必须 UTF-8 带 BOM**，否则 makensis 报 `Bad text encoding`；用 write 工具重写这类文件会丢 BOM。
+- **electron-builder 把 makensis 的 warning 当 error**——宏里引用尚未定义的 define 时，用 `!ifdef` 包住。
+- **pnpm 11 的 `allowBuilds` 占位符**：`pnpm-workspace.yaml` 里若还写着 `esbuild: set this to true or false`，那是没填完的模板，构建会以 `ERR_PNPM_IGNORED_BUILDS` 失败。
+- **semver 的预发布陷阱**：`^0.1.1-rc.1` 只匹配 `0.1.1-*`，**不会**升到 `0.1.7-rc.2`——依赖声明必须显式改。
+- **未分发合并重打**：发布 <24h、无用户流量时，删 release + tag 合并重打（`gh release delete --yes` + `git push origin :refs/tags/<tag>`），不浪费版本号。
+- **插件更新不进 SSiD 版本**：插件作者新发布走插件中心一键更新；「刚打包却提示更新」= 包里是打包时刻的 pin 快照，属正常。
 
-## 已验证经验（2026-08-27 v0.1.14 hotfix 收货）
+## 附：自建壳时代（≤0.4.0，已归档）
 
-- **不可 spread 有原型的宿主对象**：对象展开只拷贝自身可枚举属性——EventEmitter 实例的 on/checkForUpdates 在原型上，展开后会丢，packaged 首启即崩（v0.1.14 启动失败根因）。绑定注入用 Proxy 委托（get 拦截注入自定义方法，其余 Reflect.get）。此坑同样适用事件/拦截器类对象的绑定。
-- **发版前「打包版自检」缺口**：dev 模式跑不到 packaged 分支（isPackaged=false 跳过）——凡有 isPackaged 分支的代码，发布前必须用打包产物（win-unpacked）实际跑一遍启动；发版守卫应加「打包产物启动」环节。
+以下内容描述的是自建壳形态，**已随运行时归档**（tag `v0.4.0-selfbuilt` / 分支 `archive/selfbuilt-shell`）。留在这里是因为部分排查思路仍有参考价值，但**执行步骤不要照搬**：
 
-## 已验证经验（2026-08-28 v0.1.15 收货）
+- 归档重建 `node shell/scripts/prepare-runtime.mjs`（产出 `dsh-runtime.tar.gz`，有缓存约 9 分钟）——**fork 版不再产出该归档**（内核随包进 asar 的 `dsh/`）。`shell/scripts/prepare-runtime.mjs` 与 `verify-release.mjs` 都已无对象。
+- 归档抽查 `npm run verify:release`、交付链三层校验 `npm run verify:shipped`、`npm run pack`（= `bundle-kernel` + `bundle-kernel-child` + electron-builder）——均随自建壳下架。
+- 版本号「四处同步」（`shell/package.json` / `.runtime-version` / profile 内 `.runtime-version` / GitHub tag）——载体已变，见 §1。
+- 值得保留的两条通用经验：①**发版前「打包版自检」不可省**——dev 模式跑不到 `isPackaged` 分支，凡有该分支的代码，发布前必须用打包产物实际跑一遍；②**「数出来的」描述会过时**——文档里写「四个 vendor 包」这类具体数字，改动集合时顺手核对。
 
-- **第三方升级规则（用户拍板）**：第三方插件更新到 npm 最新；本地版本超前 NPM 则以本地为准（vendor/魔改优先）。大跳版本（如 dream-skin 0.4.14→8.28.0）先核实 author/发布时间/peer 范围，pnpm install 实测无 ERR_PNPM 即安全；普通跳级（0.1.1→0.1.4）直接升。
-- **vendor 定制被作者采纳的判定法（genui 案例）**：本地 vendor 魔改（模板中心/成就/dock 对齐）是否已入上游 npm 版——下载 npm tarball（npm pack → tar -xzf），对比定制标记（搜「模板中心/探索成就/面板/dock」）+ `lib/index.js` 字节一致 + `client.js` 仅 minifier 微调（byte-level diff 定位）→ 判定采纳，可切回 `^x.y.z` 并（保留 vendor 作参考即可，不必删除）。
-- **版本决策时核查「未 bump 的源码 commit」**：`git log v上版本..HEAD -- <插件>` 与插件 package.json 版本比对——若源码有改动但版本没 bump（panels 0.1.8 后 3 个优化 commit 未升版），发版前补 bump（否则安装版首启误报/插件中心版本混乱）。
-- **发版变更一次收齐再跑归档**：本次同批含 session-manager 新增 + panels 补版本 + 第三方升级 + genui 切 npm，若分批改动每批都跑一遍 prepare-runtime 耗时大——列出全部变更→一次改完→跑一次归档（改 plan 前先确认变更全集，避免 kill 重跑）。
-- **git log v上版本..HEAD 分组要含非插件 commit**：CI 流程（如 build-mac workflow）、文档/临时脚本删除、skill 更新也计入 release notes 分组（用户惯例：改了就升、变动即说明）。
-- **打包版自检的「单实例锁」误判**：打包版自检时若已有实例运行，新进程会 `single-instance lock FAILED -> quit`（正常退出非崩溃）——判断标准看 `~/.ssid/ssid.log` 的 `phase start() completed` 与 bootKernel ok，而非进程存活。
-- **release-notes 单测的 cwd**：`node --import tsx/esm --test plugins/dsh-ssid-panels/tests/release-notes.test.ts` 必须在仓库根或有本地 tsx 的目录跑，绝对路径 + 错误 cwd 会 ERR_MODULE_NOT_FOUND（tsx 从 cwd 解析）——在 panels 目录内跑即可。
-
-## 已验证经验（2026-08-30 v0.1.16 收货）
-
-- **master 内核 web 认证 → 冒烟脚本裸 URL 失效**：0.1.2-alpha.1 起 web 服务带 token（`kernel.url` = authenticatedUrl，仅存在壳进程内存）。smoke-ui.cjs 裸 `http://127.0.0.1:<port>/` 拿到认证页 → 骨架断言全 FAIL（非产品问题）。**解法：打包版带 `--remote-debugging-port=9334` 启动 → Playwright `connectOverCDP` → 找 `http://127.0.0.1:<port>/` 主视图页（自带 token）**，在真实页面上跑骨架断言（composerSeat/textarea/Context Doctor，v0.1.16 实测 PASS）。smoke-ui.cjs 的裸 URL 路径与端口自动发现（按 `*ssid-shell*` 进程匹配）同样对打包版（win-unpacked 路径）失效——CDP 方案两者兼得。
-- **@deepseek-ai/dsh-* 未上 npm → 归档用 SSID_REGISTRY 私有源**：`0.1.2-alpha.1` 是 master 源码版，npm 各子包 E404（dsh-bash-local 等）。本地已搭 verdaccio（127.0.0.1:4873，本地存储 + 代理 npmjs）+ `pnpm -r publish` 253 包（见 2026-08-29 执行记录 L1 节）→ `SSID_REGISTRY=http://127.0.0.1:4873 node scripts/prepare-runtime.mjs`。官方 npm 发布后去掉 SSID_REGISTRY 即切官方源。
-- **归档 vendor 残留 tgz 混入**：profile-template/vendor 的旧物料（dsh-session-manager-0.2.2.tgz，v0.1.15 时代声明残留）会被 vendor 修复循环（4.5 步）当 vendor 条目复制进闭包 node_modules——发版前核对 vendor 目录只含当前声明条目，残留删除后重跑归档（指纹变化确认）。
-- **prepare-runtime 会删除 dsh-runtime 源目录**（[7/7]）——归档抽查前先 `New-Item -ItemType Directory dsh-runtime` 再 `tar -xzf dsh-runtime.tar.gz -C dsh-runtime`（-C 目标不存在即失败）。
-## 已验证经验（2026-09-06 v0.2.0 收货）
-
-- **build-mac 全链落位与十轮排雷**：workflow 在 main（`build-mac.yml` 双 job→单 arm64）；关键修复：DSH clone 必须完整 checkout 到 `$GITHUB_WORKSPACE/../deepseek-harness`（tsconfig paths 编译期解析 dsh-* 源码，sparse/runner.temp 均失败）+ `--branch <dsh-tag>` 防漂移；prepare-runtime 的 pnpm 只收 `.cjs` 入口（CI shim 是 shell 脚本）；esbuild / resolve.exports 显式 devDep + `--alias`；mac artifactName 全英文（GH 中文剥离坑），zip 的 artifactName 放 mac 层（build.zip 非法）。
-- **大文件 gh 上传**：256MB+ 会挂死/404——`curl --proxy http://127.0.0.1:7897 -F "file=@..." https://uploads.github.com/repos/<o>/<r>/releases/<数字id>/assets?name=...`（release id 用 REST 数字 id，不是 node_id）；删除多余资产 `gh api -X DELETE .../releases/assets/<id>`。
-- **未分发合并重打**（v0.1.18 教训）：发布 <24h 无用户流量→删除 release+tag 合并重打（gh release delete --yes + push origin :refs/tags/<tag> + force tag 新 commit 触发 CI），不浪费版本号；本次升级直接进位 v0.2.0。
-- **插件更新不进 SSiD 版本**：插件作者新发布走插件中心一键更新；SSiD 模板 pin 同步（下次发版归档自然最新）；「刚归档却提示更新」= 归档是发版时刻 pin 快照，属正常。
-- **smoke-ui 已支持 `--cdp <port>` 模式**（connectOverCDP 找 http://127.0.0.1:<port>/ 主视图页，自带 token）。
-- **deploy EPERM**：杀实例后清理 profile 运行时残骸（node_modules 残骸/old/old2/.upgrade-backup）走首装路径即成功。
-
-## 已验证经验（2026-09-21 v0.4.0 收货）
-
-- **耗时实测**：`prepare-runtime` 在有 pnpm store 缓存时 **~9 分钟**（pnpm install 23.5s + sha256 307.9s + tar ~2 分钟），不是老口径的 25 分钟——那个数是「无缓存 + 更早的清单口径」叠出来的。排时段按 10 分钟估，首次/CI 留 25 分钟余量。
-- **本次顺手修掉的 skill 自身问题**（都是「照抄会踩」的类型，已改在对应节）：
-  - §1 的 vendor 列表里 `open-sea-skin` 与 `dsh-genui` 均已失效（前者 v0.1.16 移除、后者切回 npm）→ 改成「先 `ls shell/profile-template/vendor` 看实际」并列出当前 7 个；
-  - 「`^0.x.y` 不跨 minor」的前提已不成立（实测 template 33 条非内核声明**全是精确 pin**）→ §1 与坑清单都改了口径；
-  - §5 的「已知过时项（脚本待修）」**本身已过时**（脚本现在把 open-sea-skin 报成「属预期」，体积上限也放宽了）；
-  - §6 第 3 步的 `git add -A` 与工作区「具名 add」约定冲突 → 改成 `git status` 确认后具名加。
-- **`verify:release --npm-latest` 会静默跳过**：它走 `spawnSync('npm', …)`，npm 不在 PATH 时报 `spawnSync npm ENOENT` 并**跳过**「plugin-center == npm 最新」子项——**跳过不等于通过**，其余全绿会把它掩盖掉（v0.4.0 遇到）。要核这项就自己 `npm view` 一次。
-- **「数出来的」描述同样会过时**：§5 原写「四个 vendor 包一致性」，v0.4.0 实测是六个。改动 vendor 集合时，顺手看一眼有没有别处写了具体数字。
-- **发版回填 notes 别把哈希同步进包内**：本次差点踩（详见「常见坑」那两条）。这条约定从 v0.3.2 就有，但此前只写在各版 release notes 里、没进 skill——**约定写在使用现场之外，等于没写**。
+更早各版本（v0.1.13–v0.4.0）的逐版收货记录已移出本文——它们在 git 历史里，需要时 `git log -p .agents/skills/ssid-release/SKILL.md` 取。
