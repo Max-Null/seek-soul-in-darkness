@@ -79,6 +79,8 @@
 
 | 2026-09-26 | §7 坑 #48 #49 #50（新增）/ 变更记录外 | **随包插件集（A′）落地**：`prepare-ssid-plugins.ts` 从发版基准产出 `32 bundles / 584 packages`（含 7 个不发 npm 的 vendor 包、MCP CLI 与 codegraph 引擎），首启由 `profile-seed.ts` 建 584 个目录链接、补 `dsh.profile.bundles`、写 `link:` 声明（幂等、用户层优先）。**三次崩溃逼出三个真问题**：① 包**必须放 `node_modules/` 下** —— 平铺会让传递依赖解析失败、插件树静默不加载（撞上坑 #42 同一条教训）；② 插件集**不能带内核包** —— 会盖掉安装锚点那份，内核自己的 26 个插件 `failed to import`；③ **不能把内核版本号套到所有 `@deepseek-ai/*`**（版本线不统一，见坑 #49）。修完 `pending` 从 3 降到 1，**MCP CLI 交付打通**（`playwright=true codegraph=true`，此前一直是 false）。**剩余 1 个是内容问题**（坑 #48：同名同版本不同内容）—— 根因是**发版基准落后于 dev 已验证状态**（vendor 7 vs 21 个包、13 个 `@max-null/*` 在 template 用 npm 版本），**回填清单已列**）→ 当日试做回填：复验**确实通过**（零崩溃零 pending），但 `check:rules` 三门报红，查清**形态错了** —— 发版基准的正规声明是「**不发 npm 的包**用 `file:./vendor/…`、**发 npm 的包用版本号**」（对照安装版运行时 profile 的 69 条声明），而我把 13 个发 npm 的包也改成了 `file:`，那是 dev profile 的手工形态；`plugin-peers` 另报 template 的目标内核仍是 **0.1.5-rc.2** 而 vendor 是给 0.1.7 编的。**已整目录回退**（备份 `.ssid-build/template-backup-20260926-225631/`；`git diff shell/profile-template` 只剩一行既有改动），`plugin-peers` 随即转绿。**正确路径待拍板**：这类包的 npm 版本是**旧适配**（要 0.1.5 的 `settingsScope`）、dev vendor 里的新适配**还没发布** → 需要 `npm publish`（F2A，用户手动）后再提 template 的版本号 | 用户选定 A 后授权推进打包链（template 回填是我判断可做、做错后已如实回退）|
 
+| 2026-09-28 | §0–§3、§4、§5、§6、§7、附录 A（**整批重写**） | **换底座后的文档对齐（v1.0.0）**：**§0** 改为在开发主轴 checkout 里 `pnpm run dev:desktop`（原 `cd shell && npm start` 已失效）；**§1** 目录树重画（壳在 `apps/desktop`、Host 在 `apps/desktop-host`，`shell/` 已归档，只剩 `profile-template/` 与 `scripts/`+`lib/` 在维护）；**§2** 删掉归档/闭包/`devSkipDeploy` 整套，改为「内核随包 + 首启 seed」，并明确「改壳必须 build」；**§3** 环境变量重排（4 个消失、9 个新增，拆运行期/构建期两表）+ 新增 **§3.4 会话根三层契约** 与 **§3.5 的「出厂缺省两套」警示**；**§4** 声明落点改为 `profile-template` → 插件集 → seed 的链路；**§5** 加失效界线并新增 **§5.0′ 当前形态 + 六个打包坑**；**§6** 重写为分进程契约（IPC 白名单 / 协议版本 / 端口 / `hostCtx.provide` 无等价物）；**§7** 加失效清单（#3 #12 #15 #16 #27 #32 #33 #40）与两条「教训仍在、载体已变」（#30 在新形态下又发生一次、#45 副本集合已变）；**附录 A** 命令与日志位置对齐 | 1.0.0 换底座（自建壳 0.4.0 → 官方 `dsh-desktop-host` 基座）＋ 2026-09-28 只读调查（基准 = `.ssid-build/checkout`，分支 `ssid-desktop-fork`） |
+
 ## 工作区规范（布局 + 放置规则，2026-08-29 整理定稿）
 
 ### 布局（H:\MaxNull\WorkStation）
@@ -148,112 +150,236 @@ L1 由测试留痕；**L2 环境实测必须留痕**（此前全凭口头确认�
 
 ## 0. 快速开始（开发模式跑起来）
 
+> **壳代码在哪**：`ssid-desktop/` 是**对外快照**（读得懂、能 diff、能提 issue，单独 clone 构建不了）；**开发与构建在开发主轴**——本地工作副本 **`H:\MaxNull\WorkStation\.ssid-build\checkout`**（分支 `ssid-desktop-fork`，remote 指向 `deepseek-harness`）。它带 DSH 全历史，能直接构建。
+> **两份会漂移**，收尾时按逐文件 SHA256 比对同步（纪律见 `ssid-desktop/README.md`）。
+
 ```powershell
-# 前置：Node ≥22.13、pnpm 11.x、shell 目录已 npm install
-cd H:\MaxNull\WorkStation\seek-soul-in-darkness\shell
-npm start                # electron .（dev 裸跑，app.isPackaged=false）
+cd H:\MaxNull\WorkStation\.ssid-build\checkout
+
+pnpm run dev:desktop      # 首次、或改过壳代码：先 build 再启动
+pnpm run start:desktop    # 已完整构建过一次：跳过 build
 ```
 
-- dev 裸跑 **不部署归档**（`devSkipDeploy`），启动即 boot；boot 日志在 `~/.ssid/ssid.log`。
-- 无 electron 的内核冒烟验证：`npm run smoke`（`node --import tsx/esm boot-smoke.ts`）。
+- **入口是构建产物，不是源码**：`apps/desktop/package.json` 的 `main` 指向 `lib/main.js`（tsdown 产物）。所以「改 `src/` 即生效」**在这里不成立**——必须重新 build。
+- **必须经 pnpm 启动**：`scripts/dev.ts` 依赖 `npm_execpath`，直接跑 `electron` / `node` 会报 `invoke this launcher through pnpm run dev:desktop or start:desktop`。
+- **dev 的 harness home** 默认 `apps/desktop/.desktop-build/development/home`（可用 `DSH_HOME` 覆盖），与安装版的 `~/.dsh` 隔离。
+- **调试端口**：启动时带 `--inspect=127.0.0.1:9229` 与 `--remote-debugging-port=9222`；可用 `DSH_DESKTOP_MAIN_INSPECT_PORT` / `DSH_DESKTOP_RENDERER_DEBUG_PORT` / `DSH_DESKTOP_HOST_INSPECT_PORT` 覆盖。
+
+**类型检查必须用 `tsc -b`**：
+
+```powershell
+pnpm --filter "./apps/desktop" exec tsc -b
+```
+
+> `npx tsc --noEmit -p apps/desktop/tsconfig.json` 会**假绿**（实测漏报一个 TS2352）。一律以 `tsc -b` 为准。
 
 ## 1. 架构与目录
 
 ```
-seek-soul-in-darkness/
-├── shell/                    # Electron 壳（main.mjs 主入口）
-│   ├── kernel.ts             # DSH 内核启动（bootKernel；bundle 形态= kernel.bundle.mjs）
-│   ├── main.mjs              # 窗口/BrowserView/托盘/IPC/归档部署（ensureProfile）
-│   ├── titlebar.html/js      # 自绘标题栏（按钮组 → ssid:title:action IPC）
-│   ├── prepare-runtime.mjs   # 归档构建（scripts/）：模板→pnpm install→tar → dsh-runtime.tar.gz
-│   ├── profile-template/     # ★发版基准★：package.json(插件声明)/vendor/ 出厂技能
-│   └── dsh-runtime.tar.gz    # 内置内核闭包（安装版部署源，~204MB @0.1.2-alpha.1）
-├── plugins/                  # SSiD 自研插件源码（dsh-ssid-panels / dsh-ssid-zh-ui）
-└── docs/决策/                # 执行记录与决策文档
+H:\MaxNull\WorkStation\
+├── .ssid-build/checkout/          # ★开发主轴★（分支 ssid-desktop-fork，带 DSH 全历史，构建与启动都在这）
+│   ├── apps/desktop/              # Electron 壳（@deepseek-ai/dsh-desktop）
+│   │   ├── src/main.ts            # 壳主入口（窗口 / 托盘 / IPC / 自动更新 / 启动编排）
+│   │   ├── src/host-process.ts    # Host 子进程生命周期 + IPC 白名单
+│   │   ├── src/ssid/              # ★思灵自有实现全收在这里★
+│   │   ├── scripts/               # 构建与打包链（dev.ts / prepare-ssid-plugins.ts / package-target.ts …）
+│   │   └── installer/             # NSIS 安装器脚本
+│   └── apps/desktop-host/         # Host 进程（真正跑 DSH 内核的子进程）
+│       └── src/ssid-*.ts          # 通知 / 保活 / 截图的 Host 半
+└── seek-soul-in-darkness/
+    ├── ssid-desktop/              # 对外快照（只含改过的文件；落后于开发主轴，见 README）
+    ├── shell/                     # ★自建壳时代产物，已归档★（tag v0.4.0-selfbuilt / 分支 archive/selfbuilt-shell）
+    │   ├── profile-template/      #   ← 仍在维护：★发版基准★
+    │   └── scripts/ + lib/        #   ← 仍在维护：check:rules 六门与发版脚本
+    ├── plugins/                   # SSiD 内置插件源码
+    └── docs/                      # 本手册所在
 ```
 
-- **插件同步链**：`plugins/<pkg>/`（源头，与 vendor 全等）→ 同步三处 vendor：`~/.dsh/profiles/{web,ssid}/vendor/<pkg>` + `shell/profile-template/vendor/<pkg>`（四份逐文件指纹一致是硬性要求，比对面按包声明；发版归档自动带模板 vendor）。dsh-quick-toolbar 是例外：源头在上游仓库、vendor 为精简副本，见 §10。
-- **内核来源回退链**（`kernel.ts resolveDshRuntime` + `bootKernel`）：打包版强制闭包（preferBundled）→ dev：`DSH_CHECKOUT` 显式 → **并列源码 `../../deepseek-harness`** → 关闭时 profile `node_modules/@deepseek-ai/dsh`（部署锚点）优先于源码。
-- **DSH 双实例**：DSH web 端（3080，opencode 启动器管理）与 SSiD 是不同类型（浏览器 web 进程 vs Electron 壳）；共享 `~/.dsh` 与源码 checkout——**验证 SSiD 时由用户手动启动/关闭；不要启停 web 实例**（opencode 管理其生命周期，轮换会让 web 会话工具调用显示 interrupted）。
+- **两个进程**：`apps/desktop`（Electron 壳，主进程）**spawn 出** `apps/desktop-host`（Host，子进程）——DSH 内核跑在 Host 里，**不再是壳内的 `kernel.ts`**。两者用 IPC 通信，有严格的消息白名单：不认识的消息会 `fail()` 并 `SIGTERM` 掉整个 Host。
+- **思灵自有代码的落点**：壳侧 `apps/desktop/src/ssid/`，Host 侧 `apps/desktop-host/src/ssid-*.ts`。上游文件只在必要时侵入。
+- **`shell/` 只剩两处仍在维护**：`profile-template/`（发版基准，`prepare-ssid-plugins.ts` 的默认输入）与 `scripts/` + `lib/`（`check:rules` 六门与发版脚本）。目录里其余 `*.log` / `*.png` / `kernel.bundle.mjs` / `main.mjs.bak-*` 都是自建壳时代的历史产物，**不是活代码**。
+- **插件同步链**：`plugins/<pkg>/`（源头，与 vendor 全等）→ 同步三处 vendor：`~/.dsh/profiles/{web,ssid}/vendor/<pkg>` + `shell/profile-template/vendor/<pkg>`（四份逐文件指纹一致由 `check-vendor-sync` 强制；发版归档自动带模板 vendor）。dsh-quick-toolbar 是例外：源头在 `max-null-plugins/`、vendor 为精简副本，见 §10。
+- **内核来源**：内核随包走——安装版是 asar 内的 `dsh/`，dev 是 `<appRoot>/.desktop-build/development/project`。Host 由 `apps/desktop-host/src/index.ts` 用 `loadProfileDirectory('dsh', projectDir, installAnchor)` 解析，`installAnchor` = `<runtimeDir>/node_modules/@deepseek-ai/dsh/package.json`。**没有**自建壳时代的「DSH_CHECKOUT → 并列源码 → 部署锚点」三级回退。
+- **DSH 双实例**：DSH web 端（3080，浏览器）与 SSiD（Electron 壳）是不同类型；共享 `~/.dsh` 与源码 checkout——**验证 SSiD 时不要启停 web 实例**（会让 web 会话的工具调用显示 interrupted）。
 
 ## 2. 运行模式
 
-| 维度 | dev 裸跑（开发/自测） | 安装版（正式） |
+全部由 `app.isPackaged` 分支：
+
+| 维度 | dev（未打包） | 安装版 |
 |---|---|---|
-| 判定 | `app.isPackaged=false`（electron .） | NSIS 安装（app.isPackaged=true） |
-| 归档 | 默认跳过部署（`devSkipDeploy`）；版本不一致时设 `SSID_DEV_DEPLOY=1` 强制部署（发版预演用） | 首启/升级自动部署（`.runtime-version` 对比驱动） |
-| 内核 | 闭包锚点存在→闭包；否则并列源码（dev 常用） | 强制闭包 |
-| 场景 | 改 kernel.ts/main.mjs/插件后即时验证 | 发版验证/用户使用 |
+| 判定 | `!app.isPackaged` | `app.isPackaged` |
+| node / pnpm | `<appRoot>/scripts/node-bin` ＋ `<appRoot>/node_modules/pnpm` | `<resources>/runtime/bin` ＋ `<resources>/runtime/pnpm` |
+| DSH 内核树 | `<appRoot>/.desktop-build/development/project`（`DSH_DESKTOP_DSH_DIR` 可覆盖） | `<appRoot>/dsh`（asar 内） |
+| primary-runtime | 必须由 `DSH_DESKTOP_PRIMARY_RUNTIME_DIR` 提供，缺失即抛错 | `<resources>/runtime/primary-runtime` |
+| 随包插件集 | `SSID_PLUGIN_SET_DIR` | `<resources>/ssid-plugins` |
+| DevTools / DEV 徽章 | 默认开 / 有 | 无 |
+| harness home | `apps/desktop/.desktop-build/development/home` | `~/.dsh`（`DSH_HOME` 可覆盖） |
+| userData / 日志 | `<dev>/electron-user-data` | `%APPDATA%\@deepseek-ai\dsh-desktop\{,logs}` |
 
-**发版预演**（常被误解为"dev 也要解压"）：`SSID_DEV_DEPLOY=1` 仅用于验证"归档部署→闭包 boot"这条安装版链路；日常 dev **不设**（秒级启动，无解压）。
+> `app.name` 被**刻意保持**为包名 `@deepseek-ai/dsh-desktop`（Electron 由它派生默认 userData 目录），所以安装版的 userData 不是 `%APPDATA%\思灵`。
 
-### 归档时机 —— dev 热更新，发版才归档（2026-08-30 定稿）
+### 2.1 没有「归档部署」了
 
-- **dev 开发 = 热更新，绝不归档**：
-  - 改壳代码（`main.mjs`/`kernel.ts`）→ 重启 dev 即生效（dev 直接加载源码）；
-  - 改插件（vendor/plugins 源码）→ **同步运行时实体**（`node_modules/@max-null/<pkg>` 为 file: 拷贝物化，需手动拷贝或 `pnpm install`）→ 重启即生效；
-  - 改内核源码（deepseek-harness）→ 源码模式（无锚点/DSH_CHECKOUT）直接生效。
-- **只有 SSiD 版本收尾（发版）才统一归档**：`prepare-runtime.mjs` 重建 → 部署预演一次 → NSIS 打包。
-- **三个原因**：
-  1. 归档是**压缩**（安装包体积设计：204MB 归档 / 890MB 解压；安装版部署使用）；
-  2. **命令行操作、慢、无进度可视化**（重建 2-5 分钟 + 部署解压更久，不便开发节奏）；
-  3. 归档从 **`profile-template`（发版基准）** 构建——**反复归档会把 dev 中热更新的插件/配置整体回滚**（2026-08-29 实测：模板未同步时部署把 dsh-session-manager 等打回旧版）。**dev 改动 ≠ 归档内容**；要进归档的改动必须先同步模板（§4 双处声明）。
+自建壳时代的 `dsh-runtime.tar.gz` 归档、`devSkipDeploy`、`SSID_DEV_DEPLOY`、`.runtime-version` 指纹对比**全部不存在**（在 `apps/` 下搜这些名字零命中）。替代形态是**内核随包 + 首启 seed**：
 
-## 3. 环境变量与开关（shell 侧）
-
-| 变量 | 作用 | 场景 |
+| 时机 | 动作 | 实现 |
 |---|---|---|
-| `SSID_DEV_DEPLOY=1` | 强制 dev 也部署归档（版本不一致时） | 发版预演（一次性） |
-| `SSID_REGISTRY=http://127.0.0.1:4873` | prepare-runtime 闭包 install 用的 registry（写入闭包 .npmrc） | 本地发布（内核未上 npm）时构建；不设=官方源 |
-| `SSID_LOG_FILE` | 覆盖日志路径（默认 `~/.ssid/ssid.log`） | 诊断 |
-| `DSH_CHECKOUT` | 显式指定内核源码 | **用完即删**（pitfalls #5 幽灵依赖：User 级残留会劫持运行时） |
-| `SSID_MCP_NODE`/`SSID_MCP_PW_CLI` | 预制 Playwright MCP 运行时 | main.mjs 自动注入；smoke 裸跑需手动设（否则 mcp 行 args 为 null 启动失败） |
-| `SSID_MCP_CG_CLI`/`SSID_MCP_CG_WS`/`SSID_MCP_CG_ENABLE` | 预制 CodeGraph MCP：cli 路径 / 索引目录 / 是否启用 | main.mjs 自动解析注入（优先级：env → `~/.ssid/codegraph.json` → 最近会话探测 → 停用）；smoke 裸跑同样需手动设 `SSID_MCP_CG_CLI` |
-| `DSH_HOME` | DSH 家目录（默认 `~/.dsh`） | 换机/测试隔离 |
-| `SSID_PROFILE_NAME` | profile 名（默认 `ssid`）：同时决定 `$DSH_HOME/profiles/<名>` 与隔离会话根 `sessions-<名>` | 并行开隔离实例；非法值（含路径分隔符、或为 `.`/`..`/`node_modules`）启动即报错 |
+| 打包期 | 内核与运行时进包 | `electron-builder-config.mjs`：`dsh/` 与 `dsh/node_modules` 进 asar `files`；`extraResources` 挂 `runtime` / `ssid-plugins` / `ssid-plugins/node_modules` |
+| 已装旧版换代 | 旧 profile 改名让路 + 搬用户层 | `profile-migrate.ts` 的 `migrateLegacyProfile()`，**排在 `applyRelease()` 之前**；返回的 `carried` 交 `restoreCarriedPlugins()` 还原用户自装插件 |
+| 每次启动 | profile 骨架（**纯增量**） | `main.ts` 的 `manager.applyRelease()` → `createPluginProfile()` → `initProfile(profileDir, WEB_PROFILE.bundles)`；三个文件各自 `if (!existsSync(...))` 才写 |
+| 紧随其后 | 插件集接入 profile | `seedProfilePlugins()` → `profile-seed.ts` 的 `seedSsidProfile()`：建 junction + 追加 `bundles` + 写 `link:` 声明 + `mergeProfilePatch()` 合并出厂 patch |
+| `host.start()` 前 | 会话根三层 | `applySessionRootIsolation()`（见 §3.4） |
 
-**并行开第二个实例（隔离三件套，2026-09-13 首验 / 2026-09-18 参数化）**：`--user-data-dir=<独立目录>`（独立单实例锁）+ `DSH_HOME=<独立目录>`（独立 profile、storages、会话根）+ `SSID_LOG_FILE=<独立文件>`（独立日志），与运行中的实例零冲突。profile 目录用 junction 指回真实的那份即可零拷贝共用插件实体（`node_modules` 一个 junction 就够，配置文件拷副本，写入因此落副本）。`SSID_PROFILE_NAME` 让"第二个实例"有自己的名字与自己的会话根，不必再借用 `ssid`。
+**`initProfile` 是纯增量的**（"Existing files are never touched"）——升级**不会**覆盖 profile，但**旧的也不会自愈**：换内核系列时旧 profile 会带着上一代的内核包实体，必须显式让路（坑 #57），`profile-migrate.ts` 就是这条的代码化。
 
-**无 GUI 的先行验证**：`DSH_HOME=<隔离> SSID_PROFILE_NAME=<名> npm run smoke`——不起 Electron、不占单实例锁，隔离 home 里会落下 `profiles/<名>`、`storages/`，而真实环境分毫不动（实测见 `docs/决策/2026-09-18-profile名参数化.md`）。
+### 2.2 dev 没有热更新，改壳必须 build
 
-### 壳侧配置文件（`~/.ssid/*.json`）
+- **改壳代码（`apps/desktop/src/**`）→ 必须重新 build**：入口是产物 `lib/main.js`，`src/` 不参与运行。
+- **改插件（vendor/plugins 源码）→ 同步运行时实体**（`node_modules/@max-null/<pkg>` 是拷贝物化），然后重启。
+- **改 DSH 内核源码**：`checkout/packages/**` 是官方源码，**只读不改**（工作区铁律 2.0）。需要适配时改我们自己的：`apps/desktop/src/ssid/**`、profile 的 `cordis.patch.yml` 条目、插件源码。
+- **只有发版才打包**：`pnpm --filter "./apps/desktop" run package:win:x64:unsigned`（约 17–20 分钟，electron-builder 的 LZMA 压缩是大头）。
 
-| 文件 | 键（默认值） | 作用 |
+## 3. 环境变量与开关
+
+### 3.1 运行期（壳与 Host）
+
+| 变量 | 作用 | 谁读 / 谁写 |
 |---|---|---|
-| `notify.json` | `enabled`(true) / `replyDone` / `question` / `approval` | 窗口失焦时的 Windows 通知与音效；**文件不存在 = 全开** |
-| 同上 | `keepAwake`(true) / `keepAwakeTailMs`(60000) | 执行期间保持系统不睡眠、屏幕不息（判据陷阱见 §7 坑 #38）。尾巴 = 「一轮结束之后仍保持多久」，用来覆盖目标模式的轮次空隙——没有它，连续轮次会在缝隙里释放又立刻重开 |
-| 同上 | `mask.text`（「程序执行中，勿动」）/ `mask.hotkey`(`Control+Alt+M`) | 执行中遮罩的文案与切换快捷键。**快捷键改完要重启壳**（只在启动时注册一次）；文案与浓度下次开启即生效 |
-| 同上 | `mask.alpha`(0.12) / `mask.blur`(10) | 遮罩的浓度与模糊半径：`alpha` 越小越透（看得见底下的动静），`blur` 越大越糊（越读不出内容）。默认值 = 「布局轮廓看得出来、一个字读不出」。文案自带**一圈黑晕**（白字 + 多层 `text-shadow`），亮背景靠这圈晕抠出轮廓、暗背景靠白字本身的对比，两种底色都读得清——**不要改成给文字加深色底板**：底板会挡住正中间那块内容，而「看得见动静」正是遮罩存在的意义 |
-| `screenshot.json` | `hideWindow`(true) / `hotkey`(`Control+Shift+A`) | 截图引用 |
+| `SSID_PROFILE_NAME` | profile 名（默认 `ssid`）；非法值（含路径分隔符，或为 `.` / `..` / `node_modules`）启动即报错 | 读：壳 `apps/desktop/src/ssid/profile-name.ts` **与** `apps/desktop-host/src/profile-name.ts`（**两份逐字同步**，改一处必须改另一处） |
+| `SSID_SAFE_MODE=1` | 纯净模式：**按层**过滤，只留 `@deepseek-ai/` 的层并丢弃 profile patch 与 home patch | 读：Host `src/index.ts`；写：壳（`--ssid-safe-mode` argv → env、托盘重启带 flag） |
+| `DSH_HOME` | harness 家目录（解析顺序：显式参数 > `DSH_HOME` > `~/.dsh`；空串/纯空白视为未设） | 壳与 Host |
+| `SSID_MCP_NODE` / `SSID_MCP_PW_CLI` / `SSID_MCP_CG_CLI` | 预制 MCP 的 node 解释器与 CLI 路径 | 壳**写**（`src/ssid/mcp-env.ts`）。**必须在 `host.start()` 之前注入**——配置条目与运行时 env 要成对落地，只补一半等于没补（坑见 §7） |
+| `SSID_MCP_CG_WS` / `SSID_MCP_CG_ENABLE` | CodeGraph 的索引目录 / 是否启用 | 壳先读后写；优先级 env → `~/.ssid/codegraph.json` → 最近会话探测 → 停用 |
+| `SSID_SESSION_ISOLATED_ROOT` | 隔离会话根。**注意：这不是给外部设的变量——壳自己设**（= `<DSH_HOME>/sessions-<profileName>`）；关掉隔离时**显式 delete** 它，让 patch 的 `!!js` 回退共享根 | 壳设（`profile-name.ts`），内核 patch 读（见 §3.4） |
+| `SSID_PLUGIN_SET_DIR` | 覆盖随包插件集的根目录（dev 必需：dev 的 `process.resourcesPath` 里没有插件集） | 壳 `src/main.ts` |
+| `SSID_NOTIFY_CONFIG` / `SSID_SCREENSHOT_CONFIG` | 覆盖 `~/.ssid/notify.json` / `~/.ssid/screenshot.json` 的路径 | 壳；**并行实例用它避免两个实例抢同一份全局热键** |
+| `DSH_DESKTOP_DSH_DIR` · `_PRIMARY_RUNTIME_DIR` · `_OPEN_DEVTOOLS` · `_PNPM_ENTRY` · `_MAIN_INSPECT_PORT` · `_RENDERER_DEBUG_PORT` · `_HOST_INSPECT_PORT` | 路径与调试端口的开发期覆盖 | 壳 |
 
-`mask` 是**嵌套对象**：读取时按「默认值 ← 用户值」逐层合并——浅合并在「用户只配了 `text`」时会把 `hotkey` 整条丢掉。
+**已消失**（自建壳时代的变量，见到就说明文档过时）：`SSID_DEV_DEPLOY`、`SSID_LOG_FILE`、`SSID_REGISTRY`、`DSH_CHECKOUT`。日志改由 `app.setAppLogsPath()` 决定（落 userData 的 `logs/`，见 §2 的表）。
 
-| 同上 | `mask.passcode`（空） | **解除口令**。留空 = 不设防（长按 2 秒直接解除）；非空时托盘项、全局快捷键、长按按钮**三个入口都只把口令输入框调出来**，比对通过才解除——只给按钮加口令是没用的，托盘一点就开了。**它不是安全边界**：明文存在这个文件里，能读文件的人就能读到，挡的是「知道要长按但不愿翻配置」的人。忘了口令的逃生通道就是改这个文件删掉它 |
+### 3.2 构建期（打包与插件集）
+
+| 变量 | 作用 |
+|---|---|
+| `SSID_PROFILE_TEMPLATE_DIR` | 临时换一份 profile 模板做验证，**不动发版基准** |
+| `SSID_PLUGIN_SET_OUT` | 插件集输出目录（默认 `<buildTargetRoot>/ssid-plugins`） |
+| `SSID_CODEGRAPH_ENGINE_DIR` | 复用已下好的 codegraph 引擎，跳过联网 postinstall |
+| `SSID_PLUGIN_PNPM` | 指定 pnpm 可执行 |
+| `ELECTRON_MIRROR` | Electron 下载镜像——**直连 GitHub 会挂死且什么都不报** |
+
+### 3.3 并行开第二个实例（隔离三件套）
+
+`--user-data-dir=<独立目录>`（独立单实例锁）+ `DSH_HOME=<独立目录>`（独立 profile / storages / 会话根）+ `SSID_NOTIFY_CONFIG` 与 `SSID_SCREENSHOT_CONFIG`（**避免两个实例抢同一份全局热键**）。
+
+profile 目录用 junction 指回真实的那份，即可零拷贝共用插件实体。`SSID_PROFILE_NAME` 让第二个实例有自己的 profile 名与会话根。
+
+> 原第三件套 `SSID_LOG_FILE` 已失效——日志改由 userData 的 `logs/` 承载。
+
+### 3.4 会话根隔离（三层契约，缺一不可）
+
+**背景**：DSH 默认与会话落在 `<DSH_HOME>/sessions`，与 web 版共用。思灵把会话根隔离到 `sessions-<profileName>`，**三层必须同时生效**——缺任何一层，隔离根里的历史会话会整个消失。
+
+| 层 | 落点 | 作用 |
+|---|---|---|
+| ① env | `SSID_SESSION_ISOLATED_ROOT` / `SSID_SESSION_SHARED_ROOT` | 决定 Host 子进程读哪个根。必须在 `host.start()` **之前**设（子进程继承的是当时的 env 快照） |
+| ② profile patch | `~/.dsh/profiles/<p>/cordis.patch.yml` 的 `session-persistence-jsonl` 条 | **真正决定内核读哪个目录**的那一条 |
+| ③ 回写 | `~/.ssid/session-root.json` 的 `applied` | 记录本次是否实际生效；写时保留文件里其它键 |
+
+- **开关**：`~/.ssid/session-root.json` 的 `isolated`——**文件不存在 / JSON 损坏 / 非布尔 → 一律 `true`（默认隔离）**。
+- **关掉时**：显式 `delete process.env['SSID_SESSION_ISOLATED_ROOT']`（注释原话：必须**显式缺席**而不是留旧值），不写 patch，其 `!!js` 表达式自然退化到共享根。
+- **入口**：`applySessionRootIsolation()`（`apps/desktop/src/ssid/session-root.ts`），在 `main.ts` 里紧挨 MCP env 注入、`host.start()` 之前调用。
+- **出厂 patch 与会话根是「铺底 + 兜底」，不是互相覆盖**：seed 先铺（`mergeProfilePatch` 按**子条目 id** 合并，出厂块在前、用户留存块在后），随后 `installSessionRootPatch` 只会返回 `already-present` 跳过。真实 profile patch 里那句「这里放着是为了壳侧写入失败时仍有兜底」就是这层关系。
+
+### 3.5 壳侧配置文件（`~/.ssid/*.json`）
+
+| 文件 | 键 | 作用 |
+|---|---|---|
+| `notify.json` | `enabled` / `replyDone` / `question` / `approval` | 窗口失焦时的 Windows 通知与音效；**文件不存在 = 全开** |
+| 同上 | `keepAwake` / `keepAwakeTailMs` | 执行期间保持系统不睡眠、屏幕不息（判据陷阱见 §7 坑 #38）。尾巴 = 「一轮结束之后仍保持多久」，用来覆盖目标模式的轮次空隙——没有它，连续轮次会在缝隙里释放又立刻重开 |
+| 同上 | `mask.text` / `mask.hotkey` | 执行中遮罩的文案与切换快捷键。**快捷键改完要重启壳**（只在启动时注册一次）；文案与浓度下次开启即生效 |
+| 同上 | `mask.alpha` / `mask.blur` | 遮罩的浓度与模糊半径：`alpha` 越小越透（看得见底下的动静），`blur` 越大越糊。文案自带**一圈黑晕**（白字 + 多层 `text-shadow`），亮背景靠晕抠出轮廓、暗背景靠白字对比，两种底色都读得清——**不要改成给文字加深色底板**：底板会挡住正中间那块内容，而「看得见动静」正是遮罩存在的意义 |
+| 同上 | `mask.passcode` | **解除口令**。留空 = 不设防（长按 2 秒直接解除）；非空时托盘项、全局快捷键、长按按钮**三个入口都只把口令输入框调出来**，比对通过才解除——只给按钮加口令是没用的，托盘一点就开了。**它不是安全边界**：明文存在这个文件里，能读文件的人就能读到；逃生通道是改文件删掉它 |
+| `screenshot.json` | `hideWindow` / `hotkey` | 截图引用 |
+| `session-root.json` | `isolated` / `applied` | 会话根隔离的开关与生效记录，见 §3.4。**缺省 = 开** |
+| `codegraph.json` | `workspace` / `decided` / `decidedAt` | CodeGraph 索引目录的一次性引导决定（壳读写） |
+
+**读写分工**：`notify.json` 与 `screenshot.json` 是**壳只读、插件读写**——壳从不写这两个文件，写入全部经设置页（`dsh-ssid-panels` 的 `notify.set`，**逐字段合并**：只提交改动项，`alpha` 夹 `[0,1]`、`blur` 夹 `[0,64]` 并取整）。
+
+`mask` 是**嵌套对象**：读取时按「默认值 ← 用户值」**逐层**合并——浅合并在「用户只配了 `text`」时会把 `hotkey` 整条丢掉。
+
+> ⚠️ **出厂缺省有两套，只在文件缺键时才暴露**：壳 `src/ssid/mask.ts` 的 `DEFAULT_MASK` 是「正在专注，稍后回复」/ `0.86` / `18`，而设置页插件 `dsh-ssid-panels` 的 `NOTIFY_DEFAULTS.mask` 是「程序执行中，勿动」/ `0.12` / `10`。**文件里五个键齐全时两边一致**（本机实测即如此，所以现网看不出问题），但全新装机、或用户删掉某些键时，设置页显示的值会与壳实际用的值分叉。改默认值必须两边一起改，或统一到一个来源。
 
 **这些不用手写 JSON**：设置 → 关于 SSiD → 「通知设置」区（`dsh-ssid-panels` 的 `NotifySettings`）里就是通知 / 保活 / 遮罩的全部开关与输入框，写入走 host 半的 `/ssid/api/notify.set`（**逐字段合并**，只提交改动的那一项；`alpha` 夹在 `[0,1]`、`blur` 夹在 `[0,64]`）。手写文件同样有效——壳与插件读的是同一份，**两边的默认值与嵌套合并语义必须逐字一致**，否则设置页显示的值会和壳实际用的值分叉。
 
 **全局快捷键集中注册**：`applyGlobalHotkeys()` 是唯一入口。`globalShortcut.unregisterAll()` 是全局动作，各自为政会让后注册的把先注册的**静默抹掉**（保存截图设置那一步就足以让遮罩快捷键失效）。注册失败只落日志、不阻断启动——被别的软件占用是常态，本机实测 `Control+Alt+L`、`Control+Shift+L`、`Control+Shift+F12` 均已被占，默认值因此取实测空闲的 `Control+Alt+M`。
 
-## 4. 插件升级流程（本次教训：**双处声明**）
+## 4. 插件升级流程
 
-1. **改两处**：`~/.dsh/profiles/ssid/package.json`（运行时）+ **`shell/profile-template/package.json`（发版基准！）**——只改前者，归档会退回旧插件（2026-08-29 实测：部署后 profile 被归档包版本覆盖）。
-2. **JSON 写入用 node**（`writeFileSync(p, JSON.stringify(o,null,2)+'\n','utf8')`）——PowerShell 5.1 `Set-Content -Encoding UTF8` 写 BOM，`readProfileManifest` 直接崩。
-3. 版本**精确 pin（无 ^）**，与 web 端声明形态一致。
-4. **原生/预编译 bundle 型插件**：master 的 client 模块表演进（`dsh-client-runtime`→`dsh-client-modules`）——旧 bundle 的裸 require 会挂 → 源码型插件重建；预编译型等上游发适配版（参见测试报告：context-doctor 0.6.2-master 本地构建、dream-skin PR#42 采纳后 npm 版）。
-5. 升级验证：实体校验（读 node_modules/<pkg>/package.json version 对比目标表）。
-6. **npm 发版后的完整链路（2026-09-17 补，同日修正）**：改 pin → 让 profile 拿到新版本 → 重启。三处 pin 而不是两处——插件在 **web profile 也装**时（`dsh-memory` 就是），`~/.dsh/profiles/web/package.json` 同样要改，否则 web 侧停在旧版。
-   **拿到新版本不必停机**（同日实测）：`pnpm install --lockfile-only`（只重算 lock、不碰 node_modules，pnpm 11.21 实测 11 秒、输出 `added 0`）+ 从 npm 拉 tarball 解包后覆盖 `profiles/*/node_modules/@max-null/<pkg>/`——运行中的 Node 不锁已加载的 `.js`，跑完 pin/lock/node_modules 三者一起对齐，以后任何 `install` 都不会退版。
-   **覆盖必须「先删目录再复制」，不要用 `robocopy /MIR`**（同日踩到）：`npm pack` 把包内所有文件的 mtime 规范成 `1985-10-26 16:15:00`，而 robocopy 的跳过判据是「时间戳 + 大小」——**大小恰好与上一版相同的文件会被静默跳过**（`package.json` 在 0.7.2 与 0.7.3 都是 2305 字节，只有 version 那行不同），加 `/IS` 也无效。症状是「pin/lock 已是新版、`engine.js` 也换了，`package.json` 还写着旧版本号」这种半成品。正确做法：`Remove-Item <dst> -Recurse -Force` 后 `Copy-Item <src> <dst> -Recurse -Force`，**最后逐文件比一次哈希**收尾（30 个文件全比对才发现问题）。
-   **「install 必须停机」只对含原生模块（`node-pty` 的 `.node` 被进程锁定 → EPERM）的整体重装成立**，别当通用规则套（这么套过一次，白等一个停机窗口）。`file:`/vendor 依赖是另一回事——pnpm 不感知其内容变化，必须删包重装。
-   重启不会替你装（首启判据见 §7 坑 #33）。
+**落点变了**：运行时 profile 的 `dependencies` 现在是 `link:` 指向**随包插件集**，由 seed 自动维护——**不是**手改的地方。出厂的唯一声明源是发版基准。
 
-## 5. 内核与归档升级
+```
+shell/profile-template/package.json      ← ★唯一手改处★（dependencies + dsh.profile.bundles 双处）
+        ↓  prepare-ssid-plugins.ts（打包期：解析 file: 说明符 → pnpm install --prod → 产出实体）
+   <out>/ssid-plugins/{ node_modules/<包> , ssid-plugins.json , cordis.patch.yml }
+        ↓  electron-builder extraResources（整目录带进安装包）
+   <resources>/ssid-plugins/
+        ↓  首启 seed（profile-seed.ts 的 seedSsidProfile）
+   ~/.dsh/profiles/ssid/ ：node_modules 下建 junction ＋ 追加 bundles ＋ 写 link: 声明 ＋ mergeProfilePatch
+```
 
-> **跨系列升级先看核对清单**：如 0.1.2 → 0.1.5 这类跨系列升级，先读 `docs/决策/2026-09-10-升级前置差异清单-0.1.2-rc.1到0.1.5-rc.1.md`（破坏性变更表 + 前置 checklist + 回滚要点）；同系列升级（如 alpha.2 → rc.1）套 `2026-09-06-SSiD内核升级执行指南-rc.1通用范本.md` 即可。
+**六条要点**：
 
-> **当前内核**：`0.1.5-rc.2`（2026-09-12 升，执行记录见 `docs/决策/2026-09-12-SSiD内核升级-0.1.5-rc.2.md`；归档指纹 `0.2.1-0.1.5-rc.2-d5876b8a`）。
+1. **只改 `shell/profile-template/package.json` 的 `dependencies` 与 `dsh.profile.bundles`（双处）**。运行时 profile 不用手改——重跑打包链 + 重启，seed 会自己接上（幂等：第二次启动 `linked=0`）。
+2. **JSON 一律用 node 写**：`writeFileSync(p, JSON.stringify(o,null,2)+'\n','utf8')`。PowerShell 5.1 的 `Set-Content -Encoding UTF8` 会写 BOM，`readProfileManifest` 直接崩。
+3. **插件集绝不能带内核包**（`@deepseek-ai/*`）：带了会盖掉安装锚点那份，实测 `this.load is not a function`、26 个插件 failed to import。
+4. **插件集必须落在 `node_modules/` 下**，不能平铺在根目录——否则传递依赖 import 全失败，**插件树静默不加载**（坑 #42）。
+5. **版本精确 pin（无 `^`）**：rc 版本常只挂 npm 的 `next` 通道，`^0.x.y` 不跨 minor，会静默装回旧版。
+6. **vendor 四份指纹一致**仍由 `check-vendor-sync` 强制（`plugins/<pkg>/` 源 + 三处 vendor）。发版归档自动带模板 vendor。
+
+**npm 发版后的链路**（自制插件发布 npm 包时，如 `dsh-memory`）：改 pin → 让目标环境拿到新版本 → 重启。落点随环境不同：
+
+- **web profile**（`~/.dsh/profiles/web`）仍是 npm 声明，改 pin 后照旧生效——**它也在装同一个插件时，这处必须一起改**，否则 web 侧停在旧版。
+- **ssid profile** 是 `link:` 指向随包插件集，**不再通过改 pin 更新**；要更新得重建插件集（即走上面的出厂链路）。
+
+两条经实测的纪律（与落点无关，仍适用）：
+
+- **拿到新版本不必停机**：`pnpm install --lockfile-only`（只重算 lock、不碰 `node_modules`）＋ 从 tarball 解包覆盖实体——运行中的 Node 不锁已加载的 `.js`。**「install 必须停机」只对含原生模块（`node-pty` 的 `.node` 被进程占用 → EPERM）的整体重装成立**，别当通用规则套。
+- **覆盖必须「先删目录再复制」，不要用 `robocopy /MIR`**：`npm pack` 把包内文件 mtime 统一成 `1985-10-26 16:15:00`，而 robocopy 按「时间戳 + 大小」跳过——**大小恰好与上一版相同的文件会被静默跳过**（`package.json` 在 0.7.2/0.7.3 都是 2305 字节，只有版本行不同），加 `/IS` 也无效。正确做法：`Remove-Item <dst> -Recurse -Force` 后 `Copy-Item <src> <dst> -Recurse -Force`，**最后逐文件比一次哈希**收尾。
+
+> dev 环境下插件集的具体产出与接入操作（含 `SSID_PLUGIN_SET_DIR`），见 `ssid-desktop/SSID-CHANGES.md` 的改动 29–31。
+
+## 5. 内核升级
+
+> **当前内核**：`0.1.7-rc.2`（随包的是 `@deepseek-ai/dsh-desktop-host@0.1.7-rc.2`）。实际版本看 `apps/desktop-host/src/index.ts` 里 `installAnchor` 指向的那个 `package.json`。
+>
+> **跨系列升级先看核对清单**：0.1.2 → 0.1.5 这类跨系列升级，`docs/决策/2026-09-10-升级前置差异清单-0.1.2-rc.1到0.1.5-rc.1.md` 的破坏性变更表仍有参考价值。
+
+> ⚠️ **§5.1–§5.5 描述的是自建壳形态，v1.0.0 起已不适用**——没有 `dsh-runtime.tar.gz` 归档、没有 `kernel.ts`、没有 `shell/tsconfig.json` 的 paths 解析、也没有「闭包 vs 并列源码」之分。它们作为历史与排查思路保留，但**不要照着执行**。
+
+### 5.0′ 当前形态：内核随包（v1.0.0 起）
+
+内核不再「归档进 profile」，而是**随包发布**：
+
+| 环节 | 做法 |
+|---|---|
+| 拿新版内核 | 在开发主轴 checkout 里 `git fetch upstream --tags` → `git rebase`（**只有这条分支带 DSH 全历史**，见 `ssid-desktop/README.md`） |
+| 构建 | `pnpm install` → `pnpm run build`。Host 用 `loadProfileDirectory('dsh', projectDir, installAnchor)` 解析，`installAnchor` = `<runtimeDir>/node_modules/@deepseek-ai/dsh/package.json` |
+| profile 换代 | **坑 #57**：旧 profile 会把上一代的内核包实体带过来，必须改名让路；`profile-migrate.ts` 已把它代码化（判据：`node_modules/@deepseek-ai/` 下**非链接实体 ≥ 10** 即命中） |
+| 固化 | `pnpm --filter "./apps/desktop" run package:win:x64:unsigned`（约 17–20 分钟） |
+
+**六个打包与排查的坑**（2026-09-28 实测，都能省掉一整轮）：
+
+1. **`npx tsc --noEmit -p apps/desktop/tsconfig.json` 会假绿**——一律以 `tsc -b` 为准。
+2. **NSIS 脚本（含非 ASCII）必须 UTF-8 带 BOM**，否则 makensis 报 `Bad text encoding`；用 write 工具重写这类文件会丢 BOM。
+3. **electron-builder 把 makensis 的 warning 当 error**——宏里引用尚未定义的 define 时，用 `!ifdef` 包住。
+4. **排查打包失败别用 `Select-Object -Last N` 截断输出**——warning 与编码错误都会被切掉。真因在 `.desktop-build\packaging-runs\<run>\stdout.log`（**不是** `events.jsonl`）。
+5. **pnpm 11 的 `allowBuilds` 占位符**：`pnpm-workspace.yaml` 里若还写着 `esbuild: set this to true or false`，那是没填完的模板，构建会以 `ERR_PNPM_IGNORED_BUILDS` 失败。
+6. **semver 的预发布陷阱**：`^0.1.1-rc.1` 只匹配 `0.1.1-*`，**不会**升到 `0.1.7-rc.2`——依赖声明必须显式改。
 
 ### 5.0 内核升级必须同步的口子（2026-09-12 rc.2 升级定稿）
+
+> **适用范围**：第 **0、2、4** 条与末尾的 pin 纪律**仍然适用**；第 **1、3** 条的对象已随自建壳归档（见各条标记）。
 
 内核换版时，**版本号切换只是其中一步**。下面几处不在任何自动化链路上，漏了不会报「升级失败」，只会安静地坏或安静地失效：
 
@@ -267,14 +393,14 @@ seek-soul-in-darkness/
 - **降级内核不是可用选项**：DSH 会话格式已到 **v3 且无降级路径**（源码只有 v0→v1→v2→v3 迁移器），旧内核读 v3 日志会直接抛「older than the supported vN, and this build ships no upgrade path for it」，已有会话**永久打不开**。
 - 改这个 checkout 的后续代价还没完：SSiD 的 **dev 源码模式**需要该 checkout 自身完整可用（见 §5.5）。
 
-1. **agent preset 是手工部署的，仓库副本与 `~/.dsh` 读取副本要同时改。**
+1. ⚠️ **依据已归档**（`syncPresetSkills` / `prepare-runtime.mjs` 都随自建壳下线；当前形态下 preset 怎么部署需重新核实）——**agent preset 是手工部署的，仓库副本与 `~/.dsh` 读取副本要同时改。**
    `prepare-runtime.mjs` 只把 `skills/` 纳入归档与指纹，`kernel.ts` 的 `syncPresetSkills` 也只同步技能；`agentPresetsRoot` 指向的 `apps/cli/config/agent-presets` 在各版本里都只有 `examples/`（`scanRoot` 对不存在的根返回 `[]`，静默忽略）。所以 `presets/ssid-double-star/` **不进归档、不进升级流程**：
    - 仓库副本 `presets/ssid-double-star/agent.cordis.yml`（版本管理）
    - 运行时副本 `~/.dsh/.agent-presets/ssid-double-star/agent.cordis.yml`（DSH 实际读取）
    改完用 SHA256 核对两处一致。**任何 preset 字段变更漏掉其中一处 = 该处静默不生效**。
 2. **`dsh-persona` 的配置字段名跨版本会变，preset 会因此挂载失败。**
    `0.1.2-rc.1` 是 `config.text`；`0.1.5-rc.1`/`rc.2` 改为 **`config.prefix`（required）** + `suffix`（默认 `''`），段名也从 `deployment:persona` 拆为 `deployment:persona-prefix`/`-suffix`。字段不对就是 `$.prefix missing required value` 硬失败。**升级后必须用新版 `dsh-persona` 实体 + 真 schemastery 校验一遍真实 preset 文件**，不要只读 release notes。
-3. **`shell/tsconfig.json` 的 paths 是手写清单，内核加包就要补条目。**
+3. ⚠️ **已失效**——`shell/tsconfig.json` 与它的 paths 清单随自建壳归档；fork 形态下内核经 `installAnchor` 解析，不存在这份手写清单。
    （见 §7 坑 15）本次补了 `@deepseek-ai/dsh-package-manifest`。
 4. **用 `ctx.connection.rpc.handle` 注册通道的插件，会在 0.1.5 上崩（与宿主有无 webServer 无关）。**
    `client-connection` 在 0.1.5 把 inject 由 `['webServer','credentials']` 收缩为只 `['credentials']`。而 `rpc.handle` 的 owner 是 **connection 自己的 ctx**（`rpc-host.ts` 的 `get rpc()` 里 `const owner = this.ctx`），不是调用方插件的 ctx；owner 只声明了 `credentials`，于是 `owner.webServer.register(route)` 必抛 `cannot get property "webServer" without inject`。
@@ -334,19 +460,40 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 
 > 顺带：判断「启动失败」前**先确认单实例锁的持有者**。思灵有 single-instance 锁，打包版与 dev 版会互相抢占，被拒绝启动时日志只有 `single-instance lock FAILED -> quit`，看起来像崩溃但其实是「根本没轮到它跑」。
 
-## 6. 壳-内核兼容契约（master 升级后重点）
+## 6. 壳-内核契约（v1.0.0 起）
 
-| 契约点 | master（0.1.2-alpha.1）要求 | SSiD 侧实现 |
-|---|---|---|
-| `healProfilesModuleFallback` | **options 对象 + async**（旧双参签名失效） | `kernel.ts` 已适配（await + {installAnchor, home}） |
-| `loadProfile`/`boot`/`provideCmdline`/`webServer` | 签名兼容（webServer 键名不变） | 无需改动 |
-| **浏览器认证** | web 服务带 token（`connection.authenticatedUrl`）；裸 URL 401 | `kernel.ts` 产出 `kernel.url`（authenticated）/ main.mjs `loadURL(kernel.url)`——**无 token 则 splash 不替换**（2026-08-29 实测） |
-| 壳标志注入 | `window.__SSID_SHELL__`（dsh-quick-toolbar 分支依据） | main.mjs 在 **dom-ready** 注入——**晚于插件 apply**！插件侧必须**兜底**（load 时复查/重算，见 quick-toolbar client.js） |
-| `patchReload` | web=live；默认 live | profile/模板显式声明 `"live"` |
-| `dsh-sidebar-qa ≥0.5.0` | 依赖 `remote.session`（master 提供；rc.2 无） | 升级到 0.5.0 需随 master |
-| server 认证 401 | smoke 断言需接受 401 | `boot-smoke.ts` 已更新 |
+**形态整个换了**：壳不再在自己的进程里 boot 内核，而是 **spawn 一个 Host 子进程**，内核跑在 Host 里。
+
+```
+apps/desktop（Electron 壳，主进程）
+   │  spawn(node, ['--expose-internals', …entry, runtimeDir, projectDir, primaryRuntime, …], { stdio: […, 'ipc'] })
+   │  entry = <runtimeDir>/node_modules/@deepseek-ai/dsh-desktop-host/lib/index.js
+   ▼
+apps/desktop-host（Host 子进程）
+   │  loadProfileDirectory('dsh', projectDir, installAnchor)
+   └─ runProfile({ environment, profile: <SSID_PROFILE_NAME>, resolvedProfile, patchFiles: [], args: ['--no-open', '--port', '19388'] })
+```
+
+| 契约点 | 现状 |
+|---|---|
+| **IPC 白名单** | 壳侧 `isDesktopHostEvent` 逐条校验；**不认识的消息 → `fail()` + `SIGTERM` 掉整个 Host**。加新消息类型必须同时改两侧并动协议版本号 |
+| **协议版本** | `apps/desktop/src/host-protocol.ts` 的 `DESKTOP_HOST_PROTOCOL_VERSION`（当前 4） |
+| **端口** | Host 固定 `--port 19388`（官方桌面端用 19387，改掉以免与官方版永久互斥） |
+| `SSID_SHELL_SCREENSHOT_KEY` | **存在，但归属换了**：由 **Host 侧** `ctx.provide('ssid.shell.screenshot', …)` 注册（不再是壳的 `kernel.ts` 注入）。它的两个方法只把动作转成 `process.send`，真实动作由壳执行后回传（`apply` 带 requestId 与 5s 超时） |
+| `SSID_SHELL_RESTART_KEY` / `SSID_SHELL_UPDATE_KEY` | **不存在**。而 `dsh-ssid-panels` 仍在 `ctx.get('ssid.shell.restart')` / `('ssid.shell.update')`，fork 侧从未注册——**该面板的「会话存储隔离」开关与更新相关按钮在 fork 下取不到桥**（已知缺口，见 `SSID-CHANGES.md`） |
+| 服务方法里不要 `ctx.get` 自己 | 会无限递归（实测 500） |
+| `window.__SSID_SHELL__` | 仍在 **dom-ready** 注入（`src/ssid/titlebar.ts`）——**晚于插件 apply**，插件侧必须兜底（load 时复查 / 重算）。**这条仍然成立** |
+| 浏览器认证 | 内核 web 服务带 token；壳用 `connection.authenticatedUrl` 后 `loadURL`——**无 token 则 splash 不替换** |
+
+> ⚠️ **分进程架构下没有 `hostCtx.provide` 的等价物。** Host 要调用壳的能力，只有一条路：**Host 注册服务 + 经 IPC 请求壳执行**（截图即此形态）；壳要通知页面，走 `window.dispatchEvent(new CustomEvent('ssid:titlebar', { detail }))` 直接派发给同上下文的插件。
 
 ## 7. 常见坑速查（全部来自实测）
+
+> ⚠️ **下列坑的对象已随自建壳（tag `v0.4.0-selfbuilt`）归档，机制不再存在**——保留作历史与排查思路，但**不要照着执行**：**#3**（`SSID_DEV_DEPLOY`）、**#12**（`deployRuntime` 覆盖用户层）、**#15**（`shell/tsconfig.json` 的 paths）、**#16**（`prepare-runtime.mjs` 的 vendor README）、**#27**（托盘 `restartDsh` 的两种重启粒度）、**#32**（`main.mjs` 部署后校验）、**#33**（`main.mjs` 的 `profileReady` 首启判据）、**#40**（`devSkipDeploy` 导致模板 patch 到不了运行时）。
+>
+> **教训仍有效、但载体已变的两条**：
+> - **#30**（patch 合并吞条目）——同类事故 **2026-09-28 在新形态下又发生了一次**，载体换成 `profile-seed.ts` 的 `splitPatchFile` / `isEntryStart`：`args:` 下的标量项 `- '--exclude'` 被误当子条目，拼出非法 YAML，内核 boot 直接报 `bad indentation of a mapping entry`。
+> - **#45**（多副本漂移）——副本集合已变：现在是「**开发主轴 `.ssid-build/checkout`**（构建与启动的实体）+ **对外快照 `seek-soul-in-darkness/ssid-desktop/`**」，`ssid-shell-fork/` 是遗留副本，已不再参与。**比对判据不变**：对 `apps/desktop/src`、`apps/desktop/scripts`、`apps/desktop-host/src` 逐文件比哈希，`lib/` 是构建产物**不参与比对**。
 
 1. **BOM**：改任何 profile/模板 JSON 用 node；PowerShell 写文件（Out-File utf8/patch）都带 BOM → git apply 失败、DSH 崩溃。
 2. **PowerShell 5.1**：无 `??`/`?:`（PS7 语法）；管道传 git 输出会转码破坏字节流（用 node 中转）；`@playwright` MCP 等 `.cjs` 必须 node 显式执行（ShellExecute 假执行）。**读含中文的 `package.json` 必须用 node，不能用 `Get-Content -Raw | ConvertFrom-Json`**（2026-09-14 实踩）：PS 5.1 按 ANSI/GBK 解码 UTF-8，中文字符会**吞掉紧随其后的引号** → JSON 语法坏掉、`ConvertFrom-Json` 抛异常；而赋值语句写在 `(...)` 里时**变量保留上一轮的值**，于是循环里静默打印出**别的包的版本号**当成这个包的版本（实测把 `dsh-dream-skin 9.14.1` 显示成 `dsh-pocket`/`dsh-session-manager` 的残留值，差点据此误判升级失败）。清单类校验统一走 node 脚本（`.build/verify-profile-deps.mjs` 即为此写）。
@@ -472,11 +619,12 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
    **★ 判据（这条最有用）**：`welcome-backend.ts` 里 `Web RPC failed`（L59）与 `Web request failed`（L55）是**两个不同分支** —— 前者表示 **HTTP 通了、Host 进程起着**，是后端处理该 RPC 时返回了业务错误（`result.ok !== true`）；后者才是 Host 不可达。**看到 `Web RPC failed` 就不要去查网络/端口/进程，那说明传输层是好的，问题在插件树**。另外 `-host.log` 不会存在 —— Host 没崩，它只是返回了错误。
    **处置**：升级前 `Rename-Item "$env:USERPROFILE\.dsh\profiles\ssid" ssid.backup-0.4.0`（**改名，不是删除**），让 fork 版从零建。实测改名后启动正常，日志关键一行 `ssid: plugin set: linked=584 kept=0 missing=0 bundlesAdded=32` —— **`kept=0`** 就是「全新换代」的判据（本机隔离环境同样场景也是这组数字）。
    **两条推论**：① 对话框上的「Restart」按钮**解决不了**这类问题，它不碰 profile，重启多少次都一样（实测第二次崩溃与第一次同调用栈、仅 PID 不同）；② **`electron-updater` 的「无缝更新」在当前形态下会把用户送到一个起不来的版本** —— 两版的 `app-update.yml` 都指向 `Max-Null/seek-soul-in-darkness` 的 GitHub Releases、`latest.yml` 格式也一致，所以更新本身能走通，但装完仍是旧 profile。**要做到真无缝，必须先让壳自己识别旧 profile 并备份重建**（那是一次改壳 + 重打包）——在此之前，跨界升级只能靠一次人工改名。
+   **补充（2026-09-28 本机执行，三条可复用）**：① **内核确有清理机制，但够不着这一类残留** —— `removeLinkProjections()` 只解除指向 `<profile>/.dsh-module-fallback/node_modules` 的软链、再删掉该目录，**不带这个目录的 profile 完全不动**（`packages/boot/app-boot/src/profile.ts`）。0.4.0 把包**平铺成实体**，所以这条路只能人工走。② **换名前可以先预置用户层，省掉一轮重启**：`initProfile()` 写 `cordis.patch.yml` 用的是 `if (!existsSync(patchPath))`，已存在的文件不碰 —— 改名后**立刻**手工写一份只含用户层条目的 patch（会话根覆盖 + 自装 MCP + compaction 阈值 + 默认 preset），启动时 `mergeProfilePatch` 会把出厂条目合并进来，一次启动就是完整配置。③ **换代会丢两类东西，点清再动**：自装插件（拿随包 `ssid-plugins.json` 的 `bundles` 与 profile 的 `dsh.profile.bundles` 取差集）与用户层 patch 条目；前者照旧 profile 的 `dependencies` 声明原样搬回（`link:` 的重建链接、`github:` 的拷实体），后者按 `- id:` 从旧 patch 抄。④ **已代码化（2026-09-28）**：壳在 `manager.applyRelease()` **之前**跑 `apps/desktop/src/ssid/profile-migrate.ts` 的 `migrateLegacyProfile()` —— 判据是 `node_modules/@deepseek-ai/` 下**非链接**的官方包实体数 ≥ 10（本机实测：旧 profile 240 个 / 换代后 0 个），命中即改名备份 + 搬用户层。搬运范围取**旧 profile 的 `dsh.profile.bundles`** 而不是 `dependencies`：后者还含 `cordis` 这类运行时框架与传递依赖，照单全收会让内核把它们当 bundle 解析（`@dsh-pet/bridge` 就是靠这条才没把 `cordis@4.0.0-rc.8` 带进新 profile）。
 
 ## 8. 文档索引
 
 - 本手册（总览/流程/坑）
-- `ssid-shell-fork/SSID-CHANGES.md`（**fork 改动清单**：对上游每条改动的文件/行/原因 + dev 实机验证证据。改动 21–28 覆盖 dev profile 解耦、第三方插件接入、设置槽位迁移到 `plugins.bundle.config`、截图/保活/MCP/CodeGraph 四项功能补全，以及**「`profile-merge` 为何不移植」**与 fork 双副本同步纪律）
+- `ssid-desktop/SSID-CHANGES.md`（**fork 改动清单**：对上游每条改动的文件/行/原因 + dev 实机验证证据。含 dev profile 解耦、第三方插件接入、设置槽位迁移到 `plugins.bundle.config`、截图/保活/MCP/CodeGraph 四项功能补全，以及**「`profile-merge` 为何不移植」**与 fork 副本同步纪律）
 - `docs/决策/2026-08-29-SSiD升级执行指南.md`（升级执行方案——§1.1 版版本对照表仍在参考价值）
 - `docs/决策/2026-08-29-SSiD升级执行记录.md`（本次升级全过程与修复记录）
 - `docs/决策/2026-08-29-DSH-master插件适配测试报告.md`（插件 × master 适配矩阵、根因、PR 追踪）
@@ -514,15 +662,16 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 | 12 | **升级 `ssid-release` skill（落后于 0.1.5 内核）** | 用户 2026-09-14 指出并拍板。该 skill 定稿于 0.1.5 之前，与当前仓库已有工具脱节，照搬会走弯路：①**打包**是 `npm run pack`（= `bundle-kernel` + **`bundle-kernel-child`** + electron-builder），skill 只写了 `bundle-kernel`；②**归档抽查**已被 `npm run verify:release` 机械化（`verify-release.mjs` 覆盖 §4 完整性与 §5 七条抽查，且默认不做部署与 boot），不必手工 `tar -xzf` 逐项核；③**交付链完整性**由 `npm run verify:shipped`（仓库根 / `win-unpacked` / `setup.exe` 三层哈希）覆盖；④七道检查门（`npm run check:rules`，含 `dsh-clean`）与归档内 `runtime-integrity.sha256` 逐文件清单都是 skill 之后新增；⑤子进程内核与纯净模式、0.1.5 的 inject 收缩（405 修复）等结构性变更 skill 均未涵盖。**注意**：skill 正文**仓库里就有一份且更新**——`.agents/skills/ssid-release/`（`SKILL.md` 17,443 B，2026-09-06；`smoke-ui.cjs` 11,156 B）比用户级 `~/.dsh/skills/ssid-release/`（15,771 B，2026-08-30）新，**该做的是把仓库版同步到用户级**（而非把正文迁进仓库）。**2026-09-14 发版实测补充三条**：①**归档耗时被严重低估**——skill 写「3-5 分钟」，实际约 **25 分钟**（`runtime-integrity.sha256` 生成 65,481 条占 291 秒，1018 MB 的 `tar -czf` 再 1-3 分钟），据此安排发版时段；②**`verify-release.mjs` 的 §5-2 已过时**——它仍检查 `open-sea-skin/plugin/client.js`（该定制在 v0.1.16 已移除），本次报「归档内无该文件」属假提示；同节的体积上限 213 MB 也已被依赖增长突破（本次 230.5 MB，脚本自己提示"通常是依赖增多"）；③`pack` 脚本早已是 `bundle-kernel` + `bundle-kernel-child` + electron-builder，skill 只写 `bundle-kernel` 会漏掉子进程 bundle。**2026-09-14 首轮升级已完成**：skill 正文（`.agents/skills/ssid-release/SKILL.md`）按上述各点改写并同步到用户级 `~/.dsh/skills/ssid-release/`（两处 MD5 一致）；`verify-release.mjs` 的 §5-2 改为「open-sea-skin 缺失不判违规（v0.1.16 已移除）」、期望体积 185 → 230 MB；skill 新增「打包产物自检必须隔离（PS 5.1 无 `Start-Process -Environment`）」「隔离空环境的断言假 FAIL 判据」「gh 上传大文件实测很快（v0.3.0 的 359/409 MB 各 1-2 分钟）」等条目。 | ✅ 完成（2026-09-14 首轮；后续随工具演进继续维护） |
 | 13 | **quick-toolbar 在壳里缺「插件中心」按钮** | ✅ **已修**（2026-09-14，`dsh-quick-toolbar` 6835abb）。机理与实测见 §7 #20。修法取「壳标志函数化、每次读取」——**未**新增 `hideIfShell` 补渲染钩子：既有的 1s 补渲染轮询本就一直跑到全部内置就位，标志到达后的下一个 tick 即按壳语义补渲染，故钩子是多余的机制。dev 实测：面板 4 → 5 个内置，点击「插件中心」`pc-` 元素 0 → 1858（打开）、再点归 0（收起）。 | ✅ 完成 |
 
-## 附录 A：开发会话行为清单（2026-08-30，agent 执行前自检）
+## 附录 A：开发会话行为清单（agent 执行前自检）
 
-1. **改 shell 代码** → 先 `npm run typecheck`（有测试先跑测试；能红再改——反馈环）
-2. **改插件** → 先跑该插件 L1（typecheck+test）；改完必复跑
-3. **改 vendor 插件** → sync-vendor（或手动三处+运行时实体同步）+ 重启 dev 验证（可自重启，先判宿主）
-4. **改 profile/模板 JSON** → node 写（防 BOM）；**改插件声明** → 双处（profile + template）
-5. **重启 DSH** → 先判宿主（web 3080 禁）；重启后查 ssid.log（bootKernel ok / deploy 链路）
-6. **发版** → 给用户完整指令（包名/版本/顺序/回滚预案），F2A 由用户执行
-7. **验证留痕** → L2 checklist + 记录一行；截图顺手入 docs/shots
+1. **改壳代码**（`apps/desktop/src/**`）→ 记得**必须重新 build**（运行的是产物 `lib/main.js`，不是 `src/`）；有测试先跑测试，能红再改。
+2. **类型检查一律 `tsc -b`**：`pnpm --filter "./apps/desktop" exec tsc -b`。`--noEmit` 会**假绿**。
+3. **改插件** → 先跑该插件 L1（typecheck + test）；改完必复跑。
+4. **改 vendor 插件** → `npm run sync:vendor`（或手动三处 + 运行时实体同步）+ 重启 dev 验证（可自重启，先判宿主）。
+5. **改 profile 模板 JSON** → node 写（防 BOM）；**改插件声明** → 只改 `shell/profile-template/package.json` 的 `dependencies` + `dsh.profile.bundles` 双处（运行时 profile 由 seed 维护，不要手改）。
+6. **重启 DSH** → 先判宿主（web 3080 禁）；重启后看日志——**不再是 `~/.ssid/ssid.log`**，位置见 §2 的表。
+7. **发版** → 给用户完整指令（包名 / 版本 / 顺序 / 回滚预案），F2A 由用户执行。
+8. **验证留痕** → L2 checklist + 记录一行；截图顺手入 `docs/shots/`。
 
 ## 9. 插件开发与测试规范（2026-08-30 定稿）
 

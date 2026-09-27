@@ -1,6 +1,6 @@
 # seek-soul-in-darkness — SSiD 壳库指令
 
-思灵（SSiD）Electron 桌面壳库：`shell/`（main.mjs Electron 壳 + kernel.ts 内核启动 + scripts/ 归档构建）、`plugins/`（内置专属插件）、`docs/`（规范/决策）。
+思灵（SSiD）桌面壳库：`ssid-desktop/`（**当前壳** —— 对官方 DSH 桌面端底座的改造源码，构建与落点见其 `README.md`）、`shell/`（**自建壳时代产物，已归档**；仅 `profile-template/` 与 `scripts/` 仍在维护）、`plugins/`（内置专属插件）、`docs/`（规范/决策）。
 
 > **开发规范第一入口：`docs/SSiD开发手册.md`**（铁律速查 → 工作区规范 → 三环境流转 → 运行模式 → 插件升级 → 内核/归档 → 壳-内核契约 → 坑 → 内置插件规范）。`docs/决策/` 为历史决策与执行记录。
 
@@ -8,19 +8,21 @@
 
 `deepseek-harness/` 与 `dsh-web-runtime/` 里的 DSH 源码**只引用不改**（用户长期约定，工作区铁律 2.0）——目的是跟随 DSH 版本迭代；改了源码就再也跟不上上游，还会让 dev（tsx 跑 checkout 源码）与装版（加载 profile 里的官方 npm 包）跑**行为不同的实现**。
 
-需要适配时只改我们自己的东西：profile 的 `cordis.patch.yml` patch 条目、`max-null-plugins/` 下的插件源码、本库 `shell/` 的壳代码。机械检查：`node shell/scripts/check-dsh-checkout-clean.mjs`（已接入 `npm run check:rules` 的 `dsh-clean` 门）。
+需要适配时只改我们自己的东西：profile 的 `cordis.patch.yml` patch 条目、`max-null-plugins/` 下的插件源码、本库的壳代码（**当前在 `ssid-desktop/`**，自建壳时代的留在 `shell/`）。机械检查：`node shell/scripts/check-dsh-checkout-clean.mjs`（已接入 `npm run check:rules` 的 `dsh-clean` 门）。
 
 **读 DSH 源码做判断前先 `git status`**：工作树脏时先查改动来历（`docs/决策/` + `git log`/`stash` + `.build/` 下的 patch 脚本），否则会把补丁版行为当成官方行为（2026-09-14 的 405 排查即因此绕圈）。涉及运行时行为时，以**目标环境实际加载的产物**为准（`~/.dsh/profiles/<p>/node_modules/**/lib/*.js`），而不是 checkout 源码。
 
 ## 常用命令（shell/ 目录）
 
 ```sh
-npm start              # dev 裸跑（app.isPackaged=false；改代码即热更新）
-npm run typecheck      # shell 代码类型检查（改 kernel.ts/main.mjs 后必跑）
-npm run smoke          # 无 Electron 内核冒烟（需 SSID_MCP_NODE/SSID_MCP_PW_CLI 环境，见手册）
-npm run bundle-kernel  # 重打包 kernel.bundle.mjs（kernel.ts 改动后、发版前必做）
-node scripts/prepare-runtime.mjs   # 重建 dsh-runtime.tar.gz（发版收尾；SSID_REGISTRY 见手册）
+npm run check:rules     # 六个门（含 dsh-clean）
+npm test                # 门禁脚本自测
+npm run sync:vendor     # vendor 同步
 ```
+
+> ⚠️ `shell/scripts/` 里的 **`prepare-runtime.mjs` 与 `verify-release.mjs` 服务于自建壳时代的 `dsh-runtime.tar.gz` 归档**——fork 形态不再产出该归档（内核随包进 asar 的 `dsh/`），这两个脚本已无对象。**`ssid-release` skill 同样定稿于自建壳形态**，照搬会走弯路。
+
+自建壳时代的 `npm start` / `npm run typecheck` / `npm run smoke` / `npm run bundle-kernel` 已随运行时归档，`shell/package.json` 里不再有这些脚本。**当前壳的构建入口与落点见 `ssid-desktop/README.md`**——构建在带 DSH 全历史的开发主轴 checkout（`.ssid-build/checkout`，分支 `ssid-desktop-fork`）里做，不在本工作区直接构建。
 
 ## 内置专属插件（plugins/）
 

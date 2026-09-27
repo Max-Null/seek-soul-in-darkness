@@ -50,7 +50,7 @@ description: "SSiD（思灵）发版流程：版本决策、内置插件对齐�
 
 ## 3.5 发版前守卫（必须全绿的轻量环）
 
-**七道检查门**（BOM / 旧名残留 / profile↔模板声明 / vendor 四份一致 / bundle 不内联 DSH / 插件 peerDeps 覆盖性 / DSH 源码只引用不改）：
+**六道检查门**（BOM / 旧名残留 / profile↔模板声明 / vendor 四份一致 / 插件 peerDeps 覆盖性 / DSH 源码只引用不改）：
 
 ```powershell
 cd shell
