@@ -136,7 +136,7 @@ pwsh -NoProfile -File apps\desktop\scripts\smoke-installer-directories.ps1 `
   -FrameLibrary "<...>\installer-ui\window-frame.dll"
 ```
 
-**必须用 pwsh**（PS 5.1 缺 `CreateTempSubdirectory`）。**五个**场景：`first` / `upgrade` / `locked` / `broken` / `cancelled`——只有前两个期望 exit 0（新资产、不 obsolete），其余三个期望 exit 2（旧资产、obsolete）。**`broken` 当前不过**（期望「解压失败报告恰好一份」，未查清是既有偏差还是回归，见[交接材料](../../../docs/排查/2026-09-28-1.0.0修复-交接材料.md)第五节第 3 项）。
+**必须用 pwsh**（PS 5.1 缺 `CreateTempSubdirectory`）。**五个**场景：`first` / `upgrade` / `locked` / `broken` / `cancelled`——只有前两个期望 exit 0（新资产、不 obsolete），其余三个期望 exit 2（旧资产、obsolete）。五个场景 2026-09-28 实测全绿。
 
 ## 7. GitHub 交付
 
