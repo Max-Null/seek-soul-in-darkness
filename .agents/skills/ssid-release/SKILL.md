@@ -9,7 +9,7 @@ description: "SSiD（思灵）发版流程（fork 版 / v1.0.0 起）：版本�
 >
 > **⚠️ 1.0.0 尚未发布过**：凡标 **【待验证】** 的，是从代码里读到的、但还没实际走完一次的步骤——不要当成既成事实。
 >
-> **构建在哪**：**开发主轴** `H:\MaxNull\WorkStation\.ssid-build\checkout`（分支 `ssid-desktop-fork`，带 DSH 全历史）。本文的相对路径都相对它。`seek-soul-in-darkness/ssid-desktop/` 是**对外快照**，不是构建处。
+> **两个根，别混**：**构建与打包**在开发主轴 `H:\MaxNull\WorkStation\.ssid-build\checkout`（分支 `ssid-desktop-fork`，带 DSH 全历史）——§5 的相对路径相对它；**发版基准与资产**（`shell/`、`plugins/`、`docs/`）在 `H:\MaxNull\WorkStation\seek-soul-in-darkness\`——§2、§3、§4 的相对路径相对它。`seek-soul-in-darkness/ssid-desktop/` 是**对外快照**，不是构建处。
 >
 > **正本与生效副本**：正本在 `seek-soul-in-darkness/.agents/skills/ssid-release/`（受 git 管），**实际生效的是用户级副本 `~/.dsh/skills/ssid-release/`**——发版常在 WorkStation 根的会话里做，那里扫不到仓库的 `.agents/skills/`。**改完正本必须同步过去**（`Copy-Item .agents/skills/ssid-release/* ~/.dsh/skills/ssid-release/ -Force`），否则改了不生效且没有任何提示。
 
@@ -21,7 +21,11 @@ description: "SSiD（思灵）发版流程（fork 版 / v1.0.0 起）：版本�
 
 ## 1. 版本号：先问「这个号是谁的」
 
-换底座后**产品版本与内核版本是两条线**，而代码里有**三处**强制它们相等。**三处的位置与完整判据见 `docs/SSiD开发手册.md` 坑 #55**——其中最容易漏的是 `prepare-dsh.ts` 的 `desktopRelease`：它把 `release.version` 当作「要装的 dsh 版本」用（`readDesktopCorePackageSet(BUILD_ROOT, release.version)`），跟着改成产品版本会让内核去 npm 找一个不存在的 `@deepseek-ai/dsh@1.0.0`。
+换底座后**产品版本与内核版本是两条线**：产品版本在 `apps/desktop/package.json`，内核版本在**仓库根** `package.json`（`prepare-dsh.ts` 的 `desktopRelease()` 读它，作为 `release.version`）。代码里有**三处**把这个 `release.version` 当作 **dsh 版本**用，跟着产品版本改就会炸：
+
+- `prepare-dsh.ts` → `readDesktopCorePackageSet(BUILD_ROOT, release.version)`——拿它解析核心包集。**最容易漏的一处**：跟着产品版本改，内核会去 npm 找一个不存在的 `@deepseek-ai/dsh@1.0.0`。
+- `development-project.ts:127`——断言 `apps/cli` 的版本等于 `release.version`，不符即抛错。
+- `development-project.ts:137`——断言 `apps/desktop-host` 的版本等于 `release.version`，不符即抛错。
 
 速记判据——**逐个问「这个版本号是谁的」**：
 
@@ -31,8 +35,8 @@ description: "SSiD（思灵）发版流程（fork 版 / v1.0.0 起）：版本�
 | **产品**（安装包名、`latest.yml`、发版记录、GitHub tag） | `apps/desktop/package.json` 的 `version` | **思灵自己** |
 
 - 构建版本可选：`DSH_DESKTOP_BUILD_VERSION`（测试构建用，形如 `1.0.0-test.20260928.1`）——**不进 manifests**，只进 electron-builder、更新 feed 与上传校验。生产发布不发它。
-- **`artifactName` 与更新源要一起改**：`electron-builder-config.mjs` 的 `artifactName` 同时决定安装包文件名**与 `latest.yml` 里的 `url`/`path`**，只改一个会让自动更新指向不存在的文件（坑 #55 附带条 ⓑ）。
-- **验证要在打包链真正跑的那条命令下做**：链上用的是**根级 `tsconfig.host.json`**（开了 `TS6133`「声明但未读取」），而 `apps/desktop` 自己的 `tsc -b` 不会报——不然会跑到打包第 7 分钟才失败，白跑一轮（坑 #55 附带条 ⓐ）。
+- **`artifactName` 与更新源要一起改**：`electron-builder-config.mjs` 的 `artifactName` 同时决定安装包文件名**与 `latest.yml` 里的 `url`/`path`**，只改一个会让自动更新指向不存在的文件。
+- **验证要在打包链真正跑的那条命令下做**：链上用的是**根级 `tsconfig.host.json`**（开了 `TS6133`「声明但未读取」），而 `apps/desktop` 自己的 `tsc -b` 不会报——不然会跑到打包第 7 分钟才失败，白跑一轮。
 
 ## 2. 内置插件与 vendor 对齐（发版前必做）
 
@@ -132,7 +136,7 @@ pwsh -NoProfile -File apps\desktop\scripts\smoke-installer-directories.ps1 `
   -FrameLibrary "<...>\installer-ui\window-frame.dll"
 ```
 
-**必须用 pwsh**（PS 5.1 缺 `CreateTempSubdirectory`）。它有三个场景：`first` / `upgrade` / `locked`。
+**必须用 pwsh**（PS 5.1 缺 `CreateTempSubdirectory`）。**五个**场景：`first` / `upgrade` / `locked` / `broken` / `cancelled`——只有前两个期望 exit 0（新资产、不 obsolete），其余三个期望 exit 2（旧资产、obsolete）。**`broken` 当前不过**（期望「解压失败报告恰好一份」，未查清是既有偏差还是回归，见[交接材料](../../../docs/排查/2026-09-28-1.0.0修复-交接材料.md)第五节第 3 项）。
 
 ## 7. GitHub 交付
 

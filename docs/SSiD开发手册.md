@@ -81,6 +81,8 @@
 
 | 2026-09-28 | §0–§3、§4、§5、§6、§7、附录 A（**整批重写**） | **换底座后的文档对齐（v1.0.0）**：**§0** 改为在开发主轴 checkout 里 `pnpm run dev:desktop`（原 `cd shell && npm start` 已失效）；**§1** 目录树重画（壳在 `apps/desktop`、Host 在 `apps/desktop-host`，`shell/` 已归档，只剩 `profile-template/` 与 `scripts/`+`lib/` 在维护）；**§2** 删掉归档/闭包/`devSkipDeploy` 整套，改为「内核随包 + 首启 seed」，并明确「改壳必须 build」；**§3** 环境变量重排（4 个消失、9 个新增，拆运行期/构建期两表）+ 新增 **§3.4 会话根三层契约** 与 **§3.5 的「出厂缺省两套」警示**；**§4** 声明落点改为 `profile-template` → 插件集 → seed 的链路；**§5** 加失效界线并新增 **§5.0′ 当前形态 + 六个打包坑**；**§6** 重写为分进程契约（IPC 白名单 / 协议版本 / 端口 / `hostCtx.provide` 无等价物）；**§7** 加失效清单（#3 #12 #15 #16 #27 #32 #33 #40）与两条「教训仍在、载体已变」（#30 在新形态下又发生一次、#45 副本集合已变）；**附录 A** 命令与日志位置对齐 | 1.0.0 换底座（自建壳 0.4.0 → 官方 `dsh-desktop-host` 基座）＋ 2026-09-28 只读调查（基准 = `.ssid-build/checkout`，分支 `ssid-desktop-fork`） |
 
+| 2026-09-28 | §2.1、§3.1、§3.3 | **日志落点与「零命中」措辞澄清**：`app.setAppLogsPath()` 指向的 `logs/` **只放崩溃报告**——`main.ts` 对 `getPath('logs')` 只有 `writeCrashReport()` 与 `pruneCrashReports()` 两个用途，常规启动日志不落盘（内核 stdout 被 `host-process.ts` 的 `pipe(process.stdout)` 丢弃），原文「日志改由 userData 的 `logs/` 承载」会让人去那里找 `ssid:` 开头的行。§2.1 的「（在 `apps/` 下搜这些名字零命中）」改成分项陈述：`devSkipDeploy` / `SSID_DEV_DEPLOY` / `.runtime-version` 零命中，`dsh-runtime.tar.gz` 只剩 `profile-seed.ts` 与 `profile-migrate.ts` 里描述历史形态的注释 | 1.0.0 装机的实测核对：`%APPDATA%\@deepseek-ai\dsh-desktop\logs` 内 6 个文件全为 `crash-*`，且全树 grep 确认 `getPath('logs')` 仅上述两处用途 |
+
 ## 工作区规范（布局 + 放置规则，2026-08-29 整理定稿）
 
 ### 布局（H:\MaxNull\WorkStation）
@@ -221,7 +223,7 @@ H:\MaxNull\WorkStation\
 
 ### 2.1 没有「归档部署」了
 
-自建壳时代的 `dsh-runtime.tar.gz` 归档、`devSkipDeploy`、`SSID_DEV_DEPLOY`、`.runtime-version` 指纹对比**全部不存在**（在 `apps/` 下搜这些名字零命中）。替代形态是**内核随包 + 首启 seed**：
+自建壳时代的 `dsh-runtime.tar.gz` 归档、`devSkipDeploy`、`SSID_DEV_DEPLOY`、`.runtime-version` 指纹对比**全部不存在**：`devSkipDeploy` / `SSID_DEV_DEPLOY` / `.runtime-version` 在 `apps/` 下零命中，`dsh-runtime.tar.gz` 只剩 `profile-seed.ts` 与 `profile-migrate.ts` 里描述历史形态的注释。替代形态是**内核随包 + 首启 seed**：
 
 | 时机 | 动作 | 实现 |
 |---|---|---|
@@ -256,7 +258,7 @@ H:\MaxNull\WorkStation\
 | `SSID_NOTIFY_CONFIG` / `SSID_SCREENSHOT_CONFIG` | 覆盖 `~/.ssid/notify.json` / `~/.ssid/screenshot.json` 的路径 | 壳；**并行实例用它避免两个实例抢同一份全局热键** |
 | `DSH_DESKTOP_DSH_DIR` · `_PRIMARY_RUNTIME_DIR` · `_OPEN_DEVTOOLS` · `_PNPM_ENTRY` · `_MAIN_INSPECT_PORT` · `_RENDERER_DEBUG_PORT` · `_HOST_INSPECT_PORT` | 路径与调试端口的开发期覆盖 | 壳 |
 
-**已消失**（自建壳时代的变量，见到就说明文档过时）：`SSID_DEV_DEPLOY`、`SSID_LOG_FILE`、`SSID_REGISTRY`、`DSH_CHECKOUT`。日志改由 `app.setAppLogsPath()` 决定（落 userData 的 `logs/`，见 §2 的表）。
+**已消失**（自建壳时代的变量，见到就说明文档过时）：`SSID_DEV_DEPLOY`、`SSID_LOG_FILE`、`SSID_REGISTRY`、`DSH_CHECKOUT`。`app.setAppLogsPath()` 指向 userData 的 `logs/`（见 §2 的表），但那里**只放崩溃报告**——`main.ts` 对 `getPath('logs')` 只有两个用途（`writeCrashReport()` 与 `pruneCrashReports()`），常规启动日志不落盘（内核 stdout 被 `host-process.ts` 的 `pipe(process.stdout)` 丢弃），**别去 `logs/` 找 `ssid:` 开头的行**。
 
 ### 3.2 构建期（打包与插件集）
 
@@ -274,7 +276,7 @@ H:\MaxNull\WorkStation\
 
 profile 目录用 junction 指回真实的那份，即可零拷贝共用插件实体。`SSID_PROFILE_NAME` 让第二个实例有自己的 profile 名与会话根。
 
-> 原第三件套 `SSID_LOG_FILE` 已失效——日志改由 userData 的 `logs/` 承载。
+> 原第三件套 `SSID_LOG_FILE` 已失效——userData 的 `logs/` 只承载崩溃报告（`crash-*.log`），不是常规日志通道。并行实例的日志由 `--user-data-dir` 天然分开。
 
 ### 3.4 会话根隔离（三层契约，缺一不可）
 
