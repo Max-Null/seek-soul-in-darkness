@@ -119,3 +119,21 @@
 # 插件中心恢复正常。诊断全文见 docs/决策/2026-09-14-插件中心405诊断记录.md 第十节。
 - id: connection
   inject: [webRuntime, webServer]
+
+# ── session-persistence-jsonl 行：会话根覆盖（SSiD 隔离根）─────────────────
+#
+# 基础层给的是**共享根**（`root: !!js dshHomePath('sessions')`，见
+# `packages/bundle/base/cordis.patch.yml`）。SSiD 的历史会话在隔离根
+# `<DSH_HOME>\sessions-<profile>` 下（`dsh-ssid-panels` 与壳都按这个位置找），
+# 而 `dsh.entry` 只注入 env、不改 root 时内核仍读共享根 —— 结果是侧栏历史会话
+# 整个看不见、工作区看着是空的。2026-09-27 实机现场：workspace.json 登记 41 条
+# 与根里 187 个会话文件**交集为 0**（隔离根 172 + 共享根 15）。
+#
+# 本条目是**新装基线**：壳在 boot 前会写同样一条
+# （`apps/desktop/src/ssid/session-root.ts`，已存在即跳过），这里放着是为了
+# 壳侧写入失败时仍有兜底。`SSID_SESSION_ISOLATED_ROOT` 只在隔离开关打开时由壳
+# 注入；关掉隔离时表达式退化为与基础层相同的共享根，故本条目单独存在不会改变
+# 「关掉隔离」的行为。
+- id: session-persistence-jsonl
+  config:
+    root: !!js 'process.env.SSID_SESSION_ISOLATED_ROOT || ((process.env.DSH_HOME || (process.env.USERPROFILE + "\\.dsh")) + "\\sessions")'

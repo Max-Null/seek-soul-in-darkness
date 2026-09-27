@@ -3,6 +3,11 @@ packages:
 
 nodeLinker: hoisted
 autoInstallPeers: false
+# 2026-09-27：protobufjs 的 postinstall 只做 pbjs/pbts 命令行软链，运行时不经过它。
+# 不声明忽略的话 pnpm 以 ERR_PNPM_IGNORED_BUILDS 收尾（exit 1），
+# prepare:ssid-plugins 会把「包已装好」误判成安装失败。
+ignoredBuiltDependencies:
+  - protobufjs
 # 2026-08-22：关闭发布年龄保护（pnpm 11 默认 minimumReleaseAge=1440 分钟）。
 # DSH 0.1.1-rc.2 官方闭包 60+ 包同族发布 <24h，exclude 名单不可维护；
 # 归档运行时版本由 pnpm-lock.yaml 固定 + 构建机可控，供应链风险可接受。
