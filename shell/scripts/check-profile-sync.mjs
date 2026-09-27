@@ -36,6 +36,25 @@ const MANIFEST = path.join(HERE, 'check-rules.manifest.json');
 /** 内核族：dev 源码模式下由内核自身提供，不参与比对面。 */
 const isKernel = (name) => name.startsWith('@deepseek-ai/') || name === 'cordis';
 
+/**
+ * A′ 交付链的预期形态（2026-09-28 补）。
+ *
+ * fork 版把出厂插件作为「随包插件集」交付：壳首启时在运行时 profile 的
+ * `node_modules/` 下建目录链接，并把 `dependencies` 写成
+ * `link:<安装目录>/resources/ssid-plugins/node_modules/<包>`。
+ *
+ * 于是 B 侧的出厂插件**不再是 npm 版本号**，与 A 侧的版本号 / `file:./vendor/…`
+ * 本就不可比 —— `compareVersions` 返回 null，判定 3 会把每一个都报成
+ * 「非 semver 形态，无法判方向」。十几条一起红，而且**改哪边都修不掉**：
+ * 改 A 会破坏发版基准，改 B 会被下一次首启的 seed 覆盖回去。
+ *
+ * 永久红的门等于失效的门，所以这里把它认成预期形态、降级为 info。
+ * 标记取随包插件集的落点而不是包名 —— 换包不必改这里。
+ */
+const PLUGIN_SET_MARKER = 'ssid-plugins/node_modules';
+const isLinkedFromPluginSet = (v) =>
+  typeof v === 'string' && v.startsWith('link:') && v.slice(5).replaceAll('\\', '/').includes(PLUGIN_SET_MARKER);
+
 const gate = createGate({ id: 'check-profile-sync', label: 'profile 与 template 声明对比', base: REPO });
 
 if (!fs.existsSync(TEMPLATE_PKG)) {
@@ -83,6 +102,13 @@ for (const prof of profiles) {
     if (inA && !inB) {
       if (exemptFrozenInB[n]) {
         gate.info(`豁免（manifest 已登记 B 侧冻结）：「${n}」只在 A 有 —— ${exemptFrozenInB[n]}`);
+      } else if (fs.existsSync(path.join(path.dirname(bpPath), 'node_modules', n))) {
+        // A′ 形态（2026-09-28 补）：非 bundle 的出厂依赖（如预制 MCP 的两个 CLI 包）
+        // 不进 profile 的 `dependencies` 声明，但随包插件集已把实体链接进 `node_modules/`
+        // —— 壳注入的 CLI 路径正是从这里解析的（实测 `@playwright/mcp/cli.js` 与
+        // `@astudioplus/codegraph-mcp/bin/codegraph-mcp.js` 都在）。
+        // 判据取「实体在不在」而不是「名字有没有进声明」：声明可以补，实体缺了才是真缺。
+        gate.info(`「${n}」只在 A 有，但 B 的 node_modules 里已有实体（A′ 插件集供的）—— 它不是 bundle，本就不写进 profile 声明`);
       } else {
         gate.violation(bpPath, null, `「${n}」只在 A 有：B 尚未声明，部署后会自动补上（可预期的稳态，未必需要动手）`);
       }
@@ -98,7 +124,11 @@ for (const prof of profiles) {
       // 返回 null —— 那类退回中性文案，不假装知道方向。
       const cmp = compareVersions(aDeps[n], bDeps[n]);
       if (cmp === null) {
-        gate.violation(bpPath, null, `「${n}」声明不同：A=${aDeps[n]}  B=${bDeps[n]}（非 semver 形态，无法判方向）`);
+        if (isLinkedFromPluginSet(bDeps[n])) {
+          gate.info(`预期形态（A′ 随包插件集）：「${n}」B=link:…${PLUGIN_SET_MARKER}/… ↔ A=${aDeps[n]} —— 两侧形态不同，不做方向比较`);
+        } else {
+          gate.violation(bpPath, null, `「${n}」声明不同：A=${aDeps[n]}  B=${bDeps[n]}（非 semver 形态，无法判方向）`);
+        }
       } else if (cmp > 0) {
         if (exemptFrozenInB[n]) {
           gate.info(`豁免（manifest 已登记 B 侧冻结）：「${n}」B 落后于 A（A=${aDeps[n]}  B=${bDeps[n]}）—— ${exemptFrozenInB[n]}`);
