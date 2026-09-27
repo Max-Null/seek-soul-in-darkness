@@ -462,6 +462,17 @@ $env:SSID_DEV_DEPLOY='1'; npm start    # 发版预演：强制部署 → boot
 
 56. **给 Windows PowerShell 5.1 写含中文的 `.ps1`，必须存成 UTF-8 带 BOM**（2026-09-27 实踩，用户那边脚本「一闪而过、红字看不清」）：PS 5.1 **不看文件内容猜编码，只看 BOM** —— 无 BOM 的 UTF-8 会被按 GBK 读，中文全乱码（典型字形 `鍑犱釜`、`闀胯繃鍑`），进而**引号配对错乱**，整脚本以「字符串缺少终止符」「表达式或语句中包含意外的标记 `}`」报错、**一行都不会执行**。**判据**：报错位置指向的行号**不在**你写的逻辑上（本次是 L52/L64/L76，而真正的错因是 L76 那行中文被读坏），且报错附近能看到乱码字形 —— 那一定是编码，不是语法。**处置**：转 BOM（`[System.IO.File]::WriteAllText($dst, $content, (New-Object System.Text.UTF8Encoding $true))`，写完验前三字节是 `EF BB BF`）；或者用 `pwsh`（PowerShell 7，默认 UTF-8，无此问题）。**更稳的绕开方式**：**让用户逐条粘贴命令** —— 粘贴走 Unicode 通道、不受文件编码影响，而且每步输出停在屏幕上，比传脚本文件更可靠。相关：手册里所有交付给 Windows 用户的脚本都受这条约束。
 
+57. **换底座那次升级，旧 profile 不会自己换代，而它会让你连欢迎页都进不去**（2026-09-27 真机实测，一台已装 0.4.0 的机器）：直接装 1.0.0（profile 不动）**启动即崩**：
+   ```
+   Error: desktop welcome: Web RPC failed
+       at settingsAndReference (app.asar/lib/main.js:9823)
+       at openInitialWindow     (app.asar/lib/main.js:13838)
+   ```
+   **根因**：`seedSsidProfile` 的契约是「profile 里已有的一切都不动，只补缺失项」，而 0.4.0 的 profile 里有 7 个 `file:./vendor/…` 声明与 490 条旧 `node_modules` 实体 —— 那些副本是给 **0.1.5 内核**编的，0.1.7 加载它们失败，绑定在 settings 上的服务起不来，而欢迎页一上来就要读设置。
+   **★ 判据（这条最有用）**：`welcome-backend.ts` 里 `Web RPC failed`（L59）与 `Web request failed`（L55）是**两个不同分支** —— 前者表示 **HTTP 通了、Host 进程起着**，是后端处理该 RPC 时返回了业务错误（`result.ok !== true`）；后者才是 Host 不可达。**看到 `Web RPC failed` 就不要去查网络/端口/进程，那说明传输层是好的，问题在插件树**。另外 `-host.log` 不会存在 —— Host 没崩，它只是返回了错误。
+   **处置**：升级前 `Rename-Item "$env:USERPROFILE\.dsh\profiles\ssid" ssid.backup-0.4.0`（**改名，不是删除**），让 fork 版从零建。实测改名后启动正常，日志关键一行 `ssid: plugin set: linked=584 kept=0 missing=0 bundlesAdded=32` —— **`kept=0`** 就是「全新换代」的判据（本机隔离环境同样场景也是这组数字）。
+   **两条推论**：① 对话框上的「Restart」按钮**解决不了**这类问题，它不碰 profile，重启多少次都一样（实测第二次崩溃与第一次同调用栈、仅 PID 不同）；② **`electron-updater` 的「无缝更新」在当前形态下会把用户送到一个起不来的版本** —— 两版的 `app-update.yml` 都指向 `Max-Null/seek-soul-in-darkness` 的 GitHub Releases、`latest.yml` 格式也一致，所以更新本身能走通，但装完仍是旧 profile。**要做到真无缝，必须先让壳自己识别旧 profile 并备份重建**（那是一次改壳 + 重打包）——在此之前，跨界升级只能靠一次人工改名。
+
 ## 8. 文档索引
 
 - 本手册（总览/流程/坑）
