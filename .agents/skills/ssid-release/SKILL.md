@@ -169,7 +169,7 @@ gh release view vX.Y.Z -R Max-Null/seek-soul-in-darkness --json assets  # 传完
 - `cordis.patch.yml` 的 `insert` 子条目必须带显式 `id`（无 id = 随机 id，插件中心禁用失效 + 垃圾行累积）。
 - **`splitPatchFile` 的子条目判据必须只认 mapping 起始**（`- 键:`），不认任意 `- \S`：`args:` 下的标量项 `- '--exclude'` 会被误当子条目，拼出非法 YAML，内核 boot 直接报 `bad indentation of a mapping entry`（2026-09-28 真实事故，见手册坑 #30 的新形态注记）。
 - **`npx tsc --noEmit -p apps/desktop/tsconfig.json` 会假绿**——一律以 `tsc -b` 为准，且以**打包链真正跑的那条命令**（根级 `tsconfig.host.json`）为准。
-- **NSIS 脚本（含非 ASCII）必须 UTF-8 带 BOM**，否则 makensis 报 `Bad text encoding`；用 write 工具重写这类文件会丢 BOM。
+- **NSIS 脚本（含非 ASCII）必须 UTF-8 带 BOM**，否则 makensis 报 `Bad text encoding`；用 write 或 edit 工具改这类文件**都会**丢 BOM，改完必须复查前 3 字节是不是 `EF BB BF`。
 - **electron-builder 把 makensis 的 warning 当 error**——宏里引用尚未定义的 define 时，用 `!ifdef` 包住。
 - **pnpm 11 的 `allowBuilds` 占位符**：`pnpm-workspace.yaml` 里若还写着 `esbuild: set this to true or false`，那是没填完的模板，构建会以 `ERR_PNPM_IGNORED_BUILDS` 失败。
 - **semver 的预发布陷阱**：`^0.1.1-rc.1` 只匹配 `0.1.1-*`，**不会**升到 `0.1.7-rc.2`——依赖声明必须显式改。
