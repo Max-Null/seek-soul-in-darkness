@@ -32,18 +32,26 @@ it.each(['allowOnlyOneInstallerInstance.nsh', 'installUtil.nsh'])('cleans staged
   expect(adapted).toContain('!ifndef BUILD_UNINSTALLER')
 })
 
-it('stages before stopping the application and promotes before registering the installation', () => {
+it('moves the existing installation aside before the payload is extracted', () => {
   const result = directoryInstallSection(section)
+  // The prepare step must run before extraction: a blocked rename has to surface before 427 MB
+  // are unpacked, which is what made the old promote-after-extract order fail at 96%.
+  expect(result.indexOf('!insertmacro dshStageApplication')).toBeLessThan(result.indexOf('!insertmacro installApplicationFiles'))
   expect(result.indexOf('!insertmacro dshStageApplication')).toBeLessThan(result.indexOf('!insertmacro CHECK_APP_RUNNING'))
-  expect(result.indexOf('Call dshPromoteDirectories')).toBeLessThan(result.indexOf('!insertmacro registryAddInstallInfo'))
+  // The payload now lands directly in the final directory, so upstream's call stays where it is.
+  expect(result).toContain('!insertmacro installApplicationFiles')
+  expect(result).not.toContain('Call dshPromoteDirectories')
   expect(result).toContain('!insertmacro addStartMenuLink $keepShortcuts')
   expect(result).toContain('!insertmacro addDesktopLink $keepShortcuts')
   expect(result).toContain('!insertmacro handleUninstallResult HKEY_CURRENT_USER')
-  expect(result).not.toContain('!insertmacro installApplicationFiles')
   expect(result).not.toContain('File /oname=uninstallerIcon.ico')
 })
 
-it.each(['!include installer.nsh', '!insertmacro setLinkVars', '!insertmacro installApplicationFiles'])(
+it.each([
+  '!include installer.nsh',
+  '!insertmacro setLinkVars',
+  '!ifdef UNINSTALLER_ICON\n  File /oname=uninstallerIcon.ico "${UNINSTALLER_ICON}"\n!endif\n',
+])(
   'rejects a missing or duplicate upstream insertion point: %s', (point) => {
     expect(() => directoryInstallSection(section.replace(point, ''))).toThrow('Desktop NSIS template changed')
     expect(() => directoryInstallSection(`${section}\n${point}`)).toThrow('Desktop NSIS template changed')

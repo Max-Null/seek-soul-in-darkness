@@ -160,11 +160,23 @@ async function main(): Promise<void> {
       'autoInstallPeers: false',
       'allowBuilds:',
       "  '@astudioplus/codegraph-mcp': true",
+      // protobufjs 的 postinstall 只做 pbjs/pbts 命令行软链，运行时路径不经过它；放行只是
+      // 为了让 pnpm 不再把它计入「被忽略的构建脚本」——pnpm 11 默认 strictDepBuilds，
+      // 白名单外的构建脚本会让 install 以非零退出码收尾，而本脚本只看退出码判成败，
+      // 于是「647 个包全装好了」被误判成安装失败。
+      '  protobufjs: true',
       '',
     ].join('\n'))
     // 给了引擎目录就走「不跑构建脚本 + 自己拷引擎」，否则交给 postinstall 正规下载。
     const engineDir = process.env.SSID_CODEGRAPH_ENGINE_DIR
-    const installArgs = engineDir === undefined ? ['install', '--prod'] : ['install', '--prod', '--ignore-scripts']
+    // pnpm 11 默认 strictDepBuilds：凡有依赖的构建脚本落在白名单外就以非零退出码收尾
+    // （ERR_PNPM_IGNORED_BUILDS），而这里的退出码只用来判断安装成败，于是「647 个包全装好了」
+    // 被误判成失败。protobufjs 的 postinstall 只做 pbjs/pbts 软链，运行时路径不经过它，
+    // 所以关掉严格模式而不是放行它的脚本。写 CLI 参数而非 pnpm-workspace.yaml 字段：
+    // pnpm 会重写那个文件，写在里面的策略会被丢掉。
+    const installArgs = engineDir === undefined
+      ? ['install', '--prod', '--config.strict-dep-builds=false']
+      : ['install', '--prod', '--ignore-scripts', '--config.strict-dep-builds=false']
     await runPnpm(installArgs, staging)
     if (engineDir !== undefined) {
       stageCodeGraphEngine(join(staging, 'node_modules', '@astudioplus', 'codegraph-mcp'), engineDir)
@@ -182,6 +194,10 @@ async function main(): Promise<void> {
     // 插件树**静默不加载**（见 `src/ssid/profile-seed.ts` 里 pluginSetModules 的注释）。
     const modulesOut = join(out, 'node_modules')
     mkdirSync(modulesOut, { recursive: true })
+    // 出厂 patch 条目：随包带一份模板 `cordis.patch.yml`，首启由 `profile-seed` 按 id
+    // 合并进 profile。fork 基座的 `initProfile()` 只写空骨架，不带这一层，而预制 MCP、
+    // `connection` 的 405 修复、会话根覆盖全写在里面（见 `src/ssid/profile-seed.ts`）。
+    cpSync(join(templateDir, 'cordis.patch.yml'), join(out, 'cordis.patch.yml'))
     const packages = flattenPackages(join(staging, 'node_modules'), modulesOut)
 
     const missing = bundles.filter(name => !packages.includes(name))

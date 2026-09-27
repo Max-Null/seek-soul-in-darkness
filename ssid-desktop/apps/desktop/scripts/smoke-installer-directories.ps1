@@ -29,7 +29,10 @@ try {
   $brokenArchive = Join-Path $scratch 'broken.7z'
   [System.IO.File]::WriteAllText($brokenArchive, 'invalid archive')
 
-  foreach ($mode in @('first', 'upgrade', 'locked', 'missing-stage', 'broken', 'cancelled')) {
+  # `missing-stage` was retired with the stage-then-rename order: the payload now extracts directly
+  # into the final directory, and the two rollback-able failure points (move-aside, extraction) are
+  # covered by `locked` and `broken`.
+  foreach ($mode in @('first', 'upgrade', 'locked', 'broken', 'cancelled')) {
     $caseRoot = Join-Path $scratch $mode
     $target = Join-Path $caseRoot 'Application'
     New-Item -ItemType Directory -Path $caseRoot | Out-Null

@@ -60,6 +60,11 @@ function resolveMcpNode(): string | undefined {
   const candidates = [
     // 打包版：随包发布的 node（afterPack 注入到 resources/node/）
     process.resourcesPath === undefined ? '' : join(process.resourcesPath, 'node', bare),
+    // fork 基座（官方 `dsh-desktop-host`）的 node 在运行时目录下，不在 `resources/node/`：
+    // 实测 1.0.0 装机只有 `<resources>\runtime\primary-runtime\dependencies\node\bin\node.exe`，
+    // 而自建壳 0.4.0 才有 `resources\node\`。落空会退回 PATH 上的裸 `node`，普通用户机器
+    // 未必有 —— MCP 引擎随之起不来。
+    process.resourcesPath === undefined ? '' : join(process.resourcesPath, 'runtime', 'primary-runtime', 'dependencies', 'node', 'bin', bare),
     process.platform === 'darwin' ? '/opt/homebrew/bin/node' : '',
     process.platform === 'darwin' ? '/usr/local/bin/node' : '',
     process.env['NVM_HOME'] === undefined ? '' : join(process.env['NVM_HOME'], 'v22.22.2', 'node.exe'),

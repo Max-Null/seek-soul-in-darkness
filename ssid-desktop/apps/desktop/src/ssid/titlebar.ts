@@ -289,6 +289,11 @@ function buildTitlebarScript(options: SsidTitlebarOptions): string {
   // display（属性），不产生 childList 变化，不会自激。
   // 注意：本段整体是模板字符串的字面内容，注释里不能出现反引号或美元大括号。
   new MutationObserver(() => { syncGutter(); syncCaptured() }).observe(document.body, { childList: true, subtree: true })
+  // 低频兜底。MutationObserver 只在 body 变动时触发，而 LLM 一次回答结束后 body 会长期静止；
+  // 若最后一次同步恰好落在「React 换节点的中间态」（findCaptionButton 落空即 continue），
+  // 就再没有纠正机会，DSH 原件会一直露在外面直到重启（2026-09-28 实机：调用工具/思考时触发、
+  // 重启才恢复）。每秒一次查询代价可忽略，但保证落空之后仍有下一次机会。
+  setInterval(() => { syncGutter(); syncCaptured() }, 1000)
 
   const main = document.createElement('div')
   main.style.cssText = [

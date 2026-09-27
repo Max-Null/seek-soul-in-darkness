@@ -1,4 +1,4 @@
-!include "LogicLib.nsh"
+﻿!include "LogicLib.nsh"
 !include "FileFunc.nsh"
 !define INSTALLER_SOURCE_DIR "${__FILEDIR__}\..\installer"
 !define /ifndef INSTALLER_BUILD_DIR "${__FILEDIR__}\..\.desktop-build\targets\win-x64\installer-ui"
@@ -151,7 +151,7 @@ ManifestDPIAware true
   ${If} ${Silent}
     StrCpy $1 0
   ${EndIf}
-  System::Call '$PLUGINSDIR\window-frame.dll::InstallerReportExtractFailure(p $HWNDPARENT, i R0, w "${Archive}", w "$dshNewDirectory", w "$PLUGINSDIR\extract.log", w r0, i r1, w "$(^SetupCaption)", w "$(INSTALLER_EXTRACT_FAILED)", w "$(INSTALLER_EXTRACT_HINT)", w "$(INSTALLER_EXTRACT_COPY)", w "$(INSTALLER_EXTRACT_EXPAND)", w "$(INSTALLER_EXTRACT_COLLAPSE)", w "$(INSTALLER_EXTRACT_SAVED)", w "$(INSTALLER_EXTRACT_UNSAVED)", w "$(INSTALLER_EXTRACT_COPIED)") i.r2 ?c'
+  System::Call '$PLUGINSDIR\window-frame.dll::InstallerReportExtractFailure(p $HWNDPARENT, i R0, w "${Archive}", w "$dshFinalDirectory", w "$PLUGINSDIR\extract.log", w r0, i r1, w "$(^SetupCaption)", w "$(INSTALLER_EXTRACT_FAILED)", w "$(INSTALLER_EXTRACT_HINT)", w "$(INSTALLER_EXTRACT_COPY)", w "$(INSTALLER_EXTRACT_EXPAND)", w "$(INSTALLER_EXTRACT_COLLAPSE)", w "$(INSTALLER_EXTRACT_SAVED)", w "$(INSTALLER_EXTRACT_UNSAVED)", w "$(INSTALLER_EXTRACT_COPIED)") i.r2 ?c'
   ${If} $2 == 1
     DetailPrint $0
   ${EndIf}
@@ -161,6 +161,27 @@ ManifestDPIAware true
   Pop $3
   Pop $2
   Pop $1
+  Pop $0
+!macroend
+
+; 覆盖安装时应用通常正开着，而下面的实现只「等 10 秒」就放弃安装（`INSTALLER_RUNNING` +
+; errorlevel 2）—— 用户不手动关就永远装不上。安装器本该替用户关掉它，这里补上：
+; 按安装目录前缀结束全部相关进程，包含随包的 `resources\node\node.exe` 子进程
+; （它们与主进程一样占着安装目录里的文件，只杀主进程会卡在替换文件那一步）。
+; 判据与 app-builder-lib 的 `FIND_PROCESS` 一致。
+!macro DshStopInstalledProcesses
+  Push $0
+  nsExec::Exec '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "Get-CimInstance -ClassName Win32_Process | Where-Object { $$_.Path -and $$_.Path.StartsWith(''$INSTDIR'', ''CurrentCultureIgnoreCase'') } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }"'
+  Pop $0
+  ${If} $0 != 0
+    ; PowerShell 被组策略禁用时兜底：按映像名结束整棵进程树。
+    ; 这个 define 由构建器在别处提供，展开点未必能看到它 —— 看不到就跳过这一层，
+    ; 否则 NSIS 的 "unknown variable" 警告会被 electron-builder 当成错误。
+    !ifdef APP_EXECUTABLE_FILENAME
+      nsExec::Exec '"$SYSDIR\taskkill.exe" /F /T /IM "${APP_EXECUTABLE_FILENAME}"'
+      Pop $0
+    !endif
+  ${EndIf}
   Pop $0
 !macroend
 
@@ -181,6 +202,12 @@ ManifestDPIAware true
           ${ExitDo}
         ${EndIf}
       ${Loop}
+    ${EndIf}
+    ${If} $R0 == 0
+      ; 它没自己退，就替它退 —— 之后仍不动才真正放弃。
+      !insertmacro DshStopInstalledProcesses
+      Sleep 1000
+      System::Call '$PLUGINSDIR\window-frame.dll::InstallerFindProcess(w "$INSTDIR\${APP_EXECUTABLE_FILENAME}") i.R0 ?c'
     ${EndIf}
     ${If} $R0 == 0
       MessageBox MB_OK|MB_ICONINFORMATION "$(INSTALLER_RUNNING)" /SD IDOK

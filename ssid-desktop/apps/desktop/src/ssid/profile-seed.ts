@@ -38,7 +38,7 @@
  * 所有写文件均为 UTF-8 无 BOM（工作区铁律）。
  */
 
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 /** 插件集自述文件名（随包提供，声明要接入的 bundle 与顺序）。 */
@@ -220,6 +220,7 @@ export function seedSsidProfile(input: SsidProfileSeedInput): SsidProfileSeedSum
   // 最该避免的失败形态，不能靠「users 会去看日志」兜底。缺失由 missing 单独报出。
   const shippable = manifest.bundles.filter(name => present.has(name))
   const bundlesAdded = mergeProfileManifest(profileDir, shippable, pluginSetRoot, log)
+  mergeProfilePatch(profileDir, pluginSetRoot, log)
   log(
     `plugin set: linked=${String(linked.length)} kept=${String(kept.length)}`
     + ` missing=${String(missing.length)} bundlesAdded=${String(bundlesAdded.length)}`,
@@ -282,4 +283,163 @@ function mergeProfileManifest(
   if (wanted.length === 0) return []
   writeFileSync(manifestPath, `${JSON.stringify(manifest, undefined, 2)}\n`, 'utf8')
   return wanted
+}
+
+/** patch 层文件名：随包出厂的那份与 profile 自己的那份同名。 */
+export const PATCH_FILENAME = 'cordis.patch.yml'
+
+/** `- insert:` 块内的一个缩进子条目。 */
+export interface PatchEntry {
+  /** 子条目自己的 id；没有 id 的按「用户的」处理 —— 宁可多留，不可误删。 */
+  readonly id: string | null
+  /** 子条目正文（含其 config 行）。 */
+  readonly body: string
+}
+
+/** 一个顶层 patch 条目：正文，以及块内出现的全部 loader 条目 id。 */
+export interface PatchBlock {
+  /** 块内出现的 id（顶层 `- id: x` 与 `- insert:` 里缩进的内层 id 都算）。 */
+  readonly ids: readonly string[]
+  /** 块的正文（首行 `- ` 起、到下一块前，已去尾空行）。 */
+  readonly body: string
+  /** 块首到首个缩进子条目之前的原文（即 `- insert:` 那一行）。顶层块没有子条目，此处为空。 */
+  readonly preamble: string
+  /** 缩进子条目，按出现顺序。合并按**子条目**判归属，不是整块。 */
+  readonly entries: readonly PatchEntry[]
+}
+
+/**
+ * 拆开 patch 文件：头部原文 + 顶层条目块。
+ *
+ * 不解析 YAML —— `!!js` 表达式必须原样搬运。顶层条目的判据是行首 `- `，
+ * 块内 id 用行级正则取：够用，且不必为一个合并动作引入 YAML 依赖。
+ * @param text - patch 文件全文。
+ * @returns 头部（首个顶层条目之前的原文）与按出现顺序排列的块。
+ */
+export function splitPatchFile(text: string): { head: string; blocks: PatchBlock[] } {
+  const lines = text.split(/\r?\n/u)
+  const first = lines.findIndex(line => /^- \S/u.test(line))
+  // 空骨架的 `[]` 是合法顶层数组，但要追加条目就必须去掉它：留着会让顶层出现两个根。
+  const head = (first === -1 ? lines : lines.slice(0, first))
+    .filter(line => !/^\s*\[\s*\]\s*$/u.test(line))
+    .join('\n')
+    .replace(/\s+$/u, '')
+  const blocks: { ids: string[]; lines: string[]; entries: { id: string | null; start: number }[] }[] = []
+  const current = (): { ids: string[]; lines: string[]; entries: { id: string | null; start: number }[] } | undefined => blocks[blocks.length - 1]
+  for (const line of first === -1 ? [] : lines.slice(first)) {
+    if (/^- \S/u.test(line)) {
+      blocks.push({ ids: [], lines: [line], entries: [] })
+    } else {
+      const block = current()
+      block?.lines.push(line)
+      // 缩进子条目（`- insert:` 的成员）：记住它的起始行，供按子条目判归属时精确切分。
+      if (block !== undefined && isEntryStart(line)) {
+        block.entries.push({ id: /^\s+- id:\s*([A-Za-z0-9_@/.-]+)\s*$/u.exec(line)?.[1] ?? null, start: block.lines.length - 1 })
+      }
+    }
+    const id = /^\s*-?\s*id:\s*([A-Za-z0-9_@/.-]+)\s*$/u.exec(line)?.[1]
+    if (id !== undefined) current()?.ids.push(id)
+  }
+  return {
+    head,
+    blocks: blocks.map((block) => {
+      const body = block.lines.join('\n').replace(/\s+$/u, '')
+      // 顶层 `- id: x` 块没有缩进子条目：entries 为空、整块由 body 承载。
+      const firstStart = block.entries[0]?.start ?? block.lines.length
+      return {
+        ids: block.ids,
+        body,
+        preamble: block.lines.slice(0, firstStart).join('\n').replace(/\s+$/u, ''),
+        entries: block.entries.map((entry, index) => ({
+          id: entry.id,
+          body: block.lines.slice(entry.start, block.entries[index + 1]?.start ?? block.lines.length)
+            .join('\n').replace(/\s+$/u, ''),
+        })),
+      }
+    }),
+  }
+}
+
+/**
+ * 缩进子条目的起始行判据：`- 键:` 形式的 mapping 首行。
+ *
+ * loader 条目是 mapping，首行必是 `id:` / `name:` 这类键；而 `args:` 下的**标量项**同样以
+ * `- ` 开头（`- '--exclude'`、`- !!js …`）。两者混为一谈时，数组项会以「无 id 的子条目」
+ * 身份活下来、真条目反而退役，拼出的 `- insert:` 只剩一串数组项，末尾的 `env:` 落进序列里 ——
+ * YAML 非法，内核在 boot 阶段就拒绝启动（2026-09-28：装 1.0.0 后启动即崩，
+ * `bad indentation of a mapping entry`）。
+ * @param line - patch 文件中的一行。
+ * @returns 该行是否为一个缩进子条目的起始行。
+ */
+function isEntryStart(line: string): boolean {
+  return /^\s+- [A-Za-z_][A-Za-z0-9_.-]*:/u.test(line)
+}
+
+/**
+ * 把随包出厂的 patch 条目合并进 profile 的 `cordis.patch.yml`。
+ *
+ * ## 为什么需要
+ *
+ * fork 基座的 profile 由 `packages/boot/app-boot/src/profile.ts` 的 `initProfile()` 建立，
+ * 那一步写的 `cordis.patch.yml` 是**空骨架**（`project-manager.spec.ts:185` 断言其内容含 `[]`）。
+ * 自建壳时代这一层来自 `dsh-runtime.tar.gz` 里的 `profile-template/cordis.patch.yml`
+ * （`shell/lib/profile-merge.mjs:12` 做条目级合并），而 fork 的打包链不带该归档 ——
+ * 预制 MCP、`connection` 的 405 修复、会话根覆盖于是在新装机上**整套不存在**。
+ *
+ * ## 合并语义
+ *
+ * 「出厂条目以模板为准，用户条目原样保留」，判据粒度是**子条目**而不是整块：即便用户把自定义
+ * MCP 写进了出厂那个 `- insert:` 块里，也只有命中的那几条退役，其余原样留下。模板里没有的
+ * 条目一律不动。出厂条目排在前面、用户条目在后 —— 后者优先，与 patch 层的覆盖方向一致。
+ *
+ * profile 的文件头原样保留；内容没变就不写盘，免得每次启动都留备份、改 mtime。
+ * 写入前备份 `cordis.patch.yml.bak-<时间戳>`；任何失败只落日志，不抛。
+ * @param profileDir - profile 目录。
+ * @param pluginSetRoot - 随包插件集根目录（出厂 patch 在其中）。
+ * @param log - 落日志钩子。
+ */
+function mergeProfilePatch(profileDir: string, pluginSetRoot: string, log: (text: string) => void): void {
+  const templatePath = join(pluginSetRoot, PATCH_FILENAME)
+  const profilePath = join(profileDir, PATCH_FILENAME)
+  if (!existsSync(templatePath) || !existsSync(profilePath)) return
+
+  let template: { head: string; blocks: PatchBlock[] }
+  let existing: { head: string; blocks: PatchBlock[] }
+  try {
+    template = splitPatchFile(readFileSync(templatePath, 'utf8'))
+    existing = splitPatchFile(readFileSync(profilePath, 'utf8'))
+  } catch (error) {
+    log(`patch merge: unreadable (${error instanceof Error ? error.message : String(error)}); skipped`)
+    return
+  }
+
+  const owned = new Set(template.blocks.flatMap(block => [...block.ids]))
+  if (owned.size === 0) return
+
+  // 按子条目判归属。2026-09-28：此前按整块退役，于是「自定义 MCP 与出厂条目写在同一个
+  // `- insert:` 块里」的人会连坐丢掉自己的条目 —— 而那正是最自然的写法。
+  const keptBodies: string[] = []
+  for (const block of existing.blocks) {
+    if (block.entries.length === 0) {
+      // 顶层 `- id: x` 块：整块即一条，命中即退役。
+      if (!block.ids.some(id => owned.has(id))) keptBodies.push(block.body)
+      continue
+    }
+    const survivors = block.entries.filter(entry => entry.id === null || !owned.has(entry.id))
+    if (survivors.length === 0) continue
+    keptBodies.push([block.preamble, ...survivors.map(entry => entry.body)]
+      .filter(part => part !== '').join('\n'))
+  }
+  const head = existing.head === '' ? '' : `${existing.head}\n`
+  const merged = `${head}${[...template.blocks.map(block => block.body), ...keptBodies].join('\n')}\n`
+  if (merged === `${head}${existing.blocks.map(block => block.body).join('\n')}\n`) return
+
+  try {
+    copyFileSync(profilePath, `${profilePath}.bak-${String(Date.now())}`)
+    writeFileSync(profilePath, merged, 'utf8')
+  } catch (error) {
+    log(`patch merge: write failed (${error instanceof Error ? error.message : String(error)}); profile unchanged`)
+    return
+  }
+  log(`patch entries: ${String(template.blocks.length)} from plugin set, ${String(keptBodies.length)} kept from profile`)
 }

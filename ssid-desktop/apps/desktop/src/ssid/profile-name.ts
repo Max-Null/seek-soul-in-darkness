@@ -10,6 +10,8 @@
  * 与保留名，避免这个变量把路径带出 `profiles/`。
  */
 
+import { join } from 'node:path'
+
 /** 出厂 profile 名。 */
 export const DEFAULT_PROFILE_NAME = 'ssid'
 
@@ -43,4 +45,27 @@ export function resolveProfileName(env: NodeJS.ProcessEnv = process.env): string
  */
 export function sessionsRootDirName(profileName: string): string {
   return `sessions-${profileName}`
+}
+
+/**
+ * 把会话存储根写进 `process.env`，供 Host 子进程继承。
+ *
+ * `dsh-ssid-panels` 靠这对变量启用会话隔离：两者缺席时它退回官方基础层的
+ * `dshHomePath('sessions')`，隔离根里的历史会话就整个消失（升级后「历史会话没了」
+ * 的成因）。必须在 `host.start()` 之前调用 —— 子进程继承的是当时的 `process.env`。
+ * @param dshHome - Harness home，两个根都在其下。
+ * @param profileName - profile 名。
+ * @returns 注入的两个绝对路径，供调用方记日志。
+ */
+export function installSessionRootEnv(dshHome: string, profileName: string): {
+  readonly isolated: string
+  readonly shared: string
+} {
+  // 共享根名与官方基础层的 `dshHomePath('sessions')` 一致（见
+  // `packages/bundle/base/cordis.patch.yml` 的 session-persistence-jsonl config）。
+  const shared = join(dshHome, 'sessions')
+  const isolated = join(dshHome, sessionsRootDirName(profileName))
+  process.env['SSID_SESSION_ISOLATED_ROOT'] = isolated
+  process.env['SSID_SESSION_SHARED_ROOT'] = shared
+  return { isolated, shared }
 }
