@@ -1,34 +1,32 @@
-# SSiD macOS 打包——GitHub Actions 云端 Mac 构建（本仓库 Windows 侧无需 macOS）
+# SSiD macOS 打包 —— GitHub Actions 云端 Mac 构建（本机是 Windows，出不了 mac 包）
 #
-# 设计（见 docs/决策/2026-08-27-macOS支持与云端打包-实施.md）：
-#   - arm64（macos-latest，M 系列）+ x64 交叉构建（同一 runner 上
-#     npm_config_arch=x64 装 x64 原生二进制 + electron-builder --x64）双 job——
-#     归档内含 per-platform 原生二进制，各架构必须独立重建归档。
-#   - DSH 版本来源：完整 clone 钉 dsh-v0.1.2-rc.1（与 Windows 构建机同 tag；
-#     发版换内核时同步更新此处 branch）。路径 $GITHUB_WORKSPACE/../deepseek-harness
-#     = shell/../../deepseek-harness——与 shell/tsconfig.json paths 精确同源
-#     （kernel.ts 的 @deepseek-ai/dsh-* 编译期经 esbuild + paths 解析源码；
-#     sparse/runner.temp 均会致解析失败——v0.2.0 mac CI 实测）。
-#   - 图标：多尺度 icns 由 iconutil 从 shell/assets/mac-icon.iconset 生成
-#     （iconutil 要求目录以 .iconset 结尾）。
-#   - 签名：官方 ad-hoc（mac.identity: "-"，electron-builder 组装完成后
-#     自行 codesign）。
-#   - pnpm：CI 的 setup-pnpm 把 PNPM_CMD 指到 .bin/pnpm（shell shim），
-#     prepare-runtime 用 node 执行要求 JS 入口——已加 .cjs 校验 + bundled
-#     pnpm 兜底（scripts/prepare-runtime.mjs pnpmCandidates）。
-#   - esbuild：bundle-kernel 命令已显式声明 devDependency（幽灵依赖在 mac
-#     严格布局下 127 command not found）。
+# 为什么是现在这个形状（2026-09-29 重写；此前那份是自建壳时代的遗留）：
+#
+#   - **构建在开发主轴的 fork 分支上做**。壳从自建壳换成官方 `dsh-desktop-host` 基座之后，
+#     构建入口是 `apps/desktop/scripts/package-target.ts`（`package:*` 一族脚本），
+#     而**不是** `shell/` 下那套 —— `shell/package.json` 里既没有 `prepare-runtime` 也没有
+#     `pack:*`，旧 workflow 引用的两个脚本都不存在。旧版还钉着内核 tag `dsh-v0.1.2-rc.1`。
+#   - **出厂插件集的声明源在另一个仓库**。`prepare-ssid-plugins.ts` 默认从
+#     `<checkout>/../../../../seek-soul-in-darkness/shell/profile-template` 取；CI 上目录布局
+#     不同，所以用 `SSID_PROFILE_TEMPLATE_DIR` 显式指过去（该变量是脚本的第一优先来源）。
+#   - **未签名通道**。mac 打包默认要求 Apple 签名身份与公证凭据
+#     （`electron-builder-config.mjs` 无条件解析，缺变量即抛错），这与「不买证书、接受
+#     Gatekeeper 拦截」的既定取舍冲突 —— 与 Windows 侧同取舍。`--unsigned` 现在对 mac 也
+#     成立：撤走 Apple 凭据、走 ad-hoc 签名（`identity: '-'`）、跳过公证。产物名带
+#     `-unsigned` 后缀，与正式产物不会混淆。
+#   - **不设 ELECTRON_MIRROR**。本机（国内）直连 GitHub 拉 Electron 会挂死，所以本地打包
+#     必须设镜像；GitHub 的 mac runner 反而直连更快，设国内镜像只会变慢。
 #
 # 触发：
-#   - workflow_dispatch 手动（默认只出 artifact；勾选 publish 上传 Release）
-#   - push tag v* 自动（与 Windows 发版链对齐）
+#   - `push` tag `v*` 自动（与 Windows 发版链对齐）
+#   - `workflow_dispatch` 手动（勾选 publish 才会上传 Release）
 name: build-mac
 
 on:
   workflow_dispatch:
     inputs:
       publish:
-        description: '上传至 GitHub Release（仅当 workflow 运行在 tag 上时有意义）'
+        description: '上传至 GitHub Release（仅在 tag 上运行时才有意义）'
         type: boolean
         default: false
   push:
@@ -40,18 +38,21 @@ permissions:
 
 jobs:
   build-mac-arm64:
+    # mac-arm64 必须在 Apple Silicon 主机上构建（package-target.ts 的显式断言）
     runs-on: macos-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
-      - name: 检出 SSiD
+      - name: 检出 SSiD（提供 shell/profile-template —— 出厂插件集的声明源）
         uses: actions/checkout@v4
+        with:
+          path: seek-soul-in-darkness
 
-      - name: 检出 DSH 源码（完整 checkout 与 tsconfig paths 同源；固定内核 tag）
+      - name: 检出开发主轴（fork 分支：构建与打包都在这里做）
         run: |
-          git clone --depth 1 --branch dsh-v0.1.2-rc.1 \
-            https://github.com/deepseek-ai/deepseek-harness \
-            "$GITHUB_WORKSPACE/../deepseek-harness"
-          echo "DSH_CHECKOUT=$GITHUB_WORKSPACE/../deepseek-harness" >> "$GITHUB_ENV"
+          git clone --branch ssid-desktop-fork --single-branch \
+            https://github.com/Max-Null/deepseek-harness \
+            "$GITHUB_WORKSPACE/.ssid-build/checkout"
+          git -C "$GITHUB_WORKSPACE/.ssid-build/checkout" log --oneline -1
 
       - name: Node 22 + pnpm 11
         uses: actions/setup-node@v4
@@ -61,47 +62,36 @@ jobs:
         with:
           version: 11
 
-      - name: 安装 shell 依赖（darwin 原生二进制随平台下载）
-        working-directory: shell
-        run: |
-          pnpm install --frozen-lockfile
-          node node_modules/electron/install.js
+      - name: 安装开发主轴依赖
+        working-directory: .ssid-build/checkout
+        run: pnpm install --frozen-lockfile
 
-      - name: 重建运行时归档（mac 平台原生二进制 + DSH 版本读取）
-        working-directory: shell
-        run: |
-          export DSH_NODE="$(which node)"
-          export PNPM_CMD="$(which pnpm)"
-          node scripts/prepare-runtime.mjs
-
-      - name: 生成多尺度 icns（iconutil 要求 .iconset 后缀）
-        working-directory: shell
-        run: |
-          iconutil -c icns assets/mac-icon.iconset -o assets/icon.icns
-          ls -la assets/icon.icns
-
-      - name: 打包（bundle-kernel + electron-builder --mac dmg/zip，官方 adhoc 签名）
-        working-directory: shell
-        run: npm run pack:mac -- --publish never
+      - name: 打包（mac arm64，未签名：ad-hoc 签名 + 不公证）
+        working-directory: .ssid-build/checkout
+        env:
+          SSID_PROFILE_TEMPLATE_DIR: ${{ github.workspace }}/seek-soul-in-darkness/shell/profile-template
+        # package-target.ts 自己会传 `--publish never`，发布是独立步骤
+        run: pnpm --filter "./apps/desktop" run package:mac:arm64:unsigned
 
       - name: 上传构建产物（Actions artifact）
         uses: actions/upload-artifact@v4
         with:
-          name: ssid-mac-dist-arm64
+          name: ssid-mac-arm64-unsigned
           path: |
-            shell/dist-electron/*.dmg
-            shell/dist-electron/*.zip
-            shell/dist-electron/latest-mac.yml
-            shell/dist-electron/*.blockmap
+            .ssid-build/checkout/apps/desktop/.desktop-build/targets/mac-arm64/unsigned-artifacts/*.dmg
+            .ssid-build/checkout/apps/desktop/.desktop-build/targets/mac-arm64/unsigned-artifacts/*.zip
+            .ssid-build/checkout/apps/desktop/.desktop-build/targets/mac-arm64/unsigned-artifacts/*.yml
+            .ssid-build/checkout/apps/desktop/.desktop-build/targets/mac-arm64/unsigned-artifacts/*.blockmap
           if-no-files-found: error
 
-      - name: 上传 GitHub Release（tag 触发或手动勾选 publish）
+      - name: 上传 GitHub Release（tag 触发，或手动勾选 publish）
         if: github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.publish)
         uses: softprops/action-gh-release@v2
         with:
+          # 资产名要与 latest-mac.yml 里的 url 字段一致，否则增量更新 404
           fail_on_unmatched_files: false
           files: |
-            shell/dist-electron/*.dmg
-            shell/dist-electron/*.zip
-            shell/dist-electron/latest-mac.yml
-            shell/dist-electron/*.blockmap
+            .ssid-build/checkout/apps/desktop/.desktop-build/targets/mac-arm64/unsigned-artifacts/*.dmg
+            .ssid-build/checkout/apps/desktop/.desktop-build/targets/mac-arm64/unsigned-artifacts/*.zip
+            .ssid-build/checkout/apps/desktop/.desktop-build/targets/mac-arm64/unsigned-artifacts/*.yml
+            .ssid-build/checkout/apps/desktop/.desktop-build/targets/mac-arm64/unsigned-artifacts/*.blockmap
