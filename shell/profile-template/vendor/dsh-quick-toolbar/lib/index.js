@@ -72,10 +72,11 @@ function parseUserAdapters(raw) {
 	};
 }
 /**
-* 从文件/请求体里取出收藏数组，兼容两种形态：裸数组，或 `{ favorites: [...] }`。
-* 读写两侧必须走同一个提取步骤——只在一侧提取会让「写进去却读不出来」
-* （2026-09-14 实测：POST 提取了 `.favorites`、GET 把整个 `{favorites}` 交给
-* `normalizeFavorites`，而它只认数组，于是落盘成功却始终读回空列表）。
+* 从文件内容里取出收藏数组，兼容两种形态：裸数组，或 `{ favorites: [...] }`。
+*
+* 这个兼容不是过度设计：历史版本里读写两侧曾各提取一次，只在一侧提取会让
+* 「写进去却读不出来」（2026-09-14 实测）。旧文件可能出自任一版本，所以两种都收。
+*
 * @param raw - 解析后的 JSON（任意形状）。
 * @returns 候选值（不保证合法，交由 `normalizeFavorites` 校验）。
 */
@@ -83,11 +84,14 @@ function extractFavorites(raw) {
 	return raw !== null && typeof raw === "object" && !Array.isArray(raw) ? raw.favorites : raw;
 }
 /**
-* 归一化收藏列表（防御非法文件：逐条字段级校验，坏条目丢弃而不拖垮整份）。
-* 同 id 去重（保留靠前的一条）。不按上限截断——上限是「新增」时的准入规则，
-* 已有数据（例如早期版本写入的、或跨工作区累计的）不因规则变化被静默删除。
+* 归一化旧收藏列表：逐条字段级校验，坏条目丢弃而不拖垮整份；同 id 去重（保留靠前的
+* 一条）；按 `at` 倒序。
+*
+* **不按任何上限截断**——旧文件里可能存在跨工作区累计的、超过当年 8 个上限的条目，
+* 迁移时应当全部保留（置顶集合本身无上限）。
+*
 * @param raw - 解析后的文件内容（任意形状）。
-* @returns 规整过的收藏列表（按 `at` 倒序）。
+* @returns 规整过的收藏列表。
 */
 function normalizeFavorites(raw) {
 	const rows = Array.isArray(raw) ? raw : [];
@@ -272,77 +276,51 @@ const stateRouteDefinition = {
 		});
 	}
 };
-const FAVORITES_PATH = join(process.env.DSH_HOME ?? join(homedir(), ".dsh"), "quick-toolbar-favorites.json");
-const favoritesRouteDefinition = {
+const LEGACY_FAVORITES_PATH = join(process.env.DSH_HOME ?? join(homedir(), ".dsh"), "quick-toolbar-favorites.json");
+const LEGACY_FAVORITES_MIGRATED_PATH = LEGACY_FAVORITES_PATH + ".migrated";
+const legacyFavoritesRouteDefinition = {
 	kind: "exact",
-	path: "/quick-toolbar/api/favorites",
+	path: "/quick-toolbar/api/favorites/migrate",
 	handler: async (req, res) => {
-		if (req.method === "GET") {
-			let raw = null;
-			try {
-				raw = readFileSync(FAVORITES_PATH, "utf8");
-			} catch {
-				sendJson(res, 200, {
-					ok: true,
-					value: { favorites: [] }
-				});
-				return;
-			}
-			let parsed = null;
-			try {
-				parsed = JSON.parse(raw);
-			} catch {
-				sendJson(res, 200, {
-					ok: false,
-					error: "invalid-json"
-				});
-				return;
-			}
-			sendJson(res, 200, {
-				ok: true,
-				value: { favorites: normalizeFavorites(extractFavorites(parsed)) }
+		if (req.method !== "GET") {
+			sendJson(res, 405, {
+				ok: false,
+				error: "method-not-allowed"
 			});
 			return;
 		}
-		if (req.method === "POST") {
-			let raw = "";
-			req.on?.("data", (chunk) => {
-				raw += chunk;
-			});
-			await new Promise((resolve) => req.on?.("end", () => {
-				resolve();
-			}));
-			let parsed = null;
-			try {
-				parsed = JSON.parse(raw);
-			} catch {
-				sendJson(res, 200, {
-					ok: false,
-					error: "invalid-json"
-				});
-				return;
-			}
-			const favorites = normalizeFavorites(extractFavorites(parsed));
-			try {
-				const tmp = FAVORITES_PATH + ".tmp";
-				writeFileSync(tmp, JSON.stringify({ favorites }, null, 2), "utf8");
-				renameSync(tmp, FAVORITES_PATH);
-			} catch {
-				sendJson(res, 200, {
-					ok: false,
-					error: "write-failed"
-				});
-				return;
-			}
+		let raw = null;
+		try {
+			raw = readFileSync(LEGACY_FAVORITES_PATH, "utf8");
+		} catch {
 			sendJson(res, 200, {
 				ok: true,
-				value: { favorites }
+				value: { favorites: [] }
 			});
 			return;
 		}
-		sendJson(res, 405, {
-			ok: false,
-			error: "method-not-allowed"
+		try {
+			renameSync(LEGACY_FAVORITES_PATH, LEGACY_FAVORITES_MIGRATED_PATH);
+		} catch {
+			sendJson(res, 200, {
+				ok: false,
+				error: "rename-failed"
+			});
+			return;
+		}
+		let parsed = null;
+		try {
+			parsed = JSON.parse(raw);
+		} catch {
+			sendJson(res, 200, {
+				ok: false,
+				error: "invalid-json"
+			});
+			return;
+		}
+		sendJson(res, 200, {
+			ok: true,
+			value: { favorites: normalizeFavorites(extractFavorites(parsed)) }
 		});
 	}
 };
@@ -377,7 +355,7 @@ function apply(ctx) {
 		wsSvc = wsCtx;
 		wsCtx.webServer.register(adaptersRouteDefinition);
 		wsCtx.webServer.register(stateRouteDefinition);
-		wsCtx.webServer.register(favoritesRouteDefinition);
+		wsCtx.webServer.register(legacyFavoritesRouteDefinition);
 		wsCtx.webServer.register(authUrlRouteDefinition);
 	}));
 }

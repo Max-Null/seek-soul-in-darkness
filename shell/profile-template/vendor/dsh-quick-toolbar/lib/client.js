@@ -323,85 +323,79 @@ function runAdapter(adapter, env) {
 			return actCommand({ execute: env.runCommand }, act.name);
 	}
 }
+/** 未分组那一档的标题。 */
+const UNGROUPED_TITLE = "未分组";
+/** 归属已不可考那一档的标题。 */
+const UNRESOLVED_TITLE = "已失效";
 /**
-* 归一化收藏列表（防御非法文件：逐条字段级校验，坏条目丢弃而不拖垮整份）。
-* 同 id 去重（保留靠前的一条）。不按上限截断——上限是「新增」时的准入规则，
-* 已有数据（例如早期版本写入的、或跨工作区累计的）不因规则变化被静默删除。
-* @param raw - 解析后的文件内容（任意形状）。
-* @returns 规整过的收藏列表（按 `at` 倒序）。
+* 把置顶集合折成按工作区分组的显示结构。
+*
+* **两个顺序都由输入决定**，不由字典序或时间决定：
+* - **组内**跟 `pinnedIds` 的顺序（内核给的「最近置顶优先」）。
+* - **组间**按各组首个成员在 `pinnedIds` 中的位置——自然且稳定，不因重渲跳动。
+*
+* **失效条目保留在结果里**（`resolve` 返回 `null`，或返回的 `alive` 为假）：静默隐藏会让
+* 用户既看不见它、也没法取消它。查得到归属的失效条目留在自己的工作区分组；查不到归属的
+* 集中到 `kind: 'unresolved'` 那一档，恒定排在最后。
+*
+* 工作区标题查不到时回落到工作区 id——**不隐藏整个分组**，那同样是静默丢东西。
+*
+* @param pinnedIds - 内核置顶集合，顺序即内核给的顺序。
+* @param resolve - 给 id 返回归属与标题；会话或工作区查不到时返回 `null`。
+* @param workspaceTitle - 给工作区 id 返回显示名；查不到时返回 `null`。
+* @returns 分组后的显示结构；`pinnedIds` 为空时返回空数组。
 */
-function normalizeFavorites(raw) {
-	const rows = Array.isArray(raw) ? raw : [];
-	const out = [];
-	const seen = /* @__PURE__ */ new Set();
-	for (const row of rows) {
-		if (row === null || typeof row !== "object") continue;
-		const r = row;
-		const id = typeof r.id === "string" ? r.id.trim() : "";
-		if (id === "" || seen.has(id)) continue;
-		seen.add(id);
-		const title = typeof r.title === "string" && r.title.trim() !== "" ? r.title.trim() : id;
-		out.push({
+function groupPinned(pinnedIds, resolve, workspaceTitle) {
+	const named = [];
+	/** 键 → 在 `named` 中的下标；建组的顺序即组间顺序。 */
+	const indexOf = /* @__PURE__ */ new Map();
+	const unresolved = [];
+	for (const id of pinnedIds) {
+		const hit = resolve(id);
+		if (hit === null) {
+			unresolved.push({
+				id,
+				title: id,
+				workspaceId: "",
+				alive: false
+			});
+			continue;
+		}
+		let index = indexOf.get(hit.workspaceId);
+		if (index === void 0) {
+			index = named.length;
+			indexOf.set(hit.workspaceId, index);
+			named.push({
+				kind: hit.workspaceId === "" ? "ungrouped" : "workspace",
+				workspaceId: hit.workspaceId,
+				title: "",
+				entries: []
+			});
+		}
+		named[index].entries.push({
 			id,
-			title,
-			workspaceId: typeof r.workspaceId === "string" ? r.workspaceId : "",
-			cwd: typeof r.cwd === "string" ? r.cwd : "",
-			at: typeof r.at === "number" && Number.isFinite(r.at) ? r.at : 0
+			title: hit.title === "" ? id : hit.title,
+			workspaceId: hit.workspaceId,
+			alive: hit.alive
 		});
 	}
-	return out.sort((a, b) => b.at - a.at);
+	for (const group of named) group.title = group.kind === "ungrouped" ? UNGROUPED_TITLE : workspaceTitle(group.workspaceId) ?? group.workspaceId;
+	return unresolved.length === 0 ? named : [...named, {
+		kind: "unresolved",
+		workspaceId: "",
+		title: UNRESOLVED_TITLE,
+		entries: unresolved
+	}];
 }
 /**
-* 取某个工作区的收藏（悬浮球实际展示的那一份）。
-* @param list - 全量收藏。
-* @param workspaceId - 当前会话所属工作区 id；`undefined` 与空串等价（都表示未分组）。
-* @param isAlive - 会话是否仍然存在的判定；给出时失效条目会被排除。
-*   上限计数与展示都用它，这样**已删除会话的收藏不显示、也不占用名额**。
-*/
-function favoritesForWorkspace(list, workspaceId, isAlive) {
-	const key = workspaceId === void 0 ? "" : workspaceId;
-	return list.filter((f) => f.workspaceId === key && (isAlive === void 0 || isAlive(f.id)));
-}
-/**
-* 新增一条收藏（列表已含同 id → duplicate；该工作区已达上限 → limit）。
-* 返回**新数组**，调用方负责持久化。
-* @param list - 全量收藏。
-* @param item - 待收藏的会话（`at` 由调用方给，便于测试注入固定时钟）。
-* @param isAlive - 会话是否仍然存在的判定，透传给上限计数——**失效条目不该占名额**
-*   （2026-09-14 用户指出：删掉会话后它的收藏仍占着 8 个位置）。省略则一律计入。
-*/
-function addFavorite(list, item, isAlive) {
-	if (list.some((f) => f.id === item.id)) return {
-		ok: false,
-		list: [...list],
-		reason: "duplicate"
-	};
-	if (favoritesForWorkspace(list, item.workspaceId, isAlive).length >= 8) return {
-		ok: false,
-		list: [...list],
-		reason: "limit"
-	};
-	return {
-		ok: true,
-		list: [item, ...list].sort((a, b) => b.at - a.at)
-	};
-}
-/**
-* 移除一条收藏（不存在则原样返回新数组）。
-* @param list - 全量收藏。
-* @param id - 目标会话 id。
-*/
-function removeFavorite(list, id) {
-	return list.filter((f) => f.id !== id);
-}
-/**
-* 悬浮球里显示用的短标签：`displayTitle` 可能很长（首条提问全文），截到 12 字
-* 与内置适配器按钮的取字规则一致，完整名走 `title` 提示。
+* 菜单与 ☆ 按钮上显示的短标签：`displayTitle` 可能很长（首条提问全文），截到 12 字，
+* 与内置适配器按钮的取字规则一致；完整名走 `title` 提示。
 * @param title - 会话显示名。
+* @returns 截断后的标签；纯空白输入返回空串。
 */
-function favoriteLabel(title) {
-	const t = title.trim();
-	return t.length > 12 ? t.slice(0, 12) + "…" : t;
+function sessionLabel(title) {
+	const trimmed = title.trim();
+	return trimmed.length > 12 ? trimmed.slice(0, 12) + "…" : trimmed;
 }
 //#endregion
 //#region src/register-brief.ts
@@ -603,7 +597,7 @@ window.__ModuleLoader__.load({
 		function clickButton(button) {
 			if (button !== null && button !== void 0 && !button.disabled) button.click();
 		}
-		/** i18n 取词。收藏区每次重渲都重建按钮，故**不走 `trackLocale`**
+		/** i18n 取词。置顶区每次重渲都重建按钮，故**不走 `trackLocale`**
 		*  （那会把失效元素累积进 LOCALE_TARGETS）；改为渲染时按当前语言直取。 */
 		function favText(key) {
 			var pair = LOCALE_DICT[key];
@@ -665,71 +659,108 @@ window.__ModuleLoader__.load({
 				title
 			};
 		}
+		/** 工作区快照（服务缺失或未就绪 → null）。 */
+		function workspacesSnapshot() {
+			var svc = workspacesSvc;
+			if (svc === null || svc.list === void 0 || svc.list === null) return null;
+			if (typeof svc.list.getSnapshot !== "function") return null;
+			try {
+				return svc.list.getSnapshot() ?? null;
+			} catch (_e) {
+				return null;
+			}
+		}
+		/** 工作区显示名（查不到 → null，由调用方决定回落成 id）。 */
+		function workspaceTitleOf(workspaceId) {
+			var snap = workspacesSnapshot();
+			if (snap === null) return null;
+			var items = snap.items !== void 0 && snap.items !== null ? snap.items : [];
+			for (var i = 0; i < items.length; i++) {
+				if (items[i].workspaceId !== workspaceId) continue;
+				var t = items[i].title;
+				return typeof t === "string" && t !== "" ? t : null;
+			}
+			return null;
+		}
+		/** 置顶失败提示的可见截止时刻（毫秒）。 */
+		var pinErrorUntil = 0;
+		/** 记一次置顶失败并触发重渲，让提示显形。 */
+		function showPinFailure() {
+			pinErrorUntil = Date.now() + 8e3;
+			if (favRender !== null) favRender();
+		}
 		/**
-		* 会话是否仍然存在。已删除的收藏既不渲染入口（点了会 fail loud），也不占用
-		* 该工作区的 8 个名额——两处都走这个判定。
+		* 置顶或取消置顶一个会话（写内核置顶集合）。
 		*
-		* 列表快照不可用时返回 `true`：宁可把条目当作有效，也不要因为服务还没就绪就
-		* 把用户的收藏整批判成失效（那会同时隐藏入口、又让上限忽大忽小）。
+		* 写是**异步**的，成功后由 `workspaces.list` 的订阅把新快照回灌界面；这里不做
+		* 乐观更新——本地先改、再被权威快照覆盖，界面会在两次渲染之间跳一下。
+		*
+		* 失败**不静默**：官方 UI 给 pin/unpin 都挂了提示，理由是界面上什么都没动时，
+		* 静默失败读起来就是死按钮。
 		*/
-		function sessionAlive(id) {
-			var snap = sessionsSnapshot();
-			if (snap === null) return true;
-			return (snap.byId !== void 0 && snap.byId !== null ? snap.byId : {})[id] !== void 0;
+		function setPinned(sessionId, on) {
+			var svc = uiWorkspaceSvc;
+			var call = svc === null ? void 0 : on ? svc.pinSession : svc.unpinSession;
+			if (call === void 0) {
+				showPinFailure();
+				return;
+			}
+			try {
+				var pending = call.call(svc, sessionId);
+				if (pending !== null && pending !== void 0 && typeof pending.catch === "function") pending.catch(function() {
+					showPinFailure();
+				});
+			} catch (_e) {
+				showPinFailure();
+			}
 		}
-		/** 读收藏（host 文件；读不到就是空列表，不打断工具栏渲染）。 */
-		function loadFavorites(done) {
-			fetch("/quick-toolbar/api/favorites").then(function(r) {
-				return r.json();
-			}).then(function(d) {
-				var value = d !== null && typeof d === "object" && d.ok === true ? d.value : void 0;
-				favList = normalizeFavorites(value !== void 0 && value !== null ? value.favorites : []);
-				done();
-			}).catch(function() {
-				done();
-			});
+		/** 某个会话当前是否在置顶集合里。 */
+		function isPinned(sessionId) {
+			var snap = workspacesSnapshot();
+			if (snap === null) return false;
+			var ids = snap.pinnedSessionIds;
+			return ids !== void 0 && ids !== null && ids.indexOf(sessionId) !== -1;
 		}
-		/** 写回收藏（全量替换——客户端持有全量，包含其他工作区的条目）。
-		*  先更新内存再发请求：界面即时响应，写失败由下一次操作整体重写。 */
-		function saveFavorites(next) {
-			favList = next;
-			fetch("/quick-toolbar/api/favorites", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ favorites: next })
-			}).catch(function() {});
-		}
-		/** 收藏/取消收藏当前会话。返回是否发生了变化（供调用方决定是否重渲）。 */
-		function toggleCurrentFavorite() {
+		/**
+		* 置顶 / 取消置顶当前会话。返回是否已发出写请求（供调用方决定是否重渲）。
+		*
+		* 状态不在这里改：写成功后 `workspaces.list` 的快照会带着新的置顶集合回来，
+		* 由订阅回灌界面。
+		*/
+		function toggleCurrentPin() {
 			var cur = currentSession();
 			if (cur === null) return false;
-			var curId = cur.id;
-			var mine = favoritesForWorkspace(favList, cur.workspaceId, sessionAlive);
-			if (favList.some(function(f) {
-				return f.id === curId;
-			})) {
-				saveFavorites(removeFavorite(favList, curId));
-				return true;
-			}
-			if (mine.length >= 8) return false;
-			var added = addFavorite(favList, {
-				id: curId,
-				title: cur.title,
-				workspaceId: cur.workspaceId,
-				cwd: cur.cwd,
-				at: Date.now()
-			}, sessionAlive);
-			if (!added.ok) return false;
-			saveFavorites(added.list);
+			setPinned(cur.id, !isPinned(cur.id));
 			return true;
 		}
-		/** 切到某个收藏的会话。 */
-		function openFavorite(id) {
+		/** 切到某个置顶的会话。 */
+		function openPinned(id) {
 			var svc = sessionsSvc;
 			if (svc === null || typeof svc.open !== "function") return;
 			try {
 				svc.open(id);
 			} catch (_e) {}
+		}
+		/**
+		* 旧收藏文件的一次性迁移：取回历史条目，逐条置顶。
+		*
+		* host 侧读到旧文件就把它改名成 `.migrated`，所以这条路径**天然只生效一次**，
+		* 迁移失败也不会重复灌入。失败静默——它对用户没有可见后果（工具栏照常工作），
+		* 而报错只会制造噪音；`.migrated` 文件保留着原数据，人工可恢复。
+		*/
+		function migrateLegacyFavorites() {
+			fetch("/quick-toolbar/api/favorites/migrate").then(function(r) {
+				return r.json();
+			}).then(function(d) {
+				if (d === null || typeof d !== "object" || d.ok !== true) return;
+				var value = d.value;
+				var rows = value !== void 0 && value !== null && Array.isArray(value.favorites) ? value.favorites : [];
+				for (var i = 0; i < rows.length; i++) {
+					var row = rows[i];
+					var id = row !== null && typeof row === "object" && typeof row.id === "string" ? row.id : "";
+					if (id !== "") setPinned(id, true);
+				}
+			}).catch(function() {});
 		}
 		/**
 		* 反向互斥（2026-08-19 用户补充）：打开插件中心前，若侧栏/底栏
@@ -760,10 +791,12 @@ window.__ModuleLoader__.load({
 			"tb.addAria": ["添加/迁移按钮（让 LLM 来注册）", "Add / migrate a button (let the LLM register it)"],
 			"sm.open": ["会话管理", "Sessions"],
 			"sm.openTitle": ["打开会话管理面板", "Open session manager"],
-			"fav.add": ["收藏当前会话", "Favorite current session"],
-			"fav.remove": ["取消收藏", "Unfavorite"],
-			"fav.full": ["收藏已满（每工作区 8 个）", "Favorites full (8 per workspace)"],
-			"fav.open": ["打开会话", "Open session"]
+			"pin.add": ["置顶当前会话", "Pin current session"],
+			"pin.remove": ["取消置顶", "Unpin"],
+			"pin.menu": ["置顶会话", "Pinned sessions"],
+			"pin.empty": ["还没有置顶的会话", "No pinned sessions yet"],
+			"pin.open": ["打开会话", "Open session"],
+			"pin.failed": ["操作失败，置顶状态未变", "Action failed, pin unchanged"]
 		};
 		function applyLocale() {
 			var zh = localeIsZh();
@@ -949,12 +982,21 @@ window.__ModuleLoader__.load({
 			".ssid-tb-row .ssid-tb-btn{flex:1 1 auto;min-width:0;position:relative;z-index:1;box-sizing:border-box;background:transparent}",
 			".ssid-tb-row.ssid-tb-row-open .ssid-tb-slide{transform:translateX(-56px)}",
 			".ssid-tb-del{position:absolute;right:-56px;top:0;bottom:0;width:56px;border:0;background:var(--dsw-alias-state-error-primary,#e5484d);color:#fff;font-size:12px;cursor:pointer;font-weight:500;border-radius:8px 0 0 8px}",
-			"#ssid-toolbar .ssid-tb-favs{display:flex;flex-direction:column;gap:4px}",
-			"#ssid-toolbar .ssid-tb-favs>*{opacity:0;transform:translateY(4px);transition:opacity .16s ease,transform .16s ease}",
-			"#ssid-toolbar.ssid-tb-expanded .ssid-tb-favs>*{opacity:1;transform:none}",
-			"#ssid-toolbar .ssid-tb-fav svg{color:var(--dsw-alias-state-business-primary,#4d6bfe)}",
-			"#ssid-toolbar .ssid-tb-favstar[data-on=\"1\"] svg{color:var(--dsw-alias-state-business-primary,#4d6bfe)}",
-			"#ssid-toolbar .ssid-tb-favstar[data-full=\"1\"]{opacity:.45;cursor:not-allowed}"
+			"#ssid-toolbar .ssid-tb-pins{display:flex;flex-direction:column;gap:4px}",
+			"#ssid-toolbar .ssid-tb-pins>*{opacity:0;transform:translateY(4px);transition:opacity .16s ease,transform .16s ease}",
+			"#ssid-toolbar.ssid-tb-expanded .ssid-tb-pins>*{opacity:1;transform:none}",
+			"#ssid-toolbar .ssid-tb-pin svg{color:var(--dsw-alias-state-business-primary,#4d6bfe)}",
+			"#ssid-toolbar .ssid-tb-pintoggle[data-on=\"1\"] svg{color:var(--dsw-alias-state-business-primary,#4d6bfe)}",
+			"#ssid-toolbar .ssid-tb-pingroups{display:flex;flex-direction:column;gap:6px}",
+			"#ssid-toolbar .ssid-tb-pingroup{display:flex;flex-direction:column;gap:2px}",
+			"#ssid-toolbar .ssid-tb-pinhead{font-size:11px;opacity:.6;padding:0 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+			"#ssid-toolbar .ssid-tb-pinrow{display:flex;align-items:stretch;gap:2px}",
+			"#ssid-toolbar .ssid-tb-pinrow .ssid-tb-pinopen{flex:1 1 auto;min-width:0}",
+			"#ssid-toolbar .ssid-tb-pinrow[data-dead=\"1\"] .ssid-tb-pinopen{opacity:.5}",
+			"#ssid-toolbar .ssid-tb-pinrow .ssid-tb-pinun{flex:0 0 auto;width:22px;padding:0;opacity:0;transition:opacity .12s ease}",
+			"#ssid-toolbar .ssid-tb-pinrow:hover .ssid-tb-pinun,#ssid-toolbar .ssid-tb-pinrow .ssid-tb-pinun:focus-visible{opacity:1}",
+			"#ssid-toolbar .ssid-tb-pinerr{color:var(--dsw-alias-state-error-primary,#e5484d);font-size:11px;padding:2px 4px}",
+			"#ssid-toolbar .ssid-tb-pinempty{font-size:11px;opacity:.6;padding:2px 4px}"
 		].join("\n");
 		function toolbarIcon(name) {
 			var ICONS = {
@@ -1076,73 +1118,143 @@ window.__ModuleLoader__.load({
 			trackLocale(pinBtn, "tb.pin", "title");
 			head.appendChild(pinBtn);
 			panel.appendChild(head);
-			var favBox = document.createElement("div");
-			favBox.className = "ssid-tb-favs";
-			panel.appendChild(favBox);
-			var renderFavs = function() {
-				if (!favBox.isConnected) {
-					if (favUnsub !== null) {
-						favUnsub();
-						favUnsub = null;
-					}
-					return;
-				}
-				favBox.innerHTML = "";
-				favBox.setAttribute("data-fav-sub", favUnsub === null ? "off" : "on");
-				var cur = currentSession();
-				if (cur === null) {
-					if (sessionsSvc === null) favBox.setAttribute("data-fav-state", "no-service");
-					else if (sessionsSnapshot() === null) favBox.setAttribute("data-fav-state", "no-list");
-					else favBox.setAttribute("data-fav-state", "no-current");
-					return;
-				}
-				favBox.setAttribute("data-fav-state", "ok");
-				favBox.setAttribute("data-fav-ws", cur.workspaceId === "" ? "(ungrouped)" : cur.workspaceId);
-				var curId = cur.id;
+			var pinBox = document.createElement("div");
+			pinBox.className = "ssid-tb-pins";
+			panel.appendChild(pinBox);
+			/** 二级菜单是否展开。开合只影响渲染，故与其它一次性状态同层。 */
+			var pinMenuOpen = false;
+			/** 供 `groupPinned` 反查单条置顶的归属、标题与存活。 */
+			function resolvePinned(id) {
 				var snap = sessionsSnapshot();
-				var byId = snap !== null && snap.byId !== void 0 && snap.byId !== null ? snap.byId : {};
-				var mine = favoritesForWorkspace(favList, cur.workspaceId, sessionAlive);
-				var isFav = mine.some(function(f) {
-					return f.id === curId;
-				});
-				var full = !isFav && mine.length >= 8;
-				var star = document.createElement("button");
-				star.type = "button";
-				star.className = "ssid-tb-btn ssid-tb-favstar";
-				star.setAttribute("data-on", isFav ? "1" : "0");
-				if (full) star.setAttribute("data-full", "1");
-				star.innerHTML = toolbarIcon(isFav ? "starOn" : "star") + "<span></span>";
-				var starLabel = isFav ? favText("fav.remove") : full ? favText("fav.full") : favText("fav.add");
-				var starSpan = star.querySelector("span");
-				if (starSpan !== null) starSpan.textContent = starLabel;
-				star.setAttribute("aria-label", starLabel);
-				star.title = starLabel;
-				star.addEventListener("click", function() {
-					if (full) return;
-					if (toggleCurrentFavorite()) renderFavs();
-				});
-				favBox.appendChild(star);
-				for (var fi = 0; fi < mine.length; fi++) {
-					var fav = mine[fi];
-					if (fav.id === cur.id) continue;
-					var row = byId[fav.id];
-					var liveTitle = row !== void 0 && typeof row.displayTitle === "string" && row.displayTitle !== "" ? row.displayTitle : fav.title;
-					var btn = document.createElement("button");
-					btn.type = "button";
-					btn.className = "ssid-tb-btn ssid-tb-fav";
-					btn.setAttribute("data-adapter-id", "dsh-favorites.open:" + fav.id);
-					btn.innerHTML = toolbarIcon("chat") + "<span></span>";
-					var label = favoriteLabel(liveTitle);
-					var span = btn.querySelector("span");
+				if (snap === null) return null;
+				var row = (snap.byId !== void 0 && snap.byId !== null ? snap.byId : {})[id];
+				if (row === void 0) return null;
+				var title = typeof row.displayTitle === "string" && row.displayTitle !== "" ? row.displayTitle : id;
+				return {
+					workspaceId: workspaceOf(id),
+					title,
+					alive: true
+				};
+			}
+			/** 渲染一个分组：标题 + 每行（行体跳转 / 行尾取消置顶）。 */
+			function renderPinGroup(group, currentId) {
+				var box = document.createElement("div");
+				box.className = "ssid-tb-pingroup";
+				box.setAttribute("data-group-kind", group.kind);
+				var head = document.createElement("div");
+				head.className = "ssid-tb-pinhead";
+				head.textContent = group.title + "（" + group.entries.length + "）";
+				head.title = group.title;
+				box.appendChild(head);
+				for (var i = 0; i < group.entries.length; i++) {
+					var entry = group.entries[i];
+					var row = document.createElement("div");
+					row.className = "ssid-tb-pinrow";
+					row.setAttribute("data-dead", entry.alive ? "0" : "1");
+					var open = document.createElement("button");
+					open.type = "button";
+					open.className = "ssid-tb-btn ssid-tb-pinopen";
+					open.setAttribute("data-adapter-id", "dsh-pinned.open:" + entry.id);
+					open.innerHTML = toolbarIcon("chat") + "<span></span>";
+					var label = sessionLabel(entry.title);
+					var span = open.querySelector("span");
 					if (span !== null) span.textContent = label;
-					btn.setAttribute("aria-label", favText("fav.open") + "：" + liveTitle);
-					btn.title = liveTitle;
-					btn.addEventListener("click", (function(targetId) {
+					open.setAttribute("aria-label", favText("pin.open") + "：" + entry.title);
+					open.title = entry.title;
+					if (entry.id !== currentId) open.addEventListener("click", (function(targetId) {
 						return function() {
-							openFavorite(targetId);
+							openPinned(targetId);
 						};
-					})(fav.id));
-					favBox.appendChild(btn);
+					})(entry.id));
+					else {
+						open.setAttribute("data-current", "1");
+						open.disabled = true;
+					}
+					row.appendChild(open);
+					var un = document.createElement("button");
+					un.type = "button";
+					un.className = "ssid-tb-btn ssid-tb-pinun";
+					un.setAttribute("data-adapter-id", "dsh-pinned.unpin:" + entry.id);
+					un.innerHTML = toolbarIcon("close");
+					un.setAttribute("aria-label", favText("pin.remove") + "：" + entry.title);
+					un.title = favText("pin.remove");
+					un.addEventListener("click", (function(targetId) {
+						return function() {
+							setPinned(targetId, false);
+						};
+					})(entry.id));
+					row.appendChild(un);
+					box.appendChild(row);
+				}
+				return box;
+			}
+			var renderFavs = function() {
+				if (!pinBox.isConnected) {
+					releaseFavSubs();
+					return;
+				}
+				pinBox.innerHTML = "";
+				pinBox.setAttribute("data-pin-sub", favUnsubs.length === 0 ? "off" : "on");
+				var cur = currentSession();
+				var wsnap = workspacesSnapshot();
+				if (wsnap === null) {
+					pinBox.setAttribute("data-pin-state", "no-service");
+					return;
+				}
+				if (sessionsSnapshot() === null) {
+					pinBox.setAttribute("data-pin-state", "no-list");
+					return;
+				}
+				pinBox.setAttribute("data-pin-state", cur === null ? "no-current" : "ok");
+				var pinnedIds = wsnap.pinnedSessionIds !== void 0 && wsnap.pinnedSessionIds !== null ? wsnap.pinnedSessionIds : [];
+				pinBox.setAttribute("data-pin-count", String(pinnedIds.length));
+				var curId = cur === null ? "" : cur.id;
+				if (cur !== null) {
+					var on = pinnedIds.indexOf(curId) !== -1;
+					var star = document.createElement("button");
+					star.type = "button";
+					star.className = "ssid-tb-btn ssid-tb-pintoggle";
+					star.setAttribute("data-on", on ? "1" : "0");
+					star.innerHTML = toolbarIcon(on ? "starOn" : "star") + "<span></span>";
+					var starLabel = on ? favText("pin.remove") : favText("pin.add");
+					var starSpan = star.querySelector("span");
+					if (starSpan !== null) starSpan.textContent = starLabel;
+					star.setAttribute("aria-label", starLabel);
+					star.title = starLabel;
+					star.addEventListener("click", function() {
+						toggleCurrentPin();
+					});
+					pinBox.appendChild(star);
+				}
+				var menuBtn = document.createElement("button");
+				menuBtn.type = "button";
+				menuBtn.className = "ssid-tb-btn ssid-tb-pin";
+				menuBtn.setAttribute("aria-expanded", pinMenuOpen ? "true" : "false");
+				menuBtn.innerHTML = toolbarIcon("chat") + "<span></span>";
+				var menuLabel = favText("pin.menu") + (pinnedIds.length > 0 ? "（" + pinnedIds.length + "）" : "");
+				var menuSpan = menuBtn.querySelector("span");
+				if (menuSpan !== null) menuSpan.textContent = menuLabel;
+				menuBtn.setAttribute("aria-label", menuLabel);
+				menuBtn.title = menuLabel;
+				menuBtn.addEventListener("click", function() {
+					pinMenuOpen = !pinMenuOpen;
+					renderFavs();
+				});
+				pinBox.appendChild(menuBtn);
+				if (pinMenuOpen) {
+					var groups = groupPinned(pinnedIds, resolvePinned, workspaceTitleOf);
+					if (groups.length === 0) {
+						var empty = document.createElement("div");
+						empty.className = "ssid-tb-pinempty";
+						empty.textContent = favText("pin.empty");
+						pinBox.appendChild(empty);
+					} else for (var gi = 0; gi < groups.length; gi++) pinBox.appendChild(renderPinGroup(groups[gi], curId));
+				}
+				if (pinErrorUntil > Date.now()) {
+					var err = document.createElement("div");
+					err.className = "ssid-tb-pinerr";
+					err.textContent = favText("pin.failed");
+					pinBox.appendChild(err);
 				}
 			};
 			var TOOLBAR_KIND_BY_ADAPTER = {
@@ -1388,16 +1500,17 @@ window.__ModuleLoader__.load({
 			root.appendChild(panel);
 			document.body.appendChild(root);
 			document.body.appendChild(ball);
-			if (favUnsub !== null) {
-				favUnsub();
-				favUnsub = null;
-			}
-			var subSvc = sessionsSvc;
-			if (subSvc !== null && subSvc.list !== void 0 && subSvc.list !== null && typeof subSvc.list.subscribe === "function") try {
-				favUnsub = subSvc.list.subscribe(renderFavs);
-			} catch (_e) {
-				favUnsub = null;
-			}
+			releaseFavSubs();
+			var subSessions = sessionsSvc;
+			if (subSessions !== null && subSessions.list !== void 0 && subSessions.list !== null && typeof subSessions.list.subscribe === "function") try {
+				var offSessions = subSessions.list.subscribe(renderFavs);
+				if (typeof offSessions === "function") favUnsubs.push(offSessions);
+			} catch (_e) {}
+			var subWorkspaces = workspacesSvc;
+			if (subWorkspaces !== null && subWorkspaces.list !== void 0 && subWorkspaces.list !== null && typeof subWorkspaces.list.subscribe === "function") try {
+				var offWorkspaces = subWorkspaces.list.subscribe(renderFavs);
+				if (typeof offWorkspaces === "function") favUnsubs.push(offWorkspaces);
+			} catch (_e) {}
 			renderFavs();
 			favRender = renderFavs;
 			var BALL_SIZE = 36;
@@ -1616,11 +1729,16 @@ window.__ModuleLoader__.load({
 			"uiWorkspace"
 		];
 		var sessionsSvc = null;
-		/** 收藏会话全量（跨工作区；悬浮球只展示当前工作区那一份——`favoritesForCwd`）。 */
-		var favList = [];
-		/** 会话列表订阅的退订句柄（工具栏重建时先退订，避免重复回调）。 */
-		var favUnsub = null;
-		/** 收藏区重渲钩子（createToolbar 挂载；语言变化时由 MutationObserver 触发）。 */
+		/** 订阅的退订句柄（会话列表 + 工作区列表两个）；工具栏重建时先全退，避免重复回调。 */
+		var favUnsubs = [];
+		/** 退出全部订阅（工具栏重建、容器被移除时调用）。 */
+		function releaseFavSubs() {
+			for (var i = 0; i < favUnsubs.length; i++) try {
+				favUnsubs[i]();
+			} catch (_e) {}
+			favUnsubs = [];
+		}
+		/** 置顶区重渲钩子（createToolbar 挂载；语言变化时由 MutationObserver 触发）。 */
 		var favRender = null;
 		var workspacesSvc = null;
 		var uiWorkspaceSvc = null;
@@ -1683,10 +1801,9 @@ window.__ModuleLoader__.load({
 			workspacesSvc = svcCtx.workspaces ?? null;
 			uiWorkspaceSvc = svcCtx.uiWorkspace ?? null;
 			loadState(function() {
+				migrateLegacyFavorites();
 				if (win.__SSID_SHELL__ === true && !qtState.shellVisible) return;
-				loadFavorites(function() {
-					createToolbar();
-				});
+				createToolbar();
 			});
 			var hideIfShell = function() {
 				if (win.__SSID_SHELL__ !== true) return false;
