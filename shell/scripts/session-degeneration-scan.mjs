@@ -2,16 +2,16 @@
 /**
  * 长会话输出退化扫描：读 DSH 会话日志，量模型是否已经在「打转」。
  *
- * 为什么需要它：自动压缩的触发线是 `thresholdRatio` × 窗口（默认 0.8）。本机
- * deepseek 路由的窗口是 1,000,000（`deepseek-harness/packages/llm/llm-deepseek/src/adapter.ts:147`
- * 的 DEFAULT_CONTEXT_WINDOW），阈值因此落在 **80 万 token**——而实测长会话在 67 万
- * 附近就开始输出退化（推理里成段重复，甚至泄漏进正文）。两者之间约 13 万 token 里，
- * 系统认为「还不到时候」，模型却在打转。这个脚本把「感觉它在重复」变成可比较的数字。
+ * 为什么需要它：长会话里模型会在推理阶段成段重复（根因分析见
+ * `docs/排查/2026-09-18-长会话输出退化.md`），而**上下文占用与退化程度没有可区分的关系**——
+ * 实测一份 19 轮会话在 26.1% 的占用下重复率仍有 84%，压缩把占用从 67.9% 砍到 26.1% 之后
+ * 重复率反而略升（`max-null-plugins/dsh-allostasis/docs/排查/2026-09-28-推理退化与上下文占用脱钩.md`）。
+ * 所以占用与重复率要**分别读数、互不推断**。这个脚本把「感觉它在重复」变成可比较的数字。
  *
  * 它能回答：
  *   · 某个会话是否已经进入退化区？重复率从多少 token 开始爬？
  *   · 这个会话的上下文压力峰值是多少、占窗口几成？
- *   · 压缩线（阈值）与退化起点之间还差多少？
+ *   · 压缩在什么压力下触发？触发前后重复率变了吗？
  *   · 跨多个会话看，退化是不是普遍现象？
  *
  * 判据（全部来自日志，不猜）：
@@ -232,7 +232,7 @@ function analyze(file, options) {
       continue
     }
     if (type === 'compaction/start' || type === 'compaction/end') {
-      compactions.push({ type, seq: event.seq })
+      compactions.push({ type, seq: event.seq, pressureTokens: pressures.at(-1)?.tokens ?? null, manual: event.data?.sourceCommandId !== undefined })
       continue
     }
     if (type !== 'assistant/message') continue
@@ -280,7 +280,6 @@ function analyze(file, options) {
     firstOver,
     crossings: crossings.length,
     windowShare: window !== null && peakPressure !== null ? peakPressure.tokens / window : null,
-    thresholdTokens: window === null ? null : Math.floor(window * 0.8),
     topPressures: pressures.slice().sort((a, b) => b.tokens - a.tokens).slice(0, options.top),
     topRepeats: repetitions.slice().sort((a, b) => b.ratio - a.ratio).slice(0, options.top),
     note: reasoningCount === 0 ? 'no-reasoning（该日志没有推理文本，本判据不适用）' : null,
@@ -315,10 +314,18 @@ function renderSingle(report) {
   } else {
     const share = report.windowShare === null ? '' : `（占窗口 ${pct(report.windowShare)}）`
     lines.push(`  峰值 ${num(report.peakPressure.tokens)} token ${share}  @ t${report.peakPressure.turn}/s${report.peakPressure.step}`)
-    if (report.thresholdTokens !== null) {
-      lines.push(`  自动压缩阈值（0.8 × 窗口）= ${num(report.thresholdTokens)} token`)
-      const gap = report.thresholdTokens - report.peakPressure.tokens
-      lines.push(`  峰值距阈值 ${num(Math.abs(gap))} token ${gap >= 0 ? '（未触发压缩）' : '（已越过）'}`)
+    // 压缩阈值是配置项（thresholdRatio：内核默认 0.8，SSiD preset 是 0.5），按默认值推算会错，
+    // 所以这里只报日志里实测到的触发点。
+    const triggers = report.compactions.filter(row => row.type === 'compaction/start')
+    if (triggers.length === 0) {
+      lines.push('  本会话未触发压缩')
+    } else {
+      for (const row of triggers) {
+        const at = row.pressureTokens === null
+          ? '(此前无 usage 采样)'
+          : `${num(row.pressureTokens)} token${report.window === null ? '' : `（占窗口 ${pct(row.pressureTokens / report.window)}）`}`
+        lines.push(`  压缩触发 @ seq ${String(row.seq).padStart(5)}  ${row.manual ? '手动' : '自动'}  ${at}`)
+      }
     }
     lines.push('  最高的几个压力点：')
     for (const row of report.topPressures) {
@@ -350,7 +357,10 @@ function renderSingle(report) {
   if (report.compactions.length > 0) {
     lines.push('')
     lines.push('── 压缩事件 ──')
-    for (const row of report.compactions) lines.push(`  seq ${String(row.seq).padStart(5)}  ${row.type}`)
+    for (const row of report.compactions) {
+      const at = row.pressureTokens === null ? '' : `  此前采样 ${num(row.pressureTokens)} token`
+      lines.push(`  seq ${String(row.seq).padStart(5)}  ${row.type}  ${row.manual ? '手动' : '自动'}${at}`)
+    }
   }
 
   lines.push('')
