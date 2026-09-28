@@ -90,6 +90,10 @@ export function installWindowsMenu(): { update(): void; dispose(): void } {
     // AppFrame owns this seat; boot readiness alone precedes the rendered application.
     if (document.querySelector('[data-shell-overlay]') === null) return
     document.body.append(host)
+    // SSiD hides this menu by default: the shell draws its own caption carrying equivalent
+    // entries, and the menu would otherwise claim the caption's top-left corner. It stays
+    // mounted so contrast mode ("show DSH as-is") can reveal it — see ssid/titlebar.ts.
+    host.style.display = 'none'
     observer.disconnect()
   }
   const observer = new MutationObserver(mount)

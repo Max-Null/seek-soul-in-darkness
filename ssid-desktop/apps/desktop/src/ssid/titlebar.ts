@@ -25,9 +25,12 @@ const TITLEBAR_HEIGHT = 40
  * 让位宽度：**按页面实际占位动态测量**。
  *
  * caption 区里属于页面的可交互元素原有两个（「收起侧边栏」x=12..40、「新建会话」x=48..76），
- * 现在它们已被接管隐藏（见 `CAPTURED_ACTIONS`），所以**量到 0 才是常态** —— 这时让位必须真的
- * 归零、品牌区贴左（它自带 10px 内边距）。原来那个 48 的下限是「页面按钮还在」年代留下的，
+ * 现在它们已被接管隐藏（见 `CAPTURED_ACTIONS`），所以量到 0 是常态 —— 这时让位必须真的归零、
+ * 品牌区贴左（它自带 10px 内边距）。原来那个 48 的下限是「页面按钮还在」年代留下的，
  * 留着就会在左上角撑出一条谁也说不清来历的空白。
+ *
+ * 官方 caption 菜单（「应用 / 编辑」）已由壳弃用、不挂载（见 `preload-windows.ts`），
+ * 因此不参与让位；它过去也不曾被量到 —— 按钮挂在 host 的 shadow root 里，选择器穿不透。
  *
  * 接管一旦失效（DSH 改了结构、原件仍在页面上），测量值自然把它们算进去、让位自己长回来 ——
  * 这层降级不需要额外分支。
@@ -39,6 +42,15 @@ const GUTTER_GAP = 8
 
 /** caption 区内会被测量的页面元素：只认可交互的，空的占位容器不算。 */
 const CAPTION_INTERACTIVE_SELECTOR = 'button, a, input, select, textarea, [role="button"], [tabindex]'
+
+/**
+ * 单个占位元素允许的最大宽度。
+ *
+ * caption 区的页面原件是图标按钮（28–40px）。上限一旦放宽到「擦到这条带就算」，主内容区顶部
+ * 工具栏与右侧面板里的按钮都会被算成 caption 占位 —— 2026-09-28 实测有面板按钮
+ * right=1850（已超出 1280 的视口）被计入，让位因此被撑到整窗宽、品牌区整个推出视口。
+ */
+const CAPTION_OCCUPANT_MAX_WIDTH = 200
 
 /**
  * caption 取色所读的两个设计 token，与官方 `preload-windows.ts` 同源：
@@ -260,13 +272,14 @@ function buildTitlebarScript(options: SsidTitlebarOptions): string {
   // 只认可交互元素 —— 同样落在 caption 区的空容器不该占位。
   const measureGutter = () => {
     let right = 0
+    // 只收**整块**落在 caption 带内、且本身窄的页面元素：擦到这条带的（主内容区顶部工具栏、
+    // 右侧面板按钮）不是 caption 占位，收进来就会把让位撑到整窗宽。
     for (const el of document.querySelectorAll(${JSON.stringify(CAPTION_INTERACTIVE_SELECTOR)})) {
       if (bar.contains(el)) continue
       const rect = el.getBoundingClientRect()
       if (rect.width === 0 || rect.height === 0) continue
-      // 只看落在 caption 高度内、且自身不高于 caption 的元素
-      if (rect.top >= ${String(TITLEBAR_HEIGHT)} || rect.bottom <= 0) continue
-      if (rect.height > ${String(TITLEBAR_HEIGHT)} + 4) continue
+      if (rect.top < 0 || rect.bottom > ${String(TITLEBAR_HEIGHT)}) continue
+      if (rect.width > ${String(CAPTION_OCCUPANT_MAX_WIDTH)}) continue
       if (rect.right > right) right = rect.right
     }
     // 量到 0 说明 caption 区已经没有页面元素（都被接管了）—— 这时连间隙都不给，
@@ -473,6 +486,10 @@ function buildTitlebarScript(options: SsidTitlebarOptions): string {
   const barDisplay = bar.style.display === '' ? 'flex' : bar.style.display
   const applyContrast = () => {
     bar.style.display = contrast ? 'none' : barDisplay
+    // 官方 caption 菜单平时被壳藏着（见 preload-menu.ts 的 mount）：对照模式要看 DSH 原样，
+    // 这时把它放回来 —— 菜单始终挂载，只是默认 display:none。
+    const menu = document.querySelector('[data-windows-menu]')
+    if (menu !== null) menu.style.display = contrast ? '' : 'none'
     for (const target of CAPTURES) {
       const el = capturedRefs[target.id]
       if (el === undefined || el === null || !el.isConnected) continue

@@ -17,6 +17,7 @@ export function syncWindowsAppearance(): void {
   const install = (): void => {
     mark()
     const root = document.documentElement
+    // The menu stays mounted but hidden by default; contrast mode reveals it. See preload-menu.ts.
     const menu = installWindowsMenu()
     const probe = document.createElement('span')
     probe.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none;background-color:var(--dsw-specific-sidebar-fill);color:var(--dsw-alias-label-primary)'

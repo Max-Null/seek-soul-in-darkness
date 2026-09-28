@@ -62,7 +62,7 @@
   - `ssid-1.0.0-win-x64-unsigned.exe`（NSIS 安装包）
   - 附 `latest.yml` 与 blockmap（在线增量更新所需）
 - SHA256（`certutil -hashfile <文件> SHA256`）——**以本页与 Release 页为准**：
-  - 待打包完成后回填。
+  - `ssid-1.0.0-win-x64-unsigned.exe`：`9C20C69AC38076BC5D655B8F586B94B6EFEFDB06AC058CBD122C590D9A33ECDC`
 - 说明：**包内那份「更新日志」（关于 SSiD）不着录校验和**。安装包的哈希取决于内嵌内容，
   而包里又装着一份更新日志，把最终哈希写进包内会**再次改变**哈希；真实校验和以本页与
   GitHub Release 页为准。
