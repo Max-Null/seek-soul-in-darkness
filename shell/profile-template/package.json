@@ -2,7 +2,7 @@
   "name": "dsh-profile-ssid",
   "private": true,
   "dependencies": {
-    "@changfenhuang/dsh-genui": "0.11.1",
+    "@changfenhuang/dsh-genui": "0.11.2",
     "@huanlin/dsh-plugin-better-sidebar-plugin-office": "0.2.0",
     "@max-null/dsh-achievements": "0.1.2",
     "@max-null/dsh-allostasis": "0.2.0",
