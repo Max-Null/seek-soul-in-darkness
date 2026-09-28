@@ -1,6 +1,6 @@
 {
   "name": "@max-null/dsh-ssid-panels",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "SSiD (思灵) panels for dsh-better-sidebar: memory / guardian state / habit candidates / API balances as sidebar tabs",
   "type": "module",
   "main": "lib/index.mjs",
@@ -37,7 +37,7 @@
     "dsh-better-sidebar": ">=0.12.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "@deepseek-ai/dsh-session": "^0.1.0-rc.6"
+    "@deepseek-ai/dsh-session": ">=0.1.0-rc.6 <0.3.0"
   },
   "peerDependenciesMeta": {
     "dsh-better-sidebar": {
@@ -45,11 +45,11 @@
     }
   },
   "devDependencies": {
-    "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-session": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-web-app": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-runtime": ">=0.1.0-rc.6 <0.3.0",
+    "@deepseek-ai/dsh-client-ui-slots": ">=0.1.0-rc.6 <0.3.0",
+    "@deepseek-ai/dsh-host-webserver": ">=0.1.0-rc.6 <0.3.0",
+    "@deepseek-ai/dsh-session": ">=0.1.0-rc.6 <0.3.0",
+    "@deepseek-ai/dsh-web-app": ">=0.1.0-rc.6 <0.3.0",
     "@types/node": "^26.2.0",
     "@types/react": "~18.3.1",
     "@types/react-dom": "~18.3.1",

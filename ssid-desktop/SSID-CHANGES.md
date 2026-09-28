@@ -396,7 +396,7 @@ tsc -b tsconfig.host.json && tsdown --env.DSH_BUILD_FACE host && pnpm --filter @
 **两处待微调**：
 
 1. 品牌胶囊显示 `DSH 0.1.7-rc.2`（取自主进程 `app.getVersion()`），而页面侧栏标的是本地构建的完整版本 `0.1.7-rc.2-477b4f4-dirty`。注入脚本里读页面 `[class*="buildVersion"]` 的兜底没命中 —— 该类名或出现时机与假设不符，待对齐。
-2. `dsh-better-sidebar` 有一条 `agent-opens connection failed; stopping reconnect loop` 警告；功能未受影响，待查是否与 fork 缺少壳侧桥接有关。
+2. `dsh-better-sidebar` 有一条 `agent-opens connection failed; stopping reconnect loop` 警告 —— **已查明（2026-09-28）**：不是缺少壳侧桥接（壳的 `webRequest.onBeforeSendHeaders` 一直在改写握手头），而是 **URL 本身拼错** —— 插件用 `location.origin` 构造 WS URL，而页面在 `dsh-app://app` 下、其 `host` 是字面量 `app`，于是得到 `ws://app/…`，DNS 永远解析不了。修法是改读壳注入的 `__DSH_TRANSPORT__.streamBaseUrl`（普通 http(s) 页面下与原写法等价）。已提 PR #797（前身 #768 基于 0.22.x，随支持线前移而关闭），并在真机用 CDP 实测对照：旧构造 ERROR（2708ms）/ 新构造 OPEN（18ms）。
 
 ## 改动 7：profile 名可配 + 会话根跟随（2026-09-25）
 

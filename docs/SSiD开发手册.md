@@ -349,7 +349,7 @@ shell/profile-template/package.json      ← ★唯一手改处★（dependencie
 - **拿到新版本不必停机**：`pnpm install --lockfile-only`（只重算 lock、不碰 `node_modules`）＋ 从 tarball 解包覆盖实体——运行中的 Node 不锁已加载的 `.js`。**「install 必须停机」只对含原生模块（`node-pty` 的 `.node` 被进程占用 → EPERM）的整体重装成立**，别当通用规则套。
 - **覆盖必须「先删目录再复制」，不要用 `robocopy /MIR`**：`npm pack` 把包内文件 mtime 统一成 `1985-10-26 16:15:00`，而 robocopy 按「时间戳 + 大小」跳过——**大小恰好与上一版相同的文件会被静默跳过**（`package.json` 在 0.7.2/0.7.3 都是 2305 字节，只有版本行不同），加 `/IS` 也无效。正确做法：`Remove-Item <dst> -Recurse -Force` 后 `Copy-Item <src> <dst> -Recurse -Force`，**最后逐文件比一次哈希**收尾。
 
-> dev 环境下插件集的具体产出与接入操作（含 `SSID_PLUGIN_SET_DIR`），见 `ssid-desktop/SSID-CHANGES.md` 的改动 29–31。
+> dev 环境下插件集的具体产出与接入操作（含 `SSID_PLUGIN_SET_DIR`），见 `ssid-desktop/SSID-CHANGES.md` 的改动 29–31；**改完插件之后在 dev 里怎么验证**（落点、信号、判定）见 `docs/插件测试操作手册.md`。
 
 ## 5. 内核升级
 
@@ -378,6 +378,40 @@ shell/profile-template/package.json      ← ★唯一手改处★（dependencie
 4. **排查打包失败别用 `Select-Object -Last N` 截断输出**——warning 与编码错误都会被切掉。真因在 `.desktop-build\packaging-runs\<run>\stdout.log`（**不是** `events.jsonl`）。
 5. **pnpm 11 的 `allowBuilds` 占位符**：`pnpm-workspace.yaml` 里若还写着 `esbuild: set this to true or false`，那是没填完的模板，构建会以 `ERR_PNPM_IGNORED_BUILDS` 失败。
 6. **semver 的预发布陷阱**：`^0.1.1-rc.1` 只匹配 `0.1.1-*`，**不会**升到 `0.1.7-rc.2`——依赖声明必须显式改。
+
+### 5.0″ 跨 minor 升级要先付的账（2026-09-28，`0.1.7-rc.2 → 0.2.0-rc.1` 实测）
+
+> **与 §5.0′ 的分工**：那节讲「怎么换内核」，这节讲「换之前必须先处理什么」。`0.1.x → 0.2.x` 这种**跨 minor** 的代价不在内核本身，而在**所有插件的 peer 声明**。
+
+**一、插件会集体静默消失（最重的一条）**
+
+`packages/boot/app-boot/src/plugin-compatibility.ts:75` 对每个 bundle 的 **`@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` peer** 跑 `semver.satisfies(宿主, range, { includePrerelease: true })`；不满足时 `profile.ts:675-676` 抛错，被同层 `catch` 吞成 `skippedBundles` —— **该 bundle 的整个 patch 层不挂载**。
+
+caret 的上界是「下一个 minor」：`^0.1.7-rc.1` 展开为 `>=0.1.7-rc.1 <0.2.0-0`，对 `0.2.0-rc.1` **判定 false**（`includePrerelease` 只放宽预发布子句，不改上界）。因此**跨 minor 时所有写成 `^0.1.x` 的插件一起失配**。
+
+失败形态隐蔽：不崩溃、界面不报错，只是少加载一批。症状是**依赖它**的插件停在 `pending (waiting for service: …)`，而它自己**不在**「did not activate」列表里——它在进入 fiber 图之前就被跳过了。
+
+实测：隔离 profile 的 34 个 bundle 里，凡 `^0.1.x` 的（含我们自己的 12 个插件）全部被跳过；改范围或授予豁免后全部加载。上游 `dsh-better-sidebar` v0.24.0 的提交信息里有同一结论的独立印证。
+
+**两条出路**：
+
+- **改插件的 peer 范围**（正解）：写成覆盖两代的范围（如 `>=0.1.7-rc.1 <0.3.0`），或直接跟基线（`^0.2.0-rc.1`，代价是踢掉旧内核用户）。**第三方插件我们改不了**，只能等作者或走豁免。
+- **profile 的 `compatibility.json` 授予精确版本豁免**：`{ "<包名>@<精确版本>": ["<精确 DSH 版本>"] }`。**按精确版本匹配——插件一升级就要同步改**，否则对新版本无效。豁免是「已知情并接受不兼容风险」，不是修复。
+
+**二、dev 启动的两个坑**
+
+1. **`ELECTRON_RUN_AS_NODE` 必须清掉**：DSH 会话（它自己跑在 Electron 里）给子进程带着 `ELECTRON_RUN_AS_NODE=1`，于是 `electron.exe` 以 Node 模式启动，报 `bad option: --remote-debugging-port=…` / `bad option: --user-data-dir=…`。`bad option:` 是 **Node** 的报错格式，看到它就是这个原因。启动前 `Remove-Item env:ELECTRON_RUN_AS_NODE`。
+2. **`dev.ts` 也要读对版本号**：`scripts/dev.ts` 用 `apps/desktop/package.json` 的版本构造 `DesktopRelease`，而那个值是**思灵产品版本**（1.0.0）；`prepareDevelopmentProject` 断言 `apps/cli` 的版本等于它，于是直接抛 `apps/cli must be @deepseek-ai/dsh@1.0.0, found @deepseek-ai/dsh@0.2.0-rc.1`。**v1.0.0 产品版本解绑时漏改的就是这里**——`prepare-dsh.ts` 的 `desktopRelease()` 已改用仓库根 `package.json`，`dev.ts` 必须同样处理。
+
+**三、dev 与打包不能并行**
+
+两者共用 `.desktop-build/targets/<target>/runtime/primary-runtime`（`desktop-build-paths.mjs` 的 `developmentRuntimeDirectory()` 与 target 路径都指到这里）。同时跑会互相破坏：dev 报 `EPERM`，打包在 `smokePrimaryRuntime` 报 `node.exe ENOENT`（目录被改到一半）。**先打包完再启 dev，或先停 dev 再打包**；该目录被弄坏时整个删掉让它重建。
+
+**四、升级 dev 的插件不要动共享实体**
+
+dev profile 与生产 profile 的插件 `node_modules` 条目**都是 junction，且指向同一个目录**（`ssid-shell/resources/ssid-plugins/node_modules/<pkg>`）。在 dev 里升级插件等于直接改装版的随包插件集：轻则 EPERM（文件被运行中的装版占用），重则装版重启后因 peer 失配**静默丢掉这些插件**。
+
+**做法**：建一个 dev 专用插件集（`.ssid-iso-test/ssid-plugins-dev/`），把原集的条目全部 junction 过去（保住依赖解析链；实测 618 个 junction、0.6 秒），只把要升级的包换成实体，再把 dev profile 的 `node_modules` junction 与 `package.json` 的 `link:` 声明一起指过去。
 
 ### 5.0 内核升级必须同步的口子（2026-09-12 rc.2 升级定稿）
 
@@ -626,6 +660,7 @@ apps/desktop-host（Host 子进程）
 ## 8. 文档索引
 
 - 本手册（总览/流程/坑）
+- `docs/插件测试操作手册.md`（**改插件后在 dev 里怎么验证**：落点三选一与影响面 / 起隔离实例 / 三个失败信号 / peer 跨 minor 静默跳过 / 升级脚本 / L2 判定）
 - `ssid-desktop/SSID-CHANGES.md`（**fork 改动清单**：对上游每条改动的文件/行/原因 + dev 实机验证证据。含 dev profile 解耦、第三方插件接入、设置槽位迁移到 `plugins.bundle.config`、截图/保活/MCP/CodeGraph 四项功能补全，以及**「`profile-merge` 为何不移植」**与 fork 副本同步纪律）
 - `docs/决策/2026-08-29-SSiD升级执行指南.md`（升级执行方案——§1.1 版版本对照表仍在参考价值）
 - `docs/决策/2026-08-29-SSiD升级执行记录.md`（本次升级全过程与修复记录）
@@ -663,6 +698,7 @@ apps/desktop-host（Host 子进程）
 | 11 | **`@max-null/dsh-skills` 发布与集成** | ✅ **基本完成**（2026-09-12）。8 个 skill 已生成（SKILL.md + SOURCE.md，含 1 份带 Python 编码器），4 个不适配并记录理由；GitHub 仓库 `Max-Null/dsh-skills` 已建（PUBLIC）并推送。npm 发布**已执行**——重发返回 403「cannot publish over the previously published versions: 0.1.0」，证明该版本**已在主库**；但 registry 查询仍 404，疑为 CDN 同步延迟，待观察。SSiD 侧集成**已就位并验证到 Loader 层**：`ssid` profile 双处声明（暂用 `file:` 指向本地包）→ `pnpm install`（`+16 -68`，13 个关键包核对无缺失）→ **`dsh --profile ssid --dump-config` 的组合插件树里出现 `@max-null/dsh-skills`** → 从 profile 内加载读到全部 8 个 skill。**剩余**：npm 可见后把声明换成版本号 `0.1.0`。全过程见 `docs/决策/2026-09-10-dsh-skills发布与集成.md` | ✅ 完成（2026-09-12 收尾：npm 已可见，实测 `npm view @max-null/dsh-skills version` → `0.1.0`；ssid profile 与 profile-template 双处声明均已由 `file:` 改为 `0.1.0`，manifest 临时豁免已撤销，`check-profile-sync` 转绿；**2026-09-18：0.1.2 发布**——包扩为 10 个技能（8 上游适配 + 2 思灵自创），图书馆按来源拆类，三处声明升 0.1.2） |
 | 12 | **升级 `ssid-release` skill（落后于 0.1.5 内核）** | 用户 2026-09-14 指出并拍板。该 skill 定稿于 0.1.5 之前，与当前仓库已有工具脱节，照搬会走弯路：①**打包**是 `npm run pack`（= `bundle-kernel` + **`bundle-kernel-child`** + electron-builder），skill 只写了 `bundle-kernel`；②**归档抽查**已被 `npm run verify:release` 机械化（`verify-release.mjs` 覆盖 §4 完整性与 §5 七条抽查，且默认不做部署与 boot），不必手工 `tar -xzf` 逐项核；③**交付链完整性**由 `npm run verify:shipped`（仓库根 / `win-unpacked` / `setup.exe` 三层哈希）覆盖；④七道检查门（`npm run check:rules`，含 `dsh-clean`）与归档内 `runtime-integrity.sha256` 逐文件清单都是 skill 之后新增；⑤子进程内核与纯净模式、0.1.5 的 inject 收缩（405 修复）等结构性变更 skill 均未涵盖。**注意**：skill 正文**仓库里就有一份且更新**——`.agents/skills/ssid-release/`（`SKILL.md` 17,443 B，2026-09-06；`smoke-ui.cjs` 11,156 B）比用户级 `~/.dsh/skills/ssid-release/`（15,771 B，2026-08-30）新，**该做的是把仓库版同步到用户级**（而非把正文迁进仓库）。**2026-09-14 发版实测补充三条**：①**归档耗时被严重低估**——skill 写「3-5 分钟」，实际约 **25 分钟**（`runtime-integrity.sha256` 生成 65,481 条占 291 秒，1018 MB 的 `tar -czf` 再 1-3 分钟），据此安排发版时段；②**`verify-release.mjs` 的 §5-2 已过时**——它仍检查 `open-sea-skin/plugin/client.js`（该定制在 v0.1.16 已移除），本次报「归档内无该文件」属假提示；同节的体积上限 213 MB 也已被依赖增长突破（本次 230.5 MB，脚本自己提示"通常是依赖增多"）；③`pack` 脚本早已是 `bundle-kernel` + `bundle-kernel-child` + electron-builder，skill 只写 `bundle-kernel` 会漏掉子进程 bundle。**2026-09-14 首轮升级已完成**：skill 正文（`.agents/skills/ssid-release/SKILL.md`）按上述各点改写并同步到用户级 `~/.dsh/skills/ssid-release/`（两处 MD5 一致）；`verify-release.mjs` 的 §5-2 改为「open-sea-skin 缺失不判违规（v0.1.16 已移除）」、期望体积 185 → 230 MB；skill 新增「打包产物自检必须隔离（PS 5.1 无 `Start-Process -Environment`）」「隔离空环境的断言假 FAIL 判据」「gh 上传大文件实测很快（v0.3.0 的 359/409 MB 各 1-2 分钟）」等条目。 | ✅ 完成（2026-09-14 首轮；后续随工具演进继续维护） |
 | 13 | **quick-toolbar 在壳里缺「插件中心」按钮** | ✅ **已修**（2026-09-14，`dsh-quick-toolbar` 6835abb）。机理与实测见 §7 #20。修法取「壳标志函数化、每次读取」——**未**新增 `hideIfShell` 补渲染钩子：既有的 1s 补渲染轮询本就一直跑到全部内置就位，标志到达后的下一个 tick 即按壳语义补渲染，故钩子是多余的机制。dev 实测：面板 4 → 5 个内置，点击「插件中心」`pc-` 元素 0 → 1858（打开）、再点归 0（收起）。 | ✅ 完成 |
+  | 14 | **0.2.0 升级遗留的两处插件降级项** | 两者都是**第三方**插件，内核 peer 还停在 `^0.1.x`、目前纯靠 `compatibility.json` 豁免在 0.2.0 下运行（作者一发新版豁免即失效）。① `dsh-sidebar-qa` 的设置命名空间在 0.2.0 下被跳过、一律用默认值 —— **这是刻意的降级**（插件按结构探测 `register`，探测不到就拒绝），它的注释自己给出迁移路径：声明 volatile `Config` + 按 entry id 寻址表单，落点 `src/settings-face.ts`；若我们提 PR，须避开 schemastery 的两个坑（必须用 DSH 自己的那份；`.volatile()` 返回副本要收集返回值）。② `dsh-dream-skin` 的 CSS Module 哈希类名漂移，material refinements 失效 —— **纯外观**，插件自判无害；但清单**遇到一个记一个**（两次运行结果不同），且该仓库**没有 `src/`**。详见 `docs/决策/2026-09-29-0.2.0升级遗留的两处插件降级项.md` | ⏳ 待办 |
 
 ## 附录 A：开发会话行为清单（agent 执行前自检）
 
@@ -676,6 +712,8 @@ apps/desktop-host（Host 子进程）
 8. **验证留痕** → L2 checklist + 记录一行；截图顺手入 `docs/shots/`。
 
 ## 9. 插件开发与测试规范（2026-08-30 定稿）
+
+> **改完插件之后，在 dev 环境里怎么验证** → `docs/插件测试操作手册.md`（落点三选一与影响面 / 起隔离实例 / 三个失败信号 / peer 跨 minor 静默跳过 / 升级脚本 / L2 判定）。
 
 **背景**：早期插件开发漏了自动化测试，现已补齐——全家桶 11 个插件全部具备 `build/typecheck/test` 三件套 + `tests/`。本规范把现状**门槛化**，防止回退。
 

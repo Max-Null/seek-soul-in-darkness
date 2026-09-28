@@ -43,9 +43,15 @@ const ONLY = (process.argv.find((a) => a.startsWith('--pkg=')) ?? '').slice(6);
 const manifest = JSON.parse(fs.readFileSync(MANIFEST, 'utf8'));
 const copies = manifest.vendorCopies ?? {};
 
+// 目标只有 tpl（发版基准）与可选的 web（宿主实例，需 --web 显式开启）。
+//
+// 曾经还有第三处 `ssid`：自建壳时代 profile 里有 `vendor/`，出厂插件写 `file:./vendor/<pkg>`。
+// 1.0.0 换成 A′ 随包插件集之后，运行时 profile 的出厂插件改走 `link:` 指向
+// `<resources>/ssid-plugins/node_modules/<pkg>` —— 那个目录**不再有 vendor/**。
+// 留着一处无对象的目标，只会每次报「目标不存在」并把退出码顶成 1（`npm test` 里
+// 那条退出码契约用例就是这么红的）。manifest 的 vendorCopies.ssid 保留为历史登记。
 const targets = [['tpl', copies.tpl]];
 if (INCLUDE_WEB) targets.push(['web', copies.web]);
-targets.push(['ssid', copies.ssid]);
 
 const short = (p) => p.replace(/^[A-Z]:\\Users\\[^\\]+\\/, '~/').replace(/\\/g, '/');
 
@@ -102,8 +108,10 @@ for (const [pkg, spec] of syncable) {
 }
 
 console.log(`\n  ${'─'.repeat(60)}`);
+// 两条结论互斥：`changedTotal === 0` 只在**没有失败**时才等于「全部一致」——
+// 否则会出现「✗ 4 处失败」与「✓ 全部一致，无需同步」同时打出来的自相矛盾。
 if (failed) console.log(`  ✗ ${failed} 处失败`);
-if (changedTotal === 0) console.log('  ✓ 全部一致，无需同步');
+if (changedTotal === 0) { if (!failed) console.log('  ✓ 全部一致，无需同步'); }
 else if (!APPLY) console.log(`  · 共 ${changedTotal} 处差异待同步（dry-run；加 --apply 执行）`);
 else console.log(`  ✓ 已同步 ${changedTotal} 处`);
 console.log('');

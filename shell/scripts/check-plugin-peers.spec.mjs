@@ -75,7 +75,7 @@ test('范围不覆盖内核 → 退出码 1，且报出包名、范围与内核�
     writePlugin(dir, 'p-old', { '@deepseek-ai/dsh-session': '^0.0.9' });
     const r = runGate(dir);
     assert.equal(r.code, 1, `期望 1，实际 ${r.code}\n${r.out}`);
-    assert.match(r.out, /p-old 的 @deepseek-ai\/dsh-session@\^0\.0\.9 不覆盖内核 0\.1\.5-rc\.2/);
+    assert.match(r.out, /p-old 的 @deepseek-ai\/dsh-session@\^0\.0\.9 不覆盖 @deepseek-ai\/dsh-session 的目标版本 0\.1\.5-rc\.2/);
   });
 });
 

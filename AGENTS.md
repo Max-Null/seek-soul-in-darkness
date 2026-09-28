@@ -20,15 +20,15 @@ npm test                # 门禁脚本自测
 npm run sync:vendor     # vendor 同步
 ```
 
-> ⚠️ `shell/scripts/` 里的 **`prepare-runtime.mjs` 与 `verify-release.mjs` 服务于自建壳时代的 `dsh-runtime.tar.gz` 归档**——fork 形态不再产出该归档（内核随包进 asar 的 `dsh/`），这两个脚本已无对象。**`ssid-release` skill 同样定稿于自建壳形态**，照搬会走弯路。
+> ⚠️ `shell/scripts/` 里的 **`prepare-runtime.mjs` 与 `verify-release.mjs` 服务于自建壳时代的 `dsh-runtime.tar.gz` 归档**——fork 形态不再产出该归档（内核随包进 asar 的 `dsh/`），这两个脚本已无对象。**`ssid-release` skill 已改写为 fork 版**（自建壳那套收缩到文末「附：自建壳时代」一节），照搬那节里的步骤才会走弯路。
 
 自建壳时代的 `npm start` / `npm run typecheck` / `npm run smoke` / `npm run bundle-kernel` 已随运行时归档，`shell/package.json` 里不再有这些脚本。**当前壳的构建入口与落点见 `ssid-desktop/README.md`**——构建在带 DSH 全历史的开发主轴 checkout（`.ssid-build/checkout`，分支 `ssid-desktop-fork`）里做，不在本工作区直接构建。
 
 ## 内置专属插件（plugins/）
 
-- 源头 + 同步链与发版纪律见手册 §10：不发布 npm、vendor 四份指纹一致、改后必同步运行时实体。
-- 当前：dsh-ssid-panels（0.1.9）、dsh-ssid-zh-ui（0.1.0）——源码在 `plugins/`，与三处 vendor **逐文件全等**（含 `src/`、`tests/`）。
-- dsh-quick-toolbar（原 dsh-header-unify）已于 2026-08-30 **迁出独立**，源头在 `max-null-plugins/dsh-quick-toolbar`，`plugins/` 下不保留副本（`plugins/dsh-quick-toolbar` 残骸已于 2026-09-10 清理）；SSiD 侧仍 vendor 集成，同步链 = 独立仓库构建产物 → 三处 vendor。
+- 源头 + 同步链与发版纪律见手册 §10：不发布 npm、vendor 各份指纹一致、改后必同步运行时实体。
+- 当前：dsh-ssid-panels（0.1.11）、dsh-ssid-zh-ui（0.1.0）——源码在 `plugins/`，与 vendor 各份**逐文件全等**（含 `src/`、`tests/`）。**「三处 vendor」随 A′ 随包插件集收缩成两处**：运行时 profile 里已没有 `vendor/`（出厂插件改走 `link:` 指向 `<resources>/ssid-plugins/node_modules/<pkg>`），实际比对面是 **源 + 发版基准 `shell/profile-template/vendor` + web 运行时 `~/.dsh/profiles/web/vendor`**。
+- dsh-quick-toolbar（原 dsh-header-unify）已于 2026-08-30 **迁出独立**，源头在 `max-null-plugins/dsh-quick-toolbar`，`plugins/` 下不保留副本（`plugins/dsh-quick-toolbar` 残骸已于 2026-09-10 清理）；SSiD 侧仍 vendor 集成，同步链 = 独立仓库构建产物 → vendor 各份。
 - 该插件的 vendor 是**精简副本**：只收 `lib/` + `cordis.patch.yml` + `package.json`，源码/测试/截图/README 都不进 vendor——核对时不要按"整目录相等"比。
 
 ## 文档约定

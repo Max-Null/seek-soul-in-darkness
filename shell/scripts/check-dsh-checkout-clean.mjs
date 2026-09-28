@@ -13,6 +13,10 @@
  * 而整个诊断的机制推理都建立在读过的那份补丁版源码上。约定写在工作区 `AGENTS.md`
  * 的布局注里，但没有门，所以没拦住。
  *
+ * 检视面：默认三个 checkout —— `deepseek-harness`、`dsh-web-runtime` 整仓，外加 SSiD
+ * 的开发主轴 `.ssid-build/checkout`，**只查它的 `packages/`**（它的 `apps/**` 就是
+ * 壳代码与打包脚本，正是要改的地方）。
+ *
  * 判定（只查「已跟踪文件被修改」，M/D/R/T 任一即违规）：
  *   - 不查未跟踪文件：`.tmp-*` 诊断脚本、`.dsh/`、构建产物都是正常噪声，查了会误报
  *   - 不查删除：`dsh-web-runtime` 有一批 symlink 在 Windows 上没落成（既有状态），
@@ -36,10 +40,23 @@ const SHELL = path.resolve(HERE, '..')
 const REPO = path.resolve(SHELL, '..')
 const WORKSPACE = path.resolve(REPO, '..')
 
-/** 默认检视工作区里的两个 DSH checkout；可用 SSID_DSH_ROOTS 注入临时目录做自测。 */
+/**
+ * 默认检视三个 checkout；可用 SSID_DSH_ROOTS 注入临时目录做自测（注入模式不设 scope）。
+ *
+ * 第三个是 SSiD 的开发主轴 —— 约定「DSH 源码只引用不改」的适用面写明为
+ * `deepseek-harness/`、`dsh-web-runtime/`，**以及 `.ssid-build/checkout/packages/**`**。
+ * 前两个整仓都是上游源码，而开发主轴是 fork 仓库：`apps/**` 正是我们改的地方
+ * （壳代码、打包脚本、资源），只有 `packages/**` 属于上游源码。所以给它一个 scope
+ * 只检视 `packages/`，与约定原文的口径一致。
+ */
+const DEFAULT_ROOTS = [
+  { root: path.join(WORKSPACE, 'deepseek-harness'), scope: null },
+  { root: path.join(WORKSPACE, 'dsh-web-runtime'), scope: null },
+  { root: path.join(WORKSPACE, '.ssid-build', 'checkout'), scope: 'packages' },
+]
 const ROOTS = process.env.SSID_DSH_ROOTS !== undefined
-  ? process.env.SSID_DSH_ROOTS.split(path.delimiter).filter(Boolean)
-  : [path.join(WORKSPACE, 'deepseek-harness'), path.join(WORKSPACE, 'dsh-web-runtime')]
+  ? process.env.SSID_DSH_ROOTS.split(path.delimiter).filter(Boolean).map(root => ({ root, scope: null }))
+  : DEFAULT_ROOTS
 
 const gate = createGate({ id: 'check-dsh-checkout-clean', label: 'DSH 源码只引用不改', base: REPO })
 
@@ -59,15 +76,12 @@ function git(cwd, args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
 }
 
-for (const root of ROOTS) {
+for (const { root, scope } of ROOTS) {
   const label = path.basename(root)
-  // 默认列表里只认真正的 DSH checkout；SSID_DSH_ROOTS 注入时不套这个规则。
-  // 注意 `deepseek-harness` 不以 `dsh` 开头 —— 用白名单，别用 `^dsh` 前缀（会把它漏掉）。
-  if (process.env.SSID_DSH_ROOTS === undefined
-    && !/^(deepseek-harness|dsh[-_])/i.test(label)) {
-    gate.info(`跳过（不是 DSH checkout）：${label}`)
-    continue
-  }
+  // 这里曾有一道 basename 白名单 `^(deepseek-harness|dsh[-_])`（当年是为了别用 `^dsh`
+  // 前缀漏掉 `deepseek-harness`）。默认列表改成显式路径后它已多余，而且正是它会把
+  // `.ssid-build/checkout`（basename 是 `checkout`）静默跳过——列表里每一项都是我们
+  // 点名的 checkout，不需要再筛。
   if (!fs.existsSync(root)) {
     gate.info(`跳过（不存在）：${label}`)
     continue
@@ -94,6 +108,8 @@ for (const root of ROOTS) {
     const x = row[0]
     const y = row[1]
     const file = row.slice(3)
+    // scope 限定时只看该子树：开发主轴的 `apps/**` 是我们的工作面，不是「改源码」
+    if (scope !== null && !file.startsWith(`${scope}/`)) continue
     if (!VIOLATING.has(x) && !VIOLATING.has(y)) continue
     gate.violation(
       path.join(root, file),
@@ -101,7 +117,7 @@ for (const root of ROOTS) {
       `DSH 源码被改动（${label}）—— 约定「只引用不改」。需要适配请改 profile 的 cordis.patch.yml / 我们自己的插件或壳代码`,
     )
   }
-  gate.info(`${label}：源码干净 ✓`)
+  gate.info(`${label}：源码干净 ✓${scope === null ? '' : `（只检视 ${scope}/）`}`)
 }
 
 // 「检查过且干净」是正常通过；只有**一个仓库都没检视到**才是空语料（fail-loud）。

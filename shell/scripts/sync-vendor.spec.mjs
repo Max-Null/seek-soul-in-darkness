@@ -33,7 +33,9 @@ test('安全默认 1：不带 --apply 时不写盘，且明示这一点', () => 
 
 test('安全默认 2：默认不把 web 纳入目标，并提示如何开启', () => {
   const r = run();
-  assert.match(r.out, /目标：tpl \+ ssid/);
+  // 目标只剩 tpl（+ 可选 web）：A′ 随包插件集之后运行时 profile 已无 vendor/，
+  // 那条 ssid 目标已下架（见 sync-vendor.mjs 里的说明）。
+  assert.match(r.out, /目标：tpl（web 未纳入；需要时加 --web）/);
   assert.match(r.out, /web 未纳入；需要时加 --web/);
   assert.doesNotMatch(r.out, /\[web\]/, '默认输出里不该出现 web 目标段');
 });

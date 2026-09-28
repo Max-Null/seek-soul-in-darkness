@@ -7,7 +7,7 @@ description: "SSiD（思灵）发版流程（fork 版 / v1.0.0 起）：版本�
 
 > **换代提示**：壳已从自建壳（≤0.4.0）换成官方 `dsh-desktop-host` 基座。本文写 **fork 版**流程；自建壳那套（`bundle-kernel`、`dsh-runtime.tar.gz` 归档、`verify:shipped`）**已随运行时归档**，只在文末附录留作历史。
 >
-> **⚠️ 1.0.0 尚未发布过**：凡标 **【待验证】** 的，是从代码里读到的、但还没实际走完一次的步骤——不要当成既成事实。
+> **⚠️ 1.0.0 已于 2026-09-28 发布**（tag `v1.0.0`，GitHub Release 为该仓 latest）：打包链与 GitHub 交付**已按本文实跑过一次** —— §5 的阶段耗时表与 §5 的产物大小都是那次的实测值。**仍标【待验证】的，是那一次没覆盖到的步骤**：未签名包能否通过 `electron-updater` 的 NSIS 校验、以及「打包 → 发布 → 旧版检测到新版 → 下载 → 安装」的完整更新闭环。这两条不要当成既成事实。
 >
 > **两个根，别混**：**构建与打包**在开发主轴 `H:\MaxNull\WorkStation\.ssid-build\checkout`（分支 `ssid-desktop-fork`，带 DSH 全历史）——§5 的相对路径相对它；**发版基准与资产**（`shell/`、`plugins/`、`docs/`）在 `H:\MaxNull\WorkStation\seek-soul-in-darkness\`——§2、§3、§4 的相对路径相对它。`seek-soul-in-darkness/ssid-desktop/` 是**对外快照**，不是构建处。
 >
