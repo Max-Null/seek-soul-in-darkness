@@ -4,6 +4,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { join } from 'node:path'
 import type { PlatformSession } from '@deepseek-ai/dsh-deepseek-account'
 import { desktopNodeEnvironment } from './node-environment.ts'
+import { createHostLogSink, hostLogPath, type HostLogSink } from './ssid/host-log.ts'
 
 interface ReadyEvent {
   readonly type: 'ready'
@@ -213,6 +214,8 @@ export class DesktopHostProcess {
   })
   private exitPromise: Promise<void> | undefined
   private stderr = ''
+  /** Host 输出的落盘目标；首次 `start()` 打开，Host 退出时关闭。 */
+  private hostLog: HostLogSink | undefined
   private failureReported = false
   private stopping = false
   private shutdownCompleted = false
@@ -274,8 +277,17 @@ export class DesktopHostProcess {
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     })
     this.child = child
+    // Host 的异常原本没有去处：stdout 在 GUI 进程里没有控制台可去，stderr 只留在内存
+    // 供崩溃时拼诊断。排查 `present.open` 500 时因此拿不到堆栈 —— 两路同时落盘，
+    // 见 ssid/host-log.ts。
+    const hostLog = this.hostLog = createHostLogSink(hostLogPath(this.environment))
     child.stderr?.setEncoding('utf8')
-    child.stderr?.on('data', (chunk: string) => { this.stderr = (this.stderr + chunk).slice(-MAX_HOST_DIAGNOSTIC_CHARS) })
+    child.stderr?.on('data', (chunk: string) => {
+      this.stderr = (this.stderr + chunk).slice(-MAX_HOST_DIAGNOSTIC_CHARS)
+      hostLog.write(chunk)
+    })
+    child.stdout?.setEncoding('utf8')
+    child.stdout?.on('data', (chunk: string) => { hostLog.write(chunk) })
     child.stdout?.pipe(process.stdout)
     child.on('message', (message: unknown) => {
       if (!isDesktopHostEvent(message)) {
@@ -303,6 +315,10 @@ export class DesktopHostProcess {
     child.once('error', (error) => { this.fail(error) })
     this.exitPromise = new Promise<void>((resolve) => {
       child.once('close', (code) => {
+        // `close` 在 stdio 流关闭之后触发，Host 的输出此时已全部投递，可以安全收尾。
+        const log = this.hostLog
+        this.hostLog = undefined
+        void log?.close()
         const suffix = this.stderr.trim() === '' ? '' : `: ${this.stderr.trim()}`
         if (code !== 0 && code !== null) this.fail(new Error(`dsh desktop host exited with ${String(code)}${suffix}`))
         else this.fail(new Error(`dsh desktop host stopped${suffix}`))
