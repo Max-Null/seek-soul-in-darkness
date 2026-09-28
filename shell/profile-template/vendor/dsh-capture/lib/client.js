@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
 		//#region src/client/api.ts
 		/** POST one method and unwrap the envelope. */
 		async function api(method, payload) {
-			const res = await fetch(`/ssid/api/screenshot/${method}`, {
+			const res = await fetch(`/api/ssid/screenshot/${method}`, {
 				method: "POST",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify(payload ?? {})
@@ -772,13 +772,13 @@ window.__ModuleLoader__.load({
 		* ScreenshotButton: the composer's right-tool-seat entry (conversation.input.right
 		* — the same seat as dsh-draft-polish), dual-engine:
 		*
-		*  - SSiD 壳内（引擎 A）：POST /ssid/api/screenshot/trigger → 壳开全屏浮层
+		*  - SSiD 壳内（引擎 A）：POST /api/ssid/screenshot/trigger → 壳开全屏浮层
 		*    （多显示器、快捷键、隐藏窗口、像素级帧）。
 		*  - 纯 DSH / 无壳（引擎 B）：点击手势内同步调用 navigator.mediaDevices
 		*    .getDisplayMedia（系统选择器选一个屏幕）→ 抓一帧 → 页面内全屏遮罩
 		*    CaptureOverlay（框选 + 红框标注）→ 官方 drop intake 投递。
 		*
-		* 探测（shellAvailable，来自 host 的 /ssid/api/screenshot/get）在组件挂载时
+		* 探测（shellAvailable，来自 host 的 /api/ssid/screenshot/get）在组件挂载时
 		* 拉取并缓存——点击必须同步决定引擎（getDisplayMedia 要求用户手势调用栈），
 		* 不能先 await 再选。
 		*/
@@ -980,7 +980,7 @@ window.__ModuleLoader__.load({
 		* ScreenshotSettings: two General-settings rows (settings.general.item —
 		* the additive seat for a single setting that needs no page of its own).
 		*
-		* Rows (each fetched/saved through /ssid/api/screenshot/*):
+		* Rows (each fetched/saved through /api/ssid/screenshot/*):
 		*  - screenshot-hide: 截图时是否隐藏思灵窗口（checkbox，切换即保存）
 		*  - screenshot-hotkey: 全局快捷键（input，回车/失焦即保存，实时重注册）
 		*
@@ -1214,9 +1214,12 @@ window.__ModuleLoader__.load({
 				})
 			});
 		}
-		/** 设置——插件页卡片：截图行为（隐藏窗口开关 + 全局快捷键）——合并原两行通用设置。 */
+		/** 设置——插件页卡片：截图行为（隐藏窗口开关 + 全局快捷键）——合并原两行通用设置。
+		*
+		*  默认展开：本卡是该插件在「插件」页上唯一的设置入口，折叠态会让用户以为
+		*  「设置不见了」（2026-09-26；同日并入 SSiD 插件设置规范）。折叠仍可手动收起。 */
 		function ScreenshotSettingsCard() {
-			const [open, setOpen] = (0, react.useState)(false);
+			const [open, setOpen] = (0, react.useState)(true);
 			const t = langStrings();
 			return (0, react.createElement)("li", { className: "ssd3Card" + (open ? " ssd3CardOpen" : "") }, (0, react.createElement)("button", {
 				type: "button",
@@ -1383,18 +1386,18 @@ window.__ModuleLoader__.load({
 		*
 		* 三层职责：
 		*  1. 投递（壳层 → 输入框）：监听 `ssid:screenshot` CustomEvent（detail =
-		*     裁剪结果 `data:image/png;base64,…`，由 shell/main.mjs 经
-		*     mainView.webContents.executeJavaScript 派发），把 PNG 送进当前会话
-		*     输入框草稿——合成 drop 走 DSH 官方 composer 图片 intake
+		*     裁剪结果 `data:image/png;base64,…`，由壳层
+		*     `ssid-desktop/apps/desktop/src/ssid/screenshot.ts` 直接派发），
+		*     把 PNG 送进当前会话输入框草稿——合成 drop 走 DSH 官方 composer 图片 intake
 		*     （ui-attachment 的 document 级 drop 处理器，只认
 		*     `dataTransfer.types.includes('Files')`，量/类型/大小限制与真实拖拽一致）。
 		*  2. 截图按钮：注册 `conversation.input.right`（润色按钮同一座位），点击
-		*     调 /ssid/api/screenshot/trigger 让壳层开浮层。
-		*  3. 设置：注册「设置——插件」页卡片（settings.plugin.item）：隐藏窗口开关
-		*     + 全局快捷键编辑，即改即存（2026-09-06 由通用设置两行迁入）。
+		*     调 /api/ssid/screenshot/trigger 让壳层开浮层。
+		*  3. 设置：注册「插件」页插件详情里的卡片（`plugins.bundle.config`，key = 包名）：
+		*     隐藏窗口开关 + 全局快捷键编辑，即改即存。
 		*/
 		const inject = ["slots"];
-		/** 事件名（与 shell/main.mjs 派发一致）。 */
+		/** 事件名（与壳层 `ssid-desktop/apps/desktop/src/ssid/screenshot.ts` 派发一致）。 */
 		const SCREENSHOT_EVENT = "ssid:screenshot";
 		function parseShotPayload(detail) {
 			if (typeof detail !== "object" || detail === null) return null;
@@ -1453,9 +1456,9 @@ window.__ModuleLoader__.load({
 				id: "ssid-screenshot",
 				order: -10
 			}, ScreenshotButton));
-			ctx.slots.inject("settings.plugin.item", () => ctx.slots.register({
-				name: "settings.plugin.item",
-				key: "dsh-capture"
+			ctx.slots.inject("plugins.bundle.config", () => ctx.slots.register({
+				name: "plugins.bundle.config",
+				key: "@max-null/dsh-capture"
 			}, ScreenshotSettingsCard));
 		}
 		//#endregion

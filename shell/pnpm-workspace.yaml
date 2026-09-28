@@ -4,5 +4,9 @@ allowBuilds:
   esbuild: true
 minimumReleaseAgeExclude:
   - electron@44.2.0
-packages:
-  - tests/plugin-adapt
+# 这里曾有 `packages: [tests/plugin-adapt]`。那是个 Playwright 测试项目，源码连同
+# package.json 早已不在，只剩 report/ 与 test-results/ 两个产物被 git 跟踪着，而
+# lockfile 仍记着它的 importer —— 于是任何 `pnpm install --frozen-lockfile` 都报
+# ERR_PNPM_OUTDATED_LOCKFILE（v1.0.0 的 build-mac 就是这么在 24 秒处红的）。
+# 2026-09-29 摘掉该成员并删除残留产物，shell/ 回到单包形态（无 packages 键即默认
+# 只认本目录）。
