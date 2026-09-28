@@ -36,7 +36,7 @@ function writeSession(root: string, project: string, uuid: string, cwd: string, 
   writeFileSync(join(dir, 'session.jsonl.zstd'), zstdCompressSync(Buffer.from(`${JSON.stringify(header)}\n`)))
 }
 
-const readRegistry = (): { tables: { workspaces: Record<string, Record<string, unknown>> }, global: { workspaceIds: string[] } } =>
+const readRegistry = (): { tables: { workspaces: Record<string, Record<string, unknown>> }; global: { workspaceIds: string[] } } =>
   JSON.parse(readFileSync(registryFile, 'utf8')) as never
 
 beforeEach(() => {

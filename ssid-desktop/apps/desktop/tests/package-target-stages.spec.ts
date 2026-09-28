@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { packageTarget, parseDesktopPackageInvocation } from '../scripts/package-target.ts'
 import { withMacOSNotarizationProxy } from '../scripts/macos-notarization-proxy.ts'
 import { packageMacOSArtifacts } from '../scripts/package-macos.ts'
+import { notarizeMacOS } from '../scripts/notarize-macos.mjs'
 import { withWindowsSigningStage } from '../scripts/windows-signing-stage.mjs'
 import { prepareWindowsSignatureCacheDirectory } from '../scripts/windows-signature-cache-directory.mjs'
 
@@ -130,6 +131,20 @@ it('checks macOS directory packages without writing a release record', async () 
   expect(writeFileSync).not.toHaveBeenCalled()
 })
 
+// SSiD：未签名 mac 构建一步出产物，既不分解成「先签目录、再各自公证」，也不校验签名。
+it.each([false, true])('packages an unsigned macOS build without notarization or a release record (directory=%s)', async (directory) => {
+  const { run, stages } = supervisor()
+  await packageTarget(parseDesktopPackageInvocation(['mac-arm64', '--unsigned', ...(directory ? ['--dir'] : [])], 'darwin', 'arm64'), environment, run)
+  expect(stages.filter(stage => stage.startsWith('exec electron-builder'))).toEqual([
+    `exec electron-builder --config electron-builder.config.mjs --mac --arm64 --publish never${directory ? ' --dir' : ''} --config.mac.notarize=false`,
+  ])
+  expect(withMacOSNotarizationProxy).not.toHaveBeenCalled()
+  expect(packageMacOSArtifacts).not.toHaveBeenCalled()
+  expect(notarizeMacOS).not.toHaveBeenCalled()
+  expect(stages.at(-1)).toBe('exec tsx scripts/smoke-packaged-runtime.ts --unsigned')
+  expect(writeFileSync).not.toHaveBeenCalled()
+})
+
 it.each([undefined, '2'])('passes macOS pack concurrency %s only to workspace packing and download routing only to download stages', async (concurrency) => {
   const { run } = supervisor()
   await packageTarget(parseDesktopPackageInvocation(['mac-arm64', '--prepare-only'], 'darwin', 'arm64'), {
@@ -142,7 +157,9 @@ it.each([undefined, '2'])('passes macOS pack concurrency %s only to workspace pa
   expect(packs).toHaveLength(2)
   for (const call of packs) expect(call[2].slice(-2)).toEqual(['--concurrency', concurrency ?? '4'])
   for (const call of calls) {
-    expect(call[3].env.HTTP_PROXY).toBe(/^run prepare:(?:runtime|dsh)$/u.test(call[0]) ? 'http://downloads.example:8080' : undefined)
+    // SSiD 新增了 prepare:ssid-plugins 阶段，它与 runtime/dsh 一样走下载路由（要拉 npm 包），
+    // 因此也在带代理的那批里。
+    expect(call[3].env.HTTP_PROXY).toBe(/^run prepare:(?:runtime|dsh|ssid-plugins)$/u.test(call[0]) ? 'http://downloads.example:8080' : undefined)
   }
   expect(withMacOSNotarizationProxy).not.toHaveBeenCalled()
 })

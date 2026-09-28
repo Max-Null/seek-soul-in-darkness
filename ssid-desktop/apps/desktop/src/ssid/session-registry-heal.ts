@@ -128,7 +128,7 @@ function readSessionFact(file: string): SessionFact | undefined {
   try {
     const parsed: unknown = JSON.parse(zstdDecompressSync(readFileSync(file)).toString('utf8'))
     if (parsed === null || typeof parsed !== 'object') return undefined
-    const header = parsed as { type?: unknown, id?: unknown, cwd?: unknown, origin?: unknown }
+    const header = parsed as { type?: unknown; id?: unknown; cwd?: unknown; origin?: unknown }
     if (header.type !== 'session' || typeof header.id !== 'string' || typeof header.cwd !== 'string') return undefined
     return { id: canonicalSessionId(header.id), cwd: header.cwd, subagent: header.origin === 'subagent' }
   } catch {
@@ -152,7 +152,7 @@ export function healWorkspaceRegistry(input: HealWorkspaceRegistryInput): HealWo
 
   const registryFile = join(dshHome, 'storages', 'workspace.json')
   if (!existsSync(registryFile)) return empty('no-registry')
-  let doc: { tables?: { workspaces?: Record<string, Partial<WorkspaceRecord>> }, global?: { workspaceIds?: string[] } }
+  let doc: { tables?: { workspaces?: Record<string, Partial<WorkspaceRecord>> }; global?: { workspaceIds?: string[] } }
   try {
     doc = JSON.parse(readFileSync(registryFile, 'utf8')) as typeof doc
   } catch {
@@ -190,7 +190,7 @@ export function healWorkspaceRegistry(input: HealWorkspaceRegistryInput): HealWo
     if (typeof path === 'string') byPath.set(normalizePath(path), key)
   }
 
-  const plan = new Map<string, { cwd: string, ids: Set<string> }>()
+  const plan = new Map<string, { cwd: string; ids: Set<string> }>()
   let skippedSubagent = 0
   // 逐个会话读首帧拿 cwd：只凭目录名还原不可靠 —— 项目名里的 `-` 与路径分隔符同形。
   for (const root of roots) {
@@ -214,7 +214,7 @@ export function healWorkspaceRegistry(input: HealWorkspaceRegistryInput): HealWo
   let added = 0
   let created = 0
   // 先算改动，再备份写回 —— 没有实际改动就不碰文件。
-  const pending: { workspaceId: string, ids: string[], create?: { path: string, title: string } }[] = []
+  const pending: { workspaceId: string; ids: string[]; create?: { path: string; title: string } }[] = []
   for (const [key, entry] of plan) {
     const existing = byPath.get(key)
     if (existing === undefined) {

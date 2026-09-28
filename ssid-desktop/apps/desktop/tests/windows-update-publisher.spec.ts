@@ -90,7 +90,8 @@ describe('Windows update publisher', () => {
         DSH_DESKTOP_AUTO_UPDATE_ENV: 'production',
       }, 'win32', 'x64')
       expect(config.win.forceCodeSigning).toBe(true)
-      expect(config.artifactName).toBe('deepseek-harness-${version}-${os}-${arch}.${ext}')
+      // SSiD：artifactName 前缀改成产品名 ssid-（官方是 deepseek-harness-）。
+      expect(config.artifactName).toBe('ssid-${version}-${os}-${arch}.${ext}')
       expect(typeof config.win.signtoolOptions.sign).toBe('function')
       const manager = new WindowsSignToolManager({ platformSpecificBuildOptions: config.win, getCscLink: () => undefined })
       expect(await manager.computedPublisherName.value).toEqual(['CN=Publisher,O=Company,C=CN'])

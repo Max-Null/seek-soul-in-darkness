@@ -69,4 +69,4 @@ it.each(['win32', 'darwin'] as const)('records and prints redacted parent failur
     consoleLog.mockRestore()
     await rm(state.root, { recursive: true, force: true })
   }
-})
+}, 20_000) // 这条导入并执行整条阶段链（configuration → toolchain → 目标 package），全量并发时实测约 6 s，5 s 默认预算不够；单跑约 0.9 s，是工作量不是挂起。

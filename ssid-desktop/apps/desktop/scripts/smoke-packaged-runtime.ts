@@ -12,7 +12,7 @@ const paths = resolveDesktopTargetBuildPaths()
 const { values } = parseArgs({ options: { unsigned: { type: 'boolean', default: false } }, allowPositionals: false })
 const target = resolveDesktopBuildTarget()
 const windows = target === 'win-x64'
-if (values.unsigned && !windows) throw new Error('desktop smoke: unsigned artifacts require Windows')
+// SSiD：未签名产物 Windows 与 macOS 都有，两者都落在各自的 unsigned-artifacts。
 const artifacts = values.unsigned ? paths.unsignedArtifacts : paths.artifacts
 const application = windows ? join(artifacts, 'win-unpacked')
   : join(artifacts, target === 'mac-arm64' ? 'mac-arm64' : 'mac', `${DESKTOP_PRODUCT_NAME}.app`, 'Contents')

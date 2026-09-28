@@ -144,8 +144,14 @@ ManifestDPIAware true
   Push $4
   Push $5
   Push $6
-  ; GetTime yields zero-padded day, month, year, weekday, hour, minute, second.
+  ; GetTime zero-pads day, month, year and second only; hour and minute come back as bare integers,
+  ; so 07:38:37 renders as `73837` and the timestamp's length varies with the hour. Pad all three
+  ; so the report is always `extract-failure-YYYYMMDD-HHMMSS.log` and sorts chronologically.
+  ; The offset is the fourth argument: a bare `-2` lands in `maxlen` instead, which trims from the right.
   ${GetTime} "" "L" $0 $1 $2 $3 $4 $5 $6
+  StrCpy $4 "0$4" "" -2
+  StrCpy $5 "0$5" "" -2
+  StrCpy $6 "0$6" "" -2
   StrCpy $0 "${DSH_INSTALLER_LOG_DIR}\extract-failure-$2$1$0-$4$5$6.log"
   StrCpy $1 1
   ${If} ${Silent}

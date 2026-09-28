@@ -36,11 +36,13 @@ async function requiredRuntimeVersion(preparedRuntime?: string, preparedRuntimeV
 }
 
 describe('packaged runtime verification', () => {
-  it('requires the product version when the target tree supplies the runtime', async () => {
-    const productVersion = (JSON.parse(
-      await import('node:fs/promises').then(async fs => fs.readFile(new URL('../package.json', import.meta.url), 'utf8')),
+  it('requires the dsh version when the target tree supplies the runtime', async () => {
+    // SSiD：afterPack 校验的是**内核**（dsh）版本 —— 产品版本自 1.0.0 起独立于内核版本
+    // （6d850dddba）。官方那时两者同值，所以读 apps/desktop 的 package.json 也能过。
+    const dshVersion = (JSON.parse(
+      await import('node:fs/promises').then(async fs => fs.readFile(new URL('../../../package.json', import.meta.url), 'utf8')),
     ) as { version: string }).version
-    expect(await requiredRuntimeVersion()).toBe(productVersion)
+    expect(await requiredRuntimeVersion()).toBe(dshVersion)
   })
 
   it('requires the version installed-update qualification wrote into its private runtime', async () => {
@@ -49,15 +51,21 @@ describe('packaged runtime verification', () => {
   })
 
   it('does not let a build version change what the bundled runtime must declare', async () => {
-    const productVersion = (JSON.parse(
-      await import('node:fs/promises').then(async fs => fs.readFile(new URL('../package.json', import.meta.url), 'utf8')),
+    const readVersion = async (relative: string): Promise<string> => (JSON.parse(
+      await import('node:fs/promises').then(async fs => fs.readFile(new URL(relative, import.meta.url), 'utf8')),
     ) as { version: string }).version
+    const dshVersion = await readVersion('../../../package.json')
+    const productVersion = await readVersion('../package.json')
     const { createElectronBuilderConfig } = await import('../scripts/electron-builder-config.mjs')
+    const { desktopBuildVersionPrefix } = await import('../scripts/desktop-build-version.mjs')
     verifyDesktopRuntime.mockClear()
+    // 稳定版产品版本必须带 `-test.` 才是合法构建版本（validateDesktopBuildVersion 的要求）：
+    // 直接拼 `${productVersion}.20260921.1` 在稳定版 1.0.0 上会得到四点式版本而抛错。
+    const buildVersion = `${desktopBuildVersionPrefix(productVersion)}20260921.1`
     const config = createElectronBuilderConfig(
-      { ...ENVIRONMENT, DSH_DESKTOP_BUILD_VERSION: `${productVersion}.20260921.1` }, 'win32', 'x64')
-    expect(config.extraMetadata).toMatchObject({ version: `${productVersion}.20260921.1` })
+      { ...ENVIRONMENT, DSH_DESKTOP_BUILD_VERSION: buildVersion }, 'win32', 'x64')
+    expect(config.extraMetadata).toMatchObject({ version: buildVersion })
     await config.afterPack(CONTEXT as never)
-    expect(verifyDesktopRuntime.mock.calls[0]?.[1]).toBe(productVersion)
+    expect(verifyDesktopRuntime.mock.calls[0]?.[1]).toBe(dshVersion)
   })
 })

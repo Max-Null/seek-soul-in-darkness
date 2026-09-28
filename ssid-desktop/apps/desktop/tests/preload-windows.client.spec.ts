@@ -5,7 +5,6 @@ import { syncWindowsAppearance } from '../src/preload-windows.ts'
 
 const send = vi.hoisted(() => vi.fn())
 vi.mock('electron', () => ({ ipcRenderer: { send } }))
-vi.mock('../src/preload-menu.ts', () => ({ installWindowsMenu: () => ({ update: vi.fn(), dispose: vi.fn() }) }))
 
 afterEach(() => {
   window.dispatchEvent(new Event('pagehide'))

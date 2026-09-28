@@ -24,7 +24,13 @@ import {
 import { basename, dirname, join } from 'node:path'
 import { PATCH_FILENAME, readPluginSetManifest, splitPatchFile } from './profile-seed.ts'
 
-/** `node_modules/@deepseek-ai/` 下非链接目录达到这个数，即判定为归档部署留下的旧 profile。 */
+/**
+ * `node_modules/@deepseek-ai/` 下非链接目录达到这个数，即判定为归档部署留下的旧 profile。
+ *
+ * 两条真实样本把它夹在中间：0.4.0 的 profile 该 scope 下有 240 个实体，换代后的 profile
+ * 只剩指向随包插件集的链接（0 个实体）。取 10 是留误判余量 —— 漏判只回到手工改名，
+ * 误判会把一个正常 profile 改名搬走。
+ */
 const LEGACY_ENTITY_THRESHOLD = 10
 
 /** 一个自装插件：换代时从旧 profile 抢救出来的声明与实体。 */
@@ -45,13 +51,13 @@ export interface LegacyMigration {
   readonly reason: string
   /** 旧 profile 的备份目录；未换代时为 null。 */
   readonly backupDir: string | null
-  /** 抢救下来的用户层 patch 条目数。 */
+  /** 抢救下来的用户层 patch 条目数（每个顶层块算一条）。 */
   readonly patchEntries: number
   /** 需要在新 profile 里补声明的自装插件。 */
   readonly carried: readonly CarriedPlugin[]
 }
 
-/** `renameSync` 备份目录名用的本地时间戳（`YYYYMMDD-HHMMSS`）。 */
+/** 备份目录名使用的本地时间戳（`YYYYMMDD-HHMMSS`）。 */
 function backupStamp(): string {
   const now = new Date()
   const pad = (value: number): string => String(value).padStart(2, '0')
@@ -168,7 +174,7 @@ function collectCarriedPlugins(
     return []
   }
   const provided = new Set(shipped.packages ?? shipped.bundles)
-  let manifest: { dependencies?: Record<string, string>, dsh?: { profile?: { bundles?: unknown } } }
+  let manifest: { dependencies?: Record<string, string>; dsh?: { profile?: { bundles?: unknown } } }
   try {
     manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as typeof manifest
   } catch (error) {
@@ -233,7 +239,13 @@ export function migrateLegacyProfile(
     return none('rename-failed')
   }
 
-  const patchEntries = carryUserPatch(backupDir, profileDir, pluginSetRoot)
+  // 备份已经在手：用户层搬不过去也该继续把新 profile 建起来，这里不抛。
+  let patchEntries = 0
+  try {
+    patchEntries = carryUserPatch(backupDir, profileDir, pluginSetRoot)
+  } catch (error) {
+    log(`profile migrate: user patch not carried (${message(error)}); it stays in the backup`)
+  }
   const carried = collectCarriedPlugins(backupDir, profileDir, pluginSetRoot, log)
   log(`profile migrated: ${String(entities)} legacy entities, ${basename(backupDir)} kept as backup, `
     + `patch entries ${String(patchEntries)}, user plugins ${String(carried.length)}`)
@@ -264,7 +276,7 @@ export function restoreCarriedPlugins(
 
   const manifestPath = join(profileDir, 'package.json')
   if (!existsSync(manifestPath)) return [] // 骨架还没建：交给下一次启动
-  let manifest: { dependencies?: Record<string, string>, dsh?: { profile?: { bundles?: string[] } } }
+  let manifest: { dependencies?: Record<string, string>; dsh?: { profile?: { bundles?: string[] } } }
   try {
     manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as typeof manifest
   } catch (error) {

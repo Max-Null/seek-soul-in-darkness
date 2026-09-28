@@ -106,7 +106,7 @@ export function writeSessionRootApplied(applied: boolean, path: string = session
  * @param profileDir - profile 目录（`$DSH_HOME/profiles/<名>`）。
  * @returns `written` 本次是否改动了文件；`reason` 未改动的原因。
  */
-export function installSessionRootPatch(profileDir: string): { written: boolean, reason: string } {
+export function installSessionRootPatch(profileDir: string): { written: boolean; reason: string } {
   const patchPath = join(profileDir, 'cordis.patch.yml')
   if (!existsSync(patchPath)) return { written: false, reason: 'no-profile-patch' }
   let current: string
@@ -141,7 +141,7 @@ export function applySessionRootIsolation(dshHome: string, profileDir: string, p
   readonly isolated: boolean
   readonly isolatedRoot: string
   readonly sharedRoot: string
-  readonly patch: { written: boolean, reason: string }
+  readonly patch: { written: boolean; reason: string }
 } {
   const state = readSessionRootState()
   // 关掉隔离时不注入 ISOLATED_ROOT，profile patch 里的 `!!js` 于是回退到共享根。
@@ -159,7 +159,7 @@ export function applySessionRootIsolation(dshHome: string, profileDir: string, p
  * @param dshHome - Harness home。
  * @returns 共享根路径（`isolated` 与它同值，表示本次没有隔离根）。
  */
-function sharedRootsOnly(dshHome: string): { isolated: string, shared: string } {
+function sharedRootsOnly(dshHome: string): { isolated: string; shared: string } {
   const shared = join(dshHome, 'sessions')
   delete process.env['SSID_SESSION_ISOLATED_ROOT']
   process.env['SSID_SESSION_SHARED_ROOT'] = shared

@@ -69,12 +69,15 @@ export function createElectronBuilderConfig(
     throw new Error('desktop package: DSH_DESKTOP_UNSIGNED must be 0 or 1')
   }
   const unsigned = env.DSH_DESKTOP_UNSIGNED === '1'
-  if (unsigned && resolvedPlatform !== 'win32') throw new Error('desktop package: unsigned builds require Windows')
   const packagesMacOS = targetPlatform === 'darwin' || (targetPlatform === undefined && hostPlatform === 'darwin')
   const packagesWindows = resolvedPlatform === 'win32'
   if (resolvedPlatform === 'win32') installWindowsDirectoryInstaller()
-  const macOSSigning = packagesMacOS ? resolveMacOSSigningEnvironment(env) : undefined
-  if (packagesMacOS) resolveMacOSNotarizationEnvironment(env)
+  // SSiD：未签名构建不读 Apple 凭据 —— macOS 侧改用 ad-hoc 身份（identity `-`）签名并跳过公证，
+  // 没有开发者账号也能出可运行的包。这与 Windows 侧「不买证书、接受 SmartScreen」是同一取舍的
+  // 两个平台版本：产物可运行，但分发时 Windows 弹 SmartScreen 警告、macOS 被 Gatekeeper 拦，
+  // 由使用者自行决定是否放行。有签名构建仍要求完整的签名身份与公证策略。
+  const macOSSigning = packagesMacOS && !unsigned ? resolveMacOSSigningEnvironment(env) : undefined
+  if (packagesMacOS && !unsigned) resolveMacOSNotarizationEnvironment(env)
   const buildPaths = desktopTargetBuildPaths(resolveDesktopBuildTarget(env, hostPlatform, hostArch))
   let primaryRuntimeDestination
   let dshDestination
@@ -173,24 +176,28 @@ export function createElectronBuilderConfig(
     mac: {
       icon: fileURLToPath(new URL('../resources/icon-macos.png', import.meta.url)),
       category: 'public.app-category.developer-tools',
-      // macOS matches the application locale against this bundle, not Electron Framework resources.
-      extendInfo: { CFBundleLocalizations: ['en', 'zh_CN'] },
-      // SSiD：没配签名身份时退回 ad-hoc（`-`）。与自建壳的 mac 打包一致 ——
-      // 本地与 CI 都不需要 Apple 开发者账号也能出可运行的包，只是分发时会被
-      // Gatekeeper 拦（与 Windows 侧「不买证书、接受 SmartScreen」同一取舍）。
+      // SSiD：未签名构建落到 ad-hoc 身份 `-`（取舍见上面的凭据解析），有签名构建用发布身份。
       identity: macOSSigning?.signingIdentity ?? '-',
       forceCodeSigning: true,
       hardenedRuntime: true,
-      extendInfo: { NSMicrophoneUsageDescription: `${DESKTOP_PRODUCT_NAME} 使用麦克风把语音转写为消息草稿。` },
+      // macOS matches the application locale against this bundle, not Electron Framework resources.
+      extendInfo: {
+        CFBundleLocalizations: ['en', 'zh_CN'],
+        NSMicrophoneUsageDescription: `${DESKTOP_PRODUCT_NAME} 使用麦克风把语音转写为消息草稿。`,
+      },
+      entitlements: fileURLToPath(new URL('./macos-entitlements.plist', import.meta.url)),
+      entitlementsInherit: fileURLToPath(new URL('./macos-entitlements.plist', import.meta.url)),
       // ASAR-unpacked native runtime files are pre-signed; PAK resources are sealed by their enclosing bundle.
       // SSiD：插件集里带着从 GitHub release 下载的二进制（codegraph 引擎），与 runtime/primary-runtime 同理
       // 不在这里签。**macOS 侧尚未验证** —— 公证可能拒绝这些第三方二进制。
       signIgnore: ['/Contents/Resources/app\\.asar\\.unpacked/dsh(?:/|$)', '/Contents/Resources/runtime/primary-runtime(?:/|$)', '/Contents/Resources/ssid-plugins(?:/|$)', '\\.pak$'],
-      notarize: true,
+      // 未签名构建没有可提交给 Apple 的凭据，公证整条跳过。
+      notarize: !unsigned,
       target: ['dmg', 'zip'],
     },
     dmg: {
-      sign: true,
+      // 未签名构建的磁盘映像不签名：ad-hoc 对 Gatekeeper 不构成任何保证。
+      sign: !unsigned,
       writeUpdateInfo: false,
     },
     beforePack: async context => {
@@ -236,10 +243,11 @@ export function createElectronBuilderConfig(
         await verifyMacOSAppUpdateConfig(appPath, resolveMacOSAppUpdateFeed(context.packager.config.publish),
           context.packager.appInfo.updaterCacheDirName)
       }
-      verifyMacOSSignatureAfterSign(context, macOSSigning ?? resolveMacOSSigningEnvironment(env))
+      // 未签名构建只有 ad-hoc 签名，不指向任何发布身份，没有可核对的 Developer ID。
+      if (!unsigned) verifyMacOSSignatureAfterSign(context, macOSSigning ?? resolveMacOSSigningEnvironment(env))
     },
     artifactBuildCompleted: artifact => {
-      if (!artifact.file.endsWith('.dmg')) return
+      if (unsigned || !artifact.file.endsWith('.dmg')) return
       return notarizeMacOSDiskImageArtifact(
         artifact,
         env,

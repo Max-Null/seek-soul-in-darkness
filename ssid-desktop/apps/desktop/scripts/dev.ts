@@ -102,7 +102,8 @@ async function main(): Promise<void> {
   ]) {
     if (!existsSync(path)) throw new Error(`desktop development: missing built artifact ${path}`)
   }
-  const version = packageVersion(join(APP_ROOT, 'package.json'), 'desktop package')
+  // 与 prepare-dsh.ts 的 desktopRelease 一致：运行时描述装载的内核版本，不是产品版本。
+  const version = packageVersion(join(REPOSITORY_ROOT, 'package.json'), 'root dsh package')
   const pnpmVersion = packageVersion(join(APP_ROOT, 'node_modules', 'pnpm', 'package.json'), 'pnpm package')
   const release: DesktopRelease = {
     schemaVersion: 1,

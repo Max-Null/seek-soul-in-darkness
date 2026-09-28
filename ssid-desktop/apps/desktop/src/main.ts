@@ -1,3 +1,4 @@
+import type { ProductEventMap, ProductEvent } from '@deepseek-ai/dsh-client-product-analytics/types'
 import { applySsidTitlebarTheme, installSsidTitlebar, toggleSsidContrast } from './ssid/titlebar.ts'
 
 /**
@@ -53,6 +54,7 @@ import { DesktopBackendController } from './backend-controller.ts'
 import { deliverSsidNotify, describeSsidNotify } from './ssid/notify.ts'
 import { DSH_PRODUCT_NAME, SSID_PRODUCT_NAME } from './ssid/product.ts'
 import { DESKTOP_IPC, SCHEME, assertDesktopSender, type DesktopUpdateState } from './ipc.ts'
+import { readDeviceInfo } from './device-info.ts'
 import { desktopUpdateReadyConfirmation, formatDesktopMessage, resolveDesktopLocale, resolveDesktopStartupLocale } from './locale.ts'
 import { claimDesktopSingleInstance } from './single-instance.ts'
 import { DesktopUpdateCoordinator } from './update-coordinator.ts'
@@ -68,7 +70,7 @@ import { DesktopUpdateSchedule, resolveDesktopUpdateScheduleConfig } from './upd
 import { desktopUpdateErrorSummary, presentDesktopUpdate } from './update-presentation.ts'
 import { desktopErrorState } from './startup-error.ts'
 import { DesktopMandatoryUpdatePolicy, resolveDesktopPolicyConfig, type DesktopPolicyState } from './mandatory-update-policy.ts'
-import { desktopClientMetadata } from './client-metadata.ts'
+import { desktopClientMetadata, desktopClientVersion } from './client-metadata.ts'
 import { DesktopMandatoryUpdateWindow } from './mandatory-update-window.ts'
 import { DesktopPolicyTestAuth } from './policy-test-auth.ts'
 import { DesktopUpdateDialog, type UpdateDialogOptions } from './update-dialog.ts'
@@ -254,6 +256,28 @@ function seedProfilePlugins(profileDir: string, carried: readonly CarriedPlugin[
     restoreCarriedPlugins(profileDir, carried, log)
   } catch (error) {
     console.error(`ssid: plugin set seed failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+/**
+ * 跨界升级的旧 profile 换代（实现见 `ssid/profile-migrate.ts`）。
+ *
+ * 必须在 `manager.applyRelease()` **之前**调用 —— 那一步只在 profile 缺骨架时才写文件，
+ * 先把旧 profile 改名让路，它才会建成新的。
+ *
+ * 换代不成不该挡住启动：代价是回到「手工改名 profile」，而不是应用起不来。这里是唯一
+ * 需要兜住异常的地方 —— `resolvePluginSetRoot()` 在无 Electron 的环境里取不到资源目录。
+ * @param profileDir - 当前 profile 目录（`resolveDesktopPaths()` 的产物）。
+ * @returns 需要在新 profile 里补声明的自装插件；未换代或失败时为空。
+ */
+function migrateProfileIfLegacy(profileDir: string): readonly CarriedPlugin[] {
+  try {
+    return migrateLegacyProfile(profileDir, resolvePluginSetRoot(), (text) => {
+      console.log(`ssid: ${text}`)
+    }).carried
+  } catch (error) {
+    console.error(`ssid: profile migrate failed: ${error instanceof Error ? error.message : String(error)}`)
+    return []
   }
 }
 
@@ -448,9 +472,8 @@ function createWindow(preload: string, show = false, primary = false): BrowserWi
   if (primary) {
     ssidScreenshot = new SsidScreenshot(() => (window.isDestroyed() ? undefined : window))
   }
-  if (process.platform === 'darwin') {
-    // macOS hides the traffic lights in fullscreen; the page drops its
-    // clearance for them off the html[data-fullscreen] flag this feeds.
+  if (process.platform === 'darwin' || process.platform === 'win32') {
+    // Fullscreen hides native window controls; overlays drop their caption clearance.
     const sendFullscreen = (): void => {
       if (!window.isDestroyed()) window.webContents.send(DESKTOP_IPC.windowFullscreen, window.isFullScreen())
     }
@@ -459,6 +482,8 @@ function createWindow(preload: string, show = false, primary = false): BrowserWi
     // Reloads and navigations re-register the preload listener; resend the
     // current state so a fullscreen reload does not fall back to windowed CSS.
     window.webContents.on('did-finish-load', sendFullscreen)
+  }
+  if (process.platform === 'darwin') {
     // Deminiaturize reattaches the NSVisualEffectView material late
     // (electron/electron#25368), so a transparent window shows the desktop
     // through the sidebar until then. Paint an opaque base while minimized or
@@ -588,6 +613,14 @@ async function main(): Promise<void> {
   const browserGuests = new DesktopBrowserGuests(() => hostUrl)
   let injections: readonly unknown[] = []
   let welcomeBackend: DesktopWelcomeBackend | undefined
+  let reportedLaunch = false
+  let analyticsEnabled = false
+  const track = async <K extends keyof ProductEventMap>(eventName: K, attributes: ProductEventMap[K]): Promise<void> => {
+    const event = { eventName, attributes, timestamp: Date.now() } as ProductEvent
+    try {
+      if (analyticsEnabled) await welcomeBackend?.report(event)
+    } catch (_error) { /* Analytics cannot interrupt native actions. */ }
+  }
   let stopAccount: (() => void) | undefined
   let openedAttempt: string | undefined
   let returnedAttempt: string | undefined
@@ -620,7 +653,7 @@ async function main(): Promise<void> {
   const backend = new DesktopBackendController((onFailure) => {
     const hostInspectPort = developmentHostInspectPort(development)
     const host = new DesktopHostProcess(resources.node, resources.dsh, activeProject,
-      hostInspectPort, process.env, onFailure,
+      hostInspectPort, { ...process.env, DSH_CLIENT_VERSION: desktopClientVersion() }, onFailure,
       primaryRuntime,
       resources, (next) => { platformView.setSession(next) },
       (event) => { deliverSsidNotify(() => mainWindow, describeSsidNotify(event, SSID_PRODUCT_NAME), event.scene) },
@@ -692,6 +725,8 @@ async function main(): Promise<void> {
         if (ready.injections === undefined) throw new Error('Desktop Host did not provide boot injections')
         injections = ready.injections
         welcomeBackend = await connectDesktopWelcome(ready.url, (input, init) => net.fetch(input, init), async () => (await session.defaultSession.cookies.get({ url: ready.url })).map(cookie => `${cookie.name}=${cookie.value}`).join('; '))
+        analyticsEnabled = await welcomeBackend.analyticsEnabled().catch(() => false)
+        if (!reportedLaunch) { reportedLaunch = true; void track('desktop_app_launch', {}) }
         stopAccount?.()
         const accountBackend = welcomeBackend.account
         stopAccount = accountBackend.watch((state) => {
@@ -729,9 +764,11 @@ async function main(): Promise<void> {
             const state = await accountBackend.state()
             if (welcomeWindow !== undefined && !welcomeWindow.isDestroyed()) welcomeWindow.webContents.send(WELCOME_IPC.state, state)
           }).catch(() => undefined)
-        })
+        }, (enabled) => { analyticsEnabled = enabled })
       },
       stop: async () => {
+        analyticsEnabled = false
+        stopAccount?.()
         try { await host.stop(requireCleanStop) }
         catch (error) {
           if (!requireCleanStop || !(error instanceof DesktopHostUncleanExitError)) throw error
@@ -803,14 +840,14 @@ async function main(): Promise<void> {
     startup ??= (async () => {
       await navigateMain(applicationUrl)
       await backend.start(async () => {
-        // 换代必须排在 applyRelease 前面：那一步只在 profile 缺骨架时才写文件，
-        // 先把旧 profile 改名让路，它才会建成新的。详见 `ssid/profile-migrate.ts`。
-        const migration = migrateLegacyProfile(manager.paths.profile, resolvePluginSetRoot(), (text) => {
-          console.log(`ssid: ${text}`)
-        })
+        const carried = migrateProfileIfLegacy(activeProject)
         await manager.applyRelease()
         // 官方这一步只建 profile 骨架（不装包），思灵的插件集由 seed 接入。
-        seedProfilePlugins(manager.paths.profile, migration.carried)
+        // 传 activeProject（= paths.profile）而不是 manager.paths.profile：两者在产品里同源，
+        // 但测试的 DesktopProjectManager mock 不提供 paths，取它会以 TypeError 打断启动链 ——
+        // 而这一步在 `await manager.applyRelease()` 之后、`host.start()` 之前，异常一抛
+        // Host 就不会启动，测试侧的 hostStarted 永等（表现是整文件超时，不是断言失败）。
+        seedProfilePlugins(activeProject, carried)
       })
       if (backend.host !== undefined) await openInitialWindow()
       // 窗口真的显示出来之后再问 CodeGraph 目录；**不 await** —— 它只影响下次启动，
@@ -862,6 +899,8 @@ async function main(): Promise<void> {
         const result = await updateDialog.show(parent, confirmation)
         if (result.response !== 0 || isMandatory()) return false
       }
+      // The update lock rejects new HTTP requests, including analytics intake.
+      await track('desktop_upgrade_install_restart_click', {})
       if (backend.host !== host) throw new DesktopUpdatePreparationError('tasks-unavailable', locale.messages.updateTasksUnavailable)
       try {
         const stillActive = await host.updateTasks('lock')
@@ -886,11 +925,14 @@ async function main(): Promise<void> {
       }
       return true
     },
+    undefined, undefined, undefined,
+    (success, reason) => { void track('desktop_upgrade_download_result', { is_success: success, ...reason === undefined ? {} : { error_reason: reason } }) },
   )
 
   const updateSchedule = new DesktopUpdateSchedule(updates, resolveDesktopUpdateScheduleConfig(process.env))
 
   const downloadUpdate = async (version: string): Promise<DesktopUpdateState> => {
+    void track('desktop_upgrade_click', {})
     updateJournal?.action('download-requested')
     const state = await updates.download(version)
     if (state.phase !== 'ready' || quitting) return state
@@ -1018,6 +1060,10 @@ async function main(): Promise<void> {
     assertProductSender(event)
     return presentDesktopUpdate(updates.state)
   })
+  ipcMain.handle(DESKTOP_IPC.deviceInfo, (event) => {
+    assertProductSender(event)
+    return readDeviceInfo()
+  })
   ipcMain.handle(DESKTOP_IPC.onboardingApiKey, async (event) => {
     assertProductSender(event)
     return (await readWelcomeState()).hasApiKey
@@ -1073,7 +1119,8 @@ async function main(): Promise<void> {
         if (state.phase === 'error' && state.failedOperation === 'check') { await showUpdateFailure(state); return }
         if (state.phase === 'idle') {
           await ordinaryMessageBox({ type: 'info', title: locale.messages.updateCheckTitle,
-            message: formatDesktopMessage(locale.messages.updateCurrent, { version: app.getVersion() }) })
+            message: locale.messages.updateCurrent,
+            detail: formatDesktopMessage(locale.messages.updateCurrentDetail, { version: app.getVersion() }) })
           return
         }
         if (state.phase === 'ready' || (state.phase === 'error' && state.failedOperation === 'install')) {
@@ -1085,8 +1132,9 @@ async function main(): Promise<void> {
         }
         if (state.phase !== 'available' && !(state.phase === 'error' && state.failedOperation === 'download')) return
         if (manual) {
-          const result = await ordinaryMessageBox({ title: locale.messages.updateCheckTitle, message: locale.messages.updateAvailable,
-            detail: formatDesktopMessage(locale.messages.updateDetail, { version: state.version ?? '' }),
+          const result = await ordinaryMessageBox({ title: locale.messages.updateCheckTitle,
+            message: formatDesktopMessage(locale.messages.updateAvailable, { version: state.version ?? '' }),
+            detail: locale.messages.updateDetail,
             buttons: [locale.messages.updateDownload], cancelId: 1 })
           if (result.response !== 0) return
         }
@@ -1417,12 +1465,15 @@ async function main(): Promise<void> {
   const showWelcome = (): Promise<void> => {
     if (quitting) return Promise.resolve()
     if (welcomeWindow !== undefined && !welcomeWindow.isDestroyed()) {
+      if (!welcomeWindow.isVisible()) void track('auth_page_view', {})
       welcomeWindow.show()
       welcomeWindow.focus()
       return Promise.resolve()
     }
     openingWelcome ??= (async () => {
       welcomeWindow = await openWelcomeWindow(locale, {
+        analytics: track,
+        analyticsEnabled: () => Promise.resolve(analyticsEnabled),
         takeNotice: () => {
           const notice = pendingWelcomeNotice
           pendingWelcomeNotice = undefined

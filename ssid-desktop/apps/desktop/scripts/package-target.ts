@@ -37,6 +37,22 @@ const WINDOWS_SIGNING_ENV_NAMES = [
   'DSH_DESKTOP_WINDOWS_SIGNATURE_CACHE_DIR',
   'DSH_DESKTOP_WINDOWS_SIGNATURE_CACHE_CONCURRENCY',
 ] as const
+// SSiD：未签名构建要连 Apple 的凭据一起撤走。分属两个命名族 —— 壳自己的
+// DSH_DESKTOP_MACOS_* 与 Apple 工具直接读的 APPLE_* —— 所以显式枚举而不按前缀清理：
+// DSH_DESKTOP_MACOS_ 下还挂着并发与代理设置，那些是构建参数，不是凭据。
+// desktop-package-environment.mjs 的公证策略清单同样在调用侧枚举，不从这里取常量。
+const MACOS_SIGNING_ENV_NAMES = new Set([
+  'DSH_DESKTOP_MACOS_SIGNING_IDENTITY',
+  'DSH_DESKTOP_MACOS_TEAM_ID',
+  'APPLE_API_KEY',
+  'APPLE_API_KEY_ID',
+  'APPLE_API_ISSUER',
+  'APPLE_ID',
+  'APPLE_APP_SPECIFIC_PASSWORD',
+  'APPLE_TEAM_ID',
+  'APPLE_KEYCHAIN',
+  'APPLE_KEYCHAIN_PROFILE',
+])
 const DESKTOP_UPLOAD_CREDENTIAL_ENV_NAMES = new Set([
   'DOWNLOAD_TEST_COS_SECRET_ID',
   'DOWNLOAD_TEST_COS_SECRET_KEY',
@@ -83,6 +99,9 @@ const TARGETS: Record<DesktopPackageTargetName, DesktopPackageTarget> = {
   },
 }
 
+/** Targets whose packaging path has an unsigned variant. */
+const UNSIGNED_TARGETS: ReadonlySet<string> = new Set(['mac-arm64', 'mac-x64', 'win-x64'])
+
 /**
  * Remove Windows signing configuration from package preparation subprocesses.
  * @param environment - Packaging command environment.
@@ -96,7 +115,7 @@ export function withoutWindowsSigningEnvironment(environment: NodeJS.ProcessEnv)
 /**
  * Select signing and NSIS-compatible archive filters for electron-builder.
  * @param environment - Target packaging environment.
- * @param unsigned - Whether to create a local unsigned Windows artifact.
+ * @param unsigned - Whether to create a local unsigned artifact.
  * @returns Packaging environment without certificate inputs for unsigned builds.
  */
 export function desktopElectronBuilderEnvironment(environment: NodeJS.ProcessEnv, unsigned: boolean): NodeJS.ProcessEnv {
@@ -104,9 +123,11 @@ export function desktopElectronBuilderEnvironment(environment: NodeJS.ProcessEnv
   // The bundled NSIS decoder cannot extract 7-Zip's automatic ARM64-filtered entries.
   if (environment.DSH_DESKTOP_TARGET_PLATFORM === 'win32') selected.ELECTRON_BUILDER_7Z_FILTER = 'BCJ'
   if (!unsigned) return selected
+  // CSC_IDENTITY_AUTO_DISCOVERY also keeps electron-builder from adopting a developer
+  // certificate installed on the build host, leaving the mac target on its ad-hoc identity.
   return {
     ...Object.fromEntries(Object.entries(withoutWindowsSigningEnvironment(selected))
-      .filter(([name]) => !/^(?:WIN_)?CSC_/iu.test(name))),
+      .filter(([name]) => !/^(?:WIN_)?CSC_/iu.test(name) && !MACOS_SIGNING_ENV_NAMES.has(name))),
     CSC_IDENTITY_AUTO_DISCOVERY: 'false',
     DSH_DESKTOP_UNSIGNED: '1',
   }
@@ -233,7 +254,12 @@ export function parseDesktopPackageInvocation(
   })
   if (positionals.length > 1) throw new Error('desktop package: expected at most one target')
   const name = positionals[0] ?? hostTargetName(hostPlatform, hostArch)
-  if (values.unsigned && name !== 'win-x64') throw new Error('desktop package: --unsigned requires win-x64')
+  // SSiD：未签名通道 Windows 与 macOS 都有 —— Windows 走未签名 NSIS，macOS 走 ad-hoc 签名
+  // 加跳过公证。两者的宿主限制仍由 resolveDesktopPackageTarget 判定（mac-x64 要 Intel Mac
+  // 或带 Rosetta 的 Apple Silicon）。
+  if (values.unsigned && !UNSIGNED_TARGETS.has(name)) {
+    throw new Error(`desktop package: --unsigned requires ${[...UNSIGNED_TARGETS].join(', ')}`)
+  }
   if (values.unsigned && values['prepare-only']) throw new Error('desktop package: --unsigned cannot use --prepare-only')
   const requestedBuildVersion = values['build-version']?.trim()
   if (values['build-version'] !== undefined && (requestedBuildVersion === undefined || requestedBuildVersion === '')) {
@@ -365,8 +391,11 @@ async function main(): Promise<void> {
       recordPackagingEvent(run.directory, { type: 'macos-settings', packConcurrency: settings.packConcurrency,
         downloadProxyConfigured: settings.downloadProxy !== undefined,
         notarizationProxyConfigured: settings.notarizationProxy !== undefined })
-      await packagingStep(run.directory, 'macos-package', () => withMacOSSigningKeychain(environment,
-        signingEnvironment => packageTarget(invocation, signingEnvironment, run)), secrets)
+      // SSiD：未签名构建没有 p12 可导入，也没有可核对的发布身份，所以不建临时钥匙串；
+      // packageTarget 在 unsigned 下也不碰 Apple 工具。
+      await packagingStep(run.directory, 'macos-package', () => invocation.unsigned
+        ? packageTarget(invocation, environment, run)
+        : withMacOSSigningKeychain(environment, signingEnvironment => packageTarget(invocation, signingEnvironment, run)), secrets)
     } else {
       await packagingStep(run.directory, 'windows-package', () => packageTarget(invocation, environment, run), secrets)
     }
@@ -475,7 +504,13 @@ export async function packageTarget(
   await execute(['run', 'prepare:ssid-plugins'], downloadEnv)
   if (signPrimaryRuntime) await execute(['run', 'sign:primary-runtime', '--dsh'], electronBuilderEnv)
   if (invocation.prepareOnly) return
-  if (target.platform === 'darwin' && !invocation.directory) {
+  if (target.platform === 'darwin' && invocation.unsigned) {
+    // SSiD：未签名 mac 构建与 Windows 侧同形 —— 一步出产物，不分解成「先签目录、再各自公证」，
+    // 也不写发布记录（见本函数末尾的 unsigned 守卫）。ad-hoc 身份来自配置里的 identity `-`，
+    // 产物落在 unsigned-artifacts：可运行，分发时会被 Gatekeeper 拦。
+    await execute([...desktopElectronBuilderArguments(target, invocation.directory), '--config.mac.notarize=false'], electronBuilderEnv)
+    await execute(['exec', 'tsx', 'scripts/smoke-packaged-runtime.ts', '--unsigned'], targetEnv)
+  } else if (target.platform === 'darwin' && !invocation.directory) {
     await execute([
       ...desktopElectronBuilderArguments(target, true),
       '--config.mac.notarize=false',

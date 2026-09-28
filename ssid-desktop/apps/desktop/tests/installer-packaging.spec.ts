@@ -74,7 +74,8 @@ describe('installer preparation preserves application dependencies', () => {
       DSH_DESKTOP_TARGET_ARCH: 'x64',
       DSH_DESKTOP_UNSIGNED: '1',
     }, 'win32', 'x64')
-    expect(config.artifactName).toBe('deepseek-harness-${version}-${os}-${arch}-unsigned.${ext}')
+    // SSiD：electron-builder-config.mjs 的 artifactName 前缀改成产品名 ssid-（官方是 deepseek-harness-）。
+    expect(config.artifactName).toBe('ssid-${version}-${os}-${arch}-unsigned.${ext}')
   })
 
   it('packages every preload entry point the shell loads', async () => {

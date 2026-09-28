@@ -308,6 +308,13 @@ export interface PatchBlock {
   readonly entries: readonly PatchEntry[]
 }
 
+/** 收集过程中的块：块内出现的 id、原始行，以及子条目的起始行号。 */
+interface PatchBlockDraft {
+  readonly ids: string[]
+  readonly lines: string[]
+  readonly entries: { id: string | null; start: number }[]
+}
+
 /**
  * 拆开 patch 文件：头部原文 + 顶层条目块。
  *
@@ -324,8 +331,8 @@ export function splitPatchFile(text: string): { head: string; blocks: PatchBlock
     .filter(line => !/^\s*\[\s*\]\s*$/u.test(line))
     .join('\n')
     .replace(/\s+$/u, '')
-  const blocks: { ids: string[]; lines: string[]; entries: { id: string | null; start: number }[] }[] = []
-  const current = (): { ids: string[]; lines: string[]; entries: { id: string | null; start: number }[] } | undefined => blocks[blocks.length - 1]
+  const blocks: PatchBlockDraft[] = []
+  const current = (): PatchBlockDraft | undefined => blocks[blocks.length - 1]
   for (const line of first === -1 ? [] : lines.slice(first)) {
     if (/^- \S/u.test(line)) {
       blocks.push({ ids: [], lines: [line], entries: [] })

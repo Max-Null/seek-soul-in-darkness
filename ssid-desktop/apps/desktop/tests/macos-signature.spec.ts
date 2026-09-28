@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
 import type { NotarizeOptions } from '@electron/notarize'
 import {
   resolveDesktopAppId,
@@ -45,9 +46,19 @@ describe('desktop macOS release signature', () => {
     expect(portablePath(config.directories.output)).toContain('/.desktop-build/targets/mac-arm64/artifacts')
     // SSiD：这条描述已本地化为中文（产品名也从 DeepSeek Harness 换成思灵）。
     expect(config.mac.extendInfo.NSMicrophoneUsageDescription).toContain('麦克风')
-    expect(config.extraResources).toHaveLength(2)
+    expect(config.mac.entitlementsInherit).toBe(config.mac.entitlements)
+    const entitlements = readFileSync(config.mac.entitlements, 'utf8')
+    for (const key of ['com.apple.security.cs.allow-jit', 'com.apple.security.cs.allow-unsigned-executable-memory',
+      'com.apple.security.cs.disable-library-validation', 'com.apple.security.device.audio-input']) {
+      expect(entitlements).toContain(`<key>${key}</key>\n    <true/>`)
+    }
+    // SSiD 往 extraResources 里加了随包插件集两项（ssid-plugins 与其 node_modules），
+    // 所以 macOS 下是 4 项：runtime、ssid-plugins、ssid-plugins/node_modules、icon.png。
+    expect(config.extraResources).toHaveLength(4)
     expect(config.extraResources[0]?.to).toBe('runtime')
     expect(portablePath(config.extraResources[0]?.from ?? '')).toContain('/.desktop-build/targets/mac-arm64/runtime')
+    expect(config.extraResources[1]?.to).toBe('ssid-plugins')
+    expect(config.extraResources[2]?.to).toBe('ssid-plugins/node_modules')
     const [dshFiles, dshNodeModules] = config.files.slice(-2)
     if (!dshFiles || !dshNodeModules || typeof dshFiles === 'string' || typeof dshNodeModules === 'string') {
       throw new Error('desktop DSH resources must use electron-builder file mappings')
@@ -66,7 +77,8 @@ describe('desktop macOS release signature', () => {
         identity: RELEASE_ENVIRONMENT.DSH_DESKTOP_MACOS_SIGNING_IDENTITY,
         forceCodeSigning: true,
         notarize: true,
-        signIgnore: ['/Contents/Resources/app\\.asar\\.unpacked/dsh(?:/|$)', '/Contents/Resources/runtime/primary-runtime(?:/|$)', '\\.pak$'],
+        // SSiD 多一项 ssid-plugins —— 随包插件集与 runtime 同理，不参与代码签名。
+        signIgnore: ['/Contents/Resources/app\\.asar\\.unpacked/dsh(?:/|$)', '/Contents/Resources/runtime/primary-runtime(?:/|$)', '/Contents/Resources/ssid-plugins(?:/|$)', '\\.pak$'],
       },
       dmg: {
         sign: true,
@@ -127,10 +139,52 @@ describe('desktop macOS release signature', () => {
     })
   })
 
-  it('rejects unsigned macOS builds and malformed signing modes', async () => {
+  it('packages unsigned macOS builds with an ad-hoc identity and no notarization', async () => {
     const { createElectronBuilderConfig } = await import('../electron-builder.config.mjs')
-    expect(() => createElectronBuilderConfig({ ...RELEASE_ENVIRONMENT, DSH_DESKTOP_UNSIGNED: '1' }))
-      .toThrow(/unsigned builds require Windows/u)
+    // SSiD：未签名构建不读 Apple 凭据，所以这套只有目标平台的配置必须能构造出 builder 配置。
+    const unsignedEnvironment = {
+      DSH_DESKTOP_APP_ID: RELEASE_ENVIRONMENT.DSH_DESKTOP_APP_ID,
+      DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN: 'https://policy.example.com',
+      DSH_DESKTOP_MANDATORY_UPDATE_CONFIG: JSON.stringify({ allowedAuthOrigins: ['https://login.example.com'] }),
+      DSH_DESKTOP_TARGET_PLATFORM: 'darwin',
+      DSH_DESKTOP_TARGET_ARCH: 'arm64',
+      DSH_DESKTOP_UNSIGNED: '1',
+    }
+    const config = createElectronBuilderConfig(unsignedEnvironment, 'darwin', 'arm64')
+    expect(portablePath(config.directories.output)).toContain('/targets/mac-arm64/unsigned-artifacts')
+    expect(config.artifactName).toBe('ssid-${version}-${os}-${arch}-unsigned.${ext}')
+    expect(config).toMatchObject({
+      mac: { identity: '-', forceCodeSigning: true, notarize: false },
+      dmg: { sign: false, writeUpdateInfo: false },
+      publish: [{ provider: 'github', owner: 'Max-Null', repo: 'seek-soul-in-darkness' }],
+    })
+    // 未签名构建没有可提交的凭据，磁盘映像钩子必须直接返回而不是去解析公证环境。
+    expect(config.artifactBuildCompleted({ file: '/tmp/release.dmg' })).toBeUndefined()
+    expect(typeof config.afterSign).toBe('function')
+  })
+
+  it('still requires Apple credentials for a signed macOS build', async () => {
+    const { createElectronBuilderConfig } = await import('../electron-builder.config.mjs')
+    const platformOnly = {
+      DSH_DESKTOP_APP_ID: RELEASE_ENVIRONMENT.DSH_DESKTOP_APP_ID,
+      DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN: 'https://policy.example.com',
+      DSH_DESKTOP_MANDATORY_UPDATE_CONFIG: JSON.stringify({ allowedAuthOrigins: ['https://login.example.com'] }),
+      DSH_DESKTOP_TARGET_PLATFORM: 'darwin',
+      DSH_DESKTOP_TARGET_ARCH: 'arm64',
+    }
+    expect(() => createElectronBuilderConfig({ ...platformOnly, DSH_DESKTOP_UNSIGNED: '1' }, 'darwin', 'arm64')).not.toThrow()
+    // 有签名构建仍必须解析出签名身份与一条完整的公证策略：签名侧一旦不再要求凭据，这两条变红。
+    expect(() => createElectronBuilderConfig(platformOnly, 'darwin', 'arm64'))
+      .toThrow(/DSH_DESKTOP_MACOS_SIGNING_IDENTITY must be set to a non-empty value/u)
+    expect(() => createElectronBuilderConfig({
+      ...platformOnly,
+      DSH_DESKTOP_MACOS_SIGNING_IDENTITY: 'Example Company (TEAMID1234)',
+      DSH_DESKTOP_MACOS_TEAM_ID: 'TEAMID1234',
+    }, 'darwin', 'arm64')).toThrow(/macOS packaging requires/u)
+  })
+
+  it('rejects a malformed unsigned mode', async () => {
+    const { createElectronBuilderConfig } = await import('../electron-builder.config.mjs')
     expect(() => createElectronBuilderConfig({ ...RELEASE_ENVIRONMENT, DSH_DESKTOP_UNSIGNED: 'yes' }))
       .toThrow(/must be 0 or 1/u)
   })

@@ -99,7 +99,7 @@ describe('installed-update application inputs and builder configuration', () => 
           .toMatch(/^https:\/\/download-test\.deepseek\.com\/dsh-desk\/feeds\/qualification\/[a-f0-9]{24}\/win-x64\/$/u)
       }
     })
-  })
+  }, 20_000) // 两个版本各建一次真实文件树并逐个 validateConfiguration，全量并发时实测约 7 s，5 s 默认预算不够；单跑约 1 s，是工作量不是挂起。
 
   it('retains a failed preparation without a completion receipt and refuses an unrelated version', async () => {
     await fixture(async (manifest, source) => {
