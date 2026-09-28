@@ -66,6 +66,23 @@ jobs:
         working-directory: .ssid-build/checkout
         run: pnpm install --frozen-lockfile
 
+      - name: 生成 macOS 打包配置（未签名通道也要 App ID 与强更策略）
+        # package-target.ts 无条件加载 apps/desktop/.env.macos，缺文件即抛错
+        # （desktop-package-environment.mjs 第 36 行）；上游 CI 同样在运行前生成该文件
+        # （apps/desktop/README.zh.md「CI 同样在运行前生成目标文件」）。`--unsigned` 跳过的是
+        # Apple 签名与公证凭据的校验（validateDesktopPackageEnvironment 遇 unsigned 提前返回），
+        # App ID、强更策略与打包并发仍从这份文件读。取值与本机 .env.windows 一致，
+        # 使两个平台的产物带同一套应用标识与策略来源。
+        working-directory: .ssid-build/checkout/apps/desktop
+        run: |
+          cat > .env.macos <<'DOTENV'
+          DSH_DESKTOP_APP_ID=com.maxnull.ssid
+          DSH_DESKTOP_AUTO_UPDATE_ENV=test
+          DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN=https://example.com
+          DSH_DESKTOP_MANDATORY_UPDATE_PROD_ORIGIN=https://example.com
+          DSH_DESKTOP_MANDATORY_UPDATE_CONFIG='{"allowedAuthOrigins":["https://login.example.com"]}'
+          DOTENV
+
       - name: 打包（mac arm64，未签名：ad-hoc 签名 + 不公证）
         working-directory: .ssid-build/checkout
         env:
