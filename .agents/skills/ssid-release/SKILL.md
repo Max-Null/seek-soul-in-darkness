@@ -150,16 +150,32 @@ gh release create vX.Y.Z -R Max-Null/seek-soul-in-darkness --title "思灵 vX.Y.
 
 上传资产（**名称必须与 `latest.yml` 的 `url` 字段完全一致，否则增量更新 404**）：
 
+小资产（`latest.yml`、`.blockmap`，< 1 MB）用 gh 即可：
+
 ```powershell
 $A = ".ssid-build\checkout\apps\desktop\.desktop-build\targets\win-x64\unsigned-artifacts"
-gh release upload vX.Y.Z "$A\ssid-X.Y.Z-win-x64-unsigned.exe"          -R Max-Null/seek-soul-in-darkness
 gh release upload vX.Y.Z "$A\ssid-X.Y.Z-win-x64-unsigned.exe.blockmap" -R Max-Null/seek-soul-in-darkness
 gh release upload vX.Y.Z "$A\latest.yml"                               -R Max-Null/seek-soul-in-darkness
-gh release view vX.Y.Z -R Max-Null/seek-soul-in-darkness --json assets  # 传完核对资产名
 ```
 
+**安装包（数百 MB）必须直连上传**（2026-09-28 v1.0.0 实测，427 MB）：
+
+```powershell
+$R = 'Max-Null/seek-soul-in-darkness'
+$relId = gh release view vX.Y.Z -R $R --json databaseId --jq '.databaseId'   # 要 databaseId，不是 id
+curl.exe --fail --show-error --progress-bar -X POST --noproxy '*' `
+  -H "Authorization: token $(gh auth token)" `
+  -H "Content-Type: application/octet-stream" `
+  --data-binary "@$A\ssid-X.Y.Z-win-x64-unsigned.exe" `
+  "https://uploads.github.com/repos/$R/releases/$relId/assets?name=ssid-X.Y.Z-win-x64-unsigned.exe"
+gh release view vX.Y.Z -R $R --json assets   # 传完核对：size 与 digest 必须与本地一致
+```
+
+- **为什么不能走代理**：环境里设了 `HTTP_PROXY`（本机 `127.0.0.1:7897`）时，`gh release upload` 25 分钟零进展；`curl --data-binary` 带 448 MB `Content-Length` 卡死 40 分钟。**`--noproxy '*'` 直连 83 秒传完**（本机直连 GitHub 反而更快：api.github.com 直连 0.35 s / 代理 1.03 s）。
+- **`curl -F` 是错的**：它发 multipart，GitHub 会把包装字节原样存下——实测返回的 `size` 比本地多 236 字节、`digest` 与本地 SHA256 不符。要用 `--data-binary` + `Content-Type: application/octet-stream`。
+- **chunked 也不行**：加 `Transfer-Encoding: chunked` 被拒（400），uploads API 要 `Content-Length`。
+- **判据**：上传响应里的 `size` 与 `digest`（`sha256:…`）必须与本地一致——这是唯一能发现「内容被包装过」的检查；不一致就 `gh release delete-asset` 删掉重传。
 - **git 提交 / 打标 / push / `gh release` 都归开发会话**；**只有 `npm publish` 由用户手动**（铁律 9）。
-- **`gh` 上传大文件**：早期（v0.1.14/mac）实测 256 MB+ 会挂，但 2026-09-14 起 359–411 MB 的资产经 `gh release upload` 各 1–2 分钟正常传完——**先直接试 gh**，失败再回退 `curl -F` 直传 uploads API。
 - **【待验证】完整的更新闭环**（打包 → 发布 → 旧版检测到新版 → 下载 → 安装）需要真实发一版并装旧版，成本高，**尚未走过**。
 
 ## 常见坑
