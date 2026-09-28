@@ -440,6 +440,8 @@ export async function packageTarget(
     ...buildEnv,
     DSH_DESKTOP_TARGET_PLATFORM: target.platform,
     DSH_DESKTOP_TARGET_ARCH: target.arch,
+    // SSiD：prepare:dsh 据此决定是否对内核与 primary-runtime 的原生 Mach-O 预签名。
+    DSH_DESKTOP_UNSIGNED: invocation.unsigned ? '1' : '0',
   }
   const downloadEnv = macOSDownloadEnvironment(targetEnv, mac?.downloadProxy)
   const electronBuilderEnv = desktopElectronBuilderEnvironment(downloadEnv, invocation.unsigned)

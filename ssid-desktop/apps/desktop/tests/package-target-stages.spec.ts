@@ -112,6 +112,7 @@ it('checks the assembled macOS runtime before notarizing and recording the relea
   await packageTarget(parseDesktopPackageInvocation(['mac-arm64'], 'darwin', 'arm64'), environment, run)
   expect(packageMacOSArtifacts).toHaveBeenCalledOnce()
   expect(writeFileSync).toHaveBeenCalledOnce()
+  expect(run.run.mock.calls.find(call => call[0] === 'run prepare:dsh')![3].env.DSH_DESKTOP_UNSIGNED).toBe('0')
 })
 
 it.each([false, true])('refuses macOS notarization and release records after an assembled-runtime failure (directory=%s)', async (directory) => {
@@ -143,6 +144,8 @@ it.each([false, true])('packages an unsigned macOS build without notarization or
   expect(notarizeMacOS).not.toHaveBeenCalled()
   expect(stages.at(-1)).toBe('exec tsx scripts/smoke-packaged-runtime.ts --unsigned')
   expect(writeFileSync).not.toHaveBeenCalled()
+  // SSiD：未签名通道必须把模式传给 prepare:dsh，否则它会去解析一个不存在的 Developer ID。
+  expect(run.run.mock.calls.find(call => call[0] === 'run prepare:dsh')![3].env.DSH_DESKTOP_UNSIGNED).toBe('1')
 })
 
 it.each([undefined, '2'])('passes macOS pack concurrency %s only to workspace packing and download routing only to download stages', async (concurrency) => {

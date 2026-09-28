@@ -11,6 +11,7 @@ import {
   assertMacOSRuntimeSignatureDetails,
   assertMacOSSignatureDetails,
 } from '../scripts/verify-macos-signature.mjs'
+import { macOSNativeSigningIdentity } from '../scripts/macos-runtime.ts'
 
 const RELEASE_ENVIRONMENT = {
   DSH_DESKTOP_APP_ID: 'com.example.desktop',
@@ -37,6 +38,13 @@ describe('desktop macOS release signature', () => {
 
   afterAll(() => {
     vi.unstubAllEnvs()
+  })
+
+  // SSiD：未签名构建没有可用的 Developer ID，原生内核文件的预签名整体跳过。
+  it('omits the native runtime signing identity for an unsigned build', () => {
+    expect(macOSNativeSigningIdentity({ ...RELEASE_ENVIRONMENT, DSH_DESKTOP_UNSIGNED: '1' })).toBeUndefined()
+    expect(macOSNativeSigningIdentity({ ...RELEASE_ENVIRONMENT, DSH_DESKTOP_UNSIGNED: '0' }))
+      .toEqual(resolveMacOSSigningEnvironment(RELEASE_ENVIRONMENT))
   })
 
   it('loads release identifiers from the environment and requires code signing', async () => {

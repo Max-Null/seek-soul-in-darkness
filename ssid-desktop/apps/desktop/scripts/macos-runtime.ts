@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { closeSync, openSync, readSync } from 'node:fs'
 import { join } from 'node:path'
 import { inventoryDesktopRuntime } from '../src/runtime-tree.ts'
-import type { MacOSSigningEnvironment } from './desktop-release-environment.mjs'
+import { resolveMacOSSigningEnvironment, type MacOSSigningEnvironment } from './desktop-release-environment.mjs'
 import { cachedMacOSSignature, pruneMacOSSignatureCache } from './macos-signature-cache.ts'
 import { macOSCachePolicy } from './macos-cache-policy.ts'
 import { signMacOSRuntimeCode, verifyMacOSRuntimeCode } from './verify-macos-signature.mjs'
@@ -17,6 +17,17 @@ function magic(path: string): string {
     const header = Buffer.alloc(4)
     return readSync(descriptor, header, 0, 4, 0) === 4 ? header.toString('hex') : ''
   } finally { closeSync(descriptor) }
+}
+
+/**
+ * Resolve the identity that signs materialized native runtime files.
+ * @param environment - Packaging environment carrying the release settings and the packaging mode.
+ * @returns Required signing identity, or undefined when this build signs no native runtime files.
+ */
+export function macOSNativeSigningIdentity(environment: NodeJS.ProcessEnv): MacOSSigningEnvironment | undefined {
+  // SSiD：未签名构建没有可用的 Developer ID；electron-builder 的 signIgnore 同样排除这些路径，
+  // 两侧对「未签名」的判断保持一致。
+  return environment.DSH_DESKTOP_UNSIGNED === '1' ? undefined : resolveMacOSSigningEnvironment(environment)
 }
 
 /**
