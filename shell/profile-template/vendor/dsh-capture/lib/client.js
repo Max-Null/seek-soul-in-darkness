@@ -977,15 +977,16 @@ window.__ModuleLoader__.load({
 		//#endregion
 		//#region src/client/ScreenshotSettings.tsx
 		/**
-		* ScreenshotSettings: two General-settings rows (settings.general.item —
-		* the additive seat for a single setting that needs no page of its own).
+		* ScreenshotSettings: the settings card on the plugin detail page
+		* (`plugins.bundle.config`, key = package name) — the hide-window toggle and
+		* the global-hotkey editor, saved on change.
 		*
 		* Rows (each fetched/saved through /api/ssid/screenshot/*):
-		*  - screenshot-hide: 截图时是否隐藏思灵窗口（checkbox，切换即保存）
+		*  - screenshot-hide: 截图时是否隐藏思灵窗口（开关，切换即保存）
 		*  - screenshot-hotkey: 全局快捷键（input，回车/失焦即保存，实时重注册）
 		*
-		* The General row contract: the section supplies no props at all — copy,
-		* current value, and the write path are all the registrant's own.
+		* The card contract: the slot supplies no props at all — copy, current value,
+		* and the write path are all the registrant's own.
 		*/
 		/** Product copy (zh/en via the document lang). */
 		const STRINGS = {
@@ -1419,7 +1420,7 @@ window.__ModuleLoader__.load({
 		*  模块级缓存防止 hmr 后重复投递。 */
 		const deliveredUids = /* @__PURE__ */ new Set();
 		/** Plugin body: register the delivery listener, the composer capture button,
-		*  and the two General-settings rows. */
+		*  and the settings card on the plugin detail page. */
 		function apply(ctx) {
 			const onScreenshot = (event) => {
 				const payload = parseShotPayload(event.detail);
