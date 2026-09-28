@@ -101,7 +101,13 @@ npm publish
 
 - 先判断该插件在不在 vendor 里：`ls shell/profile-template/vendor`。当前 7 个：`dsh-capture`、`dsh-context-doctor`、`dsh-quick-toolbar`、`dsh-ssid-env`、`dsh-ssid-panels`、`dsh-ssid-pwsh-retry`、`dsh-ssid-zh-ui`。
 - **`dsh-quick-toolbar` 的 vendor 是精简副本**：只收 `lib/` + `cordis.patch.yml` + `package.json`。别按「整目录相等」比。
-- 同步走 `npm run sync:vendor`（默认 dry-run，`--apply` 才写盘），与 `check-vendor-sync` 共用同一份指纹实现。**产物不保证是固定两个文件**——整目录镜像，并清掉不再产出的旧 hash 文件。
+- **`dsh-quick-toolbar` 不走 `sync:vendor`**：它在清单里登记为 `vendor-only`，而 `sync-vendor.mjs` 只处理 `mode: "full"` 且有 `source` 的包（当前是 `dsh-ssid-panels`、`dsh-ssid-zh-ui`、`dsh-ssid-pwsh-retry`、`dsh-ssid-env`）——脚本明确不碰它。**它的新产物要手工复制到两处**：
+  - `shell/profile-template/vendor/dsh-quick-toolbar`（发版基准）
+  - `~/.dsh/profiles/web/vendor/dsh-quick-toolbar`（web 运行时）
+  - `~/.dsh/profiles/ssid` 下**没有** vendor 目录——该 profile 走 `link:`。
+
+  复制范围就是精简副本的全貌，**4 个文件**：`lib/`（整目录）+ `cordis.patch.yml` + `package.json`。
+- **门禁在这一点上是盲的**：`check-vendor-sync` 对 `vendor-only` 包只做**三处 vendor 互比、不比源**，两处都停在旧产物时它们彼此一致、门照样全绿。**「`check:rules` 全绿」不能当作「vendor 是新的」的证据**——要自己比 `lib/client.js` 的大小或版本（2026-09-29 实测：两处都停在 0.10.1 而源已 0.11.0，门是绿的）。
 - 不在 vendor 里的插件（`dsh-allostasis` 目前只发 npm）→ **这一节不适用，但要明说「不适用」**，不要略过。
 - 顺带确认 `shell/profile-template/package.json` 的 `dependencies` + `dsh.profile.bundles` 里的声明：**精确 pin，无 `^`**，要新版本得显式改那一行。
 

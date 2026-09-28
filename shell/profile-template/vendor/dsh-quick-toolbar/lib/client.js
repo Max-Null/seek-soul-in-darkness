@@ -597,6 +597,18 @@ window.__ModuleLoader__.load({
 		function clickButton(button) {
 			if (button !== null && button !== void 0 && !button.disabled) button.click();
 		}
+		/** 侧栏工作区树里会话行的 `data-row-key` 前缀（`session:<id>`）。 */
+		var SESSION_ROW_PREFIX = "session:";
+		/**
+		* 首次使用自动生成的工作区目录名。
+		*
+		* 与 `api/workspace-controller/src/default-workspace.ts` 的
+		* `DEFAULT_WORKSPACE_DIRECTORY` 同值：那里是语言中立、写进磁盘路径、跨语言切换
+		* 都不变的常量，且 `workspaceDisplayTitle` 只按它判定「这个名字是自动取的」。
+		* 本地复制一份而不是跨包引用，是因为本插件的 client bundle 独立构建，
+		* 不经过 DSH 的内联白名单（`packages/client/tsdown.client.ts` 的 INLINE_SAFE）。
+		*/
+		var DEFAULT_WORKSPACE_DIRECTORY = "default-workspace";
 		/** i18n 取词。置顶区每次重渲都重建按钮，故**不走 `trackLocale`**
 		*  （那会把失效元素累积进 LOCALE_TARGETS）；改为渲染时按当前语言直取。 */
 		function favText(key) {
@@ -644,12 +656,35 @@ window.__ModuleLoader__.load({
 			return "";
 		}
 		/** 当前会话的 id / 所属工作区 / 工作目录 / 显示名；无当前会话或服务不可用 → null。 */
+		/**
+		* 当前打开的会话 id（读不到 → 空串）。
+		*
+		* **不能读 `sessions.list` 快照的 `current`**：`SessionListSnapshot`
+		* （`api/session-controller/src/client/sessions/manager.ts`）只有
+		* `items / state / phase / error / projectionsBySession`，**没有 `current` 字段**，
+		* 它恒为 `undefined` —— 依赖它的结果是「置顶当前会话」永远判成没有会话，即使
+		* 正开着一条（2026-09-29 实测：页面标题已是会话名，判据仍是 no-current）。
+		*
+		* 改读侧栏工作区树里被选中的那一行。用 `aria-selected` / `role` / `data-row-key`
+		* 而不是哈希类名（`dzuBha_sessionRow`）：前三个是 DSH 维护的语义属性，不会随
+		* CSS Modules 的哈希改名而失效。
+		*/
+		function currentSessionIdFromDom() {
+			try {
+				var row = document.querySelector("[data-slot=\"sidebar.workspaces\"] [role=\"treeitem\"][aria-selected=\"true\"]");
+				if (row === null) return "";
+				var key = row.getAttribute("data-row-key");
+				if (key === null || key.indexOf(SESSION_ROW_PREFIX) !== 0) return "";
+				return key.slice(SESSION_ROW_PREFIX.length);
+			} catch (_e) {
+				return "";
+			}
+		}
 		function currentSession() {
-			var snap = sessionsSnapshot();
-			if (snap === null) return null;
-			var id = typeof snap.current === "string" ? snap.current : "";
+			var id = currentSessionIdFromDom();
 			if (id === "") return null;
-			var row = (snap.byId !== void 0 && snap.byId !== null ? snap.byId : {})[id];
+			var snap = sessionsSnapshot();
+			var row = (snap !== null && snap.byId !== void 0 && snap.byId !== null ? snap.byId : {})[id];
 			var title = row !== void 0 && typeof row.displayTitle === "string" && row.displayTitle !== "" ? row.displayTitle : id;
 			var cwd = row !== void 0 && typeof row.cwd === "string" ? row.cwd : "";
 			return {
@@ -678,7 +713,9 @@ window.__ModuleLoader__.load({
 			for (var i = 0; i < items.length; i++) {
 				if (items[i].workspaceId !== workspaceId) continue;
 				var t = items[i].title;
-				return typeof t === "string" && t !== "" ? t : null;
+				if (typeof t !== "string" || t === "") return null;
+				if (t === DEFAULT_WORKSPACE_DIRECTORY) return favText("pin.defaultWorkspace");
+				return t;
 			}
 			return null;
 		}
@@ -735,10 +772,10 @@ window.__ModuleLoader__.load({
 		}
 		/** 切到某个置顶的会话。 */
 		function openPinned(id) {
-			var svc = sessionsSvc;
-			if (svc === null || typeof svc.open !== "function") return;
+			var ws = uiWorkspaceSvc;
+			if (ws === null || typeof ws.openSession !== "function") return;
 			try {
-				svc.open(id);
+				ws.openSession(id);
 			} catch (_e) {}
 		}
 		/**
@@ -796,7 +833,10 @@ window.__ModuleLoader__.load({
 			"pin.menu": ["置顶会话", "Pinned sessions"],
 			"pin.empty": ["还没有置顶的会话", "No pinned sessions yet"],
 			"pin.open": ["打开会话", "Open session"],
-			"pin.failed": ["操作失败，置顶状态未变", "Action failed, pin unchanged"]
+			"pin.failed": ["操作失败，置顶状态未变", "Action failed, pin unchanged"],
+			"pin.nocur": ["当前没有会话", "No current session"],
+			"pin.isCurrent": ["（当前会话）", " (current session)"],
+			"pin.defaultWorkspace": ["默认工作区", "Default workspace"]
 		};
 		function applyLocale() {
 			var zh = localeIsZh();
@@ -814,6 +854,13 @@ window.__ModuleLoader__.load({
 			}
 		}
 		function trackLocale(el, key, attr) {
+			for (var i = 0; i < LOCALE_TARGETS.length; i++) {
+				var seen = LOCALE_TARGETS[i];
+				if (seen.el === el && seen.attr === attr) {
+					seen.key = key;
+					return;
+				}
+			}
 			LOCALE_TARGETS.push({
 				el,
 				key,
@@ -985,18 +1032,30 @@ window.__ModuleLoader__.load({
 			"#ssid-toolbar .ssid-tb-pins{display:flex;flex-direction:column;gap:4px}",
 			"#ssid-toolbar .ssid-tb-pins>*{opacity:0;transform:translateY(4px);transition:opacity .16s ease,transform .16s ease}",
 			"#ssid-toolbar.ssid-tb-expanded .ssid-tb-pins>*{opacity:1;transform:none}",
-			"#ssid-toolbar .ssid-tb-pin svg{color:var(--dsw-alias-state-business-primary,#4d6bfe)}",
+			"#ssid-toolbar .ssid-tb-pinmenu svg{color:var(--dsw-alias-state-business-primary,#4d6bfe)}",
 			"#ssid-toolbar .ssid-tb-pintoggle[data-on=\"1\"] svg{color:var(--dsw-alias-state-business-primary,#4d6bfe)}",
-			"#ssid-toolbar .ssid-tb-pingroups{display:flex;flex-direction:column;gap:6px}",
-			"#ssid-toolbar .ssid-tb-pingroup{display:flex;flex-direction:column;gap:2px}",
-			"#ssid-toolbar .ssid-tb-pinhead{font-size:11px;opacity:.6;padding:0 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
-			"#ssid-toolbar .ssid-tb-pinrow{display:flex;align-items:stretch;gap:2px}",
-			"#ssid-toolbar .ssid-tb-pinrow .ssid-tb-pinopen{flex:1 1 auto;min-width:0}",
-			"#ssid-toolbar .ssid-tb-pinrow[data-dead=\"1\"] .ssid-tb-pinopen{opacity:.5}",
-			"#ssid-toolbar .ssid-tb-pinrow .ssid-tb-pinun{flex:0 0 auto;width:22px;padding:0;opacity:0;transition:opacity .12s ease}",
-			"#ssid-toolbar .ssid-tb-pinrow:hover .ssid-tb-pinun,#ssid-toolbar .ssid-tb-pinrow .ssid-tb-pinun:focus-visible{opacity:1}",
-			"#ssid-toolbar .ssid-tb-pinerr{color:var(--dsw-alias-state-error-primary,#e5484d);font-size:11px;padding:2px 4px}",
-			"#ssid-toolbar .ssid-tb-pinempty{font-size:11px;opacity:.6;padding:2px 4px}"
+			"#ssid-toolbar .ssid-tb-pintoggle[data-disabled=\"1\"]{opacity:.4;cursor:default}",
+			"#ssid-toolbar .ssid-tb-pintoggle[data-disabled=\"1\"]:hover{background:transparent}",
+			".ssid-tb-pinsub{position:fixed;z-index:9998;box-sizing:border-box;display:flex;flex-direction:column;gap:6px;min-width:150px;max-width:260px;padding:6px;border-radius:10px;background:var(--dsw-alias-bg-layer-3,#10151f);border:1px solid var(--dsw-alias-border-l2,#1e2836);box-shadow:0 8px 24px rgba(0,0,0,.28);font-family:system-ui,\"Segoe UI\",sans-serif;color:var(--dsw-alias-label-primary,#d8e0ea);user-select:none;-webkit-user-select:none;opacity:0;visibility:hidden;transform:translateX(-4px);transition:opacity .14s ease,transform .14s ease,visibility .14s}",
+			".ssid-tb-pinsub[data-open=\"1\"]{opacity:1;visibility:visible;transform:none}",
+			".ssid-tb-pinsub *{box-sizing:border-box}",
+			":is(#ssid-toolbar,.ssid-tb-pinsub) .ssid-tb-btn{border:0;background:transparent;color:var(--dsw-alias-label-primary,#d8e0ea);border-radius:8px;height:30px;display:flex;align-items:center;gap:8px;padding:0 10px;font-size:12px;line-height:18px;cursor:pointer;white-space:nowrap;text-align:left}",
+			":is(#ssid-toolbar,.ssid-tb-pinsub) .ssid-tb-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(128,148,168,.14))}",
+			":is(#ssid-toolbar,.ssid-tb-pinsub) .ssid-tb-btn svg{flex:none;width:15px;height:15px;color:var(--dsw-alias-label-secondary,#98a2b3)}",
+			":is(#ssid-toolbar,.ssid-tb-pinsub) .ssid-tb-pingroups{display:flex;flex-direction:column;gap:6px}",
+			":is(#ssid-toolbar,.ssid-tb-pinsub) .ssid-tb-pingroup{display:flex;flex-direction:column;gap:2px}",
+			":is(#ssid-toolbar,.ssid-tb-pinsub) .ssid-tb-pinhead{display:flex;align-items:center;gap:8px;padding:0 10px;font-size:11px;opacity:.6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+			":is(#ssid-toolbar,.ssid-tb-pinsub) .ssid-tb-pinhead svg{flex:none;width:15px;height:15px}",
+			":is(#ssid-toolbar,.ssid-tb-pinsub) .ssid-tb-pinrow{display:flex;align-items:stretch;gap:2px}",
+			":is(#ssid-toolbar,.ssid-tb-pinsub) .ssid-tb-pinrow .ssid-tb-pinopen{flex:1 1 auto;min-width:0}",
+			":is(#ssid-toolbar,.ssid-tb-pinsub) .ssid-tb-pinrow .ssid-tb-pinopen[data-current=\"1\"]{opacity:.62}",
+			":is(#ssid-toolbar,.ssid-tb-pinsub) .ssid-tb-pinrow[data-dead=\"1\"] .ssid-tb-pinopen{opacity:.5}",
+			":is(#ssid-toolbar,.ssid-tb-pinsub) .ssid-tb-pinrow .ssid-tb-pinun{flex:0 0 auto;width:26px;padding:0;justify-content:center;opacity:0;transition:opacity .12s ease}",
+			":is(#ssid-toolbar,.ssid-tb-pinsub) .ssid-tb-pinrow .ssid-tb-pinun svg{color:var(--dsw-alias-label-tertiary,#7b8494)}",
+			":is(#ssid-toolbar,.ssid-tb-pinsub) .ssid-tb-pinrow .ssid-tb-pinun:hover svg{color:var(--dsw-alias-state-error-primary,#e5484d)}",
+			":is(#ssid-toolbar,.ssid-tb-pinsub) .ssid-tb-pinrow:hover .ssid-tb-pinun,:is(#ssid-toolbar,.ssid-tb-pinsub) .ssid-tb-pinrow .ssid-tb-pinun:focus-visible{opacity:1}",
+			":is(#ssid-toolbar,.ssid-tb-pinsub) .ssid-tb-pinerr{color:var(--dsw-alias-state-error-primary,#e5484d);font-size:11px;padding:2px 10px}",
+			":is(#ssid-toolbar,.ssid-tb-pinsub) .ssid-tb-pinempty{font-size:11px;opacity:.6;padding:2px 10px}"
 		].join("\n");
 		function toolbarIcon(name) {
 			var ICONS = {
@@ -1012,9 +1071,12 @@ window.__ModuleLoader__.load({
 				add: "<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\"><path d=\"M8 3.5v9M3.5 8h9\"/></svg>",
 				star: "<svg viewBox=\"0 -0.49 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linejoin=\"round\"><path d=\"M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z\"/></svg>",
 				starOn: "<svg viewBox=\"0 -0.49 24 24\" fill=\"currentColor\" stroke=\"currentColor\" stroke-width=\"1.4\" stroke-linejoin=\"round\"><path d=\"M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z\"/></svg>",
-				chat: "<svg viewBox=\"0 1.05 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linejoin=\"round\"><path d=\"M13.6 8.4c0 2.5-2.5 4.5-5.6 4.5-.6 0-1.2-.08-1.7-.23L3 14.2l1.05-2.5C3.1 10.8 2.4 9.68 2.4 8.4c0-2.5 2.5-4.5 5.6-4.5s5.6 2 5.6 4.5z\"/></svg>"
+				chat: "<svg viewBox=\"0 1.05 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linejoin=\"round\"><path d=\"M13.6 8.4c0 2.5-2.5 4.5-5.6 4.5-.6 0-1.2-.08-1.7-.23L3 14.2l1.05-2.5C3.1 10.8 2.4 9.68 2.4 8.4c0-2.5 2.5-4.5 5.6-4.5s5.6 2 5.6 4.5z\"/></svg>",
+				folder: "<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linejoin=\"round\"><path d=\"M1.9 4.3c0-.8.6-1.4 1.4-1.4h2.7l1.4 1.6h5.3c.8 0 1.4.6 1.4 1.4v6.2c0 .8-.6 1.4-1.4 1.4H3.3c-.8 0-1.4-.6-1.4-1.4V4.3z\"/></svg>",
+				pinOff: "<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M9.8 2.2l4 4-2.6 1.4-1.8 1.8.4 2.6-1.4 1.4-2.6-3L3.9 13l-1-1 3-3.9-3-2.6 1.4-1.4 2.6.4 1.8-1.8z\"/><path d=\"M2.8 2.8l10.4 10.4\" stroke-width=\"1.8\"/></svg>",
+				dot: "<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\"><circle cx=\"8\" cy=\"8\" r=\"2.2\"/></svg>"
 			};
-			return ICONS[name] || ICONS.grid;
+			return ICONS[name] || ICONS.dot;
 		}
 		var toolbarEnv = function() {
 			return {
@@ -1121,8 +1183,42 @@ window.__ModuleLoader__.load({
 			var pinBox = document.createElement("div");
 			pinBox.className = "ssid-tb-pins";
 			panel.appendChild(pinBox);
-			/** 二级菜单是否展开。开合只影响渲染，故与其它一次性状态同层。 */
-			var pinMenuOpen = false;
+			var pinSub = document.createElement("div");
+			pinSub.className = "ssid-tb-pinsub";
+			pinSub.setAttribute("data-open", "0");
+			pinSub.addEventListener("mouseenter", function() {
+				setPinSubOpen(true);
+			});
+			pinSub.addEventListener("mouseleave", function() {
+				setPinSubOpen(false);
+			});
+			document.body.appendChild(pinSub);
+			/** 二级列/入口按钮的悬停状态。任一为真即保持展开。 */
+			var pinSubHover = false;
+			var pinMenuHover = false;
+			/** 按两个悬停源刷新二级列开合（不重渲染）。 */
+			function setPinSubOpen(open) {
+				pinSubHover = open;
+				var shown = (pinSubHover || pinMenuHover) && expanded;
+				pinSub.setAttribute("data-open", shown ? "1" : "0");
+				var anchor = pinBox.querySelector(".ssid-tb-pinmenu");
+				if (anchor !== null) anchor.setAttribute("aria-expanded", shown ? "true" : "false");
+				if (shown) placePinSub();
+			}
+			/** 把二级列贴到「置顶会话」入口的右侧；越界时改贴左侧。 */
+			function placePinSub() {
+				var anchor = pinBox.querySelector(".ssid-tb-pinmenu");
+				if (anchor === null) return;
+				var r = anchor.getBoundingClientRect();
+				var w = pinSub.offsetWidth;
+				var h = pinSub.offsetHeight;
+				var left = r.right + 6;
+				if (left + w > window.innerWidth - 4) left = Math.max(4, r.left - w - 6);
+				var top = r.top;
+				if (top + h > window.innerHeight - 4) top = Math.max(4, window.innerHeight - h - 4);
+				pinSub.style.left = Math.round(left) + "px";
+				pinSub.style.top = Math.round(top) + "px";
+			}
 			/** 供 `groupPinned` 反查单条置顶的归属、标题与存活。 */
 			function resolvePinned(id) {
 				var snap = sessionsSnapshot();
@@ -1143,7 +1239,9 @@ window.__ModuleLoader__.load({
 				box.setAttribute("data-group-kind", group.kind);
 				var head = document.createElement("div");
 				head.className = "ssid-tb-pinhead";
-				head.textContent = group.title + "（" + group.entries.length + "）";
+				head.innerHTML = toolbarIcon("folder") + "<span></span>";
+				var headSpan = head.querySelector("span");
+				if (headSpan !== null) headSpan.textContent = group.title + "（" + group.entries.length + "）";
 				head.title = group.title;
 				box.appendChild(head);
 				for (var i = 0; i < group.entries.length; i++) {
@@ -1161,21 +1259,21 @@ window.__ModuleLoader__.load({
 					if (span !== null) span.textContent = label;
 					open.setAttribute("aria-label", favText("pin.open") + "：" + entry.title);
 					open.title = entry.title;
-					if (entry.id !== currentId) open.addEventListener("click", (function(targetId) {
+					open.addEventListener("click", (function(targetId) {
 						return function() {
 							openPinned(targetId);
 						};
 					})(entry.id));
-					else {
+					if (entry.id === currentId) {
 						open.setAttribute("data-current", "1");
-						open.disabled = true;
+						open.title = entry.title + favText("pin.isCurrent");
 					}
 					row.appendChild(open);
 					var un = document.createElement("button");
 					un.type = "button";
 					un.className = "ssid-tb-btn ssid-tb-pinun";
 					un.setAttribute("data-adapter-id", "dsh-pinned.unpin:" + entry.id);
-					un.innerHTML = toolbarIcon("close");
+					un.innerHTML = toolbarIcon("pinOff");
 					un.setAttribute("aria-label", favText("pin.remove") + "：" + entry.title);
 					un.title = favText("pin.remove");
 					un.addEventListener("click", (function(targetId) {
@@ -1209,47 +1307,60 @@ window.__ModuleLoader__.load({
 				var pinnedIds = wsnap.pinnedSessionIds !== void 0 && wsnap.pinnedSessionIds !== null ? wsnap.pinnedSessionIds : [];
 				pinBox.setAttribute("data-pin-count", String(pinnedIds.length));
 				var curId = cur === null ? "" : cur.id;
-				if (cur !== null) {
-					var on = pinnedIds.indexOf(curId) !== -1;
-					var star = document.createElement("button");
-					star.type = "button";
-					star.className = "ssid-tb-btn ssid-tb-pintoggle";
-					star.setAttribute("data-on", on ? "1" : "0");
-					star.innerHTML = toolbarIcon(on ? "starOn" : "star") + "<span></span>";
-					var starLabel = on ? favText("pin.remove") : favText("pin.add");
-					var starSpan = star.querySelector("span");
-					if (starSpan !== null) starSpan.textContent = starLabel;
-					star.setAttribute("aria-label", starLabel);
-					star.title = starLabel;
-					star.addEventListener("click", function() {
-						toggleCurrentPin();
-					});
-					pinBox.appendChild(star);
-				}
+				var on = cur !== null && pinnedIds.indexOf(curId) !== -1;
+				var star = document.createElement("button");
+				star.type = "button";
+				star.className = "ssid-tb-btn ssid-tb-pintoggle";
+				star.setAttribute("data-on", on ? "1" : "0");
+				star.innerHTML = toolbarIcon(on ? "starOn" : "star") + "<span></span>";
+				var starLabel = cur === null ? favText("pin.nocur") : on ? favText("pin.remove") : favText("pin.add");
+				var starSpan = star.querySelector("span");
+				if (starSpan !== null) starSpan.textContent = starLabel;
+				star.setAttribute("aria-label", starLabel);
+				star.title = starLabel;
+				if (cur === null) {
+					star.disabled = true;
+					star.setAttribute("data-disabled", "1");
+				} else star.addEventListener("click", function() {
+					toggleCurrentPin();
+				});
+				pinBox.appendChild(star);
 				var menuBtn = document.createElement("button");
 				menuBtn.type = "button";
-				menuBtn.className = "ssid-tb-btn ssid-tb-pin";
-				menuBtn.setAttribute("aria-expanded", pinMenuOpen ? "true" : "false");
+				menuBtn.className = "ssid-tb-btn ssid-tb-pinmenu";
+				menuBtn.setAttribute("aria-expanded", "false");
 				menuBtn.innerHTML = toolbarIcon("chat") + "<span></span>";
 				var menuLabel = favText("pin.menu") + (pinnedIds.length > 0 ? "（" + pinnedIds.length + "）" : "");
 				var menuSpan = menuBtn.querySelector("span");
 				if (menuSpan !== null) menuSpan.textContent = menuLabel;
 				menuBtn.setAttribute("aria-label", menuLabel);
 				menuBtn.title = menuLabel;
-				menuBtn.addEventListener("click", function() {
-					pinMenuOpen = !pinMenuOpen;
-					renderFavs();
+				menuBtn.addEventListener("mouseenter", function() {
+					pinMenuHover = true;
+					setPinSubOpen(false);
+				});
+				menuBtn.addEventListener("mouseleave", function() {
+					pinMenuHover = false;
+					setPinSubOpen(false);
+				});
+				menuBtn.addEventListener("focus", function() {
+					pinMenuHover = true;
+					setPinSubOpen(false);
+				});
+				menuBtn.addEventListener("blur", function() {
+					pinMenuHover = false;
+					setPinSubOpen(false);
 				});
 				pinBox.appendChild(menuBtn);
-				if (pinMenuOpen) {
-					var groups = groupPinned(pinnedIds, resolvePinned, workspaceTitleOf);
-					if (groups.length === 0) {
-						var empty = document.createElement("div");
-						empty.className = "ssid-tb-pinempty";
-						empty.textContent = favText("pin.empty");
-						pinBox.appendChild(empty);
-					} else for (var gi = 0; gi < groups.length; gi++) pinBox.appendChild(renderPinGroup(groups[gi], curId));
-				}
+				pinSub.innerHTML = "";
+				var groups = groupPinned(pinnedIds, resolvePinned, workspaceTitleOf);
+				if (groups.length === 0) {
+					var empty = document.createElement("div");
+					empty.className = "ssid-tb-pinempty";
+					empty.textContent = favText("pin.empty");
+					pinSub.appendChild(empty);
+				} else for (var gi = 0; gi < groups.length; gi++) pinSub.appendChild(renderPinGroup(groups[gi], curId));
+				if (pinSub.getAttribute("data-open") === "1") placePinSub();
 				if (pinErrorUntil > Date.now()) {
 					var err = document.createElement("div");
 					err.className = "ssid-tb-pinerr";
@@ -1511,6 +1622,23 @@ window.__ModuleLoader__.load({
 				var offWorkspaces = subWorkspaces.list.subscribe(renderFavs);
 				if (typeof offWorkspaces === "function") favUnsubs.push(offWorkspaces);
 			} catch (_e) {}
+			try {
+				var curObs = new MutationObserver(function() {
+					if (curObsTimer !== null) clearTimeout(curObsTimer);
+					curObsTimer = setTimeout(function() {
+						curObsTimer = null;
+						renderFavs();
+					}, 120);
+				});
+				curObs.observe(document.body, {
+					subtree: true,
+					attributes: true,
+					attributeFilter: ["aria-selected"]
+				});
+				favUnsubs.push(function() {
+					curObs.disconnect();
+				});
+			} catch (_e) {}
 			renderFavs();
 			favRender = renderFavs;
 			var BALL_SIZE = 36;
@@ -1586,6 +1714,7 @@ window.__ModuleLoader__.load({
 			};
 			var setCollapsed = function(collapsed) {
 				expanded = !collapsed;
+				if (collapsed) pinSub.setAttribute("data-open", "0");
 				ball.style.opacity = collapsed ? "" : "0";
 				if (collapsed) {
 					root.classList.remove("ssid-tb-expanded");
@@ -1644,6 +1773,7 @@ window.__ModuleLoader__.load({
 				qtState.pinned = pinned;
 				saveState();
 				applyPin();
+				applyLocale();
 				setCollapsed(pinned ? false : true);
 			});
 			var hideTimer = null;
@@ -1654,7 +1784,12 @@ window.__ModuleLoader__.load({
 			var inShellArea = function() {
 				var r = root.getBoundingClientRect();
 				var m = 18;
-				return lastMouse.x >= r.left - m && lastMouse.x <= r.right + m && lastMouse.y >= r.top - m && lastMouse.y <= r.bottom + m;
+				if (lastMouse.x >= r.left - m && lastMouse.x <= r.right + m && lastMouse.y >= r.top - m && lastMouse.y <= r.bottom + m) return true;
+				if (pinSub.getAttribute("data-open") === "1") {
+					var s = pinSub.getBoundingClientRect();
+					if (s.width > 0 && lastMouse.x >= s.left - m && lastMouse.x <= s.right + m && lastMouse.y >= s.top - m && lastMouse.y <= s.bottom + m) return true;
+				}
+				return false;
 			};
 			var scheduleCollapse = function() {
 				if (pinned || !expanded) return;
@@ -1731,6 +1866,8 @@ window.__ModuleLoader__.load({
 		var sessionsSvc = null;
 		/** 订阅的退订句柄（会话列表 + 工作区列表两个）；工具栏重建时先全退，避免重复回调。 */
 		var favUnsubs = [];
+		/** 会话切换观察器的 debounce 句柄（见订阅处的说明）。 */
+		var curObsTimer = null;
 		/** 退出全部订阅（工具栏重建、容器被移除时调用）。 */
 		function releaseFavSubs() {
 			for (var i = 0; i < favUnsubs.length; i++) try {
