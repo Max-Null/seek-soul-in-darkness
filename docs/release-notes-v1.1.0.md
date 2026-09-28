@@ -1,6 +1,6 @@
 # v1.1.0 思灵（SSiD）
 
-> 状态：**待发布**。相对 v1.0.0 的改动，分组依据 `.ssid-build/checkout` 的
+> 状态：**已发布**（2026-09-29）。相对 v1.0.0 的改动，分组依据 `.ssid-build/checkout` 的
 > `git log d24c3a7ede~1..HEAD` 与 `seek-soul-in-darkness` 的 `git log v1.0.0..HEAD` 提炼。
 > 本版是 **1.0.0 换代之后的第一次内核跟进**：随包内核从 **0.1.7-rc.2 升到 0.2.0-rc.1**
 > （上游 `dsh-v0.1.7-rc.2..dsh-v0.2.0-rc.1` 共 261 个提交、20 项新特性）。
@@ -69,7 +69,8 @@
   - `ssid-1.1.0-win-x64-unsigned.exe`（NSIS 安装包）
   - 附 `latest.yml` 与 blockmap（在线增量更新所需）
 - SHA256（`certutil -hashfile <文件> SHA256`）——**以本页与 Release 页为准**：
-  - `ssid-1.1.0-win-x64-unsigned.exe`：`<打包后填入>`
+  - `ssid-1.1.0-win-x64-unsigned.exe`：
+    `4470A357CA198151E58BEB4137C80F9C860DBCEEEA6D1BF7A25891B541CE1B40`（449775055 字节）
 - 说明：**包内那份「更新日志」（关于 SSiD）不着录校验和**。安装包的哈希取决于内嵌内容，
   而包里又装着一份更新日志，把最终哈希写进包内会**再次改变**哈希；真实校验和以本页与
   GitHub Release 页为准。
