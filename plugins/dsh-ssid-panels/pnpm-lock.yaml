@@ -9,19 +9,19 @@ importers:
   .:
     devDependencies:
       '@deepseek-ai/dsh-client-runtime':
-        specifier: ^0.1.0-rc.6
+        specifier: '>=0.1.0-rc.6 <0.3.0'
         version: 0.1.0-rc.6(9b9cc316d8840c207092351c825bdfdb)
       '@deepseek-ai/dsh-client-ui-slots':
-        specifier: ^0.1.0-rc.6
+        specifier: '>=0.1.0-rc.6 <0.3.0'
         version: 0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1))
       '@deepseek-ai/dsh-host-webserver':
-        specifier: ^0.1.0-rc.6
+        specifier: '>=0.1.0-rc.6 <0.3.0'
         version: 0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1))
       '@deepseek-ai/dsh-session':
-        specifier: ^0.1.0-rc.6
+        specifier: '>=0.1.0-rc.6 <0.3.0'
         version: 0.1.0-rc.6(6fd26f59436a18b115f326d6060415e6)
       '@deepseek-ai/dsh-web-app':
-        specifier: ^0.1.0-rc.6
+        specifier: '>=0.1.0-rc.6 <0.3.0'
         version: 0.1.0-rc.6(639f3a733d0e8c3e6550cd28aa4fd9b4)
       '@types/node':
         specifier: ^26.2.0
