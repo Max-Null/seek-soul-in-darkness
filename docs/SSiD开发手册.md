@@ -688,6 +688,14 @@ apps/desktop-host（Host 子进程）
    **顺带排除掉的**（都带证据，别重复走）：`%TEMP%` 的 ACL 完整（`icacls` 三条 ACE 全为完全控制；`diagnose-windows-sandbox-acl` 检过 `%TEMP%` 及每个祖先，verdict `NOT_THIS_CLASS`）；`TEMP`/`TMP` 在进程、用户、机器三处都指向存在的目录；无用户态 WDAC 策略、AppLocker 为空、只注册了 Windows Defender、受控文件夹访问为 `0`（关闭）——**这些都不是成因**。
    **一个边界提醒**：用户**双击**运行安装器**不在这条子进程链上**，所以「NSIS 装 1.1.1 报 `Error writing temporary file`」**不能**用本坑解释，那是另一件事，尚未定因。
 
+62. **装版 MCP 全部消失时，有两条自救通道，而且它们生效时机不同**（2026-09-29 实机，装 1.1.0）。
+   **症状**：设置 → MCP 里预制条目显示「未同步 / 0 tools」，界面上一个 `mcp__*` 都没有。根因同 #59（壳的 `SSID_MCP_*` 注入写在 `new DesktopHostProcess` 之后，到不了 Host 的构造时快照）。修壳要等发版，但**不必等发版就能先把 MCP 救回来**：
+   ① **profile 的 `cordis.patch.yml` 改动是热生效的** —— 但只对**已经在内核 `process.env` 里**的变量有用。实测：把 `mcp-github` 条目加回 `insert:` 块后**无需重启**，`mcp__github__*`（45 tools）当场出现——因为 `GITHUB_MCP_TOKEN` 本来就在 `.env` 里。
+   ② **`$DSH_HOME/.env` 是官方 env 兜底层**（见 #60），但它**只在 boot 早期灌入**：补进去的变量**必须重启内核**才会进 `process.env`。实测：补完 `SSID_MCP_*` 后那三条仍「未同步」，因为当时的内核（17:01 启动）读的是改动前（17:16 才写）的 `.env`。
+   **判据（一眼分清走哪条）**：**变量已在 `process.env`** → 走 ①，改完即生效；**变量不在** → 必须写 `.env` **且重启**。
+   **怎么判断在不在**：看条目上的 tools 数（`0` = `!!js` 表达式求值失败 = 变量缺失）；或查 `host.log` 里该 MCP 引擎的 `MCP server starting` / `Client disconnected` 时间戳，与内核启动时刻对比。
+   **注意**：重启内核会连带杀掉挂在当前 Host 下的后台任务（例如正在跑的打包 job）——先确认没有要紧的长任务再重启。
+
 ## 8. 文档索引
 
 - 本手册（总览/流程/坑）
