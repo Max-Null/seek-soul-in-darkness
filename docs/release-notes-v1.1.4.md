@@ -1,6 +1,6 @@
 # v1.1.4 思灵（SSiD）
 
-> 状态：**待发布**（2026-09-30）。三处实机反馈的修复 + 三个内置插件跟到最新。内核不变（`0.2.0-rc.1`）。
+> 状态：**已发布**（2026-09-30）。三处实机反馈的修复 + 三个内置插件跟到最新。内核不变（`0.2.0-rc.1`）。
 
 ## 这一版修的是什么
 
@@ -37,4 +37,14 @@
 
 ## 下载与校验
 
-资产见 GitHub Release v1.1.4（发布后回填链接与 SHA256）。
+资产见 [GitHub Release v1.1.4](https://github.com/Max-Null/seek-soul-in-darkness/releases/tag/v1.1.4)：
+
+- `ssid-1.1.4-win-x64-unsigned.exe`（Windows NSIS 安装包）
+- 附 `latest.yml` 与 `.blockmap`
+
+SHA256（`certutil -hashfile <文件> SHA256`）—— **以本页与 Release 页为准**：
+
+- `ssid-1.1.4-win-x64-unsigned.exe`：
+  `4316860E4E9F3E9E7DF7C8697104C23AB27A9DBDFBC68A9B8BBF3B2A52FCD5E3`（450099749 字节）
+
+说明：包内那份「更新日志」（关于 SSiD）不著录校验和 —— 把最终哈希写进包内会再次改变哈希。
