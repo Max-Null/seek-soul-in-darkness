@@ -536,9 +536,10 @@ function buildTitlebarScript(options: SsidTitlebarOptions): string {
     setFloat(next)
     fire('quick-toolbar-toggle')
   }
-  // 悬浮球状态回读。这个请求要等 Host 就绪才有答案：壳的协议 handler 在 Host 未起来时直接
-  // 返回 503（main.ts 的 protocol.handle），而这句注入常赶在 Host ready 之前跑 —— 于是控制台
-  // 会刷出 503。退避重试若干次；始终读不到就停在默认态，功能不受影响（点一下照样能切）。
+  // 悬浮球状态回读。这个请求要等 Host 就绪才有答案；协议层现在让它排在启动链上（main.ts 的
+  // protocol.handle 里 await startup），所以正常情况下第一次就拿到结果，控制台不再出现 503。
+  // 退避重试保留作兜底：启动链失败时协议层仍回 503，此时重试若干次；始终读不到就停在默认态，
+  // 功能不受影响（点一下照样能切）。
   const readFloatState = (attempt) => {
     fetch('/quick-toolbar/api/state', { credentials: 'same-origin' })
       .then((response) => response.ok ? response.json() : Promise.reject(new Error('host not ready')))

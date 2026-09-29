@@ -975,7 +975,7 @@ async function main(): Promise<void> {
     window.once('closed', () => { resolve() })
   })
 
-  protocol.handle(SCHEME, (request) => {
+  protocol.handle(SCHEME, async (request) => {
     const url = new URL(request.url)
     // Shell-owned documents live in the application bundle and never pass through the Host.
     if (url.hostname === 'shell') return serveWebDocument(request, join(app.getAppPath(), 'renderer'))
@@ -985,11 +985,18 @@ async function main(): Promise<void> {
         return serveWebDocument(request, join(resources.dsh, 'node_modules', '@deepseek-ai', 'dsh-web-frontend', 'dist'))
       }
       if (backend.host === undefined || hostUrl === undefined || hostCookie === undefined) {
-        return Promise.resolve(new Response(null, { status: 503 }))
+        // 页面在 Host ready 之前就会发请求（标题栏注入回读悬浮球状态是第一句），立刻回 503 会让
+        // 控制台刷出一串「503」，调用方只能靠退避重试掩盖。这里等启动链落定再判一次：未就绪仍是
+        // 503，只是不再抢在 Host 起来之前发出去。`startup` settle 后自清空；它的失败已由自身
+        // reportFatal 处理，这里只求不把同一个失败再抛进协议层。
+        await startup?.catch(() => undefined)
+        if (backend.host === undefined || hostUrl === undefined || hostCookie === undefined) {
+          return new Response(null, { status: 503 })
+        }
       }
       return forwardWebRequest(request, hostUrl, hostCookie)
     }
-    return Promise.resolve(new Response(null, { status: 404 }))
+    return new Response(null, { status: 404 })
   })
 
   installDesktopDirectoryPicker(() => mainWindow)
