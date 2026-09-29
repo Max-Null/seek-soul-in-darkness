@@ -162,7 +162,9 @@ describe('desktop macOS release signature', () => {
     expect(portablePath(config.directories.output)).toContain('/targets/mac-arm64/unsigned-artifacts')
     expect(config.artifactName).toBe('ssid-${version}-${os}-${arch}-unsigned.${ext}')
     expect(config).toMatchObject({
-      mac: { identity: '-', forceCodeSigning: true, notarize: false },
+      // SSiD：unsigned 下 electron-builder 整个跳过签名，由 afterPack 自己用 ad-hoc 身份签 ——
+      // osx-sign 那次关不掉的 `codesign --verify --deep` 在这棵含 LibreOfficeDev.app 的 bundle 上不可靠。
+      mac: { identity: null, forceCodeSigning: false, notarize: false },
       dmg: { sign: false, writeUpdateInfo: false },
       publish: [{ provider: 'github', owner: 'Max-Null', repo: 'seek-soul-in-darkness' }],
     })

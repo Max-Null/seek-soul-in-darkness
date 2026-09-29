@@ -177,13 +177,11 @@ export function createElectronBuilderConfig(
       icon: fileURLToPath(new URL('../resources/icon-macos.png', import.meta.url)),
       category: 'public.app-category.developer-tools',
       // SSiD：未签名构建落到 ad-hoc 身份 `-`（取舍见上面的凭据解析），有签名构建用发布身份。
-      identity: macOSSigning?.signingIdentity ?? '-',
-      forceCodeSigning: true,
+      // SSiD：未签名构建让 electron-builder 整个跳过签名（identity null + forceCodeSigning false），
+      // 改由 afterPack 用 ad-hoc 身份自己签 —— 原因见那边调用点的注释。
+      identity: unsigned ? null : macOSSigning?.signingIdentity,
+      forceCodeSigning: !unsigned,
       hardenedRuntime: true,
-      // SSiD：ad-hoc 身份没有证书，`--timestamp` 只能白等一次网络超时（实测把 app 本体的签名拖到 9 秒），
-      // 并且会在 osx-sign 紧接着那次 `codesign --verify --deep` 上暴露不一致 —— 该验证无法关闭。
-      // 有签名构建仍然需要时间戳。
-      timestamp: !unsigned,
       // macOS matches the application locale against this bundle, not Electron Framework resources.
       extendInfo: {
         CFBundleLocalizations: ['en', 'zh_CN'],
@@ -236,6 +234,19 @@ export function createElectronBuilderConfig(
         preparedRuntimeVersion ?? dshVersion, { platform: resolvedPlatform, arch: resolvedArch })
       // Unsigned Windows builds skip electron-builder's afterSign hook.
       if (packagesWindows && unsigned) await verifyWindowsAsarUnpack(buildPaths.dsh, resourcesDir, windowsCode)
+      // SSiD：未签名 mac 构建在这里自己用 ad-hoc 身份签名。@electron/osx-sign 签完固定跑
+      // `codesign --verify --deep`（该验证关不掉：`mac.strictVerify` 只控制 --strict，`mac.timestamp`
+      // 又被 MacTargetHelper 的 `customSignOptions.timestamp || undefined` 吞回默认 true），实测它在这棵
+      // 含 LibreOfficeDev.app 的巨型 bundle 上必然失败，而同一个 app 事后重跑同一条命令却通过 ——
+      // 产物本身完好（普查 144 个 Mach-O 全部有签名）。所以 unsigned 下让 electron-builder 跳过签名，
+      // 由这里用同一条 codesign 完成，不让一个结果不可复现的验证卡住整条打包链。
+      if (packagesMacOS && unsigned) {
+        await promisify(execFile)('/usr/bin/codesign', [
+          '--force', '--deep', '--sign', '-', '--options', 'runtime',
+          '--entitlements', fileURLToPath(new URL('./macos-entitlements.plist', import.meta.url)),
+          join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`),
+        ])
+      }
     },
     afterSign: async context => {
       if (windowsSigner !== undefined) {
