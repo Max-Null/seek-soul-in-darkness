@@ -40,7 +40,7 @@
 
 ## 发版记录
 
-`release-notes-v<版本>.md`，按版本号命名（v0.1.0 起，最新 [v0.4.0](release-notes-v0.4.0.md)）。
+`release-notes-v<版本>.md`，按版本号命名（v0.1.0 起，最新 [v1.1.1](release-notes-v1.1.1.md)；此前的 [v1.1.0](release-notes-v1.1.0.md)、[v1.0.0](release-notes-v1.0.0.md)）。
 
 ## 调研与上游报告
 
