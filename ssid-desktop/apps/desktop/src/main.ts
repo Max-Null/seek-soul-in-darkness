@@ -687,38 +687,9 @@ async function main(): Promise<void> {
       })
     return {
       start: async () => {
-        // SSiD 预制 MCP：env 必须在 `host.start()` 之前注入 —— Host 子进程继承 process.env，
-        // 而 profile 里那四条 mcp-client 条目的 command/args 全靠这些 env 求值。
-        // 缺失即条目自动停用（patch 的 `disabled` 表达式），不会让内核起不来。
-        // 这里**不弹任何对话框**：env 必须在 host.start() 之前定，而等人点击的对话框
-        // 会把启动永久卡住（全新 DSH_HOME 下实测过）。CodeGraph 的首次引导挪到
-        // Host 就绪之后，见 guideCodeGraphWorkspace()。
-        const mcpEnv = await installSsidMcpEnv({
-          profileDir: activeProject,
-          dshHome: resolveDshHome(),
-          profileName: resolveProfileName(),
-          log: (text) => { console.log(`ssid: ${text}`) },
-        })
-        console.log(`ssid: mcp ready (playwright=${String(mcpEnv.playwrightCli)}`
-          + ` codegraph=${String(mcpEnv.codegraphCli)} ws=${mcpEnv.codegraphWorkspace ?? '(none)'}`
-          + ` enabled=${mcpEnv.codegraphEnabled})`)
-        // SSiD 会话根隔离：env 注入 + profile patch 覆盖内核 root + 回写 applied，三层
-        // 缺一不可 —— 只注入 env 时内核仍读官方基础层的共享根，隔离根里的历史会话会
-        // 整个看不见（见 ssid/session-root.ts 的文件头）。与 MCP env 同理，必须在
-        // host.start() 之前（子进程继承当时的 process.env）。
-        const sessionRoots = applySessionRootIsolation(resolveDshHome(), activeProject, resolveProfileName())
-        console.log(`ssid: session roots isolated=${sessionRoots.isolatedRoot} shared=${sessionRoots.sharedRoot}`
-          + ` enabled=${String(sessionRoots.isolated)} patch=${sessionRoots.patch.reason}`)
-        // 换根自愈：登记一旦与根脱节，侧栏会话全掉「未分组」、工作区看着是空的，而
-        // DSH 自己的 bootstrap 只在 initialized === false 时跑过一次，此后没有兜底
-        // （见 ssid/session-registry-heal.ts 的文件头）。必须在 host.start() 之前 ——
-        // 内核起来时就已读走 workspace.json。
-        const healed = healWorkspaceRegistry({
-          dshHome: resolveDshHome(),
-          log: (text) => { console.log(`ssid: ${text}`) },
-        })
-        console.log(`ssid: registry heal healed=${String(healed.healed)} reason=${healed.reason}`
-          + ` added=${String(healed.added)} created=${String(healed.workspacesCreated)}`)
+        // 三处环境准备（MCP env、会话根隔离、工作区登记自愈）已由 prepareHostEnvironment()
+        // 在 `backend.start()` **之前**完成 —— 见那个函数的文件头：它们必须早于
+        // `new DesktopHostProcess(...)`，写在这里就晚了（子进程 env 是构造时的快照）。
         const ready = await host.start()
         hostCookie = await authenticateWebHost(ready.url)
         hostUrl = ready.url
@@ -797,6 +768,51 @@ async function main(): Promise<void> {
     }
     return shown
   }
+  /**
+   * Host 子进程的环境准备 —— 三处注入都必须在 `new DesktopHostProcess(...)` **之前**完成。
+   *
+   * 子进程的 environment 是**构造时的快照**：`host-process.ts` 把传入的 env 存成实例字段，
+   * spawn 时原样使用、只补 `ELECTRON_RUN_AS_NODE`，**不合并 live `process.env`**
+   * （见 `node-environment.ts`）。所以写在构造之后的赋值**到不了 Host**。而 `host` 是在
+   * `DesktopBackendController` 的工厂回调里创建、由 `backend.start()` 调用的 —— 因此这三处
+   * 必须提到**每一个 `backend.start()` 调用点之前**。
+   *
+   * 漏掉时的症状（2026-09-29 实机）：MCP 条目全部自动停用（界面上没有任何 `mcp__*`）、
+   * 隔离根里的历史会话整个看不见；又因为构造前 Host 可能已经重启过一次而侥幸生效，
+   * 表现为同一版本时好时坏（坑 #59）。
+   */
+  const prepareHostEnvironment = async (): Promise<void> => {
+    // SSiD 预制 MCP：profile 里那几条 mcp-client 条目的 command/args 全靠这些 env 求值，
+    // 缺失即条目自动停用（patch 的 `disabled` 表达式），不会让内核起不来。
+    // 这里**不弹任何对话框**：env 必须早于构造定型，而等人点击的对话框会把启动永久卡住
+    // （全新 DSH_HOME 下实测过）。CodeGraph 的首次引导挪到 Host 就绪之后，见
+    // guideCodeGraphWorkspace()。
+    const mcpEnv = await installSsidMcpEnv({
+      profileDir: activeProject,
+      dshHome: resolveDshHome(),
+      profileName: resolveProfileName(),
+      log: (text) => { console.log(`ssid: ${text}`) },
+    })
+    console.log(`ssid: mcp ready (playwright=${String(mcpEnv.playwrightCli)}`
+      + ` codegraph=${String(mcpEnv.codegraphCli)} ws=${mcpEnv.codegraphWorkspace ?? '(none)'}`
+      + ` enabled=${mcpEnv.codegraphEnabled})`)
+    // SSiD 会话根隔离：env 注入 + profile patch 覆盖内核 root + 回写 applied，三层缺一不可
+    // —— 只注入 env 时内核仍读官方基础层的共享根，隔离根里的历史会话会整个看不见
+    // （见 ssid/session-root.ts 的文件头）。
+    const sessionRoots = applySessionRootIsolation(resolveDshHome(), activeProject, resolveProfileName())
+    console.log(`ssid: session roots isolated=${sessionRoots.isolatedRoot} shared=${sessionRoots.sharedRoot}`
+      + ` enabled=${String(sessionRoots.isolated)} patch=${sessionRoots.patch.reason}`)
+    // 换根自愈：登记一旦与根脱节，侧栏会话全掉「未分组」、工作区看着是空的，而 DSH 自己的
+    // bootstrap 只在 initialized === false 时跑过一次，此后没有兜底
+    // （见 ssid/session-registry-heal.ts 的文件头）。内核起来时就已读走 workspace.json。
+    const healed = healWorkspaceRegistry({
+      dshHome: resolveDshHome(),
+      log: (text) => { console.log(`ssid: ${text}`) },
+    })
+    console.log(`ssid: registry heal healed=${String(healed.healed)} reason=${healed.reason}`
+      + ` added=${String(healed.added)} created=${String(healed.workspacesCreated)}`)
+  }
+
   const publishUpdate = (state: DesktopUpdateState): DesktopUpdateState => {
     updateJournal?.state(state)
     updateState = state
@@ -810,7 +826,8 @@ async function main(): Promise<void> {
       updateStoppedHost = false
       if (restoreHost) {
         // Only confirmed process exit permits replacement before another installation confirmation.
-        const hostReady = backend.start(async () => {})
+        // 环境准备必须先完成：新 Host 是在 `backend.start()` 内部构造的，env 到那时已定型。
+        const hostReady = prepareHostEnvironment().then(() => backend.start(async () => {}))
         startup = hostReady
         const recovery = hostReady.then(async () => {
           if (quitting) return
@@ -839,6 +856,8 @@ async function main(): Promise<void> {
   const reconcileBackend = (): Promise<void> => {
     startup ??= (async () => {
       await navigateMain(applicationUrl)
+      // 必须在 `backend.start()` 之前：host 在它内部构造，env 到那时已定型。
+      await prepareHostEnvironment()
       await backend.start(async () => {
         const carried = migrateProfileIfLegacy(activeProject)
         await manager.applyRelease()
