@@ -129,6 +129,18 @@ jobs:
           sleep 10
           codesign --verify --deep --strict --verbose=4 "$APP" 2>&1 | head -30 || echo "→ 10 秒后仍失败"
 
+      - name: 列出产物与更新 feed
+        working-directory: .ssid-build/checkout
+        # 发版时要按 latest-mac.yml 的 url 字段核对资产名（否则增量更新 404），所以每次都打出来。
+        run: |
+          A="apps/desktop/.desktop-build/targets/mac-arm64/unsigned-artifacts"
+          ls -lh "$A"
+          for f in "$A"/*.yml; do
+            [ -f "$f" ] || continue
+            echo "=== $f ==="
+            cat "$f"
+          done
+
       - name: 上传构建产物（Actions artifact）
         uses: actions/upload-artifact@v4
         with:
