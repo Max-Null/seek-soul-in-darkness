@@ -109,6 +109,28 @@ pnpm --filter "./apps/desktop" run package:win:x64:unsigned
 - **更新源**（`electron-builder-config.mjs`）：没配 COS 凭据时写 **`provider: github, owner: Max-Null, repo: seek-soul-in-darkness`**；配了 COS 则保持官方的 `generic`（那是官方自身流程）。
 - **签名**：用户已拍板**不买证书**，接受 SmartScreen 拦截。`publisherName` 无证书时为 `undefined`。**【待验证】未签名包能否通过 `electron-updater` 的 NSIS 校验**——代码上应当跳过校验，但没有实测证据。
 
+### macOS（arm64，未签名）：只能走 GitHub Actions
+
+本机是 Windows，mac 包出不了；构建入口是 `.github/workflows/build-mac.yml`。2026-09-29 实测跑通（15 分 50 秒），产物 `ssid-<产品版本>-mac-arm64-unsigned.{dmg,zip}` 与 `.zip.blockmap`，落在 `.desktop-build/targets/mac-arm64/unsigned-artifacts/`，并上传为 Actions artifact（约 1.13 GB）。
+
+```powershell
+gh workflow run build-mac.yml --ref main -R Max-Null/seek-soul-in-darkness
+gh run list --workflow=build-mac.yml -R Max-Null/seek-soul-in-darkness --limit 1
+```
+
+- **改了 workflow 不能用「Re-run failed jobs」验证**：rerun 沿用该 run 所属 ref（通常是 tag）上的 workflow 定义，改动不在那个 commit 上就不生效，只会原样再失败一次。验证新 workflow 一律走 `workflow_dispatch --ref main`；该路径下 `github.ref_type == 'branch'`，上传 Release 的步骤自带守卫，不会污染已发布的 Release。
+- **CI 从 GitHub 的 fork 分支取代码**，不是本地 `.ssid-build/checkout`。壳代码改动必须走完整推送链，否则 CI 跑的是旧代码：`.ssid-build/checkout` → `origin`（本地镜像 `deepseek-harness`）→ `fork`（GitHub）。改了 workflow 却只见旧行为时，先查这条链。
+- **CI 只证明打包链跑通**，不证明产物能在 mac 上双击运行：打包后的冒烟只校验产物路径、不启动应用，而 ad-hoc 签名的包会被 Gatekeeper 拦。这条边界不要对外说成「mac 版可用」。
+
+mac 侧只在真机上暴露的四个坑（2026-09-29 实测，逐层剥出来）：
+
+| 现象 | 根因 | 处置 |
+|---|---|---|
+| 打包一开始就报读不到 `apps/desktop/.env.macos` | `package-target.ts` 无条件加载该文件 | workflow 在打包前生成它（App ID、强更策略、并发）。`--unsigned` 跳过的是 Apple 凭据校验，不是这个文件 |
+| `prepare:dsh` 报 `DSH_DESKTOP_MACOS_SIGNING_IDENTITY must be set` | `prepare-dsh.ts` 在 `darwin` 下无条件解析签名身份 | `DSH_DESKTOP_UNSIGNED` 会传进子进程，未签名时跳过内核与 primary-runtime 的原生 Mach-O 预签名 |
+| `EMFILE: too many open files` | 随包插件集有 43099 个文件，而 mac runner 的 `kern.maxfilesperproc` 只有 10240；只抬 `ulimit` 无用 | 打包步骤内 `sudo sysctl -w kern.maxfiles=400000 kern.maxfilesperproc=200000`，再 `ulimit -n 200000`（必须同一步骤的同一 shell） |
+| `codesign --verify --deep` 失败，事后重跑同一条命令却必过 | `@electron/osx-sign` 签完固定跑该验证且关不掉（`mac.strictVerify` 只管 `--strict`，`mac.timestamp` 被 `customSignOptions.timestamp \|\| undefined` 吞回默认） | 未签名通道让 electron-builder 整个跳过签名（`identity: null` + `forceCodeSigning: false`），由 `afterPack` 用 ad-hoc 身份自签 |
+
 ## 6. 冒烟
 
 打包链**自带一步**（`smoke-packaged-runtime.ts`，约 56 秒）——它跑完才写 `windows-package` 阶段结果，若那一步失败就是打包失败。
