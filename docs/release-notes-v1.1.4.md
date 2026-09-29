@@ -40,11 +40,13 @@
 资产见 [GitHub Release v1.1.4](https://github.com/Max-Null/seek-soul-in-darkness/releases/tag/v1.1.4)：
 
 - `ssid-1.1.4-win-x64-unsigned.exe`（Windows NSIS 安装包）
-- 附 `latest.yml` 与 `.blockmap`
+- `ssid-1.1.4-mac-arm64-unsigned.dmg` / `.zip`（macOS，ad-hoc 签名，未公证）
+- 附 `latest.yml` / `latest-mac.yml` 与各自的 blockmap
 
 SHA256（`certutil -hashfile <文件> SHA256`）—— **以本页与 Release 页为准**：
 
 - `ssid-1.1.4-win-x64-unsigned.exe`：
   `4316860E4E9F3E9E7DF7C8697104C23AB27A9DBDFBC68A9B8BBF3B2A52FCD5E3`（450099749 字节）
+- macOS 两件资产由 Actions 构建，校验和以 Release 页上 GitHub 记录的 `digest` 为准。
 
 说明：包内那份「更新日志」（关于 SSiD）不著录校验和 —— 把最终哈希写进包内会再次改变哈希。
