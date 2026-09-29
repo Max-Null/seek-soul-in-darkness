@@ -180,21 +180,22 @@ gh release upload vX.Y.Z "$A\ssid-X.Y.Z-win-x64-unsigned.exe.blockmap" -R Max-Nu
 gh release upload vX.Y.Z "$A\latest.yml"                               -R Max-Null/seek-soul-in-darkness
 ```
 
-**安装包（数百 MB）必须直连上传**（2026-09-28 v1.0.0 实测，427 MB）：
+**安装包（数百 MB）必须直连、且用流式 `-T`**（2026-09-29 v1.1.1 实测，429 MB / 94 秒）：
 
 ```powershell
 $R = 'Max-Null/seek-soul-in-darkness'
 $relId = gh release view vX.Y.Z -R $R --json databaseId --jq '.databaseId'   # 要 databaseId，不是 id
-curl.exe --fail --show-error --progress-bar -X POST --noproxy '*' `
+curl.exe --fail --show-error -X POST --noproxy '*' `
   -H "Authorization: token $(gh auth token)" `
   -H "Content-Type: application/octet-stream" `
-  --data-binary "@$A\ssid-X.Y.Z-win-x64-unsigned.exe" `
+  -T "$A\ssid-X.Y.Z-win-x64-unsigned.exe" `
   "https://uploads.github.com/repos/$R/releases/$relId/assets?name=ssid-X.Y.Z-win-x64-unsigned.exe"
 gh release view vX.Y.Z -R $R --json assets   # 传完核对：size 与 digest 必须与本地一致
 ```
 
-- **为什么不能走代理**：环境里设了 `HTTP_PROXY`（本机 `127.0.0.1:7897`）时，`gh release upload` 25 分钟零进展；`curl --data-binary` 带 448 MB `Content-Length` 卡死 40 分钟。**`--noproxy '*'` 直连 83 秒传完**（本机直连 GitHub 反而更快：api.github.com 直连 0.35 s / 代理 1.03 s）。
-- **`curl -F` 是错的**：它发 multipart，GitHub 会把包装字节原样存下——实测返回的 `size` 比本地多 236 字节、`digest` 与本地 SHA256 不符。要用 `--data-binary` + `Content-Type: application/octet-stream`。
+- **为什么不能走代理**：环境里设了 `HTTP_PROXY`（本机 `127.0.0.1:7897`）时，`gh release upload` 25 分钟零进展。**`--noproxy '*'` 直连**即可（本机直连 GitHub 反而更快：api.github.com 直连 0.35 s / 代理 1.03 s）。
+- **`--data-binary` 对数百 MB 资产不可用**：它把整个文件读进内存——2026-09-29 实测 429 MB 的包让 curl 常驻 438 MB 工作集、25 分钟零进度；换成流式 `-T` 后同一条命令 94 秒传完。v1.0.0 记的「83 秒」是 `--data-binary` 在当时那次的数值，不适用于这个量级。
+- **`curl -F` 是错的**：它发 multipart，GitHub 会把包装字节原样存下——实测返回的 `size` 比本地多 236 字节、`digest` 与本地 SHA256 不符。要用 `-T` + `Content-Type: application/octet-stream`。
 - **chunked 也不行**：加 `Transfer-Encoding: chunked` 被拒（400），uploads API 要 `Content-Length`。
 - **判据**：上传响应里的 `size` 与 `digest`（`sha256:…`）必须与本地一致——这是唯一能发现「内容被包装过」的检查；不一致就 `gh release delete-asset` 删掉重传。
 - **git 提交 / 打标 / push / `gh release` 都归开发会话**；**只有 `npm publish` 由用户手动**（铁律 9）。
