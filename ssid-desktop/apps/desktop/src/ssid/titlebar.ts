@@ -53,6 +53,15 @@ const CAPTION_INTERACTIVE_SELECTOR = 'button, a, input, select, textarea, [role=
 const CAPTION_OCCUPANT_MAX_WIDTH = 200
 
 /**
+ * 占位元素右边缘允许到达的最大横坐标，即左上角 caption 区的右边界。
+ *
+ * 宽度上限拦不住「窄、但不在 caption 区」的元素：2026-09-29 实测 dsh-chat-rail 的会话项
+ * 宽 34px 却落在 right=698，让位被撑到 706 —— 窗口宽 1280 时标题栏背景只剩 45%，
+ * 左侧 706px 全透明。caption 区只在左上角，横坐标必须与宽度同时受限。
+ */
+const CAPTION_REGION_MAX_RIGHT = 200
+
+/**
  * caption 取色所读的两个设计 token，与官方 `preload-windows.ts` 同源：
  * 侧栏填充色作底、主标签色作字。变量缺失时按深浅主题退回近似值。
  */
@@ -272,14 +281,18 @@ function buildTitlebarScript(options: SsidTitlebarOptions): string {
   // 只认可交互元素 —— 同样落在 caption 区的空容器不该占位。
   const measureGutter = () => {
     let right = 0
-    // 只收**整块**落在 caption 带内、且本身窄的页面元素：擦到这条带的（主内容区顶部工具栏、
-    // 右侧面板按钮）不是 caption 占位，收进来就会把让位撑到整窗宽。
+    // 只收**整块**落在左上角 caption 区的窄元素：擦到这条带的（主内容区顶部工具栏、
+    // 右侧面板按钮）不是 caption 占位，收进来就会把让位撑到整窗宽。横坐标、宽度与可见性
+    // 要同时受限——宽 34px 的会话项落在 right=698 时，宽度判据放它过关；chat-rail 在
+    // 会话列过窄时给 rail 加 opacity:0（.crl_navHidden），那份布局仍在，只看尺寸照样会收。
     for (const el of document.querySelectorAll(${JSON.stringify(CAPTION_INTERACTIVE_SELECTOR)})) {
       if (bar.contains(el)) continue
       const rect = el.getBoundingClientRect()
       if (rect.width === 0 || rect.height === 0) continue
       if (rect.top < 0 || rect.bottom > ${String(TITLEBAR_HEIGHT)}) continue
+      if (rect.right > ${String(CAPTION_REGION_MAX_RIGHT)}) continue
       if (rect.width > ${String(CAPTION_OCCUPANT_MAX_WIDTH)}) continue
+      if (typeof el.checkVisibility === 'function' && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) continue
       if (rect.right > right) right = rect.right
     }
     // 量到 0 说明 caption 区已经没有页面元素（都被接管了）—— 这时连间隙都不给，
