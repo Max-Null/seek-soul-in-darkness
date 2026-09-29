@@ -40,6 +40,7 @@ import { installSsidMcpEnv } from './ssid/mcp-env.ts'
 import { migrateLegacyProfile, restoreCarriedPlugins, type CarriedPlugin } from './ssid/profile-migrate.ts'
 import { resolveProfileName } from './ssid/profile-name.ts'
 import { applySessionRootIsolation } from './ssid/session-root.ts'
+import { installSsidShellVersion } from './ssid/shell-version.ts'
 import { healWorkspaceRegistry } from './ssid/session-registry-heal.ts'
 import { killPackagedChildProcesses } from './ssid/child-process-cleanup.ts'
 import { seedSsidProfile } from './ssid/profile-seed.ts'
@@ -782,6 +783,10 @@ async function main(): Promise<void> {
    * 表现为同一版本时好时坏（坑 #59）。
    */
   const prepareHostEnvironment = async (): Promise<void> => {
+    // SSiD 壳版本：`dsh-ssid-panels` 的 host 半读它显示「关于 SSiD」的版本号
+    // （见 ssid/shell-version.ts）。
+    const shellVersion = installSsidShellVersion()
+    console.log(`ssid: shell version ${shellVersion}`)
     // SSiD 预制 MCP：profile 里那几条 mcp-client 条目的 command/args 全靠这些 env 求值，
     // 缺失即条目自动停用（patch 的 `disabled` 表达式），不会让内核起不来。
     // 这里**不弹任何对话框**：env 必须早于构造定型，而等人点击的对话框会把启动永久卡住

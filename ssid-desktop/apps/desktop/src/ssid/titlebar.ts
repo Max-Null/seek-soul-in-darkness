@@ -673,5 +673,9 @@ export function installSsidTitlebar(window: BrowserWindow, options: SsidTitlebar
   }
   window.webContents.on('dom-ready', injectShellFlag)
   window.webContents.on('did-finish-load', () => { injectShellFlag(); inject() })
-  if (!window.webContents.isLoading()) inject()
+  // 页面还没有文档时（窗口刚创建、尚未 loadURL）不注入：那一次 executeJavaScript 的脚本会
+  // 落在空白页上、随后被导航冲掉，而 `did-finish-load` 还会再注入一次 —— 同一次页面加载里
+  // 注入两遍，会让注入脚本里的初始化请求整串跑两遍（quick-toolbar 的悬浮球状态回读是 6 次
+  // 退避重试，控制台因此刷出成对的 503）。页面已有文档时（URL 非空）仍照旧立即补一次。
+  if (window.webContents.getURL() !== '') inject()
 }
