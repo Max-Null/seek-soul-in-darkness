@@ -39,3 +39,24 @@ v0.6.1（构建产物已入库，无需本地构建）。已知局限见上游
 [issue #8](https://github.com/Zhenyu98/dsh-context-doctor/issues/8)（symlink 指令链
 双算、技能目录 scope 语义）；日常诊断请显式传 `cwd=<会话工作目录>`。
 
+### dsh-better-sidebar
+
+第三方侧边栏底座（上游 `omdsh-dev/DSH-better-sidebar`）的 vendor 固化
+（`file:./vendor/dsh-better-sidebar`）。基线 = npm `dsh-better-sidebar@0.24.1`，
+**外加一处本地修复**：WebSocket 路由改用壳注入的 transport base。
+
+**为什么需要 vendor**：该插件拿 `location.origin` 当 WebSocket 的 base，而桌面壳把页面
+放在 `dsh-app://app/` 下、`location.host` 是字面量 `app`，拼出的 `ws://app/sidebar/ws/…`
+永远解析不了 —— 控制台持续刷连接失败，侧栏的 agent-opens 与 fs-watch 静默退化。修复
+（`src/client/desktop-env.ts` 新增 `sidebarWebSocketBase()`，读
+`__DSH_TRANSPORT__.streamBaseUrl`、回退 `document.baseURI`）**无法走 npm** —— 包不是我们的，
+发布权在上游。所以按 genui 的先例走厂商魔改：产物进本目录随安装包分发，同时向上游提 PR。
+
+- 上游 PR：[omdsh-dev/DSH-better-sidebar#797](https://github.com/omdsh-dev/DSH-better-sidebar/pull/797)
+  （在 `v0.24.1` 基线上重放；更早的 #768 因基线过旧已关闭）。**作者采纳发版后，本目录应撤掉、切回 npm 版本号。**
+- 本地产物来源：`third-party-plugins/DSH-better-sidebar` 的分支 `fix/ws-base-0241`
+  （提交 `2718725`），用 `pnpm build` 构建后 `npm pack --ignore-scripts` 解包得到。
+- 验证判据（版本号与实际装版同为 0.24.1，只能看内容）：本目录 `lib/client.js` 含
+  `sidebarWebSocketBase` 3 处、`streamBaseUrl` 2 处；装版随包那份两者均为 0 处。
+
+

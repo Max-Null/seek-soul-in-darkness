@@ -22,7 +22,7 @@
     "@max-null/dsh-ssid-pwsh-retry": "file:./vendor/dsh-ssid-pwsh-retry",
     "@playwright/mcp": "0.0.83",
     "ds-harness-remote": "0.4.26",
-    "dsh-better-sidebar": "0.24.1",
+    "dsh-better-sidebar": "file:./vendor/dsh-better-sidebar",
     "dsh-context": "0.60.0",
     "dsh-context-doctor": "file:./vendor/dsh-context-doctor",
     "dsh-dream-skin": "9.29.0",
