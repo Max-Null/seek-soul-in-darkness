@@ -58,7 +58,8 @@ description: "SSiD（思灵）发版流程（fork 版 / v1.0.0 起）：版本�
   ```powershell
   Copy-Item docs/release-notes-vX.Y.Z.md plugins/dsh-ssid-panels/release-notes.md -Force
   # 守卫校验：首行 # vX.Y.Z 必须 == 产品版本（不一致不弹不显示）
-  node --import tsx/esm --test plugins/dsh-ssid-panels/tests/release-notes.test.ts
+  # cwd 是仓库根；tsx 装在 shell/ 下，故显式指向（写 tsx/esm 会 ERR_MODULE_NOT_FOUND）
+  node --import ./shell/node_modules/tsx/dist/esm/index.mjs --test plugins/dsh-ssid-panels/tests/release-notes.test.ts
   # 构建 + vendor 同步（含本插件的 lib/src/release-notes.md）
   pnpm --dir plugins/dsh-ssid-panels exec tsdown
   ```
@@ -75,10 +76,12 @@ npm run check:rules          # 六门全跑，任一失败即 exit 1
 
 六门 = BOM / 旧名残留（硬域）/ profile↔模板声明 / vendor 四份一致 / 插件 peerDeps 覆盖性 / DSH 源码只引用不改。（第 7 门 `loader-external` 已随自建壳下架，脚本仍在，需要时可单独跑。）
 
-两条单测冒烟：
+两条单测冒烟（**cwd 是仓库根，不是 `shell/`**：仓库根没有 `node_modules`，`tsx` 装在 `shell/` 下，
+所以显式指向它 —— 直接写 `--import tsx/esm` 会 `ERR_MODULE_NOT_FOUND`）：
 
 ```powershell
-node --import tsx/esm --test plugins/dsh-ssid-panels/tests/release-notes.test.ts   # 更新日志解析 + 版本守卫
+cd H:\MaxNull\WorkStation\seek-soul-in-darkness
+node --import ./shell/node_modules/tsx/dist/esm/index.mjs --test plugins/dsh-ssid-panels/tests/release-notes.test.ts
 ```
 
 ## 5. 打包
