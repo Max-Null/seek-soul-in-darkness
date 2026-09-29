@@ -91,7 +91,9 @@ jobs:
         # mac runner 的 fd 软上限只有 256：electron-builder 遍历随包插件集的 node_modules
         # （es-toolkit 这类包光 .d.mts 就上千个）时会 EMFILE，所以必须与打包在同一个 shell 里提高上限。
         run: |
-          ulimit -n 10240
+          echo "fd soft=$(ulimit -n) hard=$(ulimit -Hn) maxfilesperproc=$(sysctl -n kern.maxfilesperproc 2>/dev/null || echo n/a)"
+          ulimit -n "$(ulimit -Hn)" 2>/dev/null || ulimit -n 65535
+          echo "fd now=$(ulimit -n)"
           pnpm --filter "./apps/desktop" run package:mac:arm64:unsigned
 
       - name: 上传构建产物（Actions artifact）
