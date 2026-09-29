@@ -190,7 +190,12 @@ export function createElectronBuilderConfig(
       // ASAR-unpacked native runtime files are pre-signed; PAK resources are sealed by their enclosing bundle.
       // SSiD：插件集里带着从 GitHub release 下载的二进制（codegraph 引擎），与 runtime/primary-runtime 同理
       // 不在这里签。**macOS 侧尚未验证** —— 公证可能拒绝这些第三方二进制。
-      signIgnore: ['/Contents/Resources/app\\.asar\\.unpacked/dsh(?:/|$)', '/Contents/Resources/runtime/primary-runtime(?:/|$)', '/Contents/Resources/ssid-plugins(?:/|$)', '\\.pak$'],
+      // SSiD：未签名构建没有「已预签名」这回事 —— @electron/osx-sign 签名后固定跑
+      // `codesign --verify --deep`（--deep 关不掉），被排除的嵌套 Mach-O 会让它直接失败，
+      // 所以 unsigned 下不再排除任何路径，交给 osx-sign 统一用 ad-hoc 身份签。
+      signIgnore: unsigned
+        ? ['\\.pak$']
+        : ['/Contents/Resources/app\\.asar\\.unpacked/dsh(?:/|$)', '/Contents/Resources/runtime/primary-runtime(?:/|$)', '/Contents/Resources/ssid-plugins(?:/|$)', '\\.pak$'],
       // 未签名构建没有可提交给 Apple 的凭据，公证整条跳过。
       notarize: !unsigned,
       target: ['dmg', 'zip'],

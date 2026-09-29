@@ -98,6 +98,23 @@ jobs:
           echo "after: soft=$(ulimit -n) maxfilesperproc=$(sysctl -n kern.maxfilesperproc)"
           pnpm --filter "./apps/desktop" run package:mac:arm64:unsigned
 
+      - name: 打包失败时打印签名验证详情
+        if: failure()
+        working-directory: .ssid-build/checkout
+        # @electron/osx-sign 签名后固定跑 `codesign --verify --deep`，失败原因被 electron-builder 吞掉，
+        # 只留一句 Command failed。这里在同一个产物上手动复现一次，把具体是哪个文件的问题打出来。
+        run: |
+          APP="apps/desktop/.desktop-build/targets/mac-arm64/unsigned-artifacts/mac-arm64/思灵.app"
+          if [ -d "$APP" ]; then
+            echo "=== codesign --verify --deep --strict --verbose=4 ==="
+            codesign --verify --deep --strict --verbose=4 "$APP" 2>&1 | head -80 || true
+            echo "=== 未签名的嵌套代码（前 20 个） ==="
+            find "$APP" -type f \( -perm -u+x -o -name '*.dylib' -o -name '*.node' \) -print0 2>/dev/null \
+              | xargs -0 -n1 -I{} sh -c 'codesign -dv "{}" >/dev/null 2>&1 || echo "{}"' | head -20 || true
+          else
+            echo "no app bundle at $APP"
+          fi
+
       - name: 上传构建产物（Actions artifact）
         uses: actions/upload-artifact@v4
         with:
