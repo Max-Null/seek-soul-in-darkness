@@ -677,16 +677,16 @@ apps/desktop-host（Host 子进程）
    ① **`mergeProfilePatch` 按子条目 id 合并，语义是「出厂条目以模板为准，用户条目原样保留」**（`profile-seed.ts:408-451`）—— `session-persistence-jsonl` **在模板里**（`resources/ssid-plugins/cordis.patch.yml`），所以手改 profile 里那条的 `root` 会在下次启动被模板值盖回去；这也是 `profiles/ssid/cordis.patch.yml` 的 mtime **每次启动都变**的原因（不是有人手改）。要改出厂条目就得连模板一起改，或走源码/发版。
    ② **`$DSH_HOME/.env` 是官方的一条兜底 env 通道**：`dsh-app-boot` 的 `loadLayeredEnv` 在 boot 早期把它灌进内核 `process.env`，且**只在变量未定义时填充**（壳恢复正常注入后自动失效，天然自失能）；`readEnvLayer` 只拒绝 **bootstrap-only** 名（`PATH`/`HOME`/`USERPROFILE`/`SHELL`/`NODE_*`/`LD_*`/`BASH_ENV`/`PYTHONPATH` 等，前缀 `DSH_`/`XDG_`/`DYLD_`/`BASH_FUNC_`），`SSID_*` 不受限；Harness-home 层另允许四个代理名。**它是应急而不是修法**：能救回会话可见性，救不了 #59 里「同名缺口」的另一半。
 
-61. **打包的 `prepare:dsh` 会在 `%TEMP%` 上撞 `EPERM`，而且它不像权限问题**（2026-09-29 实测；1.1.0 打包时没有，是这台机器上后出现的变化，与版本无关）。
+61. **打包的 `prepare:dsh` 会在 `%TEMP%` 上撞 `EPERM` —— 边界是「工作区」，且只有子进程受限**（2026-09-29 实测）。
    **症状**：`[EPERM] EPERM: operation not permitted, mkdir 'C:\Users\<u>\AppData\Local\Temp\dsh-desktop-runtime-<rand>\store\v11'`，随后 `Error: desktop runtime: pnpm exited with 4294963248`；打包停在 `prepare:dsh` 的**第一个** pnpm 调用（`runtime:lockfile`）。
-   **为什么不像权限问题**：同一个 shell 里 `pwsh` 建 `%TEMP%` 子目录**成功**，而失败的那个 pnpm 是**被 Electron 的 node 拉起来的**（`prepare-dsh.ts:77` 的 `spawn(NODE, …)`，`NODE` = `targets/<t>/electron/electron.exe`）。直接拿该可执行文件试：`ELECTRON_RUN_AS_NODE=1 electron.exe -e "require('fs').mkdirSync(process.env.TEMP + '\\x')"` → **EPERM**；同样写法写 `H:` 盘 → **成功**。同一个二进制、同一次调用，**只有 `%TEMP%` 被拒**。
-   **已排除的三项**（都带证据，别再重复走）：① ACL —— `diagnose-windows-sandbox-acl` 检了 `%TEMP%` 及其每个祖先，`verdict=NOT_THIS_CLASS`（无 deny ACE、无 package allow SID、`WRITE_DAC`/`WRITE_OWNER` 齐全）；② 磁盘空间 —— C 盘 240 GB 空闲；③ 残留目录 —— `%TEMP%` 下的旧 `dsh-desktop-runtime-*` 与本次的随机名不冲突。
-   **绕法（已生效）**：把打包的 `TEMP`/`TMP` 指到 `H:` 盘。`prepare-dsh.ts:39` 用 `mkdtempSync(join(tmpdir(), …))`，而 `tmpdir()` 读 `TEMP`：
+   **判据（一次分清，别再逐项排除）**：同一个建目录脚本，分别由 ① pwsh 直跑、② 子进程（`node` / `ELECTRON_RUN_AS_NODE=1 electron.exe`）跑。实测：pwsh 直跑写 `%TEMP%` **成功**；**子进程**写 `C:\` 下任意位置（`Documents` / `AppData\Local` / `AppData\Local\Temp` / 用户根 / 盘根）**全部 EPERM**，写**工作区内**（`H:\MaxNull\WorkStation\…`）**成功**，写 `H:\` **盘根**同样**失败**。→ **边界是「工作区」，不是某个盘、也不是 `%TEMP%` 特有；且只有子进程受限，发起它的进程本身不受。**
+   **绕法（已验证）**：把打包的 `TEMP`/`TMP` 指到**工作区内**——`prepare-dsh.ts:39` 用 `mkdtempSync(join(tmpdir(), …))`，而 `tmpdir()` 读 `TEMP`：
    ```powershell
    $env:TEMP = 'H:\MaxNull\WorkStation\.ssid-build\tmp'; $env:TMP = $env:TEMP
    New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
    ```
-   **未确定的部分**：为什么这个 `electron.exe` 写不了 `%TEMP%`。ACL 层面看不出差异，疑似进程完整性标签一类的持久标记（DSH 的 `sandbox-windows-acl` 会给被沙箱执行的进程打 Low 完整性标签，且该标记「活过 DSH」）。真要根治，先删掉 `targets/<t>/electron/` 让它重新解压再试——若仍失败就是标记层面的事，继续用 `TEMP` 重定向即可。
+   **顺带排除掉的**（都带证据，别重复走）：`%TEMP%` 的 ACL 完整（`icacls` 三条 ACE 全为完全控制；`diagnose-windows-sandbox-acl` 检过 `%TEMP%` 及每个祖先，verdict `NOT_THIS_CLASS`）；`TEMP`/`TMP` 在进程、用户、机器三处都指向存在的目录；无用户态 WDAC 策略、AppLocker 为空、只注册了 Windows Defender、受控文件夹访问为 `0`（关闭）——**这些都不是成因**。
+   **一个边界提醒**：用户**双击**运行安装器**不在这条子进程链上**，所以「NSIS 装 1.1.1 报 `Error writing temporary file`」**不能**用本坑解释，那是另一件事，尚未定因。
 
 ## 8. 文档索引
 
