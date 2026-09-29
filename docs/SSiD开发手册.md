@@ -83,6 +83,8 @@
 
 | 2026-09-28 | §2.1、§3.1、§3.3 | **日志落点与「零命中」措辞澄清**：`app.setAppLogsPath()` 指向的 `logs/` **只放崩溃报告**——`main.ts` 对 `getPath('logs')` 只有 `writeCrashReport()` 与 `pruneCrashReports()` 两个用途，常规启动日志不落盘（内核 stdout 被 `host-process.ts` 的 `pipe(process.stdout)` 丢弃），原文「日志改由 userData 的 `logs/` 承载」会让人去那里找 `ssid:` 开头的行。§2.1 的「（在 `apps/` 下搜这些名字零命中）」改成分项陈述：`devSkipDeploy` / `SSID_DEV_DEPLOY` / `.runtime-version` 零命中，`dsh-runtime.tar.gz` 只剩 `profile-seed.ts` 与 `profile-migrate.ts` 里描述历史形态的注释 | 1.0.0 装机的实测核对：`%APPDATA%\@deepseek-ai\dsh-desktop\logs` 内 6 个文件全为 `crash-*`，且全树 grep 确认 `getPath('logs')` 仅上述两处用途 |
 
+| 2026-09-29 | §3.4（补两条判据）/ §7 坑 #59 #60（新增） | **会话根隔离的第 ① 层断链：注入写在 `process.env` 上，却因为「先构造、后注入」到不了 Host 子进程**。症状是隔离根里的历史会话整个看不见（**会话没丢**，插件把它显示成「已失效」），而壳回写的 `applied` 仍自述已生效。手册原先把第 ① 层的时限写成「`host.start()` 之前」，实际约束更早 —— **`new DesktopHostProcess(...)` 之前**，因为该对象在构造时就把 env 存成实例字段、spawn 时原样使用（不合并 live `process.env`）；由此「**Host 重启过就侥幸生效**」，同一版本在不同机器、甚至同一台机器的不同次启动上时好时坏。同批记下两个可复用事实（#60）：`mergeProfilePatch` 会用模板盖回手改的出厂条目；`$DSH_HOME/.env` 是断链时的官方兜底 env 通道（只在变量未定义时填充、天然自失能）。**一秒判据**：取 `DSH_SESSION_ID` 去两个会话根各找一次，看哪个根的 mtime 在更新，别拿 `session-root.json` 下结论 | 装 1.1.0 实机（根因由 web 侧并行会话在重启验证时钉死；完整记录 `docs/排查/2026-09-29-1.1.0会话根隔离失效-诊断与应急热修.md`，含 §十二 验证回填） |
+
 ## 工作区规范（布局 + 放置规则，2026-08-29 整理定稿）
 
 ### 布局（H:\MaxNull\WorkStation）
@@ -231,7 +233,7 @@ H:\MaxNull\WorkStation\
 | 已装旧版换代 | 旧 profile 改名让路 + 搬用户层 | `profile-migrate.ts` 的 `migrateLegacyProfile()`，**排在 `applyRelease()` 之前**；返回的 `carried` 交 `restoreCarriedPlugins()` 还原用户自装插件 |
 | 每次启动 | profile 骨架（**纯增量**） | `main.ts` 的 `manager.applyRelease()` → `createPluginProfile()` → `initProfile(profileDir, WEB_PROFILE.bundles)`；三个文件各自 `if (!existsSync(...))` 才写 |
 | 紧随其后 | 插件集接入 profile | `seedProfilePlugins()` → `profile-seed.ts` 的 `seedSsidProfile()`：建 junction + 追加 `bundles` + 写 `link:` 声明 + `mergeProfilePatch()` 合并出厂 patch |
-| `host.start()` 前 | 会话根三层 | `applySessionRootIsolation()`（见 §3.4） |
+| `new DesktopHostProcess(...)` 前 | 会话根三层 | `applySessionRootIsolation()`（见 §3.4）。**代码现状是构造在前、注入在后 → 注入到不了子进程**（§7 坑 #59，待 1.1.1 修） |
 
 **`initProfile` 是纯增量的**（"Existing files are never touched"）——升级**不会**覆盖 profile，但**旧的也不会自愈**：换内核系列时旧 profile 会带着上一代的内核包实体，必须显式让路（坑 #57），`profile-migrate.ts` 就是这条的代码化。
 
@@ -251,7 +253,7 @@ H:\MaxNull\WorkStation\
 | `SSID_PROFILE_NAME` | profile 名（默认 `ssid`）；非法值（含路径分隔符，或为 `.` / `..` / `node_modules`）启动即报错 | 读：壳 `apps/desktop/src/ssid/profile-name.ts` **与** `apps/desktop-host/src/profile-name.ts`（**两份逐字同步**，改一处必须改另一处） |
 | `SSID_SAFE_MODE=1` | 纯净模式：**按层**过滤，只留 `@deepseek-ai/` 的层并丢弃 profile patch 与 home patch | 读：Host `src/index.ts`；写：壳（`--ssid-safe-mode` argv → env、托盘重启带 flag） |
 | `DSH_HOME` | harness 家目录（解析顺序：显式参数 > `DSH_HOME` > `~/.dsh`；空串/纯空白视为未设） | 壳与 Host |
-| `SSID_MCP_NODE` / `SSID_MCP_PW_CLI` / `SSID_MCP_CG_CLI` | 预制 MCP 的 node 解释器与 CLI 路径 | 壳**写**（`src/ssid/mcp-env.ts`）。**必须在 `host.start()` 之前注入**——配置条目与运行时 env 要成对落地，只补一半等于没补（坑见 §7） |
+| `SSID_MCP_NODE` / `SSID_MCP_PW_CLI` / `SSID_MCP_CG_CLI` | 预制 MCP 的 node 解释器与 CLI 路径 | 壳**写**（`src/ssid/mcp-env.ts`）。**必须在 `new DesktopHostProcess(...)` 之前注入**（写在它之后的值到不了子进程，§7 坑 #59）——配置条目与运行时 env 要成对落地，只补一半等于没补（坑见 §7） |
 | `SSID_MCP_CG_WS` / `SSID_MCP_CG_ENABLE` | CodeGraph 的索引目录 / 是否启用 | 壳先读后写；优先级 env → `~/.ssid/codegraph.json` → 最近会话探测 → 停用 |
 | `SSID_SESSION_ISOLATED_ROOT` | 隔离会话根。**注意：这不是给外部设的变量——壳自己设**（= `<DSH_HOME>/sessions-<profileName>`）；关掉隔离时**显式 delete** 它，让 patch 的 `!!js` 回退共享根 | 壳设（`profile-name.ts`），内核 patch 读（见 §3.4） |
 | `SSID_PLUGIN_SET_DIR` | 覆盖随包插件集的根目录（dev 必需：dev 的 `process.resourcesPath` 里没有插件集） | 壳 `src/main.ts` |
@@ -284,14 +286,16 @@ profile 目录用 junction 指回真实的那份，即可零拷贝共用插件�
 
 | 层 | 落点 | 作用 |
 |---|---|---|
-| ① env | `SSID_SESSION_ISOLATED_ROOT` / `SSID_SESSION_SHARED_ROOT` | 决定 Host 子进程读哪个根。必须在 `host.start()` **之前**设（子进程继承的是当时的 env 快照） |
+| ① env | `SSID_SESSION_ISOLATED_ROOT` / `SSID_SESSION_SHARED_ROOT` | 决定 Host 子进程读哪个根。必须在 **`new DesktopHostProcess(...)` 之前**设——子进程继承的是**该对象构造那一刻**的 env 快照，晚于它的 `process.env` 写入一律无效（见下一条与 §7 坑 #59） |
 | ② profile patch | `~/.dsh/profiles/<p>/cordis.patch.yml` 的 `session-persistence-jsonl` 条 | **真正决定内核读哪个目录**的那一条 |
 | ③ 回写 | `~/.ssid/session-root.json` 的 `applied` | 记录本次是否实际生效；写时保留文件里其它键 |
 
 - **开关**：`~/.ssid/session-root.json` 的 `isolated`——**文件不存在 / JSON 损坏 / 非布尔 → 一律 `true`（默认隔离）**。
 - **关掉时**：显式 `delete process.env['SSID_SESSION_ISOLATED_ROOT']`（注释原话：必须**显式缺席**而不是留旧值），不写 patch，其 `!!js` 表达式自然退化到共享根。
-- **入口**：`applySessionRootIsolation()`（`apps/desktop/src/ssid/session-root.ts`），在 `main.ts` 里紧挨 MCP env 注入、`host.start()` 之前调用。
+- **入口**：`applySessionRootIsolation()`（`apps/desktop/src/ssid/session-root.ts`），在 `main.ts` 里紧挨 MCP env 注入调用。**看它的调用点与 `new DesktopHostProcess(...)` 谁在前**：约束是「注入早于构造」，而代码现状是构造在前（`main.ts:655` vs `:696`/`:709`）→ 注入到不了 Host 子进程，要靠 Host 重启才侥幸生效（§7 坑 #59）。
 - **出厂 patch 与会话根是「铺底 + 兜底」，不是互相覆盖**：seed 先铺（`mergeProfilePatch` 按**子条目 id** 合并，出厂块在前、用户留存块在后），随后 `installSessionRootPatch` 只会返回 `already-present` 跳过。真实 profile patch 里那句「这里放着是为了壳侧写入失败时仍有兜底」就是这层关系。
+- **第 ③ 层的 `applied` 是壳的自述，不是内核行为的证据**（2026-09-29 实证）：它由壳回写（`writeSessionRootApplied`），而**能否真生效取决于第 ① 层到没到内核**。断链时的形状是**静默**的 —— 第 ② 层的表达式写作 `process.env.SSID_SESSION_ISOLATED_ROOT || ((DSH_HOME || USERPROFILE + "\.dsh") + "\sessions")`，变量缺席就安静地退回共享根：**会话一条不丢，只是隔离根那批在侧栏与插件里全部「看不见」**（置顶菜单会把它显示成「已失效」）。**一秒判据**：取 `DSH_SESSION_ID`，去 `sessions/` 与 `sessions-ssid/` 各找一次同名目录 —— 哪个根的 mtime 在最近更新，内核就在读哪个根。别拿 `session-root.json` 下结论。
+- **第 ① 层的注入必须早于 `new DesktopHostProcess(...)`**（`SSID-CHANGES.md:1380` 的既有约束）：`DesktopHostProcess` 把构造时传入的 env **存成实例字段**（`host-process.ts:246`），spawn 时原样使用（`:276` → `node-environment.ts:12` 只补 `ELECTRON_RUN_AS_NODE`，**不合并 live `process.env`**）。所以「先构造、后注入」的形状下，注入写在 `process.env` 上的值**永远到不了 Host 子进程**；更隐蔽的是——**Host 重启过就侥幸生效**（工厂被二次调用，第二次构造的快照带上了上一轮的注入），于是同一版本在不同机器、甚至同一台机器的不同次启动上时好时坏。判据：boot 的 `~/.dsh/logs/host.log` 里 `dsh: skipping profile bundle` 是**一段还是两段**（两段 = 两次 Host 启动）。详见 §7 坑 #59。
 
 ### 3.5 壳侧配置文件（`~/.ssid/*.json`）
 
@@ -662,6 +666,16 @@ apps/desktop-host（Host 子进程）
    **处置**：换成与内核对齐的版本（本次 `dsh-better-sidebar` 0.21.1 → 0.24.1，peer `^0.2.0-rc.1`）；改 `resources/ssid-plugins/node_modules/<pkg>` 即可，**profile 的 junction 不用动**（换完通过链接读到的就是新版本）。实测 A/B：换前 fatal，换后 `[dsh-excel-panel] xlsx viewer registered`。
    **根治**：打包时让 npm 拉 latest 必埋此雷 —— 插件集里每个随包第三方插件的 peer 内核系列，必须与内核版本对齐。
    **机制详见 `docs/插件测试操作手册.md` §4**；完整事故记录（含六条已排除假设与 CDP 抓 console 的手法）见 `docs/排查/2026-09-29-1.1.0启动失败-插件peer与内核脱钩.md`。
+
+59. **写在 `process.env` 上的注入传不进出子进程 —— 因为父进程在「注入之前」就把 env 快照了**（2026-09-29 实机实测：装 1.1.0 后「独立会话存储」开关看着是开的、隔离根里的历史会话整个看不见）。
+   **形状**：`DesktopHostProcess` 把构造参数里的 env 存成实例字段（`host-process.ts:246`），spawn 时原样用（`:276`；`node-environment.ts:12` 只补 `ELECTRON_RUN_AS_NODE`）；而壳的注入（`installSsidMcpEnv` / `applySessionRootIsolation`）写在 `DesktopBackendController` 工厂返回的 `start()` 里，**构造在它之前**（`main.ts:655` 构造 vs `:696`/`:709` 注入）。这与 `SSID-CHANGES.md:1380` 的既有要求（「注入必须在 `new DesktopHostProcess(...)` 之前 await 完」）矛盾 —— 是一次回归，不是设计。
+   **为什么表现为「时好时坏」**：工厂在 **Host 重启**时会被再次调用，第二次构造的快照就带上了上一轮的注入。判据 = boot 的 `~/.dsh/logs/host.log` 里 `dsh: skipping profile bundle` 有**两段**（两次 Host 启动）就侥幸生效、**一段**就全程失效。
+   **连带**：同一批注入**要么全生效要么全失效** —— 会话根 env 与 `SSID_MCP_*` 一起缺，所以「工具面上没有 `mcp__*`」与「隔离根会话消失」是同一个根因的两个面。反过来说：用 `.env` 兜底补上会话根变量后，MCP 那半可能仍然缺（两者不同源），别把「会话回来了」当成「注入修好了」。
+   **修法**：把三处注入提到构造之前（或让 `DesktopHostProcess` 在 spawn 时合并 live `process.env` —— 后者会波及测试里显式传 environment 的语义，优先前者）。
+
+60. **改 profile 的出厂条目会被模板盖回；断链时的兜底通道是 `$DSH_HOME/.env`**（2026-09-29 实测）。两个独立事实：
+   ① **`mergeProfilePatch` 按子条目 id 合并，语义是「出厂条目以模板为准，用户条目原样保留」**（`profile-seed.ts:408-451`）—— `session-persistence-jsonl` **在模板里**（`resources/ssid-plugins/cordis.patch.yml`），所以手改 profile 里那条的 `root` 会在下次启动被模板值盖回去；这也是 `profiles/ssid/cordis.patch.yml` 的 mtime **每次启动都变**的原因（不是有人手改）。要改出厂条目就得连模板一起改，或走源码/发版。
+   ② **`$DSH_HOME/.env` 是官方的一条兜底 env 通道**：`dsh-app-boot` 的 `loadLayeredEnv` 在 boot 早期把它灌进内核 `process.env`，且**只在变量未定义时填充**（壳恢复正常注入后自动失效，天然自失能）；`readEnvLayer` 只拒绝 **bootstrap-only** 名（`PATH`/`HOME`/`USERPROFILE`/`SHELL`/`NODE_*`/`LD_*`/`BASH_ENV`/`PYTHONPATH` 等，前缀 `DSH_`/`XDG_`/`DYLD_`/`BASH_FUNC_`），`SSID_*` 不受限；Harness-home 层另允许四个代理名。**它是应急而不是修法**：能救回会话可见性，救不了 #59 里「同名缺口」的另一半。
 
 ## 8. 文档索引
 
