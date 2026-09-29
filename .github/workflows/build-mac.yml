@@ -96,7 +96,7 @@ jobs:
           sudo sysctl -w kern.maxfiles=400000 kern.maxfilesperproc=200000
           ulimit -n 200000
           echo "after: soft=$(ulimit -n) maxfilesperproc=$(sysctl -n kern.maxfilesperproc)"
-          pnpm --filter "./apps/desktop" run package:mac:arm64:unsigned
+          DEBUG='electron-osx-sign*,electron-builder*' pnpm --filter "./apps/desktop" run package:mac:arm64:unsigned
 
       - name: 打包失败时打印签名验证详情
         if: failure()
@@ -105,15 +105,22 @@ jobs:
         # 只留一句 Command failed。这里在同一个产物上手动复现一次，把具体是哪个文件的问题打出来。
         run: |
           APP="apps/desktop/.desktop-build/targets/mac-arm64/unsigned-artifacts/mac-arm64/思灵.app"
-          if [ -d "$APP" ]; then
-            echo "=== codesign --verify --deep --strict --verbose=4 ==="
-            codesign --verify --deep --strict --verbose=4 "$APP" 2>&1 | head -80 || true
-            echo "=== 未签名的嵌套代码（前 20 个） ==="
-            find "$APP" -type f \( -perm -u+x -o -name '*.dylib' -o -name '*.node' \) -print0 2>/dev/null \
-              | xargs -0 -n1 -I{} sh -c 'codesign -dv "{}" >/dev/null 2>&1 || echo "{}"' | head -20 || true
-          else
-            echo "no app bundle at $APP"
-          fi
+          if [ ! -d "$APP" ]; then echo "no app bundle at $APP"; exit 0; fi
+          echo "=== 事后重跑 --deep --strict（若复现，则失败是确定性的） ==="
+          codesign --verify --deep --strict --verbose=4 "$APP" 2>&1 | head -60 || echo "重跑同样失败"
+          echo "=== app 本体签名详情 ==="
+          codesign -dvvv "$APP" 2>&1 | head -30 || true
+          echo "=== Mach-O 签名普查 ==="
+          total=0; bad=0
+          while IFS= read -r -d '' f; do
+            case "$(xxd -p -l 4 "$f" 2>/dev/null)" in
+              cffaedfe|cefaedfe|feedfacf|feedface|cafebabe|bfbafeca|cafebabf|bebafeca) ;;
+              *) continue ;;
+            esac
+            total=$((total + 1))
+            if ! codesign -v "$f" 2>/dev/null; then bad=$((bad + 1)); [ "$bad" -le 10 ] && echo "未签名: $f"; fi
+          done < <(find "$APP" -type f -print0)
+          echo "Mach-O 总数=$total 未签名=$bad"
 
       - name: 上传构建产物（Actions artifact）
         uses: actions/upload-artifact@v4
