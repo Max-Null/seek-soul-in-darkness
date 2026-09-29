@@ -40,7 +40,7 @@ description: "SSiD（思灵）发版流程（fork 版 / v1.0.0 起）：版本�
 
 ## 2. 内置插件与 vendor 对齐（发版前必做）
 
-- **vendor 定制插件**：**别照抄列表，先 `ls shell/profile-template/vendor` 看实际**。当前 7 个：`dsh-capture`、`dsh-context-doctor`、`dsh-quick-toolbar`、`dsh-ssid-env`、`dsh-ssid-panels`、`dsh-ssid-pwsh-retry`、`dsh-ssid-zh-ui`。
+- **vendor 定制插件**：**别照抄列表，先 `ls shell/profile-template/vendor` 看实际**。当前 8 个：`dsh-better-sidebar`、`dsh-capture`、`dsh-context-doctor`、`dsh-quick-toolbar`、`dsh-ssid-env`、`dsh-ssid-panels`、`dsh-ssid-pwsh-retry`、`dsh-ssid-zh-ui`。其中 `dsh-better-sidebar` 是**第三方**的厂商魔改 —— 上游 PR 尚未合并时的临时形态，采纳发版后撤掉（处置与基线见 `vendor/README.md`）。
   - 源码 bump 后必须同步 vendor：`lib/*`（构建产物）+ **package.json 版本号**（漏了 = 插件中心持续误报更新）。
   - `git diff --no-index <源>/lib <vendor>/lib` 一致；源仓库 git 干净。
   - `dsh-quick-toolbar` 是**精简副本**（只收 `lib/` + `cordis.patch.yml` + `package.json`），别按「整目录相等」比。
