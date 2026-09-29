@@ -20,6 +20,8 @@
  * 给出加载顺序；其中的 `@deepseek-ai/*` 由安装锚点提供，不进插件集。
  */
 
+import { evaluatePluginCompatibility, getDshRuntimeVersion } from '@deepseek-ai/dsh-app-boot'
+import { satisfies } from 'semver'
 import { spawn } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -200,9 +202,50 @@ async function main(): Promise<void> {
     cpSync(join(templateDir, 'cordis.patch.yml'), join(out, 'cordis.patch.yml'))
     const packages = flattenPackages(join(staging, 'node_modules'), modulesOut)
 
+    // 内核版本与内核自己的判据同源（app-boot 包的 version），下面放宽与校验都用它。
+    const runtimeVersion = getDshRuntimeVersion()
+    // 上游 peer 仍停在旧范围、但运行时不依赖旧版专有 API 的包：只对白名单内、且只对
+    // `@deepseek-ai/dsh*` 的 peer 放宽到覆盖当前内核。真正的障碍只是内核按 peer 声明做的门，
+    // 而那道门会**静默跳过整个 bundle**；改动只落在随包插件集里，不碰上游包。
+    // 加入白名单前必须核过该包的运行时内核引用 —— 放宽只解决声明，不解决 API 差异。
+    // 当前为空：`@changfenhuang/dsh-genui` 与 `dsh-dream-skin` 已在自身 manifest 里声明覆盖当前
+    // 内核的范围（前者逐条追加 `>=0.2.0-rc.1 <0.3.0-0`，后者把 `^0.1.0-rc.6` 改成 `<0.3.0-0` 上界）。
+    const PEER_RELAXED_BUNDLES: string[] = []
+    for (const name of PEER_RELAXED_BUNDLES) {
+      const manifestPath = join(modulesOut, name, 'package.json')
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { peerDependencies?: Record<string, string> }
+      const peers = manifest.peerDependencies
+      if (peers === undefined) continue
+      let widened = 0
+      for (const [peer, range] of Object.entries(peers)) {
+        if (peer !== '@deepseek-ai/dsh' && !peer.startsWith('@deepseek-ai/dsh-')) continue
+        if (satisfies(runtimeVersion, range, { includePrerelease: true })) continue
+        peers[peer] = `${range} || >=${runtimeVersion} <0.3.0-0`
+        widened += 1
+      }
+      if (widened > 0) {
+        writeFileSync(manifestPath, `${JSON.stringify(manifest, undefined, 2)}\n`)
+        console.log(`ssid plugins: ${name} 的 ${String(widened)} 条内核 peer 放宽到覆盖 ${runtimeVersion}（上游未适配）`)
+      }
+    }
+
     const missing = bundles.filter(name => !packages.includes(name))
     if (missing.length > 0) {
       throw new Error(`ssid plugins: bundle 声明了却没装出来：${missing.join(', ')}`)
+    }
+    // 1.1.0 的实机教训：dsh-better-sidebar 0.21.1 的 peer 上界是 `<0.2.0-0`，内核 0.2.0-rc.1
+    // 落在区间外，内核于是**静默跳过整个 bundle** —— 它不报错、不进 `did not activate` 列表，
+    // 只让等它服务的插件全部 `pending`，客户端 boot 直接失败。而「跟到最新」并不保证覆盖新内核：
+    // 实测 dsh-dream-skin 与 @changfenhuang/dsh-genui 的最新版 peer 仍停在 `^0.1.x`。
+    // 这里按**内核自己的判据**拦一道（同一个函数、同一个 runtimeVersion），避免两边漂移。
+    const incompatible = bundles.flatMap((name) => {
+      const manifest = JSON.parse(readFileSync(join(modulesOut, name, 'package.json'), 'utf8')) as object
+      const issue = evaluatePluginCompatibility(manifest, {}, runtimeVersion)
+      return issue === undefined ? [] : [issue]
+    })
+    if (incompatible.length > 0) {
+      throw new Error(`ssid plugins: 随包 bundle 与内核 ${runtimeVersion} 不兼容，内核启动时会静默跳过它们：\n`
+        + incompatible.map(issue => `  ${issue.name}@${issue.version} → peers ${JSON.stringify(issue.peers)}`).join('\n'))
     }
     writeFileSync(join(out, SSID_PLUGIN_SET_MANIFEST), `${JSON.stringify({
       schemaVersion: 1,
