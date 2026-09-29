@@ -78,11 +78,9 @@
   ],
   "scripts": {
     "build": "node -e \"require('node:fs').rmSync('lib',{recursive:true,force:true})\" && tsc -p tsconfig.build.json && tsdown",
-    "prepublishOnly": "pnpm build",
     "typecheck": "tsc --noEmit",
     "bundle": "tsdown",
     "watch": "tsdown --watch",
-    "prepare": "tsdown",
     "test": "vitest run",
     "test:windows": "vitest run --maxWorkers=1",
     "test:mount": "bash scripts/e2e-mount.sh",
