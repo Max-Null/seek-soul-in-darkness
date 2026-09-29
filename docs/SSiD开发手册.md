@@ -657,6 +657,12 @@ apps/desktop-host（Host 子进程）
    **两条推论**：① 对话框上的「Restart」按钮**解决不了**这类问题，它不碰 profile，重启多少次都一样（实测第二次崩溃与第一次同调用栈、仅 PID 不同）；② **`electron-updater` 的「无缝更新」在当前形态下会把用户送到一个起不来的版本** —— 两版的 `app-update.yml` 都指向 `Max-Null/seek-soul-in-darkness` 的 GitHub Releases、`latest.yml` 格式也一致，所以更新本身能走通，但装完仍是旧 profile。**要做到真无缝，必须先让壳自己识别旧 profile 并备份重建**（那是一次改壳 + 重打包）——在此之前，跨界升级只能靠一次人工改名。
    **补充（2026-09-28 本机执行，三条可复用）**：① **内核确有清理机制，但够不着这一类残留** —— `removeLinkProjections()` 只解除指向 `<profile>/.dsh-module-fallback/node_modules` 的软链、再删掉该目录，**不带这个目录的 profile 完全不动**（`packages/boot/app-boot/src/profile.ts`）。0.4.0 把包**平铺成实体**，所以这条路只能人工走。② **换名前可以先预置用户层，省掉一轮重启**：`initProfile()` 写 `cordis.patch.yml` 用的是 `if (!existsSync(patchPath))`，已存在的文件不碰 —— 改名后**立刻**手工写一份只含用户层条目的 patch（会话根覆盖 + 自装 MCP + compaction 阈值 + 默认 preset），启动时 `mergeProfilePatch` 会把出厂条目合并进来，一次启动就是完整配置。③ **换代会丢两类东西，点清再动**：自装插件（拿随包 `ssid-plugins.json` 的 `bundles` 与 profile 的 `dsh.profile.bundles` 取差集）与用户层 patch 条目；前者照旧 profile 的 `dependencies` 声明原样搬回（`link:` 的重建链接、`github:` 的拷实体），后者按 `- id:` 从旧 patch 抄。④ **已代码化（2026-09-28）**：壳在 `manager.applyRelease()` **之前**跑 `apps/desktop/src/ssid/profile-migrate.ts` 的 `migrateLegacyProfile()` —— 判据是 `node_modules/@deepseek-ai/` 下**非链接**的官方包实体数 ≥ 10（本机实测：旧 profile 240 个 / 换代后 0 个），命中即改名备份 + 搬用户层。搬运范围取**旧 profile 的 `dsh.profile.bundles`** 而不是 `dependencies`：后者还含 `cordis` 这类运行时框架与传递依赖，照单全收会让内核把它们当 bundle 解析（`@dsh-pet/bridge` 就是靠这条才没把 `cordis@4.0.0-rc.8` 带进新 profile）。
 
+58. **内核跨 minor，所有写成 `^0.1.x` peer 的随包插件会被集体静默跳过**（2026-09-29 实机实测：装 1.1.0 后启动失败）。症状 `web boot: N entries did not activate` + 若干下游 `pending (waiting for service: X)`，而 **X 的提供者自己不在列表里**（它在进入 fiber 图之前就被跳过了）；崩溃日志是 `crash-*-web-boot.log`、**没有** `-host.log`；托盘「纯净版启动」**照样报错** —— 出问题的插件是**随包**的，不是用户层。
+   **判据**：看到 `pending (waiting for service: X)`，就去**按 semver 算** X 的提供者 peer 是否覆盖当前内核 —— `^0.1.7-rc.1` 的上界是 `<0.2.0-0`，**不含 0.2.0 的任何预发布**，而 1.1.0 的内核是 `0.2.0-rc.1`。
+   **处置**：换成与内核对齐的版本（本次 `dsh-better-sidebar` 0.21.1 → 0.24.1，peer `^0.2.0-rc.1`）；改 `resources/ssid-plugins/node_modules/<pkg>` 即可，**profile 的 junction 不用动**（换完通过链接读到的就是新版本）。实测 A/B：换前 fatal，换后 `[dsh-excel-panel] xlsx viewer registered`。
+   **根治**：打包时让 npm 拉 latest 必埋此雷 —— 插件集里每个随包第三方插件的 peer 内核系列，必须与内核版本对齐。
+   **机制详见 `docs/插件测试操作手册.md` §4**；完整事故记录（含六条已排除假设与 CDP 抓 console 的手法）见 `docs/排查/2026-09-29-1.1.0启动失败-插件peer与内核脱钩.md`。
+
 ## 8. 文档索引
 
 - 本手册（总览/流程/坑）
