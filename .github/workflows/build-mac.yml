@@ -121,6 +121,13 @@ jobs:
             if ! codesign -v "$f" 2>/dev/null; then bad=$((bad + 1)); [ "$bad" -le 10 ] && echo "未签名: $f"; fi
           done < <(find "$APP" -type f -print0)
           echo "Mach-O 总数=$total 未签名=$bad"
+          echo "=== 复现：重签 app 本体后立刻 verify ==="
+          ENT="apps/desktop/scripts/macos-entitlements.plist"
+          codesign --sign - --force --timestamp --options runtime --entitlements "$ENT" "$APP" 2>&1 | head -5
+          codesign --verify --deep --strict --verbose=4 "$APP" 2>&1 | head -30 || echo "→ 立即 verify 复现失败"
+          echo "=== 等 10 秒后再 verify ==="
+          sleep 10
+          codesign --verify --deep --strict --verbose=4 "$APP" 2>&1 | head -30 || echo "→ 10 秒后仍失败"
 
       - name: 上传构建产物（Actions artifact）
         uses: actions/upload-artifact@v4

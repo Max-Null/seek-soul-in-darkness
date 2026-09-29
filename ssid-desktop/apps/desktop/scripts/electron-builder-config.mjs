@@ -180,6 +180,10 @@ export function createElectronBuilderConfig(
       identity: macOSSigning?.signingIdentity ?? '-',
       forceCodeSigning: true,
       hardenedRuntime: true,
+      // SSiD：ad-hoc 身份没有证书，`--timestamp` 只能白等一次网络超时（实测把 app 本体的签名拖到 9 秒），
+      // 并且会在 osx-sign 紧接着那次 `codesign --verify --deep` 上暴露不一致 —— 该验证无法关闭。
+      // 有签名构建仍然需要时间戳。
+      timestamp: !unsigned,
       // macOS matches the application locale against this bundle, not Electron Framework resources.
       extendInfo: {
         CFBundleLocalizations: ['en', 'zh_CN'],
