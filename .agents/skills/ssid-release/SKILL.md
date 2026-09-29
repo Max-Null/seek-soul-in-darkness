@@ -86,11 +86,21 @@ node --import ./shell/node_modules/tsx/dist/esm/index.mjs --test plugins/dsh-ssi
 
 ## 5. 打包
 
+**开工前先读一遍手册 §7 的坑清单**（`seek-soul-in-darkness/docs/SSiD开发手册.md`）—— 打包链上的坑多数记在那里，踩一次就是 20 分钟。两个必设项：
+
 ```powershell
 cd H:\MaxNull\WorkStation\.ssid-build\checkout
 $env:ELECTRON_MIRROR = "https://npmmirror.com/mirrors/electron/"   # 直连 GitHub 拉 Electron 会挂死且不报错
-pnpm --filter "./apps/desktop" run package:win:x64:unsigned
+# 坑 #61：prepare:dsh 在 %TEMP% 下建 pnpm store 会 EPERM（子进程写 C:\ 受限，写工作区内可以）
+$env:TEMP = 'H:\MaxNull\WorkStation\.ssid-build\tmp'; $env:TMP = $env:TEMP
+New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
+# 输出重定向到文件；否则 job 完成后读输出会撞几十万行
+pnpm --filter "./apps/desktop" run package:win:x64:unsigned *> <某个日志文件>
 ```
+
+**不设 TEMP 的症状**（认出来就别再往别处查）：`prepare:dsh` 的 `runtime:lockfile` 阶段**约 1 秒即失败**，
+报 `Error: desktop runtime: pnpm exited with 4294963248`，而 pnpm 自己**一条输出都没有**
+（2026-09-29 与 2026-09-30 各踩一次）。
 
 **一条命令跑完 19 个阶段（实测 1142.6 s ≈ 19 分钟）**，编排在 `scripts/package-target.ts`，阶段与耗时（2026-09-28 实测）：
 
