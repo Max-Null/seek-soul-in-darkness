@@ -104,6 +104,7 @@ pnpm --filter "./apps/desktop" run package:win:x64:unsigned
   - `ssid-<产品版本>-win-x64-unsigned.exe`（实测 1.0.0 为 **427.6 MB**）
   - 同名 `.blockmap`（增量更新的差分）
   - **`latest.yml`**（更新 feed；provider 见下）
+- **交付落点**：产物必须复制到 `H:\MaxNull\WorkStation\ssid-releases\`——那是用户取包的地方，留在 `.desktop-build` 里不算交付（2026-09-27 用户追问过「你怎么不输出到 H:\MaxNull\WorkStation 了？」）。**2026-09-29 起用 `ssid-releases\` 这个子目录**：此前几个版本直接堆在工作区根，用户嫌乱。可交付的那几件（exe / `.blockmap` / `latest.yml`）集中放这里，别的东西不要落到工作区根。
 - **`--publish never`**：electron-builder 不发布，发布是独立步骤（见 §7）。
 - **日志与结果**：`.desktop-build/packaging-runs/<时间戳>/` 下的 `stdout.log`（**真因在这里，不是 `events.jsonl`**）与 `result.json`（逐阶段耗时与成败）。**排查打包失败别用 `Select-Object -Last N` 截断输出**——warning 与编码错误会被切掉，只剩调用栈。
 - **更新源**（`electron-builder-config.mjs`）：没配 COS 凭据时写 **`provider: github, owner: Max-Null, repo: seek-soul-in-darkness`**；配了 COS 则保持官方的 `generic`（那是官方自身流程）。
