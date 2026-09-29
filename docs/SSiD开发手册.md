@@ -521,6 +521,7 @@ apps/desktop-host（Host 子进程）
 | **端口** | Host 固定 `--port 19388`（官方桌面端用 19387，改掉以免与官方版永久互斥） |
 | `SSID_SHELL_SCREENSHOT_KEY` | **存在，但归属换了**：由 **Host 侧** `ctx.provide('ssid.shell.screenshot', …)` 注册（不再是壳的 `kernel.ts` 注入）。它的两个方法只把动作转成 `process.send`，真实动作由壳执行后回传（`apply` 带 requestId 与 5s 超时） |
 | `SSID_SHELL_RESTART_KEY` / `SSID_SHELL_UPDATE_KEY` | **不存在**。而 `dsh-ssid-panels` 仍在 `ctx.get('ssid.shell.restart')` / `('ssid.shell.update')`，fork 侧从未注册——**该面板的「会话存储隔离」开关与更新相关按钮在 fork 下取不到桥**（已知缺口，见 `SSID-CHANGES.md`） |
+| `SSID_SHELL_VERSION` | **已注入**（2026-09-30 补，提交 `061738e548`）：`ssid/shell-version.ts` 写入 `app.getVersion()`（产品版本，与内核版本 `resolveDshVersion()` 彼此独立），落点 `prepareHostEnvironment()` —— 与另两处 env 准备同处，必须在每个 `backend.start()` 之前。此前壳从不注入它，而 `dsh-ssid-panels`（`src/index.ts:86`）读 `process.env.SSID_SHELL_VERSION ?? '0.0.0'`，「关于 SSiD」因此恒显示 `v0.0.0`。**更新动作本身另有缺口**（见上一行），这行只解决显示 |
 | 服务方法里不要 `ctx.get` 自己 | 会无限递归（实测 500） |
 | `window.__SSID_SHELL__` | 仍在 **dom-ready** 注入（`src/ssid/titlebar.ts`）——**晚于插件 apply**，插件侧必须兜底（load 时复查 / 重算）。**这条仍然成立** |
 | 浏览器认证 | 内核 web 服务带 token；壳用 `connection.authenticatedUrl` 后 `loadURL`——**无 token 则 splash 不替换** |
@@ -695,6 +696,17 @@ apps/desktop-host（Host 子进程）
    **判据（一眼分清走哪条）**：**变量已在 `process.env`** → 走 ①，改完即生效；**变量不在** → 必须写 `.env` **且重启**。
    **怎么判断在不在**：看条目上的 tools 数（`0` = `!!js` 表达式求值失败 = 变量缺失）；或查 `host.log` 里该 MCP 引擎的 `MCP server starting` / `Client disconnected` 时间戳，与内核启动时刻对比。
    **注意**：重启内核会连带杀掉挂在当前 Host 下的后台任务（例如正在跑的打包 job）——先确认没有要紧的长任务再重启。
+
+63. **dev 壳起不来、electron 退出码 `0x80000003`（STATUS_BREAKPOINT）时，先加 `--no-sandbox`**（2026-09-30 定位并绕开）。
+   **现象**：`pnpm run start` 下 electron **在打印任何输出之前就退出**，码是 `2147483651`（= `-2147483645` = `0x80000003`）—— 前一天还能跑通的同一个脚本会突然集体失效。
+   **怎么二分**：起一个最小 Electron app（只有 `app.whenReady()`，进度用主进程 `appendFileSync` 落文件，别指望 stdout）用同样的 WMI 姿势跑。**它也崩且退出码相同** ⇒ 与 app 代码、与 `dev.ts` 的参数都无关，是 Electron 起不来；**加 `--no-sandbox` 后它立刻跑通** ⇒ 就是 Electron 的沙箱创建失败。
+   **绕法**：`.ssid-iso-test/launch-dev-nosandbox.ps1` —— 照 `dev.ts` 的同一组参数与环境变量自己起 electron，额外加 `--no-sandbox`（`dev.ts` 把参数写死、没有注入口子，而 `ELECTRON_EXTRA_LAUNCH_ARGS` 实测**无效**）。**不要为此改 `dev.ts`** —— 那是 fork 里的上游文件，改了就给后续跟上游添一处差异。
+   **附带的两个事实**：① **Windows 上 Electron 是 GUI 子系统程序，Chromium 模式没有可用的 stdout**（实测 `electron --version` 在 GUI 模式零输出；`Start-Process -RedirectStandard*` 建了文件但内容为空）—— 所以壳里的探针只能由主进程直接写文件；② **DSH 内核的环境自带 `ELECTRON_RUN_AS_NODE=1`**（Host 子进程就是这么起的），在 DSH 会话里直接起 electron 会走 Node 模式（`--version` 打出来的是 Node 版本），跑 GUI 前先 `Remove-Item env:ELECTRON_RUN_AS_NODE`。
+
+64. **起隔离实例会弹「Another DSH instance is running」模态框 —— 那不是故障，是 Host 端口 19388 冲突**（2026-09-30 实测）。
+   **现象**：`.ssid-iso-test/启动-iso-110.ps1` 这类脚本起的实例会弹全屏模态框，标题「The application could not start or stopped unexpectedly.」，正文写「Another DSH instance (such as dsh web or the desktop app) is running. They cannot start at the same time.」—— **文案读起来像单实例锁冲突，实际是 Host 起不来**。
+   **真因**：Host 端口在 `apps/desktop-host/src/index.ts:59` 硬编码 `19388`，生产实例占着它 ⇒ 隔离实例的 `webserver` 插件 `listen EADDRINUSE` ⇒ 2 个 required 插件未激活 ⇒ 壳判定启动失败并弹框。诊断报告在 `<user-data>/logs/crash-<ts>-host.log`，里面 `shell pid` 与 `EADDRINUSE: address already in use 127.0.0.1:19388` 都写得很清楚。
+   **怎么处理**：点 **Exit**（`Restart` 只会再撞一次）；**起隔离实例之前先跟人打个招呼** —— 它会弹一个需要点掉的全屏框，不知道的人会以为自己的实例坏了。这个框是隔离实例的常态（它的既定用途就是「抓 boot 期一片 503 的 console」）；要一个**可用**的第二实例，走 §3.1 / §3.3 —— 靠 profile patch 把 webserver 挪到 19488。
 
 ## 8. 文档索引
 
