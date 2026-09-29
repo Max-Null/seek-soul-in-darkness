@@ -134,6 +134,8 @@ gh run list --workflow=build-mac.yml -R Max-Null/seek-soul-in-darkness --limit 1
 
 - **改了 workflow 不能用「Re-run failed jobs」验证**：rerun 沿用该 run 所属 ref（通常是 tag）上的 workflow 定义，改动不在那个 commit 上就不生效，只会原样再失败一次。验证新 workflow 一律走 `workflow_dispatch --ref main`；该路径下 `github.ref_type == 'branch'`，上传 Release 的步骤自带守卫，不会污染已发布的 Release。
 - **CI 从 GitHub 的 fork 分支取代码**，不是本地 `.ssid-build/checkout`。壳代码改动必须走完整推送链，否则 CI 跑的是旧代码：`.ssid-build/checkout` → `origin`（本地镜像 `deepseek-harness`）→ `fork`（GitHub）。改了 workflow 却只见旧行为时，先查这条链。
+- **推 fork 必须早于打 tag**（2026-09-30 实测踩到）：tag push 会**立刻**触发 mac workflow，而它检出的是**那个时刻**的 fork 分支。先 tag 后推 fork，那次 CI 构建的是旧代码，却仍按 tag 路径把产物传进**新版本**的 Release —— v1.1.4 的 Release 上就这么出现过 `ssid-1.1.3-mac-arm64-unsigned.*`（版本号露的馅）。正确顺序：推 fork → 确认 fork 上已是目标提交 → 再 tag push。
+  补救：`gh release delete-asset vX.Y.Z <name> -R Max-Null/seek-soul-in-darkness --yes` 删掉错误资产，再用 `gh workflow run build-mac.yml --ref main` 重新构建（该路径**不上传** Release，需从 Actions artifact 取回产物后 `gh release upload`）。
 - **CI 只证明打包链跑通**，不证明产物能在 mac 上双击运行：打包后的冒烟只校验产物路径、不启动应用，而 ad-hoc 签名的包会被 Gatekeeper 拦。这条边界不要对外说成「mac 版可用」。
 
 mac 侧只在真机上暴露的四个坑（2026-09-29 实测，逐层剥出来）：
