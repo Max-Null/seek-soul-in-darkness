@@ -35,6 +35,10 @@ async function main(): Promise<void> {
       ...loadedProfile,
       layers: loadedProfile.layers.filter(layer => layer.packageName.startsWith('@deepseek-ai/')),
       patches: [],
+      // 被跳过的 bundle 同样属于「本次没加载的第三方」。不跟着清掉的话，reportSkippedBundles
+      // 会在「丢弃 28 层」之后紧接着把**过滤前**的跳过项再报一遍，日志读起来像是第三方仍在被
+      // 处理 —— 2026-09-29 实机排查就是据此误判成「纯净模式没生效」的。
+      skippedBundles: [],
     }
     : loadedProfile
   if (safeMode) {
