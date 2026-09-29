@@ -251,7 +251,7 @@ H:\MaxNull\WorkStation\
 | 变量 | 作用 | 谁读 / 谁写 |
 |---|---|---|
 | `SSID_PROFILE_NAME` | profile 名（默认 `ssid`）；非法值（含路径分隔符，或为 `.` / `..` / `node_modules`）启动即报错 | 读：壳 `apps/desktop/src/ssid/profile-name.ts` **与** `apps/desktop-host/src/profile-name.ts`（**两份逐字同步**，改一处必须改另一处） |
-| `SSID_SAFE_MODE=1` | 纯净模式：**按层**过滤，只留 `@deepseek-ai/` 的层并丢弃 profile patch 与 home patch | 读：Host `src/index.ts`；写：壳（`--ssid-safe-mode` argv → env、托盘重启带 flag） |
+| `SSID_SAFE_MODE=1` | 纯净模式：**按层**过滤，只留 `@deepseek-ai/` 的层并丢弃 profile patch 与 home patch | 读：Host `src/index.ts`；写：壳（`--ssid-safe-mode` argv → env、托盘重启带 flag）。**判据（2026-09-29 实证）**：Host 打的 `ssid: 纯净模式（SSID_SAFE_MODE=1）：N 层中保留官方 M 层` **只在 safeMode 为真时出现**——它出现即证明标志到达且过滤执行；紧跟其后的 `dsh: skipping profile bundle` 是 `reportSkippedBundles` 报的**过滤前**遗留项（1.1.1 起已随过滤一并清空），**不要**据此判断纯净模式是否生效。客户端 entries 的唯一来源是 Loader 条目（`internal/plugin` → `sources` → `table` → `compose()`，`client/modules/src/index.ts:624/758/1040`），所以过滤了 layers 就不可能再拿到被丢弃的插件 |
 | `DSH_HOME` | harness 家目录（解析顺序：显式参数 > `DSH_HOME` > `~/.dsh`；空串/纯空白视为未设） | 壳与 Host |
 | `SSID_MCP_NODE` / `SSID_MCP_PW_CLI` / `SSID_MCP_CG_CLI` | 预制 MCP 的 node 解释器与 CLI 路径 | 壳**写**（`src/ssid/mcp-env.ts`）。**必须在 `new DesktopHostProcess(...)` 之前注入**（写在它之后的值到不了子进程，§7 坑 #59）——配置条目与运行时 env 要成对落地，只补一半等于没补（坑见 §7） |
 | `SSID_MCP_CG_WS` / `SSID_MCP_CG_ENABLE` | CodeGraph 的索引目录 / 是否启用 | 壳先读后写；优先级 env → `~/.ssid/codegraph.json` → 最近会话探测 → 停用 |
