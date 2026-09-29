@@ -58,5 +58,10 @@ v0.6.1（构建产物已入库，无需本地构建）。已知局限见上游
   （提交 `2718725`），用 `pnpm build` 构建后 `npm pack --ignore-scripts` 解包得到。
 - 验证判据（版本号与实际装版同为 0.24.1，只能看内容）：本目录 `lib/client.js` 含
   `sidebarWebSocketBase` 3 处、`streamBaseUrl` 2 处；装版随包那份两者均为 0 处。
+- **vendor 化的一个必要改造**：从 npm 包解包得到的 `package.json` 带着安装期脚本
+  （`prepare` / `prepublishOnly`），而 vendor 目录没有 devDependencies —— 这些脚本会在
+  pnpm 处理该 `file:` 依赖时被触发，装包直接失败（实测 `npm pack --dry-run` 报
+  `'tsdown' is not recognized`）。**只保留非安装期脚本**，与 `dsh-capture` /
+  `dsh-quick-toolbar` 一致（两者都保留 build/typecheck/test/watch、都没有 `prepare`）。
 
 
