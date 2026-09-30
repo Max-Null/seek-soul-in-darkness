@@ -87,6 +87,8 @@
 
 | 2026-10-01 | §9 截图规范第 5 条（豁免清单） | **dsh-allostasis 退出无 UI 豁免**：它新增了空回合提示（对话页 Turn 尾部一行），不再是纯提示注入类，改按第 2/3 条办。同批落地时挖到两个可复用事实：① **`conversation.chat.turnTail` 是浏览器半边唯一官方的事件通道**——`scope: 'session'` 且 owner 自带 `turn` 数据表；而 `shell.overlay` 是帧级的、`inject` 不传 sessionId，要用它就得先自己回答「用户在看哪个会话」（`ctx.sessions.binding(id)` 得先有 id，而选中会话是 ui-workspace 的状态）；② **tsdown 的 `outputOptions.banner`/`footer`/`intro` 会让产物变成 0 字节**——不报错、不警告，只是 `client.js` 为空，2×2 探针（hello 入口/真实入口 × 包装/不包装）定位到与入口无关；改用 `plugins: [{ renderChunk }]` 自己拼包装文本才稳定 | 空回合可见化落地（插件仓库 `ab90b05`；设计记录 `max-null-plugins/dsh-allostasis/docs/设计/2026-09-30-空回合检测与可见化.md` §10） |
 
+| 2026-10-01 | §7 坑 #65（新增）/ §9 截图规范第 5 条（豁免清单） | **下游插件不能把自定义事件类型写进会话日志**：内核的事件词汇表由构建期生成、`Session.append()` 没有 `ignorable` 通道，无标记的自定义事件会让**整份**日志在下次加载时被拒读 —— 表现形式是「重启后历史会话打不开」，很容易被误判成会话根或磁盘出了问题。同批记下三条配套事实：已污染日志的修法是补 `ignorable`（**不能删行**，`Session.fromRestore` 校验 seq 连续性）、多帧 zstd 要按 magic 切帧否则只能解出第一帧、以及**浏览器半边的 `apply` 拿不到插件配置**（配置开关管不到客户端界面元素）。同日另有一批可见化收尾：**dsh-allostasis 退出无 UI 豁免**（新增空回合提示，改按截图规范第 2/3 条办）。同批落地时挖到两个可复用事实：① **`conversation.chat.turnTail` 是浏览器半边唯一官方的事件通道**——`scope: 'session'` 且 owner 自带 `turn` 数据表；而 `shell.overlay` 是帧级的、`inject` 不传 sessionId，要用它就得先自己回答「用户在看哪个会话」（`ctx.sessions.binding(id)` 得先有 id，而选中会话是 ui-workspace 的状态）；② **tsdown 的 `outputOptions.banner`/`footer`/`intro` 会让产物变成 0 字节**——不报错、不警告，只是 `client.js` 为空，2×2 探针（hello 入口/真实入口 × 包装/不包装）定位到与入口无关；改用 `plugins: [{ renderChunk }]` 自己拼包装文本才稳定 | 用户报告「重启后无法访问历史会话」；排查确认是插件写的事件被拒读，非会话根问题（插件仓库 `ab90b05` → `461b9a5`，pin 提到 0.2.1；设计记录 `max-null-plugins/dsh-allostasis/docs/设计/2026-09-30-空回合检测与可见化.md` §10 §11） |
+
 ## 工作区规范（布局 + 放置规则，2026-08-29 整理定稿）
 
 ### 布局（H:\MaxNull\WorkStation）
@@ -709,6 +711,13 @@ apps/desktop-host（Host 子进程）
    **现象**：`.ssid-iso-test/启动-iso-110.ps1` 这类脚本起的实例会弹全屏模态框，标题「The application could not start or stopped unexpectedly.」，正文写「Another DSH instance (such as dsh web or the desktop app) is running. They cannot start at the same time.」—— **文案读起来像单实例锁冲突，实际是 Host 起不来**。
    **真因**：Host 端口在 `apps/desktop-host/src/index.ts:59` 硬编码 `19388`，生产实例占着它 ⇒ 隔离实例的 `webserver` 插件 `listen EADDRINUSE` ⇒ 2 个 required 插件未激活 ⇒ 壳判定启动失败并弹框。诊断报告在 `<user-data>/logs/crash-<ts>-host.log`，里面 `shell pid` 与 `EADDRINUSE: address already in use 127.0.0.1:19388` 都写得很清楚。
    **怎么处理**：点 **Exit**（`Restart` 只会再撞一次）；**起隔离实例之前先跟人打个招呼** —— 它会弹一个需要点掉的全屏框，不知道的人会以为自己的实例坏了。这个框是隔离实例的常态（它的既定用途就是「抓 boot 期一片 503 的 console」）；要一个**可用**的第二实例，走 §3.1 / §3.3 —— 靠 profile patch 把 webserver 挪到 19488。
+
+65. **下游插件不能把自定义事件类型写进会话日志 —— 会让整份日志在下次加载时被拒读**（2026-10-01 由 `dsh-allostasis` 触发，dev 与装版各有会话打不开）。
+   **机制**：会话日志的事件词汇表 `KNOWN_SESSION_EVENT_TYPES` 由内核在**构建期**生成（`scripts/gen-persistence-catalog.ts`），下游插件的事件类型按构造不在其中；而 `Session.append()` 的封装（`packages/core/session/src/index.ts:744-750`）只拼 `{ type, seq, time, data, …surfaceMetadata }`，**没有 `ignorable` 通道**。`SessionEvent.ignorable` 的契约要求在「丢失不影响重建」的记录上自带 `true`，缺标记即视为必需 —— `validateStoredEvents`（`packages/session/session-persistence/src/storage-contract.ts:75-80`）于是拒绝解释**整份**日志，报 `contains event type "…" (seq N) unknown to this harness and not marked ignorable`。
+   **判据**：要写会话事件的插件，先确认该类型在内核的已知表里；不在表里就**别写**。留痕改用 `console` 诊断行，或落到已有的宿主通道上。
+   **上游的态度是明确的**：`known-event-types.ts` 的 JSDoc 写明下游事件「outside this list by construction」，`ignorable` 就是给它们的兼容机制；`deepseek-harness/.agents/notes/implemented/architecture/2026-08-30-retain-ignorable-external-session-events.md` 记录该字段曾因 PR #3087 被移除、又因第三方插件依赖它而恢复，并否决了「把已挂载插件的事件名登记为已知」这条替代路。
+   **已污染日志的修复**：给这些行补 `ignorable: true`（`seq` 不动，日志仍自洽）；**不能删行** —— `Session.fromRestore` 校验 seq 连续性。文件是**多帧 zstd**（每次 append 写一帧），要按 magic `28 b5 2f fd` 切帧后逐帧解压（流式解压器只吐第一帧，用它读会误判成「只有一条元事件」）。**读-改-写窗口内不能有并发追加**（DSH 用 `O_APPEND` 追加），所以只在宿主退出后跑：`.ssid-iso-test/watch-and-repair.ps1`（看护模式）/ `repair-session-logs.bat`（手动），底层脚本 `scan-allostasis-events.mjs --fix`，写前留 `.bak`。
+   **配套的客户端事实**：浏览器半边的 `apply` **拿不到插件配置** —— 在 `cordis.patch.yml` 里配 `silentTurn: off`，宿主读到 `off`、浏览器半边收到空对象（2026-10-01 实测）。所以「用配置开关掉某个界面元素」这条路对客户端半边不成立，要静默只能禁用插件。
 
 ## 8. 文档索引
 
