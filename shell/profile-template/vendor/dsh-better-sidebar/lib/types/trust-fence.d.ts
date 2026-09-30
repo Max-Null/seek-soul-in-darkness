@@ -1,10 +1,12 @@
 /**
- * Browser-trust fence for the sidebar routes, behaviorally identical to the
- * /api gateway's fence in @deepseek-ai/dsh-client-connection
+ * Browser-trust fence for the sidebar routes, copied from the /api gateway's
+ * fence in @deepseek-ai/dsh-client-connection
  * (src/api-request-trust.ts + src/loopback-hostname.ts, BSD-3-Clause,
  * copied here because the package does not export these helpers and the
- * plugin must not depend on its internals). Host-header loopback or a
- * configured trusted authority passes; cross-site browser markers refuse.
+ * plugin must not depend on its internals) with one addition: the desktop
+ * shell's application origin, which reaches only the routes the shell does not
+ * forward. Host-header loopback or a configured trusted authority passes;
+ * cross-site browser markers refuse.
  * This is a DNS-rebinding / cross-site defense, not authentication.
  */
 import type { IncomingHttpHeaders } from 'node:http';

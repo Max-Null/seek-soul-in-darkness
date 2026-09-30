@@ -43,21 +43,42 @@ v0.6.1（构建产物已入库，无需本地构建）。已知局限见上游
 
 第三方侧边栏底座（上游 `omdsh-dev/DSH-better-sidebar`）的 vendor 固化
 （`file:./vendor/dsh-better-sidebar`）。基线 = npm `dsh-better-sidebar@0.24.1`，
-**外加一处本地修复**：WebSocket 路由改用壳注入的 transport base。
+**外加两处本地修复**：WebSocket 路由改用壳注入的 transport base，以及信任栅栏接受
+桌面壳页面的 origin。**两处缺一不可。**
 
-**为什么需要 vendor**：该插件拿 `location.origin` 当 WebSocket 的 base，而桌面壳把页面
-放在 `dsh-app://app/` 下、`location.host` 是字面量 `app`，拼出的 `ws://app/sidebar/ws/…`
-永远解析不了 —— 控制台持续刷连接失败，侧栏的 agent-opens 与 fs-watch 静默退化。修复
-（`src/client/desktop-env.ts` 新增 `sidebarWebSocketBase()`，读
-`__DSH_TRANSPORT__.streamBaseUrl`、回退 `document.baseURI`）**无法走 npm** —— 包不是我们的，
-发布权在上游。所以按 genui 的先例走厂商魔改：产物进本目录随安装包分发，同时向上游提 PR。
+**为什么需要 vendor**：桌面壳把页面放在 `dsh-app://app/` 下，插件的 WebSocket 要走两道关，
+原版两道都过不了。
+
+1. **URL base**：插件拿 `location.origin` 当 base，而它的 `host` 是字面量 `app`，拼出的
+   `ws://app/sidebar/ws/…` 永远解析不了。修复 = `src/client/desktop-env.ts` 新增
+   `sidebarWebSocketBase()`（读 `__DSH_TRANSPORT__.streamBaseUrl`、回退 `document.baseURI`）。
+2. **信任栅栏**：URL 修好之后握手仍然失败 —— 壳的 `protocol.handle` 只转 HTTP、不承载
+   upgrade，这条 socket 直连 loopback，Chromium 因此带上 `Origin: dsh-app://app`，而栅栏按
+   hostname 比较（`app` ≠ `127.0.0.1`），socket 在 `handleUpgrade` 之前就被 `destroy()`。
+   修复 = `src/trust-fence.ts` 在 Host 检查通过之后接受精确字符串 `dsh-app://app`（与壳自身
+   转发器的信任集合一致）。
+
+HTTP 路由一直正常，是因为壳转发前会删掉 `origin` 头 —— 同一个栅栏只在 WebSocket 路径上
+暴露，所以症状看起来像「侧栏基本能用，只是几个功能没反应」。修复**无法走 npm** —— 包不是
+我们的，发布权在上游。所以按 genui 的先例走厂商魔改：产物进本目录随安装包分发，同时向上游
+提 PR。
 
 - 上游 PR：[omdsh-dev/DSH-better-sidebar#797](https://github.com/omdsh-dev/DSH-better-sidebar/pull/797)
-  （在 `v0.24.1` 基线上重放；更早的 #768 因基线过旧已关闭）。**作者采纳发版后，本目录应撤掉、切回 npm 版本号。**
+  （在 `v0.24.1` 基线上重放，现已含第二处修复；更早的 #768 因基线过旧已关闭）。
+  **作者采纳发版后，本目录应撤掉、切回 npm 版本号。**
+- 第二处修复的来源：上游 PR 评论中 @davidshilr8 的独立报告（在 0.2.0-rc.2 的安装上抓到
+  真实握手）。该结论先在本地壳代码里坐实 —— `.ssid-build/checkout/apps/desktop/src/web-document.ts`
+  的 `forwardWebRequest` 校验 origin 后删掉该头再转发，正是「HTTP 全好、WS 全坏」的原因。
 - 本地产物来源：`third-party-plugins/DSH-better-sidebar` 的分支 `fix/ws-base-0241`
-  （提交 `2718725`），用 `pnpm build` 构建后 `npm pack --ignore-scripts` 解包得到。
+  （提交 `e1c7ac3`），用 `pnpm build` 构建后 `npm pack --ignore-scripts` 解包得到。
 - 验证判据（版本号与实际装版同为 0.24.1，只能看内容）：本目录 `lib/client.js` 含
-  `sidebarWebSocketBase` 3 处、`streamBaseUrl` 2 处；装版随包那份两者均为 0 处。
+  `sidebarWebSocketBase` 3 处、`streamBaseUrl` 2 处；`lib/index.js` 含 `dsh-app` 2 处、
+  `SHELL_APP_ORIGIN` 2 处（**改前那份的真值是 `dsh-app` 0 处** —— 只比对 client 半会把
+  「半截修复」判成已完成）。
+- **构建噪声（别整体覆盖 client bundle）**：同一分支两次 `pnpm build` 得到的 `lib/client*.js`
+  字节不同 —— CSS module 类名映射的键顺序会漂移（键集合、值与行数一致）。同步 vendor 时只
+  替换真实改动的文件（本次是 `lib/index.js`、`lib/types/trust-fence.d.ts`、`src/trust-fence.ts`），
+  逐文件比 SHA256 收尾。
 - **vendor 化的一个必要改造**：从 npm 包解包得到的 `package.json` 带着安装期脚本
   （`prepare` / `prepublishOnly`），而 vendor 目录没有 devDependencies —— 这些脚本会在
   pnpm 处理该 `file:` 依赖时被触发，装包直接失败（实测 `npm pack --dry-run` 报

@@ -786,6 +786,17 @@ function header(headers, name) {
 	const value = headers[name];
 	return typeof value === "string" ? value : void 0;
 }
+/**
+* Origin of the Electron desktop shell's application page. The shell serves the
+* GUI from the `dsh-app:` scheme, so a page-initiated WebSocket handshake
+* carries this origin while the socket itself targets the Host's loopback
+* authority — an authority match is impossible by construction. The shell's own
+* request forwarder admits exactly this non-null origin and refuses every other
+* one; WebSocket upgrades bypass that forwarder (the scheme handler does not
+* carry them), which is why this fence is the first place the shell origin is
+* ever compared against a request.
+*/
+const SHELL_APP_ORIGIN = "dsh-app://app";
 /** Normalized URL of a Host-header authority, or undefined when unparsable. */
 function parseAuthority(authority) {
 	try {
@@ -828,6 +839,7 @@ function isTrustedApiRequest(request, trustedHosts) {
 	if (header(request.headers, "sec-fetch-site") === "cross-site") return false;
 	const origin = header(request.headers, "origin");
 	if (origin === void 0) return true;
+	if (origin === SHELL_APP_ORIGIN) return true;
 	try {
 		return new URL(origin).hostname === hostUrl.hostname;
 	} catch {
