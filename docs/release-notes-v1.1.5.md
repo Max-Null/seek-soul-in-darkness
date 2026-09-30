@@ -1,6 +1,6 @@
 # v1.1.5 思灵（SSiD）
 
-> 状态：**待发布**（2026-09-30）。一处启动期控制台噪音的根治。内核不变（`0.2.0-rc.1`）。
+> 状态：**已发布**（2026-09-30）。一处启动期控制台噪音的根治。内核不变（`0.2.0-rc.1`）。
 
 ## 这一版修的是什么
 
@@ -20,4 +20,16 @@
 
 ## 下载与校验
 
-资产见 GitHub Release v1.1.5（发布后回填链接与 SHA256）。
+资产见 [GitHub Release v1.1.5](https://github.com/Max-Null/seek-soul-in-darkness/releases/tag/v1.1.5)：
+
+- `ssid-1.1.5-win-x64-unsigned.exe`（Windows NSIS 安装包）
+- `ssid-1.1.5-mac-arm64-unsigned.dmg` / `.zip`（macOS，ad-hoc 签名，未公证）
+- 附 `latest.yml` / `latest-mac.yml` 与各自的 blockmap
+
+SHA256（`certutil -hashfile <文件> SHA256`）—— **以本页与 Release 页为准**：
+
+- `ssid-1.1.5-win-x64-unsigned.exe`：
+  `927F73C7E26E4C8FA899CA648437A657E3DE7D67017F20C595D7D62901793FCF`（450100519 字节）
+- macOS 两件资产由 Actions 构建，校验和以 Release 页上 GitHub 记录的 `digest` 为准。
+
+说明：包内那份「更新日志」（关于 SSiD）不著录校验和 —— 把最终哈希写进包内会再次改变哈希。
