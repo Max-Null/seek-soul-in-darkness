@@ -14,7 +14,7 @@
     "@max-null/dsh-guardian": "0.2.2",
     "@max-null/dsh-habit": "0.2.2",
     "@max-null/dsh-memory": "0.15.1",
-    "@max-null/dsh-node-appearance": "0.7.1",
+    "@max-null/dsh-node-appearance": "0.8.0",
     "@max-null/dsh-plugin-center": "0.4.5",
     "@max-null/dsh-skill-mcp-center": "0.5.2",
     "@max-null/dsh-ssid-panels": "file:./vendor/dsh-ssid-panels",
