@@ -75,6 +75,15 @@ HTTP 路由一直正常，是因为壳转发前会删掉 `origin` 头 —— 同
   `sidebarWebSocketBase` 3 处、`streamBaseUrl` 2 处；`lib/index.js` 含 `dsh-app` 2 处、
   `SHELL_APP_ORIGIN` 2 处（**改前那份的真值是 `dsh-app` 0 处** —— 只比对 client 半会把
   「半截修复」判成已完成）。
+- **行为验证（2026-10-01 真机，判据是握手拿到 101）**：用 `.ssid-iso-test/fence-probe.mjs`
+  对真实 Host 发 raw WebSocket upgrade —— 同一脚本、同一台机器，只换产物内容：修复前打
+  **运行中的装版 Host**（`Origin: dsh-app://app`）得 `ECONNRESET`（socket 被 `destroy()`），
+  修复后打**隔离实例**（隔离集里换成新产物）得 **`101 UPGRADED`**；跨站 origin 的两组、
+  无 Origin、loopback origin 在修复前后**结果完全一致**（跨站恒被拒），即本次只多了
+  carrier origin 这一格。
+  **排查提示**：`Origin: dsh-app://app` 配上 `sec-fetch-site: same-origin` 在修复前**同样被拒**
+  —— 拒绝来自 Origin 比较，不是 fetch-site 标记，别被这个组合误导。想看真实页面里的行为，
+  用同目录的 `cdp-ws-verify.mjs`（需要一个带 `--remote-debugging-port` 的壳实例）。
 - **构建噪声（别整体覆盖 client bundle）**：同一分支两次 `pnpm build` 得到的 `lib/client*.js`
   字节不同 —— CSS module 类名映射的键顺序会漂移（键集合、值与行数一致）。同步 vendor 时只
   替换真实改动的文件（本次是 `lib/index.js`、`lib/types/trust-fence.d.ts`、`src/trust-fence.ts`），
