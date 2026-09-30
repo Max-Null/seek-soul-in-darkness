@@ -85,6 +85,8 @@
 
 | 2026-09-29 | §3.4（补两条判据）/ §7 坑 #59 #60（新增） | **会话根隔离的第 ① 层断链：注入写在 `process.env` 上，却因为「先构造、后注入」到不了 Host 子进程**。症状是隔离根里的历史会话整个看不见（**会话没丢**，插件把它显示成「已失效」），而壳回写的 `applied` 仍自述已生效。手册原先把第 ① 层的时限写成「`host.start()` 之前」，实际约束更早 —— **`new DesktopHostProcess(...)` 之前**，因为该对象在构造时就把 env 存成实例字段、spawn 时原样使用（不合并 live `process.env`）；由此「**Host 重启过就侥幸生效**」，同一版本在不同机器、甚至同一台机器的不同次启动上时好时坏。同批记下两个可复用事实（#60）：`mergeProfilePatch` 会用模板盖回手改的出厂条目；`$DSH_HOME/.env` 是断链时的官方兜底 env 通道（只在变量未定义时填充、天然自失能）。**一秒判据**：取 `DSH_SESSION_ID` 去两个会话根各找一次，看哪个根的 mtime 在更新，别拿 `session-root.json` 下结论 | 装 1.1.0 实机（根因由 web 侧并行会话在重启验证时钉死；完整记录 `docs/排查/2026-09-29-1.1.0会话根隔离失效-诊断与应急热修.md`，含 §十二 验证回填） |
 
+| 2026-10-01 | §9 截图规范第 5 条（豁免清单） | **dsh-allostasis 退出无 UI 豁免**：它新增了空回合提示（对话页 Turn 尾部一行），不再是纯提示注入类，改按第 2/3 条办。同批落地时挖到两个可复用事实：① **`conversation.chat.turnTail` 是浏览器半边唯一官方的事件通道**——`scope: 'session'` 且 owner 自带 `turn` 数据表；而 `shell.overlay` 是帧级的、`inject` 不传 sessionId，要用它就得先自己回答「用户在看哪个会话」（`ctx.sessions.binding(id)` 得先有 id，而选中会话是 ui-workspace 的状态）；② **tsdown 的 `outputOptions.banner`/`footer`/`intro` 会让产物变成 0 字节**——不报错、不警告，只是 `client.js` 为空，2×2 探针（hello 入口/真实入口 × 包装/不包装）定位到与入口无关；改用 `plugins: [{ renderChunk }]` 自己拼包装文本才稳定 | 空回合可见化落地（插件仓库 `ab90b05`；设计记录 `max-null-plugins/dsh-allostasis/docs/设计/2026-09-30-空回合检测与可见化.md` §10） |
+
 ## 工作区规范（布局 + 放置规则，2026-08-29 整理定稿）
 
 ### 布局（H:\MaxNull\WorkStation）
@@ -803,7 +805,8 @@ apps/desktop-host（Host 子进程）
 - ✅ 达标：dsh-chat-rail、dsh-node-appearance
 - ⚠️ 半规范（图未进 shots / 空段 / 散落）：dsh-capture、dsh-draft-polish、dsh-plugin-center
   - ✅ 上述三处已于 2026-09-12 补齐（dsh-capture 归位 7 张、dsh-draft-polish 填充空段、dsh-plugin-center 归位 3 张）。
-5. **无 UI 插件豁免**（2026-09-12 补）：**行为/提示注入/Provider 类**插件（不新增任何按钮、面板或设置项）**不适用**第 3 条的「入口与面板」截图要求；改为在 `## 截图` 段用文字说明「装完会多出/变成什么」的行为效果，并注明本插件无界面元素。当前适用：dsh-chinese-thinking、dsh-guardian、dsh-habit、dsh-skills、dsh-tone-layer、dsh-allostasis。
+5. **无 UI 插件豁免**（2026-09-12 补）：**行为/提示注入/Provider 类**插件（不新增任何按钮、面板或设置项）**不适用**第 3 条的「入口与面板」截图要求；改为在 `## 截图` 段用文字说明「装完会多出/变成什么」的行为效果，并注明本插件无界面元素。当前适用：dsh-chinese-thinking、dsh-guardian、dsh-habit、dsh-skills、dsh-tone-layer。
+   - **2026-10-01 移出 dsh-allostasis**：它新增了空回合提示（对话页 Turn 尾部一行），不再是纯提示注入类，改按第 2/3 条办（`docs/shots/silent-turn-1.png`）。**豁免随界面元素来去**——加了界面就退出豁免，别把这张清单当成插件的永久身份。
 6. **标题允许双语**（2026-09-12 补）：`## 截图` 段标题可写作 `## Screenshots / 截图` 等**含「截图」**的形式（便于英文读者定位）；校验按「h2 标题含『截图』」判定，不强制纯中文。
 7. **`files` 字段必须含 `docs/shots`**（2026-09-12 补）：截图目录移入 `docs/shots/` 后，若 `package.json` 的 `files` 未列入该路径，**截图不会随 npm 包发布**（README 在 npm 页面上会显示裂图）。这是易漏项，新增截图时一并检查。
 - ~~❌ 缺：dsh-chinese-thinking、dsh-guardian、dsh-habit、dsh-memory、dsh-skill-mcp-center、dsh-ssid-achievements~~ —— 此清单是 2026-08-30 的快照，上列缺口已于 2026-09-12 全部补齐（新截 5 个 + 归位 2 个 + 豁免 4 个，见本文待办表第 4 项）；保留删除线是为了不与上方「现状缺口」标题下的结论互相矛盾。
