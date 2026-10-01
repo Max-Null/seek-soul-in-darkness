@@ -261,6 +261,7 @@ H:\MaxNull\WorkStation\
 | `SSID_MCP_NODE` / `SSID_MCP_PW_CLI` / `SSID_MCP_CG_CLI` | 预制 MCP 的 node 解释器与 CLI 路径 | 壳**写**（`src/ssid/mcp-env.ts`）。**必须在 `new DesktopHostProcess(...)` 之前注入**（写在它之后的值到不了子进程，§7 坑 #59）——配置条目与运行时 env 要成对落地，只补一半等于没补（坑见 §7） |
 | `SSID_MCP_CG_WS` / `SSID_MCP_CG_ENABLE` | CodeGraph 的索引目录 / 是否启用 | 壳先读后写；优先级 env → `~/.ssid/codegraph.json` → 最近会话探测 → 停用 |
 | `SSID_SESSION_ISOLATED_ROOT` | 隔离会话根。**注意：这不是给外部设的变量——壳自己设**（= `<DSH_HOME>/sessions-<profileName>`）；关掉隔离时**显式 delete** 它，让 patch 的 `!!js` 回退共享根 | 壳设（`profile-name.ts`），内核 patch 读（见 §3.4） |
+| `SSID_STORAGE_ROOT` | 隔离存储根。**同上：壳自己设**（= `<DSH_HOME>/storages-<profileName>`）；不设时 patch 的 `!!js` 回退到基础层的 `dshHomePath('storages')` | 壳设（`ssid/storage-root.ts`），内核 patch 读（见 §3.4） |
 | `SSID_PLUGIN_SET_DIR` | 覆盖随包插件集的根目录（dev 必需：dev 的 `process.resourcesPath` 里没有插件集） | 壳 `src/main.ts` |
 | `SSID_NOTIFY_CONFIG` / `SSID_SCREENSHOT_CONFIG` | 覆盖 `~/.ssid/notify.json` / `~/.ssid/screenshot.json` 的路径 | 壳；**并行实例用它避免两个实例抢同一份全局热键** |
 | `DSH_DESKTOP_DSH_DIR` · `_PRIMARY_RUNTIME_DIR` · `_OPEN_DEVTOOLS` · `_PNPM_ENTRY` · `_MAIN_INSPECT_PORT` · `_RENDERER_DEBUG_PORT` · `_HOST_INSPECT_PORT` | 路径与调试端口的开发期覆盖 | 壳 |
@@ -301,6 +302,23 @@ profile 目录用 junction 指回真实的那份，即可零拷贝共用插件�
 - **出厂 patch 与会话根是「铺底 + 兜底」，不是互相覆盖**：seed 先铺（`mergeProfilePatch` 按**子条目 id** 合并，出厂块在前、用户留存块在后），随后 `installSessionRootPatch` 只会返回 `already-present` 跳过。真实 profile patch 里那句「这里放着是为了壳侧写入失败时仍有兜底」就是这层关系。
 - **第 ③ 层的 `applied` 是壳的自述，不是内核行为的证据**（2026-09-29 实证）：它由壳回写（`writeSessionRootApplied`），而**能否真生效取决于第 ① 层到没到内核**。断链时的形状是**静默**的 —— 第 ② 层的表达式写作 `process.env.SSID_SESSION_ISOLATED_ROOT || ((DSH_HOME || USERPROFILE + "\.dsh") + "\sessions")`，变量缺席就安静地退回共享根：**会话一条不丢，只是隔离根那批在侧栏与插件里全部「看不见」**（置顶菜单会把它显示成「已失效」）。**一秒判据**：取 `DSH_SESSION_ID`，去 `sessions/` 与 `sessions-ssid/` 各找一次同名目录 —— 哪个根的 mtime 在最近更新，内核就在读哪个根。别拿 `session-root.json` 下结论。
 - **第 ① 层的注入必须早于 `new DesktopHostProcess(...)`**（`SSID-CHANGES.md:1380` 的既有约束）：`DesktopHostProcess` 把构造时传入的 env **存成实例字段**（`host-process.ts:246`），spawn 时原样使用（`:276` → `node-environment.ts:12` 只补 `ELECTRON_RUN_AS_NODE`，**不合并 live `process.env`**）。所以「先构造、后注入」的形状下，注入写在 `process.env` 上的值**永远到不了 Host 子进程**；更隐蔽的是——**Host 重启过就侥幸生效**（工厂被二次调用，第二次构造的快照带上了上一轮的注入），于是同一版本在不同机器、甚至同一台机器的不同次启动上时好时坏。判据：boot 的 `~/.dsh/logs/host.log` 里 `dsh: skipping profile bundle` 是**一段还是两段**（两段 = 两次 Host 启动）。详见 §7 坑 #59。
+
+#### 存储根隔离（同一套三层，对象换成 `storage-json` 的 root）
+
+**背景**：官方桌面版与思灵共用 `<DSH_HOME>` 时，两边内核的 `storage-json` 后端都开同一批 unit（`workspace`、`schedule`…），而它对每个 unit 是**全量重写**整份文件 —— 后写的一方把对方那一份整个盖掉。实测跑过一次官方版之后，思灵的会话登记从 297 条（WorkStation 145）掉到 131 条（21），侧栏大批会话落进「未分组」。
+
+| 层 | 落点 | 作用 |
+|---|---|---|
+| ① env | `SSID_STORAGE_ROOT` | 第 ② 层的 `!!js` 表达式读它；同样必须在 **`new DesktopHostProcess(...)` 之前**设 |
+| ② profile patch | `<profile>/cordis.patch.yml` 的 `storage-json` 条 | 覆盖 `config.root`（基础层给的是 `!!js dshHomePath('storages')`） |
+| ③ 搬家 | 旧根 `<DSH_HOME>/storages` → 新根 `storages-<profileName>` | 首次把旧根已有条目补进新根 |
+
+- **入口**：`applyStorageRootIsolation()`（`apps/desktop/src/ssid/storage-root.ts`），在 `prepareHostEnvironment()` 里紧接会话根之后调用；两者共用 `installPatchEntry()`（`ssid/profile-patch.ts`）做 profile patch 的幂等写入。
+- **表达式写作 `process.env.SSID_STORAGE_ROOT || dshHomePath("storages")`** —— 变量缺席即回退基础层行为，因此「不隔离」与「隔离」共用同一份配置，条目单独存在不会改变前者。
+- **搬家只补不缺**（目标同名条目已存在一律不动，重复调用幂等），**旧根一个字节都不删**；不收四类：`memory.json` / `query-log.json`（见下条）、`.bak-*`、`.tmp` 与点开头残片。搬家排在 patch 之前：两种半成品里「搬了家但还没改 root」保持旧行为，比「改了 root 但新根是空的」安全。
+- **记忆不在这一层**：`dsh-memory` 自建 `JsonStorageBackend`，root 取自 `process.env.DSH_HOME`（`engine.ts` 的 `globalRoot()`），与内核这个后端无关 —— 于是搬家之后跨会话记忆仍留在原处、两个应用继续共用一份。这是刻意的（用户 2026-09-17 定的语义：记忆的目的就是跨会话，分离等于自造枷锁）。
+- **两条 patch 纪律**（来自「cordis patch 的静默失效」那次两个月的空转）：`- id:` 必须**逐字等于**内核条目 id，不匹配即 warned-and-skipped、不报错也不警告；patch 的 `config` 是**整体替换、不深合并**（`storage-json` 的 config 只有 `root` 一个字段，故无遗漏）。
+- **验证要看内核写到哪，不是看配置被没被改**：`dsh --profile <p> --dump-config` 只能证明「那一行被 patched by …」（负对照：指向不存在的 id 会报 `entry "…" not found` 且该行不变）；要证生效，看隔离实例的启动日志 `ssid: storage root isolated=… patch=written migrated=N`，以及**新根里真的出现了 unit 文件**、原位置零改动。
 
 ### 3.5 壳侧配置文件（`~/.ssid/*.json`）
 
@@ -697,6 +715,12 @@ apps/desktop-host（Host 子进程）
    **根因处置**：`icacls '<...>\electron.exe' /setintegritylevel Medium` —— 实测同一探针立刻从 `MKDIR-FAIL EPERM` 转为 `MKDIR-OK`；批量脚本 `.ssid-build/clear-low-il.ps1`。**但根治很贵**（工作区几十万文件要递归）且**只要再跑受限沙箱模式的会话就会重新打上**（当前 `danger-full-access` 不施加），所以**日常仍走上面的 TEMP 绕法**，只在绕不动时才清标签。**排除项**：`ELECTRON_DISABLE_SANDBOX=1` 与 `--no-sandbox` 都无效（后者在 Node 模式下报 `bad option`）—— 别往 Electron 沙箱方向查。
    **顺带排除掉的**（都带证据，别重复走）：`%TEMP%` 的 ACL 完整（`icacls` 三条 ACE 全为完全控制；`diagnose-windows-sandbox-acl` 检过 `%TEMP%` 及每个祖先，verdict `NOT_THIS_CLASS`）；`TEMP`/`TMP` 在进程、用户、机器三处都指向存在的目录；无用户态 WDAC 策略、AppLocker 为空、只注册了 Windows Defender、受控文件夹访问为 `0`（关闭）——**这些都不是成因**。
    **一个边界提醒**：用户**双击**运行安装器**不在这条子进程链上**，所以「NSIS 装 1.1.1 报 `Error writing temporary file`」**不能**用本坑解释，那是另一件事，尚未定因。
+   **第三个症状：它还会把某些功能的「验证路径」整体堵死**（2026-10-02 实测）。userData 让位（`applySsidUserData()`，见 §3.1 与改动 33）**在 dev 上验不了** —— dev 壳的 `electron.exe` 在工作区里、带 Low 标签，于是它写 Medium 的 `%APPDATA%` 必然失败，让位静默走兜底分支（保持官方默认目录、应用照常起来）：
+   ```
+   [ssid] 自有 userData 目录不可用: EPERM: operation not permitted, mkdir 'C:\Users\<u>\AppData\Roaming\ssid-shell'
+   ```
+   对照实测：装版的 `%LOCALAPPDATA%\Programs\ssid-shell\思灵.exe` **不带** Low 标签，写 `%APPDATA%` 正常 —— 所以这一项**只能在装版上验证**，在 dev 上空耗只会得到假阴性。**教训**：这行 EPERM 读起来像「让位逻辑写坏了」，实际是**测试环境的缺陷被读成被测对象的行为**（与 §7 里 `ELECTRON_RUN_AS_NODE` 那次同一类错误）。**判据**：见到这类 EPERM 先跑 `icacls <exe> | Select-String 'Mandatory'`，再决定是查代码还是换环境。
+   副产品：这一趟也是让位兜底分支的**首次真实触发**，确认它在目标目录建不出来时会保持官方默认目录、不让应用起不来。
 
 62. **装版 MCP 全部消失时，有两条自救通道，而且它们生效时机不同**（2026-09-29 实机，装 1.1.0）。
    **症状**：设置 → MCP 里预制条目显示「未同步 / 0 tools」，界面上一个 `mcp__*` 都没有。根因同 #59（壳的 `SSID_MCP_*` 注入写在 `new DesktopHostProcess` 之后，到不了 Host 的构造时快照）。修壳要等发版，但**不必等发版就能先把 MCP 救回来**：
