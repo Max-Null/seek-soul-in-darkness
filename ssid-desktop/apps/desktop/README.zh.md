@@ -22,6 +22,14 @@ Desktop Host 的 Platform API 请求与更新策略请求用相同的 Platform �
 
 按 F12（多媒体功能键键盘上为 Fn+F12）、macOS 的 Command+Option+I 或 Windows 的 Ctrl+Shift+I，可切换当前获得焦点的应用页面的 DevTools，打包版本同样支持。这些原生快捷键通过隐藏的应用菜单项注册。更新遮罩和打包版本的内嵌浏览器禁用 DevTools。
 
+## 终端命令
+
+应用菜单中的**管理 dsh 命令…**位于**检查更新…**下方，显示当前命令，并提供安装、修复和移除操作。命令复用 Desktop 已安装的运行时和普通 [dsh CLI](../cli/README.zh.md)，Desktop 应用关闭后也可以使用。安装后打开新终端，运行 `dsh --version`。
+
+macOS 安装会创建 `/usr/local/bin/dsh`；目录权限需要时，系统会请求管理员认证，不会修改 shell 启动文件。Windows 管理对话框将命令注册到当前用户的 PATH。切换已有命令前会要求确认；修复当前已选中的 Desktop 命令不会重复要求切换确认。macOS 链接会保留并恢复被替换的启动器；Windows 会保留其他 PATH 条目，包括注册前就已存在的条目。若其他命令的 PATH 优先级更高，对话框会显示其位置。移动应用后，macOS 使用“修复”，Windows 从新位置使用“安装”。“移除”不会改动无关安装。
+
+命令注册是安装 Desktop 后的可选操作。卸载 Desktop 前，请通过**管理 dsh 命令… → 移除**删除其 CLI 注册；应用卸载程序不会移除该注册。更新或卸载 Desktop 前请结束 CLI 命令。CLI 运行时版本随已安装的 Desktop 版本变化。Desktop 插件命令与运行时限制见[内置命令运行时](#bundled-command-runtime)。
+
 ## 关闭窗口与退出
 
 关闭主窗口（macOS 的关闭按钮和 ⌘W；Windows 的 ×、Alt+F4 和任务栏"关闭窗口"）会隐藏窗口；Windows 首次隐藏前需要确认。页面和 Host 继续运行，任务不受影响，下次显示时仍是原来的文档，会话、草稿和滚动位置都保留；macOS 全屏窗口先退出全屏再隐藏。macOS 通过 Dock 图标、再次启动或 `dsh://open` 找回窗口，Windows 通过托盘找回。最小化行为不变。进入工作区前关闭欢迎窗口，Windows 上走退出流程，macOS 上应用留在 Dock 中且没有窗口。
@@ -62,7 +70,7 @@ Desktop 默认注册 `office-docx`、`office-pptx` 和 `office-xlsx`。这些技
 
 Desktop 私有的 `runtime/bin` 目录仅添加到包安装进程，不进入 PTC 和 agent shell 从 Host 继承的 PATH。该工具不修改 PATH、环境变量或用户包管理器配置。pnpm 的全局包、命令入口和 store 保留自身默认值及用户设置，包括环境不支持全局安装时的原生错误。不提供独立依赖更新器。[第一方 Runtime 决策](../../.agents/notes/implemented/feature/2026-09-14-desktop-primary-runtime.zh.md)记录这些选择。
 
-Node 准备内置解释器和 Python 库，无需系统 Python 或 pip。[下载锁](../../scripts/primary-runtime/lock.json)固定解释器压缩包、Python 分发包版本及目标平台 wheel 的 URL 和哈希；共享构建器从根开发依赖中解析 pnpm 固定版本。测试检查根 package-manager 版本和 Desktop 固定版本保持一致。每个目标的 wheel 文件名必须与分发包版本一致。所选目标、wheel 记录及分发包映射内部的键顺序，以及 wheel 条目顺序都会影响产物身份，编辑时须保留；锁文件顶层键的顺序不影响该身份。库 wheel 解压到 site-packages，各 wheel 的 `.data/scripts` 目录保留辅助文件，不生成命令行包装器。其他安装方案会被拒绝。本机目标检查在清理暂存目录后以及 macOS 签名后验证锁定 wheel 的集合与版本，允许解释器自带的 pip，并检查 Python 版本、Office 文档读写和依赖完整性，不写入字节码。独立 Node 可执行文件获得 V8 所需的 JIT 权限。跨目标执行和签名安装需要对应的发布主机。`dev:desktop` 和 `start:desktop` 都会在启动 Electron 前准备 `.desktop-build/targets/<target>/runtime/primary-runtime`；首次准备可能需要下载锁定的依赖。准备未完成时，启动命令不能报告成功退出。
+Node 准备内置解释器和 Python 库，无需系统 Python 或 pip。[下载锁](../../scripts/primary-runtime/lock.json)固定解释器压缩包、Python 分发包版本及目标平台 wheel 的 URL 和哈希；共享构建器从根开发依赖中解析 pnpm 固定版本。测试检查根 package-manager 版本和 Desktop 固定版本保持一致。每个目标的 wheel 文件名必须与分发包版本一致。所选目标、wheel 记录及分发包映射内部的键顺序，以及 wheel 条目顺序都会影响产物身份，编辑时须保留；锁文件顶层键的顺序不影响该身份。库 wheel 解压到 site-packages，各 wheel 的 `.data/scripts` 目录保留辅助文件，不生成命令行包装器。其他安装方案会被拒绝。本机目标检查在清理暂存目录后以及 macOS 签名后验证锁定 wheel 的集合与版本，允许解释器自带的 pip，并检查 Python 版本、Office 文档读写和依赖完整性，不写入字节码。独立 Node 可执行文件获得 V8 所需的 JIT 权限；x64 目标还获得 `com.apple.security.cs.allow-unsigned-executable-memory`，允许可执行代码页，包括在 Rosetta 下运行时。ARM64 Node 和 Office 辅助程序保留仅 JIT 权限。跨目标执行和签名安装需要对应的发布主机。`dev:desktop` 和 `start:desktop` 都会在启动 Electron 前准备 `.desktop-build/targets/<target>/runtime/primary-runtime`；首次准备可能需要下载锁定的依赖。准备未完成时，启动命令不能报告成功退出。
 
 | 决策 | 原因 | 直接结果 |
 |---|---|---|
@@ -78,9 +86,17 @@ Node 准备内置解释器和 Python 库，无需系统 Python 或 pip。[下载
 
 Welcome 加载共享 Toast 的配色和阴影变量，挂载在 body 下的通知使用系统字体。
 
+## 内置命令运行时
+
+安装后的 `resources/runtime/cli/bin/dsh` shell 脚本（Windows 为 `dsh.cmd`）使用 Desktop 的 Electron 可执行文件和内置 pnpm 运行普通 CLI 分派入口。Desktop 关闭时也可使用，并保留 [Electron 运行时限制](../../.agents/notes/implemented/architecture/2026-09-11-desktop-electron-node-runtime.zh.md)。普通 profile、配置和插件命令与 npm dsh 使用相同实现；该命令不会打开 Desktop。
+
+管理 Desktop 插件前，先启动一次 Desktop 以初始化其 profile，完全退出应用，再运行 `dsh plugin --profile desktop add <package>`、`list` 或 `remove <package>`。重新打开 Desktop 后使用更改。包操作保留共享的 profile 写锁和兼容性检查。内置命令拒绝未初始化的 Desktop profile，不会在其位置创建普通 CLI profile。
+
+更新或卸载 Desktop 前请结束 CLI 命令；安装程序不与运行中的命令协调。CLI 不提供 Office 创作 skill 的资源路径。Desktop 现有 Office 设置与 Web 附件转换保留各自的资源配置。`prepare:runtime` 复制启动脚本，无需编译原生 CLI 启动器。
+
 ## 安装归属
 
-Electron 拥有 `$DSH_HOME/profiles/desktop`。其 `dependencies` 包含 pnpm 安装的包；`dsh.profile.bundles` 包含内置 bundle，后接已启用插件。签名应用从 `resources/app.asar/dsh` 提供 dsh、私有 Desktop Host 及其生产依赖。打包应用选择 runtime profile 解析，不创建包链接；开发 profile 使用文件系统链接。宿主与插件在同一个 Electron Node 模式进程中执行；Desktop 不启用 `--preserve-symlinks`。CLI 不能启动或修改此 profile。
+Electron 拥有 `$DSH_HOME/profiles/desktop`。其 `dependencies` 包含 pnpm 安装的包；`dsh.profile.bundles` 包含内置 bundle，后接已启用插件。签名应用从 `resources/app.asar/dsh` 提供 dsh、私有 Desktop Host 及其生产依赖。打包应用选择 runtime profile 解析，不创建包链接；开发 profile 使用文件系统链接。宿主与插件在同一个 Electron Node 模式进程中执行；Desktop 不启用 `--preserve-symlinks`。CLI 不能启动此 profile。Desktop 内置命令可在应用退出后管理其插件；npm 安装的 dsh 不能修改它。
 
 应用 preload 只向 `dsh-app://app` 文档暴露启动就绪、致命启动失败上报、原生目录选择、用于 composer 路径引用的 `__DSH_HOST_PATHS__` 桥接和租约范围内的 Browser 桥接。同一个 preload 通过 `dshDesktop.deviceInfo()` 转发主进程采集的机器描述，按 `name=value` 字段以 `; ` 分隔：`platform`、`os`、`app_arch`（应用二进制实际运行的架构，模拟运行时与硬件架构不同）、`cpu` 和 `memory_gib`（物理内存总量，GiB，保留一位小数）。取值不可用时省略对应字段。该描述不包含主机名、用户名或序列号。产品页面还获得 Desktop 标记、更新展示数据和打开原生确认的操作，不能选择安装产物或授权安装。插件管理使用 Web 应用经过认证的 HTTP API；Electron 在 `dsh-app://shell/` 本地提供更新弹窗文档和资源，不依赖 Host 就绪。Electron 不提供插件管理 IPC 或独立管理页面。任何渲染进程都不会获得文件系统访问、原始 Electron IPC、shell 或任意 pnpm 参数。
 
@@ -119,6 +135,10 @@ macOS 上自定义菜单保留 Electron 的标准 Window 菜单及应用隐藏�
 首个致命弹窗打开前，Electron 会向平台日志目录（`app.getPath('logs')`：macOS 为 `~/Library/Logs/DeepSeek Harness`，Windows 与 Linux 为应用 `userData` 目录下的 `logs`）写入一份崩溃报告，最多等待写入一秒；写入缓慢或失败时弹窗不带路径。文件 `crash-<UTC 时间>-<source>.log` 记录来源（`host` 为 Host 退出、`web-boot` 为渲染进程启动失败、`renderer` 为渲染进程或文档失败、`main` 为壳自身错误）、后端是否已就绪、应用与运行时版本、包含可枚举属性与 cause 链的错误（截至 256 KiB）、Host 在退出前通过 IPC 报告启动失败时自己的 inspect 错误（最多 64 KiB），以及主窗口最近的 error 级 console 输出（最多 64 KiB）。因此 Host 退出报告包含保留的 stderr 尾部，其中可能含有插件输出。关闭过程中的致命失败只写报告、不弹窗。平台支持时文件仅所有者可读；启动时保留最新十份报告并删除更早的，不触碰目录中的其他文件。
 
 恢复操作等待 Host 关闭后才修改插件启用状态。原生恢复操作在 profile 事务锁内调用共享 app-boot 恢复函数。它禁用第三方 bundle，并将 profile 的 `cordis.patch.yml` 重命名为 `cordis.patch.yml.bak-<timestamp>`（重名时追加序号），无需解析；下次启动创建空 patch。已安装包和已有备份保留。home 级 patch 不变。Electron 控制台记录备份路径（或原文件不存在）以及 home 级 patch 未修改。profile 数据无效、重命名失败或写入失败会作为恢复操作错误报告；已完成的修改保留，Desktop 不会假装恢复成功后重启。Desktop 不提供 profile 重置操作或应急 HTML 文档。
+
+### Host 环境
+
+macOS 和 Linux 从图形界面启动的程序只继承会话管理器提供的环境，不包含 shell 启动文件导出的变量。第一个 Host 启动之前，Desktop 以 `<shell> -ilc` 运行一次账户的登录 shell（取自用户数据库，不看 `$SHELL`），读取定界符之间的 `env -0` 输出，使 `~/.zprofile` 和 `~/.zshrc`（或该 shell 的对应文件）对 Host、agent shell、终端和 profile 配置生效。读取与 profile 准备并行进行。读取进程没有终端输入，并设置 `DISABLE_AUTO_UPDATE=true`、`ZSH_TMUX_AUTOSTARTED=true` 和 `ZSH_TMUX_AUTOSTART=false`，避免 oh-my-zsh 和 tmux 插件阻塞。shell 的值覆盖继承的值，但 `PWD`、`OLDPWD`、`SHLVL`、`_`、上述读取变量以及启动方自有的 `DSH_*` 和 `ELECTRON_*` 除外；Desktop 在读取之前已按 `DSH_HOME` 等变量解析路径，因此 Host 保持相同的值。读取在结束定界符出现时完成，因此启动文件启动的后台进程可以继续运行，其输出被丢弃。候选 shell 无法启动、以非零状态退出、没有输出定界内容或超过 `DSH_DESKTOP_LOGIN_SHELL_TIMEOUT_MS`（1000 到 2147483647 的整数毫秒，默认 `10000`；超时会结束其进程组）时，Desktop 记录一条警告，并依次尝试 `/bin/zsh`、`/bin/bash` 和 `/bin/sh`；全部失败时 Host 使用继承的环境。读取命令使用 POSIX 语法，因此 csh、tcsh 或 nushell 等账户 shell 会失败，Host 改为获得第一个系统 shell 的启动文件所设置的环境。读取期间退出 Desktop 会结束正在运行的读取进程组。每个应用进程只读取一次，因此修改 shell 启动文件后需要退出并重新打开 Desktop。Windows 从图形界面启动的程序已经从注册表继承用户和系统环境变量，因此 Windows 跳过这一步。
 
 ## 开发
 
@@ -237,9 +257,11 @@ Windows 安装器在启动时和选定目标目录后检查应用是否正在运
 
 ### 上传更新
 
+固定安装包下载在仓库根目录使用 `pnpm run upload:latest:mac:arm64`、`pnpm run upload:latest:mac:x64` 或 `pnpm run upload:latest:win:x64`。它们把已完成目标的 DMG 或 EXE 上传到 `desktop/dsh-latest-macos-arm64.dmg`、`desktop/dsh-latest-macos-x64.dmg` 或 `desktop/dsh-latest-windows-x64.exe`。生产 URL 以 `https://download.deepseek.com/` 开头；测试 URL 使用 `DOWNLOAD_TEST_ORIGIN`。两个部署环境均复用目标 dotenv 中的部署、bucket 和凭据、全部常规发布校验以及下述上传审计。每个命令覆盖一个固定对象，不发布更新清单、blockmap 或发布标签。测试固定下载在测试 bucket 中跨发布 ID 共享；包内更新 URL 仍要求原有发布 ID。发布由操作人员显式执行，也允许预发布版本。部署基础设施必须配置重新验证，或在覆盖后清除固定下载的缓存。本地回环测试覆盖上传行为；真实 COS 和 CDN 验收由发布操作人员负责。
+
 test 与 production 的 `upload:*` 上传在发布前置检查通过后，分别保留新的 `.desktop-build/upload-records/<environment>-<target>-*` 目录。`plan.json` 记录目标、版本、每个文件的大小/SHA-512 和发布的 YAML 字节；刷盘的 `events.jsonl` 记录 PUT 意图及可用的响应状态/请求 ID；`result.json` 记录完成结果或最后失败阶段。缺少最终结果表示中断或存储不可用，不表示成功。不记录凭据值、认证头或原始 SDK 错误。审计写入失败即停止后续 PUT。每个对象都以一次流式腾讯 COS PUT 上传，并携带显式长度与 Content-MD5；COS SDK 仅在请求体不是流时才会重发请求，上传器自身也不重试。保留部分记录，检查远端状态后再执行下一次操作：超时或回执写入失败不能证明对象未存储。这些记录仅在本地，不防篡改，也不会自动备份；每次发布应将它们与构建证据一同归档到受控存储。公网 CDN 回读仍是单独的发布验收，上传结果明确标记为 `not-performed`。
 
-Windows 操作人员可以在仓库外保存 CLIXML 对象，其中 `SecretId` 和 `SecretKey` 是经 DPAPI 加密的 SecureString 字段。[凭据启动器](scripts/upload-with-credentials.ps1)要求显式提供 `-CredentialFile` 和 `-Environment production` 或 `test`；不指定 `-Upload` 时，只验证解密以及向本地 Node 子进程注入凭据，不发起网络请求。它要求 `PATH` 中有 Node，并使用加密该文件时的 Windows 用户和机器。明文、空字段及纯空白字段都会失败。父进程环境保持不变；子进程先清除无关密钥与 Node 预加载选项，再仅接收所选 COS 凭据对。原始子进程 stderr 不会显示，stdout 中的凭据值会被遮盖。此检查不能证明 COS 授权有效。显式上传还要求 `-Upload -Target <target> -Bucket <bucket>` 及下述常规发布完成前提；真实云端上传仍需发布操作人员验收。此启动器支持长期密钥，不支持 STS 凭据。显式上传要求所选部署环境和 bucket 与目标 dotenv 文件及已完成的打包记录一致，才会发起网络写入；即使 dotenv 文件含有其他 COS 密钥，也使用 DPAPI 凭据对。
+Windows 操作人员可以在仓库外保存 CLIXML 对象，其中 `SecretId` 和 `SecretKey` 是经 DPAPI 加密的 SecureString 字段。[凭据启动器](scripts/upload-with-credentials.ps1)要求显式提供 `-CredentialFile` 和 `-Environment production` 或 `test`；不指定 `-Upload` 时，只验证解密以及向本地 Node 子进程注入凭据，不发起网络请求。它要求 `PATH` 中有 Node，并使用加密该文件时的 Windows 用户和机器。明文、空字段及纯空白字段都会失败。父进程环境保持不变；子进程先清除无关密钥与 Node 预加载选项，再仅接收所选 COS 凭据对。原始子进程 stderr 不会显示，stdout 中的凭据值会被遮盖。此检查不能证明 COS 授权有效。显式上传还要求 `-Upload -Target <target> -Bucket <bucket>` 及下述常规发布完成前提；真实云端上传仍需发布操作人员验收。在该上传调用中添加 `-Latest`，即可替换固定安装包，而不发布更新清单或发布标签。此启动器支持长期密钥，不支持 STS 凭据。显式上传要求所选部署环境和 bucket 与目标 dotenv 文件及已完成的打包记录一致，才会发起网络写入；即使 dotenv 文件含有其他 COS 密钥，也使用 DPAPI 凭据对。
 
 `DSH_DESKTOP_AUTO_UPDATE_ENV` 同时选择打包写入的 URL 与后续 COS 上传环境，可取 `test` 或 `production`；缺省为 `test`。测试打包通过 `DOWNLOAD_TEST_ORIGIN` 提供 HTTPS origin；生产使用 `https://download.deepseek.com`。上传通过 `DOWNLOAD_TEST_COS_BUCKET` 或 `DOWNLOAD_PROD_COS_BUCKET` 提供所选 bucket。生产清单位于 `dsh-desk/feeds/<target>/`，安装包位于 `dsh-desk/bin/<target>/`。测试发布必须配置 `DOWNLOAD_TEST_RELEASE_ID`：32 位小写十六进制字符，分别插入路径 `dsh-desk/<release-id>/feeds/<target>/` 和 `dsh-desk/<release-id>/bin/<target>/`。YAML 引用、稳定通道别名和 blockmap 都位于该发布目录内。目标为 `mac-arm64`、`mac-x64` 和 `win-x64`。
 

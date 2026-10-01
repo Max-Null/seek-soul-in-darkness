@@ -29,7 +29,7 @@ import {
   macOSNativeSigningIdentity,
   signMacOSRuntime,
 } from './macos-runtime.ts'
-import { resolveDesktopBuildTarget, resolveDesktopTargetBuildPaths } from './desktop-build-paths.mjs'
+import { desktopTargetPlatform, resolveDesktopBuildTarget, resolveDesktopTargetBuildPaths } from './desktop-build-paths.mjs'
 import { desktopRuntimeFileExclusion } from './runtime-file-policy.ts'
 import { selectOfficeEngine } from '../../../scripts/libreoffice-packages.mjs'
 
@@ -129,7 +129,7 @@ async function main(): Promise<void> {
     await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:install', () => runPnpm(['install', '--prod', '--frozen-lockfile', '--trust-lockfile']))
     const packageSet = readDesktopCorePackageSet(BUILD_ROOT, release.version)
     const targetName = resolveDesktopBuildTarget()
-    const target = { platform: process.platform, arch: targetName.endsWith('arm64') ? 'arm64' : 'x64' }
+    const target = { platform: process.platform, arch: desktopTargetPlatform(targetName).arch }
     const modules = join(BUILD_ROOT, 'node_modules')
     const officeManifest = JSON.parse(readFileSync(join(modules, '@deepseek-ai/libreoffice-kit/package.json'), 'utf8'))
     const officeEngine = selectOfficeEngine(officeManifest, target)
@@ -154,8 +154,8 @@ async function main(): Promise<void> {
     }
     const nativeSigning = process.platform === 'darwin' ? macOSNativeSigningIdentity(process.env) : undefined
     if (nativeSigning !== undefined) {
-      await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'sign:dsh-native', () => signMacOSRuntime(DSH_OUTPUT_ROOT, resolveDesktopAppId(process.env), nativeSigning, join(BUILD_PATHS.root, 'signature-cache')))
-      await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'sign:primary-native', () => signMacOSRuntime(join(RUNTIME_ROOT, 'primary-runtime'), resolveDesktopAppId(process.env), nativeSigning, join(BUILD_PATHS.root, 'signature-cache')))
+      await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'sign:dsh-native', () => signMacOSRuntime(DSH_OUTPUT_ROOT, resolveDesktopAppId(process.env), nativeSigning, target.arch, join(BUILD_PATHS.root, 'signature-cache')))
+      await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'sign:primary-native', () => signMacOSRuntime(join(RUNTIME_ROOT, 'primary-runtime'), resolveDesktopAppId(process.env), nativeSigning, target.arch, join(BUILD_PATHS.root, 'signature-cache')))
     }
     await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:manifests', () => prepareRuntimeManifests(DSH_OUTPUT_ROOT))
     await packagingStep(process.env.DSH_DESKTOP_PACKAGING_RUN_DIR, 'runtime:primary-smoke', async () => smokePrimaryRuntime(join(RUNTIME_ROOT, 'primary-runtime')))

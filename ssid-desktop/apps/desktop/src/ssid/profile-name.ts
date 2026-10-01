@@ -48,6 +48,19 @@ export function sessionsRootDirName(profileName: string): string {
 }
 
 /**
+ * 存储根目录名，跟随 profile 名。
+ *
+ * 与 {@link sessionsRootDirName} 同理：官方桌面版与思灵共用 `<DSH_HOME>` 时，两边
+ * 内核的 `storage-json` 后端会开同一批 unit 并各自**全量重写**整份文件，后写的一方
+ * 把对方整个盖掉，所以思灵的存储根必须自落一份（见 `ssid/storage-root.ts`）。
+ * @param profileName - profile 名。
+ * @returns 存储根目录名。
+ */
+export function storagesRootDirName(profileName: string): string {
+  return `storages-${profileName}`
+}
+
+/**
  * 把会话存储根写进 `process.env`，供 Host 子进程继承。
  *
  * `dsh-ssid-panels` 靠这对变量启用会话隔离：两者缺席时它退回官方基础层的

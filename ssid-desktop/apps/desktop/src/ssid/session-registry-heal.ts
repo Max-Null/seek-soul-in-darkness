@@ -30,8 +30,14 @@ import { zstdDecompressSync } from 'node:zlib'
 
 /** {@link healWorkspaceRegistry} 的输入。 */
 export interface HealWorkspaceRegistryInput {
-  /** Harness home（两个会话根与 `storages` 都在其下）。 */
+  /** Harness home —— 会话根都在其下。 */
   readonly dshHome: string
+  /**
+   * 内核 storage 服务的根，登记文件 `workspace.json` 在其下；省略时退回
+   * `<dshHome>/storages`（与官方桌面版共用一份的形态）。存储根隔离之后必须显式传，
+   * 否则这里改的是**旧根**那份、而内核读写的是新根那份，自愈于是静默失效。
+   */
+  readonly storageRoot?: string
   /** 落日志钩子（省略则静默）。 */
   readonly log?: (text: string) => void
 }
@@ -146,11 +152,11 @@ function readSessionFact(file: string): SessionFact | undefined {
  * @returns 本次自愈的结果摘要。
  */
 export function healWorkspaceRegistry(input: HealWorkspaceRegistryInput): HealWorkspaceRegistryResult {
-  const { dshHome, log = () => {} } = input
+  const { dshHome, storageRoot = join(dshHome, 'storages'), log = () => {} } = input
   const empty = (reason: string): HealWorkspaceRegistryResult =>
     ({ healed: false, reason, added: 0, workspacesCreated: 0, skippedSubagent: 0 })
 
-  const registryFile = join(dshHome, 'storages', 'workspace.json')
+  const registryFile = join(storageRoot, 'workspace.json')
   if (!existsSync(registryFile)) return empty('no-registry')
   let doc: { tables?: { workspaces?: Record<string, Partial<WorkspaceRecord>> }; global?: { workspaceIds?: string[] } }
   try {

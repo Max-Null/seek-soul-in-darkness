@@ -678,5 +678,9 @@ export function installSsidTitlebar(window: BrowserWindow, options: SsidTitlebar
   // 落在空白页上、随后被导航冲掉，而 `did-finish-load` 还会再注入一次 —— 同一次页面加载里
   // 注入两遍，会让注入脚本里的初始化请求整串跑两遍（quick-toolbar 的悬浮球状态回读是 6 次
   // 退避重试，控制台因此刷出成对的 503）。页面已有文档时（URL 非空）仍照旧立即补一次。
-  if (window.webContents.getURL() !== '') inject()
+  // `getURL` 可能缺席（测试的 Electron mock 的 webContents 就没有它）—— 缺席时按「还没有文档」
+  // 处理：只损失这次立即补注入，`did-finish-load` 仍会注入，标题栏不会漏。抛出去则会让
+  // createWindow 失败、整条启动链断在 reportFatal 上（2026-10-01 合 rc.2 时实测）。
+  const webContents = window.webContents as { getURL?: () => string }
+  if ((webContents.getURL?.() ?? '') !== '') inject()
 }

@@ -21,9 +21,10 @@
  * 幂等与用户优先：条目已存在一律不动（用户改过的那份优先），写入前备份。
  */
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { installPatchEntry, type PatchEntryResult } from './profile-patch.ts'
 import { installSessionRootEnv } from './profile-name.ts'
 
 /** 承载会话根覆盖的 loader 条目 id（官方基座里供给 `root` 的那一行）。 */
@@ -101,30 +102,13 @@ export function writeSessionRootApplied(applied: boolean, path: string = session
 /**
  * 把会话根覆盖幂等写进 profile 的 `cordis.patch.yml`。
  *
- * 三种情形：条目已在 → 原样不动；文件是空骨架（`[]` 或空白）→ 整份替换成该条目；
- * 已有其他条目 → 追加到末尾。写入前备份为 `<文件名>.bak-<时间戳>`。
+ * 写入与幂等规则见 {@link installPatchEntry}：条目已在原样不动、空骨架整份替换、
+ * 其余追加，写入前备份。
  * @param profileDir - profile 目录（`$DSH_HOME/profiles/<名>`）。
  * @returns `written` 本次是否改动了文件；`reason` 未改动的原因。
  */
-export function installSessionRootPatch(profileDir: string): { written: boolean; reason: string } {
-  const patchPath = join(profileDir, 'cordis.patch.yml')
-  if (!existsSync(patchPath)) return { written: false, reason: 'no-profile-patch' }
-  let current: string
-  try {
-    current = readFileSync(patchPath, 'utf8')
-  } catch {
-    return { written: false, reason: 'unreadable' }
-  }
-  if (current.includes(SESSION_ROOT_ENTRY_ID)) return { written: false, reason: 'already-present' }
-
-  const body = current.trim() === '' || current.trim() === '[]' ? SESSION_ROOT_ENTRY : `${current.trimEnd()}\n\n${SESSION_ROOT_ENTRY}`
-  try {
-    copyFileSync(patchPath, `${patchPath}.bak-${String(Date.now())}`)
-    writeFileSync(patchPath, body, 'utf8')
-  } catch {
-    return { written: false, reason: 'write-failed' }
-  }
-  return { written: true, reason: 'written' }
+export function installSessionRootPatch(profileDir: string): PatchEntryResult {
+  return installPatchEntry(profileDir, SESSION_ROOT_ENTRY_ID, SESSION_ROOT_ENTRY)
 }
 
 /**

@@ -34,14 +34,22 @@ function callSites(pattern: RegExp, contextLines = 4): { line: number; context: 
 }
 
 describe('Host 环境注入的顺序', () => {
-  it('每个 backend.start() 之前都已 await prepareHostEnvironment()', () => {
+  it('每个 backend.start() 都在 spawn 之前走完 prepareHostEnvironment()', () => {
     // 注释里也会出现这个字符串，但它们不含调用特征（左括号后跟 `async (` 或 `()`）。
     const sites = callSites(/backend\.start\((?:async )?\(/)
     expect(sites.length).toBeGreaterThan(0)
     for (const site of sites) {
+      // 两种合法形态：
+      // ① 调用点之前已 await —— rc.1 时代的写法，当时 `backend.start` 没有 prepare 契约；
+      // ② 在 `backend.start(prepare)` 的回调体内 await —— 上游 0.2.0-rc.2 起该契约保证
+      //    「prepare 先于 spawn 完成」（backend-controller.ts:57）。
+      // 形态 ① 会让 `backend.start()` 晚调用，依赖 preparing 信号的测试永远等不到它
+      // （main-startup 的「creates the Host only after the login-shell read」），故统一用 ②。
+      const before = site.context.includes('prepareHostEnvironment')
+      const inside = lines.slice(site.line - 1, site.line + 24).join('\n').includes('prepareHostEnvironment')
       expect(
-        site.context.includes('prepareHostEnvironment'),
-        `main.ts:${String(site.line)} 的 backend.start() 之前没有 prepareHostEnvironment()`,
+        before || inside,
+        `main.ts:${String(site.line)} 的 backend.start() 既没在之前 await、也没在 prepare 回调内 await prepareHostEnvironment()`,
       ).toBe(true)
     }
   })

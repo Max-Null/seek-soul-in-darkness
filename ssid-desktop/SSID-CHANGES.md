@@ -1,6 +1,6 @@
 # SSiD Desktop Fork — 对上游的改动清单
 
-**基线**：`deepseek-harness` tag `dsh-v0.1.7-rc.2`
+**基线**：`deepseek-harness` tag `dsh-v0.2.0-rc.2`
 **上游坐标**：`apps/desktop`（Electron 壳）+ `apps/desktop-host`（Host 进程）
 **原则**：SSiD 的实现全部收进 `src/ssid/`，上游文件里只留调用点。每条改动登记在此，含文件、行、原因。
 
@@ -1854,5 +1854,97 @@ T=18、宽 106/117），以及右侧面板里 right=1850（**已超出 1280 视�
 
 `capturedButtons: 2`（两个被接管的原件随之放回/藏起），让位恒为 0。
 单测：`preload-menu` 8 项 + `preload-windows` 3 项全过。
+
+## 改动 33：与官方 DSH 桌面版共存（2026-10-01 ~ 10-02，用户提出「同时启动、互不影响」）
+
+官方桌面版与思灵装在同一台机器上，两者**不能并存**：`app.name` 同为包名 `@deepseek-ai/dsh-desktop`，
+Electron 因此给两者派生同一个 userData，单实例锁落在同一个 `lockfile` 上 —— 先启动的一方占住，
+另一方在 `single-instance.ts` 里静默 `app.quit()`，界面上表现为「双击没反应」。更隐蔽的是数据面：
+两者共用 `<DSH_HOME>` 时，内核 `storage-json` 后端对每个 unit **全量重写**整份文件，后写的一方
+把对方整个盖掉 —— 实测跑过一次官方版之后，思灵的会话登记从 297 条（WorkStation 145）掉到 131 条（21）。
+全部处置落在我们自己的壳里，**不碰官方版、不碰 DSH 源码**。
+
+### 一、让出 userData（单实例锁）
+
+| 文件 | 性质 | 改动 |
+|---|---|---|
+| `apps/desktop/src/ssid/user-data.ts` | **新增** | `applySsidUserData(app)`：userData 从官方默认的 `%APPDATA%\@deepseek-ai\dsh-desktop` 挪到 `%APPDATA%\ssid-shell`（锁随 userData 走），首次把界面状态与平台会话迁过去；目标目录不可建可写时**保持官方默认目录**并告警，不让应用起不来 |
+| `apps/desktop/src/main.ts` | 改 | 调用点早于 `app.setAppLogsPath()`（日志落点按 userData 解析） |
+
+判据是「只在 userData 仍是官方默认值时改写」：显式传 `--user-data-dir` 的隔离实例原样保留，隔离不受影响。
+不改 `app.name`（它还供 crash-report、client-metadata、macOS 菜单 label）。代价是 dev 与装版仍共用同一个自有目录、仍互斥。
+
+**验证受环境限制**：dev 壳的 `electron.exe` 在工作区内，而工作区根带 `Low Mandatory Level`，
+其中一切 exe 继承为 Low IL —— 写 Medium 的 `%APPDATA%` 必然 `EPERM`，让位于是走兜底分支。
+`icacls` 对照：工作区 exe 为 `Low (I)(NW)`，装版 `%LOCALAPPDATA%\Programs\ssid-shell\思灵.exe` 无 Low 标签。
+**这一项只能在装版上实测**（详见 `docs/决策/2026-10-01-思灵userData与官方桌面版并存冲突.md`）。
+
+### 二、存储根隔离（`storages/`）
+
+与会话根隔离同款三层，对象换成内核 `storage-json` 后端的 root：
+
+| 文件 | 性质 | 改动 |
+|---|---|---|
+| `apps/desktop/src/ssid/storage-root.ts` | **新增** | `applyStorageRootIsolation()`：注入 `SSID_STORAGE_ROOT` → 写 profile patch 覆盖 `storage-json` 的 `config.root` → 首次把旧根已有条目搬进新根 |
+| `apps/desktop/src/ssid/profile-patch.ts` | **新增** | `installPatchEntry()`：profile patch 单条目幂等写入（条目已在不动、空骨架整份替换、其余追加，写入前备份） |
+| `apps/desktop/src/ssid/session-root.ts` | 改 | `installSessionRootPatch` 改为复用 `installPatchEntry`（行为与失败原因逐字不变） |
+| `apps/desktop/src/ssid/profile-name.ts` | 改 | 加 `storagesRootDirName()` → `storages-<profile>`，与会话根 `sessions-<profile>` 对称 |
+| `apps/desktop/src/ssid/session-registry-heal.ts` | 改 | 输入加可选 `storageRoot`：自愈要改的是内核实读写的那一份登记，省略时退回 `<dshHome>/storages` |
+| `apps/desktop/src/main.ts` | 改 | 在 `prepareHostEnvironment()` 里接线，早于 `hostEnvironment` 合成（子进程 env 是构造时的快照） |
+
+覆盖条目的表达式是 `!!js 'process.env.SSID_STORAGE_ROOT || dshHomePath("storages")'` —— 变量缺席即回退基础层行为，
+因此「不隔离」与「隔离」共用同一份配置。搬家排在 patch 之前：两种半成品里「搬了家但还没改 root」保持旧行为，
+比「改了 root 但新根是空的」安全。**旧根一个字节都不删。**
+
+**搬家不收四类**：`memory.json` / `query-log.json`（`dsh-memory` 自建 `JsonStorageBackend`，root 取自
+`process.env.DSH_HOME`，与内核这个后端无关 —— 于是记忆继续留在原处、两个应用共用一份，正是用户
+2026-09-17 明确要的语义）、`.bak-*`（留在旧根作为搬家前的快照）、`.tmp` 与点开头残片。
+
+**证据**：① `--dump-config` 显示 base 那一行被命中（`# == @deepseek-ai/dsh-base, patched by …ov-storage.yml`），
+负对照（不存在的 id）报 `entry "…" not found` 且 root 不变；② 隔离实例真机启动日志
+`ssid: storage root isolated=… patch=written migrated=4`，新根出现 `workspace.json`/`guardian`/`habit`/`session_projcache`，
+`memory.json` 与备份留在旧根，旧根六个条目 mtime 全未变；③ 位移实验（`SSID_STORAGE_ROOT` 指向独立目录）
+内核确实把 `workspace.json` 写到了新根、原位置零改动；④ 单测 `tests/ssid-storage-root.spec.ts` 6 项 +
+`tests/ssid-session-root.spec.ts` 3 项。
+
+**两条必须遵守的 patch 纪律**（来自「cordis patch 的静默失效」那次两个月的空转）：
+`- id:` 必须**逐字等于内核条目 id**（不匹配即 warned-and-skipped，不报错不警告；本条用的是
+`packages/bundle/base/cordis.patch.yml:168` 的 `storage-json`）；patch 的 `config` 是**整体替换、不深合并**
+（`storage-json` 的 config 只有 `root` 一个字段，故无遗漏）。
+
+### 三、协议名让给官方版
+
+| 文件 | 位置 | 改动 |
+|---|---|---|
+| `apps/desktop/src/main.ts` | 协议注册 | `setAsDefaultProtocolClient('dsh')` → `'ssid'`；`open-url` 判据同步改为 `ssid://open` |
+
+两者是同一份上游代码、注册同一个协议名，而 Windows 上每次启动都会重写 `HKCU\Software\Classes\dsh`
+—— 谁后启动谁抢走，从外部唤起时打开哪个应用不确定。内核与我们的插件都不发 `dsh://open`（实测 grep），
+影响面窄，但按「互不影响」把思灵改到自有协议名下。
+
+### 四、清点过的其余共享面
+
+| 接触面 | 判定 |
+|---|---|
+| 端口 `19387`（官方）/ `19388`（思灵） | 已天然错开 |
+| 全局热键 | 官方版 asar 里 `globalShortcut` **0 处**，不抢 |
+| `~/.dsh/logs/host.log` | 官方版 asar 里无此字符串（host-log 是思灵壳自己加的） |
+| 会话根 | 官方版 asar 里无 `sessions-ssid`，它只认 `sessions` |
+| profile 目录 | `profiles/desktop` vs `profiles/ssid`，各自独立 |
+| 任务栏 AUMID | `electron.app.思灵` vs `com.deepseek.dsh`，图标不合并 |
+| `~/.dsh/profiles/node_modules` | 内核的运行时解析表，按 home 共享、每个 app 启动时重建；profile 自身的 `node_modules` 优先，影响仅限低概率的动态加载 |
+| `~/.dsh/dsh-runtimes/dsh-primary-runtime` | 两边展开到同一路径，但 `payloadDigest` **逐字相同**（`a7dddb0d…`），共享零成本；将来版本分叉时才需要处理 |
+| `.credentials.yaml` / `.env` / `.agent-presets` | 共享；官方版不认 `SSID_*`，无冲突 |
+
+### 五、当前状态
+
+| 要件 | 代码 | 验证 |
+|---|---|---|
+| ① userData 让位 | 已在主轴 | **dev 验不了**（Low IL），待装版双击实测 |
+| ② 存储根隔离 | 已在主轴 | 隔离实例真机通过 + 9 条单测 |
+| ③ 协议改名 | 已在主轴 | 静态确认（打包时 `app.isPackaged` 才注册，故只在装版生效） |
+| ④ 全局热键 | 无需改动 | 官方版零注册 |
+
+三件随 **1.1.6** 交付（内核为 `0.2.0-rc.2`，与官方桌面版同版本）。
 
 
