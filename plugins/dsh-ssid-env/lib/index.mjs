@@ -13,12 +13,14 @@
  * 动态而非硬编码：只有探测到桌面壳的运行期标识才注入。若本包被装进非 SSiD
  * 环境，它保持沉默——自述不能说谎，否则比没有更糟。
  *
- * 判据沿革（0.1.2）：0.1.0 / 0.1.1 读 `SSID_PROFILE_DIR`，那是自建壳（≤0.4.0）
- * 在 kernel-child 里写的变量；换成官方桌面端底座后，壳给的是 `DSH_SHELL` /
- * `DSH_PROFILE_DIR`，于是本插件自 1.0.0 起**一直静默返回**——那段提示词一次
- * 都没注入过，而且不报错、日志无痕（2026-10-02 实测：装版 1.1.6 里
- * `SSID_PROFILE_DIR` 不存在，`SSID_STORAGE_ROOT` / `SSID_SHELL_VERSION` 才是
- * 现在有的）。判据据此改为实测存在的变量，并把隔离落点一并读进来当证据。
+ * 判据沿革（0.1.3）：三个版本，两次错在「取错了变量」。
+ * - 0.1.0 / 0.1.1 读 `SSID_PROFILE_DIR`，那是自建壳（≤0.4.0）在 kernel-child 里写的变量。
+ * - 0.1.2 改读 `DSH_SHELL` / `DSH_PROFILE_DIR`——依据是**工具子进程**（pwsh）里能看到这两个
+ *   变量。但工具进程的环境由内核在 spawn 时按需拼装，内核进程本身并没有：2026-10-03 在装版
+ *   1.1.6 上探针直接读内核进程环境，两个都是 undefined，而 `SSID_SHELL_VERSION` 在——判据
+ *   仍然关着，提示词依旧一次都没注入。
+ * - 0.1.3 改读 `SSID_SHELL_VERSION`：思灵壳注入，且实测存在于内核进程。
+ * 教训：判据要取**目标进程**里真实可得的变量，不能拿子进程看得到的值推断父进程也有。
  */
 
 /** Cordis 插件名（与包名一致，bundle patch 按此名挂载）。 */
@@ -38,22 +40,22 @@ const ORDER = -95
  * @returns SSiD 专有的运行期事实；不在 SSiD 内时返回 undefined。
  */
 function detectSsid() {
-  // `DSH_SHELL=1` 是 fork 壳（1.0.0+）注入的桌面壳标记；`DSH_PROFILE_DIR` 是同层给的
-  // profile 目录。两者缺一即不认为自己在 SSiD 内。
-  if (process.env.DSH_SHELL !== '1') return undefined
-  const profileDir = process.env.DSH_PROFILE_DIR
-  if (typeof profileDir !== 'string' || profileDir === '') return undefined
+  // 主判据是 `SSID_SHELL_VERSION`：思灵壳注入的版本标记，且实测在内核进程里存在。
+  // 不要改用 `DSH_SHELL` / `DSH_PROFILE_DIR` —— 它们只在内核 spawn 工具子进程时被拼进
+  // 子进程环境，内核自己看不到（见文件头的判据沿革）。
+  const shellVersion = process.env.SSID_SHELL_VERSION
+  if (typeof shellVersion !== 'string' || shellVersion === '') return undefined
 
   const read = key => {
     const value = process.env[key]
     return typeof value === 'string' && value !== '' ? value : undefined
   }
   return {
-    profileDir,
+    shellVersion,
+    profileDir: read('DSH_PROFILE_DIR'),
     profileName: read('DSH_PROFILE'),
     isolatedRoot: read('SSID_SESSION_ISOLATED_ROOT'),
     storageRoot: read('SSID_STORAGE_ROOT'),
-    shellVersion: read('SSID_SHELL_VERSION'),
   }
 }
 
@@ -64,11 +66,11 @@ function detectSsid() {
  */
 function describe(fact) {
   const evidence = [
-    `profile 目录 ${fact.profileDir}`,
+    `壳版本 ${fact.shellVersion}`,
+    fact.profileDir === undefined ? undefined : `profile 目录 ${fact.profileDir}`,
     fact.profileName === undefined ? undefined : `profile 名 ${fact.profileName}`,
     fact.isolatedRoot === undefined ? undefined : `会话根 ${fact.isolatedRoot}`,
     fact.storageRoot === undefined ? undefined : `存储根 ${fact.storageRoot}`,
-    fact.shellVersion === undefined ? undefined : `壳版本 ${fact.shellVersion}`,
   ].filter(part => part !== undefined)
 
   const lines = [
