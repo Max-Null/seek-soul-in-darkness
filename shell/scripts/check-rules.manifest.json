@@ -109,18 +109,6 @@
         ".git/**"
       ]
     },
-    "dsh-context-doctor": {
-      "mode": "vendor-only",
-      "$sourceNote": "上游固化包，无本地源头，只能三处互比",
-      "include": [
-        "**"
-      ],
-      "exclude": [
-        "node_modules/**",
-        "**/*.tsbuildinfo",
-        ".git/**"
-      ]
-    },
     "dsh-dream-skin": {
       "$unmanaged": true,
       "$unmanagedReason": "实测它只在 ~/.dsh/profiles/web/vendor 有一份，tpl 与 ssid 都没有——而 tpl 是 ssid 的发版基准，不含它属设计如此（web 专有）。**只有一份就没有可比对象**，纳入比对会报「可比的份数不足 2」这种无意义的红。此条仅作事实登记，不参与比对。",
