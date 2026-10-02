@@ -13,6 +13,18 @@
 
 **两份会漂移**，这是这种分工的固有代价。收尾时按逐文件 SHA256 比对同步（纪律见开发手册坑 #45），不要靠印象。
 
+### 推送路径（2026-10-02 起：默认直连 GitHub）
+
+开发主轴的 `git push` **默认直连 GitHub** —— `ssid-desktop-fork` 绑定 `fork/ssid-desktop-fork`（`fork` = `https://github.com/Max-Null/deepseek-harness.git`）；本机镜像 `deepseek-harness/`（clone 源，即 checkout 的 `origin`）只在需要它同步时**显式**推：
+
+```sh
+git -C .ssid-build/checkout push                 # ① 直连 GitHub（日常）
+git -C .ssid-build/checkout push origin ssid-desktop-fork   # ② 想让本机镜像也同步时
+git -C deepseek-harness push fork ssid-desktop-fork         # ② 之二跳：镜像 → GitHub
+```
+
+**为什么把默认改成直连**：接力要两跳就会忘。2026-10-02 核查发现 GitHub 上的 `ssid-desktop-fork` 停在 09-30 的 `618dcdee82`、落后本地 **5 个提交**（含「Merge tag dsh-v0.2.0-rc.2」那步内核升级）——链路本身没坏，坏在"没人负责第二跳"。两条路现在都实测可用（都是快进推、无需 `--force-with-lease`），且 `origin` 仍保留原语义，②那条随时能补镜像。
+
 ## 改了什么
 
 逐条改动、原因与 dev 实机验证证据见 [`SSID-CHANGES.md`](./SSID-CHANGES.md)。要点：
