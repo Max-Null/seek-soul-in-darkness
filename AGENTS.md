@@ -15,7 +15,7 @@
 ## 常用命令（shell/ 目录）
 
 ```sh
-npm run check:rules     # 六个门（含 dsh-clean）
+npm run check:rules     # 七个门（含 dsh-clean、profile-manifest）
 npm test                # 门禁脚本自测
 npm run sync:vendor     # vendor 同步
 ```

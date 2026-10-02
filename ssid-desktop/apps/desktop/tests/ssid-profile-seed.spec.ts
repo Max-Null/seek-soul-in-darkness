@@ -11,7 +11,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
-  listPluginPackages, readPluginSetManifest, seedSsidProfile, SSID_PLUGIN_SET_MANIFEST,
+  ensureProfileManifestVersion, listPluginPackages, PROFILE_MANIFEST_VERSION,
+  readPluginSetManifest, seedSsidProfile, SSID_PLUGIN_SET_MANIFEST,
 } from '../src/ssid/profile-seed.ts'
 
 let root: string
@@ -119,12 +120,12 @@ describe('seedSsidProfile', () => {
     expect(readFileSync(join(profileDir, 'package.json'), 'utf8')).toBe(before)
   })
 
-  it('用户层优先：已有的链接与声明都不动', () => {
+  it('用户层优先：已有的链接与声明都不动（含用户改过的 version）', () => {
     makePluginSet(['@max-null/dsh-memory'])
     makeProfile(['@deepseek-ai/dsh-base', '@max-null/dsh-memory', 'user-own-bundle'])
     const manifest = readManifest()
     manifest.dependencies['@max-null/dsh-memory'] = '0.9.9'
-    writeFileSync(join(profileDir, 'package.json'), `${JSON.stringify(manifest, undefined, 2)}\n`)
+    writeFileSync(join(profileDir, 'package.json'), `${JSON.stringify({ ...manifest, version: '9.8.7' }, undefined, 2)}\n`)
     const before = readFileSync(join(profileDir, 'package.json'), 'utf8')
     // 用户自己放了一份（比如手改过）——不能被我们的链接覆盖。
     const occupied = join(profileDir, 'node_modules', '@max-null', 'dsh-memory')
@@ -137,6 +138,8 @@ describe('seedSsidProfile', () => {
     expect(summary.kept).toEqual(['@max-null/dsh-memory'])
     expect(readFileSync(join(profileDir, 'package.json'), 'utf8')).toBe(before)
     expect(JSON.parse(readFileSync(join(occupied, 'package.json'), 'utf8')).version).toBe('9.9.9')
+    // 用户改过的 version 不被骨架卫生覆盖 —— 只补不改。
+    expect(JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8')).version).toBe('9.8.7')
     expect(manifest.dsh.profile.bundles).toContain('user-own-bundle')
   })
 
@@ -162,12 +165,46 @@ describe('seedSsidProfile', () => {
     expect(summary.linked).toEqual(['@max-null/dsh-memory'])
   })
 
-  it('插件集没有自述时不抛，profile 一动不动', () => {
+  it('插件集没有自述时不抛：不动插件声明，只补 manifest 的 version', () => {
     makeProfile()
-    const before = readFileSync(join(profileDir, 'package.json'), 'utf8')
+    const before = JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8')) as Record<string, unknown>
     const summary = seedSsidProfile({ profileDir, pluginSetRoot })
     expect(summary).toEqual({ linked: [], kept: [], missing: [], bundlesAdded: [] })
-    expect(readFileSync(join(profileDir, 'package.json'), 'utf8')).toBe(before)
+    const after = JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8')) as Record<string, unknown>
+    delete after['version']
+    expect(after).toEqual(before)
+    expect(JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8')).version).toBe(PROFILE_MANIFEST_VERSION)
+  })
+})
+
+describe('ensureProfileManifestVersion', () => {
+  it('骨架缺 version 时补上，且是幂等的', () => {
+    makeProfile()
+    expect(ensureProfileManifestVersion(profileDir)).toBe(true)
+    const after = readFileSync(join(profileDir, 'package.json'), 'utf8')
+    expect(JSON.parse(after).version).toBe(PROFILE_MANIFEST_VERSION)
+    // 补完就闭嘴：第二次不再写盘（逐字节不变）。
+    expect(ensureProfileManifestVersion(profileDir)).toBe(false)
+    expect(readFileSync(join(profileDir, 'package.json'), 'utf8')).toBe(after)
+  })
+
+  it('已有非空 version 时不动；空串视为缺失', () => {
+    makeProfile()
+    const manifest = readManifest()
+    writeFileSync(join(profileDir, 'package.json'), `${JSON.stringify({ ...manifest, version: '1.2.3' }, undefined, 2)}\n`)
+    expect(ensureProfileManifestVersion(profileDir)).toBe(false)
+    expect(JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8')).version).toBe('1.2.3')
+
+    writeFileSync(join(profileDir, 'package.json'), `${JSON.stringify({ ...manifest, version: '' }, undefined, 2)}\n`)
+    expect(ensureProfileManifestVersion(profileDir)).toBe(true)
+    expect(JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8')).version).toBe(PROFILE_MANIFEST_VERSION)
+  })
+
+  it('骨架还没建、或 manifest 读不出来时不抛', () => {
+    expect(ensureProfileManifestVersion(profileDir)).toBe(false)
+    makeProfile()
+    writeFileSync(join(profileDir, 'package.json'), '{ not json')
+    expect(ensureProfileManifestVersion(profileDir)).toBe(false)
   })
 })
 

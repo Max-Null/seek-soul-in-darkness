@@ -21,7 +21,7 @@
  * 失败输出按官方 `formatGateResultReason` 把三类事实**全列出、互不遮蔽**：
  * error / exit N / signal X —— 只报"失败"而不说清是哪一类，会让人查错方向。
  *
- * 用法：node scripts/check-rules.mjs [all|vendor-sync|profile-sync|bom|legacy-names]
+ * 用法：node scripts/check-rules.mjs [all|vendor-sync|profile-sync|profile-manifest|bom|legacy-names]
  */
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -32,6 +32,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MODES = [
   { id: 'vendor-sync', label: 'vendor 各份一致性', script: 'check-vendor-sync.mjs' },
   { id: 'profile-sync', label: 'profile 与 template 声明对比', script: 'check-profile-sync.mjs' },
+  { id: 'profile-manifest', label: 'profile manifest 可解析性', script: 'check-profile-manifest.mjs' },
   { id: 'bom', label: 'BOM 扫描', script: 'check-bom.mjs' },
   { id: 'legacy-names', label: '旧名残留（硬域）', script: 'check-legacy-names.mjs' },
   // 自建壳的 kernel bundle 约束随自建壳一起下架：这门检查 kernel.bundle.mjs /

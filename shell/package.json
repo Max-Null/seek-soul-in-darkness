@@ -5,10 +5,11 @@
   "description": "SSiD（思灵）：发版基准 + 门禁 + 同步脚本。自建壳的运行时已于 tag v0.4.0-selfbuilt / 分支 archive/selfbuilt-shell 归档，本目录只保留仍在维护的部分 —— profile-template/（发版基准，被 prepare-ssid-plugins.ts 引用）与 scripts/（check:rules 七个门与发版脚本）。",
   "type": "module",
   "scripts": {
-    "test": "node --test scripts/check-bom.spec.mjs scripts/check-legacy-names.spec.mjs scripts/check-cot-leakage.spec.mjs scripts/check-loader-external.spec.mjs scripts/check-plugin-peers.spec.mjs scripts/check-vendor-sync.spec.mjs scripts/sync-vendor.spec.mjs",
-    "test:check-rules": "node --test scripts/check-bom.spec.mjs scripts/check-legacy-names.spec.mjs scripts/check-cot-leakage.spec.mjs scripts/check-loader-external.spec.mjs scripts/check-plugin-peers.spec.mjs scripts/check-vendor-sync.spec.mjs",
+    "test": "node --test scripts/check-bom.spec.mjs scripts/check-legacy-names.spec.mjs scripts/check-cot-leakage.spec.mjs scripts/check-loader-external.spec.mjs scripts/check-plugin-peers.spec.mjs scripts/check-profile-manifest.spec.mjs scripts/check-vendor-sync.spec.mjs scripts/sync-vendor.spec.mjs",
+    "test:check-rules": "node --test scripts/check-bom.spec.mjs scripts/check-legacy-names.spec.mjs scripts/check-cot-leakage.spec.mjs scripts/check-loader-external.spec.mjs scripts/check-plugin-peers.spec.mjs scripts/check-profile-manifest.spec.mjs scripts/check-vendor-sync.spec.mjs",
     "check:bom": "node scripts/check-bom.mjs",
     "check:profile-sync": "node scripts/check-profile-sync.mjs",
+    "check:profile-manifest": "node scripts/check-profile-manifest.mjs",
     "check:vendor-sync": "node scripts/check-vendor-sync.mjs",
     "check:legacy-names": "node scripts/check-legacy-names.mjs",
     "check:rules": "node scripts/check-rules.mjs",

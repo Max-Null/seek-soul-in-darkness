@@ -33,7 +33,10 @@
  * 1. 链接缺席才建，已存在一律不动 —— **用户自装/自改的那份优先**；
  * 2. `dsh.profile.bundles` 只追加缺失项，不清洗用户自己的 bundle；
  * 3. `dependencies` 写 `link:<绝对路径>`，与链接语义一致，用户日后跑 `pnpm install`
- *    也不会把条目换成 registry 上的另一份。
+ *    也不会把条目换成 registry 上的另一份；
+ * 4. 骨架缺 `version` 时补上 —— 官方 `initProfile` 不写该字段，而请求侧的包身份解析
+ *    对「有 name 无 version」是硬失败，profile 目录里一旦出现本地文件条目就会让
+ *    **每一次模型请求**都失败（见 {@link ensureProfileManifestVersion}）。
  *
  * 所有写文件均为 UTF-8 无 BOM（工作区铁律）。
  */
@@ -43,6 +46,17 @@ import { dirname, join } from 'node:path'
 
 /** 插件集自述文件名（随包提供，声明要接入的 bundle 与顺序）。 */
 export const SSID_PLUGIN_SET_MANIFEST = 'ssid-plugins.json'
+
+/**
+ * 补进 profile manifest 的 `version` 值。
+ *
+ * 它**不表达产品版本**，只为满足"这份 manifest 必须声明非空 version"的读者：
+ * 官方 `initProfile` 建出的骨架不带该字段，而请求侧的包身份解析
+ * （`@deepseek-ai/dsh-plugin-package-inventory-deepseek` 的 `identityFromManifest`）
+ * 对「有 name 无 version」是硬失败。事故与机制见
+ * `docs/决策/2026-10-02-请求扩展准备失败-本地插件条目打死模型请求.md`。
+ */
+export const PROFILE_MANIFEST_VERSION = '0.0.0'
 
 /** 插件集自述文件内容。 */
 export interface SsidPluginSetManifest {
@@ -185,6 +199,8 @@ function linkSpecifier(target: string): string {
  */
 export function seedSsidProfile(input: SsidProfileSeedInput): SsidProfileSeedSummary {
   const { profileDir, pluginSetRoot, log = () => {} } = input
+  // 骨架卫生与插件集无关：自述缺失时也要跑（那正是最需要自愈的场面）。
+  ensureProfileManifestVersion(profileDir, log)
   const manifest = readPluginSetManifest(pluginSetRoot)
   if (manifest === undefined) {
     log(`plugin set: no usable ${SSID_PLUGIN_SET_MANIFEST} under ${pluginSetRoot}; profile left untouched`)
@@ -241,6 +257,37 @@ function isLinkEntry(path: string): boolean {
   } catch {
     return false
   }
+}
+
+/**
+ * 保证 profile 根 manifest 声明非空 `version`。
+ *
+ * 官方 `initProfile` 建出的骨架只有 `name` / `private` / `dependencies` / `dsh`。
+ * profile 目录里一旦出现以本地文件路径插入的 loader 条目，请求侧的包身份解析就会从
+ * 该文件向上找到这份 manifest，并因「name 有、version 无」抛错 —— 那是**每一次模型请求**
+ * 都失败的硬故障（2026-10-02 实机事故，见 `docs/决策/2026-10-02-请求扩展准备失败-本地插件条目打死模型请求.md`）。
+ * 本函数在每次启动时把该字段补齐，使同类条目不再有这个触发面。
+ *
+ * 只补不改：已有非空 `version` 一律保留（用户层优先，与 {@link mergeProfileManifest} 同一条纪律）。
+ * @param profileDir - profile 目录。
+ * @param log - 落日志钩子。
+ * @returns 本次是否补写了。
+ */
+export function ensureProfileManifestVersion(profileDir: string, log: (text: string) => void = () => {}): boolean {
+  const manifestPath = join(profileDir, 'package.json')
+  if (!existsSync(manifestPath)) return false // 骨架还没建：交给下一次启动
+  let manifest: Record<string, unknown>
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>
+  } catch (error) {
+    log(`plugin set: profile manifest unreadable (${error instanceof Error ? error.message : String(error)}); skipped`)
+    return false
+  }
+  if (typeof manifest['version'] === 'string' && manifest['version'].length > 0) return false
+  manifest['version'] = PROFILE_MANIFEST_VERSION
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, undefined, 2)}\n`, 'utf8')
+  log(`plugin set: profile manifest declared no version; wrote ${PROFILE_MANIFEST_VERSION}`)
+  return true
 }
 
 /**

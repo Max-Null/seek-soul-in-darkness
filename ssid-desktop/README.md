@@ -33,7 +33,7 @@
 | 路径 | 为什么留 |
 |---|---|
 | `shell/profile-template/` | **发版基准** —— `apps/desktop/scripts/prepare-ssid-plugins.ts` 的默认路径指着它（硬编码），门里的 `plugin-peers`、`profile-sync` 也依赖它 |
-| `shell/scripts/` | **`check:rules` 六个门 + 发版脚本**（`sync:vendor`、`verify:release`），以及它们依赖的 `shell/lib/` |
+| `shell/scripts/` | **`check:rules` 七个门 + 发版脚本**（`sync:vendor`、`verify:release`），以及它们依赖的 `shell/lib/` |
 
 ## 构建
 

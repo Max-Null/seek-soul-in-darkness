@@ -149,8 +149,11 @@ async function main(): Promise<void> {
   const out = process.env.SSID_PLUGIN_SET_OUT ?? join(resolveDesktopTargetBuildPaths().root, 'ssid-plugins')
   const staging = mkdtempSync(join(tmpdir(), 'ssid-plugins-'))
   try {
+    // version 不能省：这份 manifest 是 staging 目录里的"最近祖先"，而请求侧的包身份解析
+    // 对「有 name 无 version」是硬失败（手册 §7 坑 #66）。插件集产物可能被复制到别处复用，
+    // 一份缺字段的 manifest 会把同一个坑带过去。
     writeFileSync(join(staging, 'package.json'), `${JSON.stringify({
-      name: 'ssid-plugins-staging', private: true, dependencies,
+      name: 'ssid-plugins-staging', version: '0.0.0', private: true, dependencies,
     }, undefined, 2)}\n`)
     // codegraph-mcp 的 postinstall 会下载引擎（Windows 上是 codegraph-server-*.exe）；
     // pnpm ≥10 默认拦构建脚本，必须显式放行，否则装出来的是跑不起来的空壳。
