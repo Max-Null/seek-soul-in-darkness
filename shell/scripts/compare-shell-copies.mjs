@@ -9,6 +9,9 @@
  *
  * 输出三类差异：只在主轴有过、只在快照有过、两边都有但内容不同。
  * 快照是 tag 指向的内容，发版前必须与主轴一致 —— 否则装出来的包与仓库对不上。
+ *
+ * `*.log` 是 dev 跑出来的运行残留（不是源码、也从不进快照），不参与比对：
+ * 留在里面只会制造假红，而假红会训练人忽略这个工具（同手册坑 #36 的教训）。
  */
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -28,7 +31,8 @@ function walk(directory, base = directory, out = []) {
     if (IGNORED.has(entry.name)) continue
     const full = join(directory, entry.name)
     if (entry.isDirectory()) walk(full, base, out)
-    else out.push(relative(base, full).split('\\').join('/'))
+    // 运行残留不参与比对（见文件头）：它既不是快照内容，也不该让发版门报红。
+    else if (!entry.name.endsWith('.log')) out.push(relative(base, full).split('\\').join('/'))
   }
   return out
 }
