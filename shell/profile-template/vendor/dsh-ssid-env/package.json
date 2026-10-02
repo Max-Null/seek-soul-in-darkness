@@ -1,7 +1,7 @@
 {
   "name": "@max-null/dsh-ssid-env",
-  "version": "0.1.1",
-  "description": "SSiD (思灵) environment self-report: one fixed system-prompt section telling the agent it runs inside the SSiD desktop shell rather than a bare DSH web instance, with verifiable evidence",
+  "version": "0.1.2",
+  "description": "SSiD (思灵) environment self-report: one fixed system-prompt section telling the agent it runs inside the SSiD desktop shell rather than a bare DSH web instance or the official DSH desktop app, carrying the isolation roots (session / storage / userData) and the coexistence contract as verifiable evidence",
   "type": "module",
   "main": "lib/index.mjs",
   "exports": {
