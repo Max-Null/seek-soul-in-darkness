@@ -98,11 +98,46 @@ export function describeSsidNotify(event: SsidNotifyEvent, productName: string):
   return { title: productName, body: `AI 向你提出了一个问题，请回到${productName}回答` }
 }
 
-/** 播放系统提示音。失败不影响通知本身。 */
-function playNotificationSound(): void {
+/** 播放提示音要执行的命令。 */
+export interface NotificationSoundCommand {
+  readonly command: string
+  readonly args: readonly string[]
+}
+
+/**
+ * 解析给定平台播放提示音的命令。
+ *
+ * 音效按平台分派，没有一条命令能跨平台用：Windows 只有 `powershell` 的
+ * `SystemSounds`，macOS 只有随系统附带的 `afplay`。其余平台返回 null。
+ * @param platform - 目标平台，取自 `process.platform`。
+ * @returns 要执行的命令与参数；该平台没有实现时为 null（调用方不播放）。
+ */
+export function notificationSoundCommand(platform: NodeJS.Platform): NotificationSoundCommand | null {
+  if (platform === 'win32') {
+    return {
+      command: 'powershell',
+      args: ['-NoProfile', '-WindowStyle', 'Hidden', '-Command',
+        '[System.Media.SystemSounds]::Asterisk.Play()'],
+    }
+  }
+  if (platform === 'darwin') {
+    return { command: '/usr/bin/afplay', args: ['/System/Library/Sounds/Glass.aiff'] }
+  }
+  return null
+}
+
+/**
+ * 播放系统提示音。失败不影响通知本身。
+ * @param platform - 目标平台，默认 `process.platform`；仅供测试注入。
+ */
+export function playNotificationSound(platform: NodeJS.Platform = process.platform): void {
+  const sound = notificationSoundCommand(platform)
+  if (sound === null) return
   try {
-    spawn('powershell', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command',
-      '[System.Media.SystemSounds]::Asterisk.Play()'], { windowsHide: true, stdio: 'ignore' })
+    const child = spawn(sound.command, sound.args, { windowsHide: true, stdio: 'ignore' })
+    // spawn 失败是**异步** error 事件（macOS 上没有 powershell 即 ENOENT），同步 catch 捕不到它；
+    // 不挂监听时会直接冒成主进程 uncaughtException，把一次通知变成一次崩溃。
+    child.on('error', () => undefined)
   } catch {
     // 音效是增强项：任何失败都只损失声音。
   }
