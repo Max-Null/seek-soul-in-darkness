@@ -97,6 +97,7 @@
 | 2026-10-02 | 待办 #15（新增） | **登记 `dsh-context-doctor` 在随包集里 `failed to import`**：随包集里唯一直接 `import { defineTool } from "@deepseek-ai/dsh-tools"` 的插件，而交付链刻意不收内核包（上溯链上没有该包）。症状为 `dsh: warning: 1 entry did not activate`，不挡启动、界面无感。实测两端 `@deepseek-ai/` 只有 `cosmokit` 与 `schemastery`；三个修法（链接 asar / 装进 profile / 改上游）各有代价，**当前选择不修、登记在案** | 装版 1.1.6 随包插件逐个体检（起因：用户问「其他内置插件还正常工作吗」） |
 
 | 2026-10-02 | `plugins/dsh-ssid-env` 0.1.2 | **环境自述插件自 1.0.0 起一直静默失效**：0.1.0 / 0.1.1 按 `SSID_PROFILE_DIR` 判定「我在不在思灵里」，那是自建壳写在 kernel-child 的变量；换官方桌面端底座后壳给的是 `DSH_SHELL` / `DSH_PROFILE_DIR`，于是它每次都返回 undefined —— **不报错、日志无痕，那段提示词一次都没注入过**。判据改为 `DSH_SHELL=1` + `DSH_PROFILE_DIR`（缺一不注册），并读入会话根 / 存储根 / 壳版本当可复核证据；内容补上这版新出现的事实：官方桌面版可同时运行、存储根隔离（`storages-ssid` 与共享 `storages` 的分工）、userData 让位、`ssid://` 与 `dsh://` 各归各；进程链判据由 `kernel-child.bundle.mjs` 改为实测形态。测试 5/5（两个方向都锁），七门全绿 | 用户问「思灵改版了，这个提示也该升级了吧」——查下去发现不是过时而是失效（`docs/SSiD开发手册.md` §3.4 同套三层） |
+| 2026-10-03 | `plugins/dsh-ssid-env` **0.1.3**（订正上一行） | **上一行记的 0.1.2 判据也不成立 —— 那段提示词其实仍未注入**：0.1.2 押在 `DSH_SHELL` / `DSH_PROFILE_DIR` 上，依据是「工具子进程 pwsh 里看得到它们」，但**工具进程的环境是内核 spawn 时按需拼装的，内核进程自己并没有这两个变量**（探针直读内核环境实测：两者皆 `undefined`，而 `SSID_SHELL_VERSION` 在）。0.1.3 改读 `SSID_SHELL_VERSION`，`section-registered` 确认注册成功、会话 system prompt 里出现该段。判据落定为「只取目标进程里真实可得的变量」；测试补两条（反例：只设 `DSH_SHELL`/`DSH_PROFILE_DIR` 必须不注册；可选项缺失时不许留空档），7/7 通过 | 用户选 A（加探针 + 重启）后由探针日志定位；两个 turn 内两次重启完成闭环 |
 
 ## 工作区规范（布局 + 放置规则，2026-08-29 整理定稿）
 
@@ -970,7 +971,7 @@ apps/desktop-host（Host 子进程）
 ### 定位
 - 内置插件 **dsh-ssid-panels / dsh-ssid-zh-ui / dsh-ssid-pwsh-retry / dsh-ssid-env**：**脱离 SSiD 生态无法独立使用** → **不单独建库、不发布 npm**。
 - **分合判断（2026-09-17 定）：一个适配面一个插件，不合并。** 合并能省的成本（vendor 同步、门禁覆盖）已被 manifest + `sync:vendor` + `check-vendor-sync` 这套工具吸收——加一个包的人工动作只有 manifest 一段 JSON 加两条命令；而代价（独立回滚、故障隔离、`pwsh-retry` 必须挂在 `bundles` 末尾的加载顺序语义）无法自动化。将来小适配 ≥ 5 个、或它们开始共享状态时再评估。依据：`docs/决策/2026-09-17-内置插件分合与运行环境自述.md`。
-- **dsh-ssid-env**（2026-09-17 新增）：贡献一条 `systemPrompt` 段落做**运行环境自述**——让模型知道自己在 SSiD 而非裸 DSH web，带上可复核的判据（宿主进程链、profile 目录、会话根）。**只有探测到 `SSID_PROFILE_DIR` 才注入**，装到非 SSiD 环境时保持沉默（自述说错比没有更糟）。`order = -95`，排在中文思考（-90）之前。
+- **dsh-ssid-env**（2026-09-17 新增）：贡献一条 `systemPrompt` 段落做**运行环境自述**——让模型知道自己在 SSiD 而非裸 DSH web，带上可复核的判据（宿主进程链、壳版本 `SSID_SHELL_VERSION`、会话根）。**只有探测到 `SSID_PROFILE_DIR` 才注入**，装到非 SSiD 环境时保持沉默（自述说错比没有更糟）。`order = -95`，排在中文思考（-90）之前。
 - **dsh-ssid-pwsh-retry**（2026-09-15 新增）：包装 `tools/execute`，对 pwsh 工具的 `spawn EPERM` 做一次透明重试（等待 300ms 后重新 dispatch）。挂载点必须在 `bundles` **末尾**——Cordis 的 waterfall 用 `cbs.shift()` 逐个消耗监听器，`next()` 不可重放，只有链尾的包装器重新 `next()` 才会再次真正 dispatch。带单测（7 项）。
 - 源码在壳库 **`plugins/`**（源头）→ 三处 vendor 同步（`~/.dsh/profiles/{web,ssid}/vendor` + `shell/profile-template/vendor`），四份**逐文件**指纹一致（源与 vendor 为全等副本，连 `src/`、`tests/`、`docs/` 都同步；**不要**按"整目录摘要相等"比）。
 - **dsh-quick-toolbar（原 dsh-header-unify）已于 2026-08-30 迁出独立**（仓库 `max-null-plugins/dsh-quick-toolbar`；独立化设计见该仓库 `doc/设计/2026-08-30-quick-toolbar-独立化设计方案.md`）；SSiD 侧仍 vendor 集成——同步链 = 独立仓库构建产物 → 三处 vendor（正式发布 npm 后切官方路径）。
