@@ -1,73 +1,76 @@
 ---
 name: mxy-pptx-slim
-description: 压缩 PowerPoint (.pptx) 文件中的视频、GIF 和 PNG 图片，显著减小文件体积。当用户提到 PPTX 太大、压缩 PPT、PPT 瘦身、PowerPoint 文件优化时触发。
+description: 压缩 PowerPoint (.pptx) 文件体积——把超尺寸图片缩小重编码、把巨型 GIF/视频转码、并点名可移除的系统自带嵌入字体。当用户提到 PPTX 太大、压缩 PPT、PPT 瘦身、PowerPoint 文件优化时触发。
 ---
 
 ## 功能
 
-自动压缩 `.pptx` 文件中的媒体资源：
-- **视频 (.mp4)** → H.264 Main Profile + yuv420p，以 PPT 全尺寸 1080p（1920px）为上限，按幻灯片中实际占比自适应分辨率
-- **动图 (.gif)** → 1080p 上限 + 15fps + 256 色调色板 + 自适应分辨率 + 高质量抖动
-- **图片 (.png)** → Pillow 无损优化 + 超大图缩放
+按"风险从低到高"的顺序压 `.pptx`：
 
-脚本运行时显示实时进度条和最终压缩报告。
+| 对象 | 做法 | 典型收益 |
+|------|------|----------|
+| 位图 | 长边超过上限（默认 1920）的等比缩小，再重新编码（JPEG 有损 / PNG 无损优化） | 大 |
+| GIF | ffmpeg 重编码：缩尺寸 + 降帧 + 减色。GIF 没有帧间压缩，这三个旋钮最有效 | 大 |
+| 视频 | H.264 Main + yuv420p 转码，长边限制 | 中 |
+| 嵌入字体 | **不修改**，只在报告里点名哪些是系统自带、可安全移除 | — |
 
-## 调用方式
+**两条设计底线**：
 
-脚本位于 `D:\Project\tools\pptx-slim\pptx-slim.py`，跨项目通用：
+1. **只缩尺寸、改内容，绝不改文件名与扩展名。** 这是不动 `rels` / `[Content_Types].xml` 的前提，也就不存在把包改坏的风险。
+2. **输出永远是新文件**，原始文件不动；失败或没变小的项目一律保留原样。
 
-```bash
-python D:\Project\tools\pptx-slim\pptx-slim.py <input.pptx> [-o <output.pptx>] [选项]
-```
+脚本自包含，就在本技能目录下，不依赖任何外部路径（原先指向 `D:\Project\tools\` 的路径已失效，该目录在本机不存在）。
 
-## 执行流程
-
-### 第一步：确认输入文件
-
-向用户确认要压缩的 PPTX 文件路径。如果用户提供了路径，直接使用；否则询问。
-
-### 第二步：检查依赖
+## 调用
 
 ```bash
-python --version
-python -c "import PIL; print('Pillow:', PIL.__version__)"
-python -c "import defusedxml; print('defusedxml: OK')"
+python "<技能目录>/pptx-slim.py" <input.pptx> [选项]
 ```
 
-- Python 3.9+ 必须
-- Pillow 未安装时执行 `python -m pip install Pillow`
-- defusedxml 未安装时执行 `python -m pip install defusedxml`
-- FFmpeg 可选（脚本自动检测，找不到时仅跳过视频/GIF 压缩）
-
-### 第三步：给出命令
-
-将完整的压缩命令输出给用户，**由用户在终端中自行执行**。
+先跑一次 `--report` 看体积构成，再决定怎么压——**不看构成直接压，等于蒙**：
 
 ```bash
-python "D:\Project\tools\pptx-slim\pptx-slim.py" "<文件路径>" -o "<输出路径>"
+python "<技能目录>/pptx-slim.py" big.pptx --report
+python "<技能目录>/pptx-slim.py" big.pptx -o small.pptx
 ```
 
-用户在终端中可看到实时进度条和最终压缩报告。CLI 工具无法流式输出，因此不代为执行。
+### 选项
 
-## 选项参考
+| 选项 | 默认 | 说明 |
+|------|------|------|
+| `-o, --output` | `xxx-slim.pptx` | 输出路径 |
+| `--report` | — | 只分析构成，不写文件 |
+| `--max-edge` | 1920 | 位图长边上限 |
+| `--quality` | 82 | JPEG 质量 |
+| `--gif-max-edge` / `--gif-fps` / `--gif-colors` | 720 / 8 / 128 | GIF 三个旋钮 |
+| `--gif-timeout` | 3000 | 单个 GIF 的 ffmpeg 超时（秒） |
+| `--gif-min-mb` | 1.0 | 只处理大于该体积的 GIF |
+| `--video-crf` | 26 | 视频质量，数值越大越小 |
+| `--no-image` / `--no-gif` / `--no-video` | — | 跳过某类 |
+| `--ffmpeg` | 自动探测 | 手动指定 ffmpeg |
 
-| 选项 | 说明 |
-|------|------|
-| `-o, --output` | 输出路径（默认: `xxx-slim.pptx`） |
-| `--dry-run` | 仅分析不修改 |
-| `--no-video` | 跳过视频压缩 |
-| `--no-gif` | 跳过 GIF 优化 |
-| `--no-png` | 跳过 PNG 压缩 |
-| `--ffmpeg` | 手动指定 ffmpeg 路径 |
+依赖：Python 3.9+、Pillow；ffmpeg 可选（缺了就只压图片）；lxml 可选（用于读字体名）。
 
-## 共享给同事
+## 实战经验（都是踩出来的）
 
-本工具是独立脚本，同事无需任何额外工具也可直接使用。复制 `D:\Project\tools\pptx-slim\` 目录给对方即可：
+**1. 先看报告，体积大头常常出人意料。**
+合并几个课件后遇到的真实构成：图片 220 MB + GIF 118 MB + 嵌入字体 113 MB。其中
+- 一批 **4096×3072 的照片存成了 PNG**——不动格式、只缩尺寸，省了 124 MB；
+- 三个 **几十 MB 的 GIF**，其实是现场实拍的视频片段（一个 56 MB 的 GIF 只有 960×540、158 帧）。用 GIF 装视频是几十倍的浪费。
 
-```bash
-python pptx-slim.py big.pptx -o small.pptx
-```
+**2. GIF 处理很慢，且跳过项必须过目。**
+56 MB 的 GIF 用 ffmpeg 重编码要跑几分钟；超时设小了会静默跳过。第一版就是因为没把跳过项打进报告，两个最大的 GIF（合计 83 MB）被漏掉，白压一轮。现在脚本会把所有跳过项连原因一起列出，**看报告时务必扫一眼那一段**。
+另外：已经优化过的 GIF 再压往往**反而变大**，脚本会自动保留原样，属正常。
 
-## 后续工具约定
+**3. 嵌入字体是块硬骨头，但报告能告诉你值不值得动。**
+`.fntdata` 是混淆格式，PIL 打不开；字体名要从 `ppt/presentation.xml` 的 `embeddedFontLst` 里读。判断标准是**放映机有没有这款字体**：
+- 系统自带（微软雅黑、等线、黑体、Calibri…）→ 可移除。实测某课件里这类占 44.7 MB。
+- 设计字体（汉仪系列等）→ **必须保留**，目标电脑没有，删了字体就变形。
 
-`D:\Project\tools\` 为共享工具目录，后续新建的通用工具统一放在此目录下，每个工具一个子目录。
+移除要在 PowerPoint 里操作（文件 → 选项 → 保存 → 取消"将字体嵌入文件"），脚本不代劳。
+
+**4. 别指望压缩能救一切。** 如果字体就占 100+ MB 且不能删，压缩的天花板就在那儿。压完建议在实际放映的那台机器上试放，确认流畅、动画正常。
+
+## 输出说明
+
+脚本打印：体积构成表 → 最大的几个媒体 → 字体清单（含系统字体标记）→ 逐项压缩明细 → **跳过项清单** → 总压缩率。确认无误后交付新文件。
