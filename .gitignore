@@ -2,9 +2,8 @@ node_modules/
 dist/
 out/
 build/
-# 例外：shell/build/ 是 NSIS 定制脚本（installer.nsh），必须入库随包构建
-!shell/build/
-!shell/build/**
+# NSIS 定制脚本在 ssid-desktop/apps/desktop/installer/ 与 .../scripts/ 下，不在 build/ 里。
+# 注意 build/ 匹配任意层级：脚本若移入名为 build/ 的目录，需在此补 !<path>/build/ 才入库。
 .DS_Store
 *.log
 .dsh/
