@@ -57,6 +57,8 @@ description: "SSiD（思灵）发版流程（fork 版 / v1.0.0 起）：版本�
 
   ```powershell
   Copy-Item docs/release-notes-vX.Y.Z.md plugins/dsh-ssid-panels/release-notes.md -Force
+  # 再把包内那份的「## 下载与校验」整节删掉 —— 该节属 docs 与 Release 页：包内写最终哈希会
+  # 再次改变哈希，而留着占位（「打包后回填」）会原样显示在「关于 SSiD → 更新日志」里。
   # 守卫校验：首行 # vX.Y.Z 必须 == 产品版本（不一致不弹不显示）
   # cwd 是仓库根；tsx 装在 shell/ 下，故显式指向（写 tsx/esm 会 ERR_MODULE_NOT_FOUND）
   node --import ./shell/node_modules/tsx/dist/esm/index.mjs --test plugins/dsh-ssid-panels/tests/release-notes.test.ts
@@ -64,6 +66,7 @@ description: "SSiD（思灵）发版流程（fork 版 / v1.0.0 起）：版本�
   pnpm --dir plugins/dsh-ssid-panels exec tsdown
   ```
 
+  - **包内那份与 `docs/` 那份不是同一份**：`docs/` 与 GitHub Release 页含「下载与校验」（最终哈希 + 资产名），包内那份**到「升级说明」为止**。判据可直接取证：`git show v上版本:shell/profile-template/vendor/dsh-ssid-panels/release-notes.md`，它的末节就是「升级说明」。
   - 弹窗每版本只弹一次，已读状态记在 `~/.ssid/changelog-seen.json`（**不是** localStorage，也不随 profile 隔离——所以「全新隔离环境」未必会弹）。
 - **发版回填 notes 别把哈希同步进包内**：安装包的 SHA256 取决于内嵌内容，而包里又装着更新日志，把最终哈希写进包内会**再次改变**哈希。发包**前**走上面的同步链；发包**后**回填只改 `docs/` 与 GitHub Release 页。
 
