@@ -71,7 +71,14 @@ const exemptOnlyInB = manifest.profileSync?.exemptOnlyInB ?? {};
  * 不会再装新版插件），「B 落后于 A」就不是「一次未完成的部署」而是**稳态** —— 与
  * `exemptOnlyInB` 是同一类豁免的两个方向。理由与撤销条件写在 manifest 里，换壳完成后连同登记一并移除。
  */
-const exemptFrozenInB = manifest.profileSync?.exemptFrozenInB ?? {};
+const exemptFrozenInB = manifest.profileSync?.exemptFrozenInB ?? {}
+/**
+ * 「A 新增、B 尚未部署」白名单：发版流程里新增一个出厂 bundle 时，A 侧先有声明，而 B 侧要等
+ * 用户装上这一版、首启 seed 按新插件集补 `link:` —— 这段中间态是**欠一次部署**，不是漂移。
+ * 与 `exemptOnlyInB` / `exemptFrozenInB` 同源（三者都是「方向差异的合法成因」）；撤销条件是
+ * 「装版升到含该 bundle 的版本」，写在 manifest 里。
+ */
+const exemptPendingDeploy = manifest.profileSync?.exemptPendingDeploy ?? {};
 /** 所有受检 profile 里实际出现过的非内核依赖名；循环后用来给豁免登记自洁。 */
 const seenInB = new Set();
 
@@ -102,6 +109,8 @@ for (const prof of profiles) {
     if (inA && !inB) {
       if (exemptFrozenInB[n]) {
         gate.info(`豁免（manifest 已登记 B 侧冻结）：「${n}」只在 A 有 —— ${exemptFrozenInB[n]}`);
+      } else if (exemptPendingDeploy[n]) {
+        gate.info(`豁免（manifest 已登记：新增 bundle 待部署）：「${n}」只在 A 有 —— ${exemptPendingDeploy[n]}`);
       } else if (fs.existsSync(path.join(path.dirname(bpPath), 'node_modules', n))) {
         // A′ 形态（2026-09-28 补）：非 bundle 的出厂依赖（如预制 MCP 的两个 CLI 包）
         // 不进 profile 的 `dependencies` 声明，但随包插件集已把实体链接进 `node_modules/`

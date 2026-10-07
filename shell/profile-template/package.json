@@ -14,6 +14,7 @@
     "@max-null/dsh-draft-polish": "0.2.5",
     "@max-null/dsh-guardian": "0.2.2",
     "@max-null/dsh-habit": "0.2.2",
+    "@max-null/dsh-jubensha": "0.1.0",
     "@max-null/dsh-memory": "0.15.1",
     "@max-null/dsh-node-appearance": "0.10.1",
     "@max-null/dsh-plugin-center": "0.4.6",
@@ -31,8 +32,8 @@
     "dsh-session-manager": "0.6.2",
     "dsh-sidebar-qa": "1.1.0",
     "dsh-video-preview": "0.1.4",
-    "dsh-wechat": "0.9.10",
-    "@astudioplus/codegraph-mcp": "0.20.1",
+    "dsh-wechat": "0.9.11",
+    "@astudioplus/codegraph-mcp": "0.21.0",
     "@max-null/dsh-quick-toolbar": "file:./vendor/dsh-quick-toolbar",
     "@max-null/dsh-skills": "0.1.2",
     "@max-null/dsh-ssid-env": "file:./vendor/dsh-ssid-env"
@@ -72,7 +73,8 @@
         "@max-null/dsh-skills",
         "@max-null/dsh-ssid-pwsh-retry",
         "@max-null/dsh-ssid-env",
-        "@max-null/dsh-allostasis"
+        "@max-null/dsh-allostasis",
+        "@max-null/dsh-jubensha"
       ],
       "patchReload": "live"
     }
