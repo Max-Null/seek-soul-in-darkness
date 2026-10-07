@@ -74,10 +74,13 @@ description: "SSiD（思灵）发版流程（fork 版 / v1.0.0 起）：版本�
 
 ```powershell
 cd H:\MaxNull\WorkStation\seek-soul-in-darkness\shell
-npm run check:rules          # 六门全跑，任一失败即 exit 1
+npm run check:rules          # 七门全跑，任一失败即 exit 1
 ```
 
-六门 = BOM / 旧名残留（硬域）/ profile↔模板声明 / vendor 四份一致 / 插件 peerDeps 覆盖性 / DSH 源码只引用不改。（第 7 门 `loader-external` 已随自建壳下架，脚本仍在，需要时可单独跑。）
+七门 = vendor-sync（vendor 各份一致）/ profile-sync（profile↔模板声明）/ profile-manifest（manifest 可解析）/ bom / legacy-names（旧名残留·硬域）/ 插件 peerDeps 覆盖性 / DSH 源码只引用不改。自建壳时代的 `loader-external` 已下架，脚本仍在，需要时可单独跑。
+
+- **新增出厂 bundle 时 `profile-sync` 必然报「A 有 B 无」**：A（发版基准）先有声明，B 要等用户装上这一版、首启 seed 按新插件集补 `link:` —— 这段中间态是**欠一次部署**，不是漂移。做法是按 `check-rules.manifest.json` 的 `profileSync.exemptPendingDeploy` **显式登记**（理由写清、撤销条件写成「装版升到含该 bundle 的版本」）；**不要**往本机 profile 塞实体把它调绿 —— 那只会让判据看不见真实状态，而且改运行中的 profile 有打断会话的风险。
+- 改过 `shell/scripts/**` 要一并跑 `npm test`（cwd 是 `shell/`）—— 那是门禁脚本的自测套件，当前 50 例。
 
 两条单测冒烟（**cwd 是仓库根，不是 `shell/`**：仓库根没有 `node_modules`，`tsx` 装在 `shell/` 下，
 所以显式指向它 —— 直接写 `--import tsx/esm` 会 `ERR_MODULE_NOT_FOUND`）：
