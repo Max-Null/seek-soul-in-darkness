@@ -22,7 +22,7 @@
       "dsh-plugin-zhihu-search": "用户从 GitHub 自装的第三方插件（`github:klarkxy/zhihu-search`），不属于思灵出厂预置 —— 补进模板等于给所有用户预装它。有意不入模板，属于本机运行时增量。"
     },
     "exemptPendingDeploy": {
-      "@max-null/dsh-jubensha": "v1.2.0 新增的出厂 bundle：A 侧（发版基准）先有声明，B 侧要等用户装上这一版、首启 seed 按新插件集补 link: —— 这里的「A 有 B 无」是**欠一次部署**，不是漂移，也不该靠往本机 profile 塞实体来「调绿」。撤销条件：装版升到 1.2.0 或更新之后移除本条（那时 B 侧应已有实体与声明）。"
+      "@max-null/dsh-jubensha": "v1.1.7 新增的出厂 bundle：A 侧（发版基准）先有声明，B 侧要等用户装上这一版、首启 seed 按新插件集补 link: —— 这里的「A 有 B 无」是**欠一次部署**，不是漂移，也不该靠往本机 profile 塞实体来「调绿」。撤销条件：装版升到 1.1.7 或更新之后移除本条（那时 B 侧应已有实体与声明）。"
     },
     "$note": "2026-09-12 @max-null/dsh-skills 转 npm 0.1.0 后豁免撤销；2026-09-23 登记 @dsh-pet/bridge（理由见上）；2026-09-27 新增 exemptFrozenInB 类别（B 侧已冻结：A 领先不再算「欠一次部署」）；2026-10-08 新增 exemptPendingDeploy 类别（新增 bundle 待部署：A 侧先有、B 侧等装版首启补，同样是「方向差异的合法成因」而非漂移）。豁免会被 check-profile-sync 自洁：登记项不再出现时会打印「已过期」提示，可据此移除 —— 但 exemptFrozenInB 与 exemptPendingDeploy 的项在 B 里始终不存在（前者是冻结、后者是尚未部署），不会自动过期，撤销靠理由里写明的条件。"
   },

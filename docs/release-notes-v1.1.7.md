@@ -1,4 +1,4 @@
-# v1.2.0 思灵（SSiD）
+# v1.1.7 思灵（SSiD）
 
 > 状态：**待发布**（2026-10-08）。新增预制插件「剧本杀」；随包插件跟到各自最新。
 
@@ -41,13 +41,13 @@
 
 ## 下载与校验
 
-资产见 GitHub Release **v1.2.0**（发布时补链）：
+资产见 GitHub Release **v1.1.7**（发布时补链）：
 
-- `ssid-1.2.0-win-x64-unsigned.exe`（Windows NSIS 安装包）
+- `ssid-1.1.7-win-x64-unsigned.exe`（Windows NSIS 安装包）
 - 附 `latest.yml` 与 blockmap
 
 SHA256（`certutil -hashfile <文件> SHA256`）—— **以本页与 Release 页为准**：
 
-- `ssid-1.2.0-win-x64-unsigned.exe`：`4720B59BDFEE573D8FE6A250827EBFBBBCD2AA5503F9B15F2FAFF92B647D87F6`（451,743,499 字节）
+- `ssid-1.1.7-win-x64-unsigned.exe`：（打包后回填）
 
 说明：包内那份「更新日志」（关于 SSiD）不著录校验和 —— 把最终哈希写进包内会再次改变哈希。
