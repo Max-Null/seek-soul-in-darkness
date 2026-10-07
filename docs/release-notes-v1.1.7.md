@@ -48,6 +48,6 @@
 
 SHA256（`certutil -hashfile <文件> SHA256`）—— **以本页与 Release 页为准**：
 
-- `ssid-1.1.7-win-x64-unsigned.exe`：（打包后回填）
+- `ssid-1.1.7-win-x64-unsigned.exe`：`5DF56282B67B2B00926A228B8FC5EC2CEF0F00745D94D17066F70654EF79730E`（451,743,025 字节）
 
 说明：包内那份「更新日志」（关于 SSiD）不著录校验和 —— 把最终哈希写进包内会再次改变哈希。
