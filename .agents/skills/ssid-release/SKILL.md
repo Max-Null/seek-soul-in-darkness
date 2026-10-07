@@ -104,6 +104,8 @@ New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
 pnpm --filter "./apps/desktop" run package:win:x64:unsigned *> <某个日志文件>
 ```
 
+- **可选第三项：`SSID_CODEGRAPH_ENGINE_DIR`**（指向一份已下好的 `bin/`）。不设它时 `prepare:ssid-plugins` 会让 codegraph 的 postinstall **现下引擎**（约 120 MB；实测 50 秒，但网络抖动时会长时间挂住 —— 脚本注释记了 2026-09-26 卡 24 分钟那次）。**引擎与包版本必须逐字相符**：脚本读 `bin/.engine-version` 与包的 `package.json` 比对，不符即抛「引擎版本不符（包 X / 引擎 Y），拒绝混用」。所以**升级 `@astudioplus/codegraph-mcp` 时必须换一份新引擎**，沿用旧的那份会在 `prepare:ssid-plugins` 直接失败（而不是降级跑）。换法：另起空目录，写只含该依赖的 `package.json` + `pnpm-workspace.yaml`（`nodeLinker: hoisted`、`allowBuilds: {'@astudioplus/codegraph-mcp': true}`），跑 `pnpm install --prod --config.strict-dep-builds=false`，`node_modules/@astudioplus/codegraph-mcp/bin/` 就是可复用的引擎目录。
+
 **不设 TEMP 的症状**（认出来就别再往别处查）：`prepare:dsh` 的 `runtime:lockfile` 阶段**约 1 秒即失败**，
 报 `Error: desktop runtime: pnpm exited with 4294963248`，而 pnpm 自己**一条输出都没有**
 （2026-09-29 与 2026-09-30 各踩一次）。
