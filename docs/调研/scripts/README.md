@@ -31,14 +31,16 @@ $NODE measure-skill-usage.mjs --root "$USERPROFILE/.dsh/sessions-ssid" --min-siz
 | `measure-final.mjs` | 拆「用户显式点名」成分；压缩的独立效应 | §4.3 |
 | `measure-4.mjs` | 修正字段 bug 后的正式测量（四因素全分离） | §四 |
 
-### 二、匹配可行性：BM25 与触发词（两个都被否掉）
+### 二、匹配可行性：三种匹配器（全部被否掉）
 
 | 脚本 | 作用 | 文档节 |
 |---|---|---|
-| `step1-positive-count.mjs` | 统计每个 skill 的真实正例数 → 决定哪些 skill 可评估 | §7.2 |
+| `step1-positive-count.mjs` | 统计每个 skill 的真实正例数 → 决定哪些 skill 可评估 | §7.3 |
 | `match-feasibility.mjs` | BM25 匹配可行性；top-1 与模型选择的一致率 | §7.1 |
 | `diag-bm25-why.mjs` | BM25 误匹配的根因诊断（通用词堆分、分数与语义无关） | §7.1 |
-| `exp-trigger-words.mjs` | **对照实验**：补触发词 vs 只接长（三组：base/exp/ctrl） | §7.2 |
+| `exp-trigger-words.mjs` | **对照实验**：补触发词 vs 只接长（三组：base/exp/ctrl） | §7.3 |
+| `build-eval-set.mjs` | 实验 2 第一步：从会话日志重建 96 条带真值评估集与并行载荷 | §7.2 |
+| `exp2-router.mjs` | 实验 2：换厂商独立模型（`qwen3.8-flash`）做路由；key 从凭据文件读、不落盘 | §7.2 |
 
 ### 三、数据重建
 
@@ -46,8 +48,10 @@ $NODE measure-skill-usage.mjs --root "$USERPROFILE/.dsh/sessions-ssid" --min-siz
 |---|---|
 | `extract-named-rounds.mjs` | 提取「用户点名但模型没调用」的轮次 → 漏用清单 |
 
-> **评估集不在版本控制里**：65 条带真值正例与 276 条漏用清单含真实用户输入，
-> 不随仓库分发。用上面两个脚本可从会话日志重建（`--root <会话根> --out <输出>`）。
+> **评估集不在版本控制里**：96 条（实验 2）与 65 条（触发词实验）两份带真值正例、以及 276 条漏用清单
+> 都含真实用户输入，不随仓库分发——落在 `scripts/.exp2/`（已 gitignore）或本地输出目录。
+> 用 `build-eval-set.mjs` / `exp-trigger-words.mjs` / `extract-named-rounds.mjs` 可从会话日志重建
+> （`--root <会话根> --out <输出>`）。
 
 ### 四、机制探测
 
