@@ -43,8 +43,9 @@ v0.6.1（构建产物已入库，无需本地构建）。已知局限见上游
 
 第三方侧边栏底座（上游 `omdsh-dev/DSH-better-sidebar`）的 vendor 固化
 （`file:./vendor/dsh-better-sidebar`）。基线 = npm `dsh-better-sidebar@0.24.1`，
-**外加两处本地修复**：WebSocket 路由改用壳注入的 transport base，以及信任栅栏接受
-桌面壳页面的 origin。**两处缺一不可。**
+**外加三处本地修复**：WebSocket 路由改用壳注入的 transport base、信任栅栏接受
+桌面壳页面的 origin、并发同名上传的 rename 争用改走有界重试。**三处缺一不可**
+（判据见本节末尾）。
 
 **为什么需要 vendor**：桌面壳把页面放在 `dsh-app://app/` 下，插件的 WebSocket 要走两道关，
 原版两道都过不了。
@@ -57,6 +58,12 @@ v0.6.1（构建产物已入库，无需本地构建）。已知局限见上游
    hostname 比较（`app` ≠ `127.0.0.1`），socket 在 `handleUpgrade` 之前就被 `destroy()`。
    修复 = `src/trust-fence.ts` 在 Host 检查通过之后接受精确字符串 `dsh-app://app`（与壳自身
    转发器的信任集合一致）。
+3. **并发同名上传的 rename 争用**（与桌面壳无关，v1.1.7 带入）：Windows 上多个上传同时把
+   临时文件 rename 到同一目标时，同一瞬间的 rename 互斥、输的那一个被拒
+   （`EPERM`/`EACCES`/`EBUSY`），而它只是争用、不是判决。原实现一次不成就把失败报给用户，
+   现改为有界重试（上限 10 次；实测 8 方并发下最坏一次吸收 8 次拒绝），其他 errno
+   （`ENOENT`/`EXDEV`/`EROFS`…）仍首次抛出即传播 —— 重试有界，真正被占住的目标仍会失败
+   而不是挂住。
 
 HTTP 路由一直正常，是因为壳转发前会删掉 `origin` 头 —— 同一个栅栏只在 WebSocket 路径上
 暴露，所以症状看起来像「侧栏基本能用，只是几个功能没反应」。修复**无法走 npm** —— 包不是
@@ -65,7 +72,13 @@ HTTP 路由一直正常，是因为壳转发前会删掉 `origin` 头 —— 同
 
 - 上游 PR：[omdsh-dev/DSH-better-sidebar#797](https://github.com/omdsh-dev/DSH-better-sidebar/pull/797)
   （在 `v0.24.1` 基线上重放，现已含第二处修复；更早的 #768 因基线过旧已关闭）。
-  **作者采纳发版后，本目录应撤掉、切回 npm 版本号。**
+  **已于 2026-10-04 合并**，第一、二处修复随 `v0.25.0` / `v0.26.0` 发版 —— 但撤除
+  条件不是「PR 合并」，而是**三处修复全部出现在 npm 版里**。
+- **撤除判据（2026-10-15 核实）**：截至 npm `0.26.0`，**第三处修复仍未采纳** ——
+  整包（含 `lib/index.js`）扫描 `RENAME_CONTENTION` / `renameIntoPlace` / `EBUSY`
+  均 0 命中，而 vendor 版分别有 2 / 3 / 1 处。所以**本目录仍需保留**，侧边栏继续走
+  `file:` 形态。下次判断能否撤除时，先跑这三条判据再下结论 —— 只核 PR 状态或只核
+  前两处修复，会漏掉第三处。
 - 第二处修复的来源：上游 PR 评论中 @davidshilr8 的独立报告（在 0.2.0-rc.2 的安装上抓到
   真实握手）。该结论先在本地壳代码里坐实 —— `.ssid-build/checkout/apps/desktop/src/web-document.ts`
   的 `forwardWebRequest` 校验 origin 后删掉该头再转发，正是「HTTP 全好、WS 全坏」的原因。
@@ -73,8 +86,14 @@ HTTP 路由一直正常，是因为壳转发前会删掉 `origin` 头 —— 同
   （提交 `e1c7ac3`），用 `pnpm build` 构建后 `npm pack --ignore-scripts` 解包得到。
 - 验证判据（版本号与实际装版同为 0.24.1，只能看内容）：本目录 `lib/client.js` 含
   `sidebarWebSocketBase` 3 处、`streamBaseUrl` 2 处；`lib/index.js` 含 `dsh-app` 2 处、
-  `SHELL_APP_ORIGIN` 2 处（**改前那份的真值是 `dsh-app` 0 处** —— 只比对 client 半会把
-  「半截修复」判成已完成）。
+  `SHELL_APP_ORIGIN` 2 处、`renameIntoPlace` 3 处、`RENAME_CONTENTION` 2 处、`EBUSY` 1 处
+  （**改前那份的真值是 `dsh-app` 0 处** —— 只比对 client 半会把「半截修复」判成已完成）。
+  `sidebarWebSocketBase` 是本地实现的名字，上游采纳后重构成 `hostTransportBase`
+  （`0.25.0+` 的 `src/client/desktop-env.ts`），跨版本核对时按各自的实际命名看。
+- **运行时实体可能比本目录旧**：预置插件实体是打包时从本目录物化的，所以安装版落后于
+  仓库时两者会差修复，而版本号都是 `0.24.1`、junction 回读也看不出差别。实测（2026-10-15）：
+  SSiD 1.1.6 的运行时实体只有前两处修复（第三处由 v1.1.7 才带进本目录）。判「运行时到底
+  有几处修复」要按上面的判据跑内容，别看版本号。
 - **行为验证（2026-10-01 真机，判据是握手拿到 101）**：用 `.ssid-iso-test/fence-probe.mjs`
   对真实 Host 发 raw WebSocket upgrade —— 同一脚本、同一台机器，只换产物内容：修复前打
   **运行中的装版 Host**（`Origin: dsh-app://app`）得 `ECONNRESET`（socket 被 `destroy()`），
