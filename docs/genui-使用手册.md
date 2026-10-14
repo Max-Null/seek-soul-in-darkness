@@ -2,6 +2,7 @@
 
 > 版本：v1.1 ｜ 适用：DeepSeek Harness Web GUI（dsh web）
 > 依据：genui 技能规范（SKILL.md）+ `@changfenhuang/dsh-genui` 客户端实现源码验证（lib/client.js、lib/index.js）
+> v1.1 变更：补文字字段的换行约束（§5 铁律 + Q7）——`\n` 与 `<br>` 都不换行，多行须拆节点。
 
 ---
 
