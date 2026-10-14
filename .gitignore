@@ -33,3 +33,9 @@ docs/决策/decisions.json
 # 本地备份与临时脚本（2026-09-12）：备份内容可由 git 复原（git show <commit>^:<file>），不必入库
 *.bak-*
 .tmp-*
+
+# 本地调试目录（2026-10-14）：带点的 .build/ 不被上面的 build/ 匹配，但它同样是中间产物
+.build/
+# skill 召回研究的实验中间产物：评估集/载荷/结果含真实会话文本，不入库
+# （由 docs/调研/scripts/build-eval-set.mjs 从会话日志重建）
+docs/调研/scripts/.exp2/
