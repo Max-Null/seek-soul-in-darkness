@@ -6,18 +6,18 @@
 
 > **在黑暗中，寻找硅基生命的灵魂。**
 
-SSiD 是 fractal 的 **DSH 基座版**——基于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的桌面 AI 应用，用「DSH 官方 GUI + 自研壳 + 插件」拼装而成。
+SSiD 是 fractal 的 **DSH 基座版**——基于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的桌面 AI 应用：在**官方 DSH 桌面端底座**上改壳、装插件，做成开箱即用的思灵。
 
 ## 一页总览
 
 | 维度 | 内容 |
 |---|---|
 | 三代家底 | cc-gui（UI 资产）→ oc-plus（增强件）→ fractal（桌面 GUI）≈ **50 个功能** |
-| 迁移结论 | 约 **70% DSH 原生覆盖**，增量收敛 **5 块**：自研壳 / 记忆 UI + Guardian / 四 agent / 14 技能 / 零散面板 |
-| 路线 | **M0** 闭环验证 → **M1** 记忆 UI → **M2** Guardian 状态 → **M3** 四 agent → **M4** 自研壳 |
-| 护栏 | ① fractal（OC 版）继续兜底 ② 渐进迁移不 all-in ③ 不 fork 换皮、不改 DSH 源码 |
+| 迁移结论 | 约 **70% DSH 原生覆盖**，增量收敛 **5 块**：壳能力 / 记忆 UI + Guardian / 四 agent / 14 技能 / 零散面板 |
+| 迁移路线 | **M0** 闭环验证 → **M1** 记忆 UI → **M2** Guardian 状态 → **M3** 四 agent → **M4** 自研壳——2026-08 排的期，**已走完**；M4 那个自研壳又在 1.0.0 换成了官方桌面端底座的 fork（见「定位」） |
+| 长期护栏 | ① **不改 DSH 源码**，只改壳与插件这两层 ② 跟随 DSH 版本迭代，而不是把内核锁在旧版 |
 
-📄 **[技术设计方案](docs/设计/SSiD-技术设计方案.md)** · [迁移对照表](docs/设计/2026-08-16-三代资产完整迁移对照表.md) · [路线图](docs/设计/2026-08-16-分阶段路线图.md) · [品牌手册](docs/品牌/品牌手册.md)
+📄 **迁移期的设计文档**（2026-08 起点）：[技术设计方案](docs/设计/SSiD-技术设计方案.md) · [迁移对照表](docs/设计/2026-08-16-三代资产完整迁移对照表.md) · [路线图](docs/设计/2026-08-16-分阶段路线图.md)｜**品牌**：[品牌手册](docs/品牌/品牌手册.md)
 
 ## 名字
 
@@ -36,16 +36,17 @@ SSiD 是 fractal 的 **DSH 基座版**——基于 [DeepSeek Harness](https://gi
 
 | 维度 | 说明 |
 |---|---|
-| 基座 | DeepSeek Harness（一切皆插件） |
-| 形态 | DSH 官方 Web GUI + 自研桌面壳（参考 anywhere-labs） + 插件 |
+| 基座 | DeepSeek Harness（一切皆插件；**不改其源码**） |
+| 形态 | **官方 DSH 桌面端底座的 fork**——内核随包进 `app.asar` 的 `dsh/`，Host 由官方的 `dsh-desktop-host` 担当，我们只做壳与插件这两层的改造 |
 | 引擎 | DeepSeek 唯一 Provider |
-| 与 fractal 关系 | fractal = OC 基座版（继续维护、兜底）；SSiD = DSH 基座版（2.0） |
+| 版本线 | **两条独立**：思灵自己一个号（当前 `1.1.7`），随包内核一个号（当前 `0.2.0-rc.2`） |
+| 与 fractal 关系 | fractal = OC 基座版（前身）；SSiD = DSH 基座版 |
 
 ## 技术栈
 
-- **基座**：DeepSeek Harness（`dsh web` 官方 GUI）
-- **壳**：自研（Electron，参考 anywhere-labs 架构）
-- **插件**：预制插件全家桶（中文思考、跨会话记忆、Guardian 状态引擎、自学习习惯引擎、皮肤）+ 侧栏生态（dsh-better-sidebar 及扩展）
+- **基座**：DeepSeek Harness——内核**随包**（`app.asar` 的 `dsh/`），不改源码；DSH 发新版就跟着走，而不是自己维护一套窗口层
+- **壳**：官方桌面端基座 + 我们的改造（源码在 [`ssid-desktop/`](ssid-desktop/README.md)，逐条改动见 [`SSID-CHANGES.md`](ssid-desktop/SSID-CHANGES.md)）。自建壳时代做出来、换代后逐项接线回来的执行期能力：保持唤醒、截图（含标注编辑）、执行中遮罩、原生通知、托盘菜单、CodeGraph 索引适配、自绘标题栏
+- **插件**：随包插件集 **34 个 bundle**（其中 20 个是 `@max-null/*` 自制），首启由壳接进 profile——记忆与监督（`dsh-memory` / `dsh-guardian` / `dsh-habit`）、中文思考与文风、侧栏生态（`dsh-better-sidebar` 及扩展）、剧本杀、微信桥、CodeGraph MCP、Office / 视频 / Excel 面板
 
 ## 截图
 
@@ -61,36 +62,43 @@ SSiD 是 fractal 的 **DSH 基座版**——基于 [DeepSeek Harness](https://gi
 
 ## 现状
 
-**最新版本：v0.2.1**（2026-09-07，[Release Notes](docs/release-notes-v0.2.1.md)）：预制微信桥（dsh-wechat 0.9.1，扫码绑定）+ CodeGraph MCP 0.20.1、免安装版（zip）交付形态（Win10 家庭版等安装器受阻场景的正解：解压即用）、升级部署「用户层保留」护栏（用户自装插件 / MCP 不再被升级覆盖）、归档构建修正。v0.2.0（[Notes](docs/release-notes-v0.2.0.md)，原 v0.1.18 未分发内容并入重打）为 **DSH rc.1 内核升级** + 插件基线升级 + 在线更新网络链修复。v0.1.x 系列演进（自研壳 + 侧栏生态 + 预制插件、标题栏统一按钮组、插件中心、预设技能包 14 技能、会话存储隔离等）见各版本 [Release Notes](docs/) 与 [Release 页面](https://github.com/Max-Null/seek-soul-in-darkness/releases)。
+**最新版本：v1.1.7**（2026-10-08，[Release Notes](docs/release-notes-v1.1.7.md)）：新增预制插件「剧本杀」（`@max-null/dsh-jubensha` 0.1.0）——AI 坐 DM 位、也填满其余的椅子，一个人就能开局；随包插件各跟到最新；`dsh-better-sidebar` 补一个并发上传 rename 争用的有界重试修复。本版未改壳代码。
+
+前面两个版本定下了当前的形态，值得单独点出：
+
+- **v1.1.6**（[Notes](docs/release-notes-v1.1.6.md)）——思灵与**官方 DSH 桌面版可以同时运行**：userData 让到 `%APPDATA%\ssid-shell`、存储根隔离到 `storages-ssid`、协议改为 `ssid://`；跨会话记忆两边共用。安装器与卸载器也换成了思灵品牌。
+- **v1.0.0**（[Notes](docs/release-notes-v1.0.0.md)）——**换代版**：桌面壳从自建壳（≤0.4.0）换成**官方 DSH 桌面端底座的 fork**，内核随包；产品版本自此与内核版本分成两条线。自建壳时代的 `shell/` 已归档在 tag `v0.4.0-selfbuilt`。
+
+更早的版本（0.1.x 自研壳 + 侧栏生态、预置插件、14 技能包、会话存储隔离）见 [Releases](https://github.com/Max-Null/seek-soul-in-darkness/releases) 与 `docs/release-notes-v*.md`。
 
 ## 下载安装
 
-> **系统要求：Windows 10/11，64 位（x64）**。32 位 Windows 不支持——Shell 基于 Electron 44（官方已移除 32 位支持，见 Electron Breaking Changes），内置运行环境（DSH 内核 + 原生模块）也按 64 位预编译。
+> **系统要求**：Windows 10/11 x64；macOS 另有产物，边界见下。
 
-> **关于签名**：本项目为开源免费软件，安装包**未做代码签名**（无费用）。Windows/杀软首次运行可能提示「未知发布者/已保护你的电脑」——属正常安全提示，按下方步骤放行即可；**或优先选用免安装版（zip）**——无需安装器，最常见的拦截/兼容场景直接绕过。
-
-> **推荐：免安装版（zip）**——解压即用，功能与安装版完全一致。NSIS 安装版若报「**不支持的 16 位应用程序**」等异常：大多为**下载文件损坏**（截断/下载器中断），非兼容问题——删除后重新下载，或改用免安装版。
-
-- **免安装版（zip，推荐）**：[`ssid-shell-0.2.1-win.zip`](https://github.com/Max-Null/seek-soul-in-darkness/releases/download/v0.2.1/ssid-shell-0.2.1-win.zip)（约 405 MB）→ 解压到任意目录 → 运行 `思灵.exe`
-- **安装版（NSIS）**：[`ssid-shell-setup-0.2.1.exe`](https://github.com/Max-Null/seek-soul-in-darkness/releases/download/v0.2.1/ssid-shell-setup-0.2.1.exe)（约 355 MB）
-- **校验文件完整性**（可选，先验后装）：
-  ```bat
-  certutil -hashfile "ssid-shell-setup-0.2.1.exe" SHA256
-  certutil -hashfile "ssid-shell-0.2.1-win.zip" SHA256
-  ```
-  各版本资产的 SHA256 见对应 [Releases](https://github.com/Max-Null/seek-soul-in-darkness/releases) 页的「下载与校验」节。
+- **v1.1.7 资产**（[Release 页](https://github.com/Max-Null/seek-soul-in-darkness/releases/tag/v1.1.7)）：
+  - Windows：`ssid-1.1.7-win-x64-unsigned.exe`（NSIS 安装包，约 431 MB）
+  - macOS：`ssid-1.1.7-mac-arm64-unsigned.dmg` / `.zip`（约 540 / 567 MB）
+- **开箱即用**：内核与预制插件**随包**（首启由壳把插件集接进 profile），不需要装 Node / pnpm、不需要设任何环境变量
+- **升级**：覆盖安装即可——会话、工作区、插件配置与跨会话记忆都保留
+- **与官方 DSH 桌面版共存**：1.1.6 起两者各有自己的 userData、存储根、会话根与协议名，可以同时开着
+- **校验**：`certutil -hashfile <文件> SHA256`（macOS 用 `shasum -a 256`）——以 Release 页上 GitHub 记录的 `digest` 为准
 - 全部历史版本：[Releases](https://github.com/Max-Null/seek-soul-in-darkness/releases)
-- **一键安装**：首次启动自动部署内置运行环境（DSH 内核 + 预制插件，约 600MB），无需安装 Node/pnpm、无需设置任何环境变量；安装完成后关闭窗口重新打开即用
-- **升级**：安装新版后启动时自动检测版本，不一致自动重部署运行环境（约 30 秒，可取消），旧版无损
 
-> **SmartScreen 放行三步**（首次安装遇到拦截图时）：
-> 1. 右键安装包 → 属性 → 若勾选「解除锁定」则打勾 → 确定；
-> 2. 仍被拦就在弹窗点「更多信息」→「仍要运行」；
-> 3. 或右键「以管理员身份运行」。
+> **关于签名**：本项目为开源免费软件，安装包**未做代码签名**（无费用）。Windows 首次运行可能提示「未知发布者 / 已保护你的电脑」——属正常安全提示，按下节放行即可。
+
+> **macOS 通道的边界**：这条通道目前只验证到「CI 在真 mac 上打包成功、每个内嵌二进制都有签名」，**尚未在真机双击验证过**。产物是 ad-hoc 签名、未公证，Gatekeeper 会拦（右键打开，或先 `xattr -dr com.apple.quarantine 思灵.app`）。它证明的是**打包链通了**，不等于「mac 版已可用」——你在真机上试出来的结果，欢迎开 issue 反馈。
+
+**Windows SmartScreen 放行三步**（首次安装遇到拦截图时）：
+
+1. 右键安装包 → 属性 → 若勾选「解除锁定」则打勾 → 确定；
+2. 仍被拦就在弹窗点「更多信息」→「仍要运行」；
+3. 或右键「以管理员身份运行」。
 
 ## 路线图
 
-见 [`docs/决策/2026-08-16-分形DSH迁移-重评估映射表.md`](docs/决策/2026-08-16-分形DSH迁移-重评估映射表.md)。
+- **版本历史与发版说明**：[Releases](https://github.com/Max-Null/seek-soul-in-darkness/releases) 与 [`docs/release-notes-v*.md`](docs/)
+- **开发规范**：[`docs/SSiD开发手册.md`](docs/SSiD开发手册.md)——铁律速查、环境流转、插件升级、发版流程、踩过的坑
+- **迁移期设计文档**（2026-08 起点）：[`docs/设计/`](docs/设计/)；历史决策与执行记录：[`docs/决策/`](docs/决策/)
 
 ## License
 
