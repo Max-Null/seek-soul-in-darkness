@@ -27,25 +27,50 @@
 ## 二、schema 草案
 
 ```yaml
-- id: string                 # 唯一标识，用于节流状态与诊断行
-  intent: string             # 这条判据守的是什么约定——给人读，不进模型上下文
-  enabled: boolean           # 默认 true
-  when:                      # 触发条件；省略 = 每轮都适用
-    userText: regex          # 本轮用户消息的文本匹配
-  require:                   # 「到期」时必须已出现的动作
-    toolCall: string         # 工具名（精确匹配）
-  window: turn               # 观察窗；第一版只实现 turn
-  throttle: per-turn         # 同一轮至多提醒一次；第一版只有这一个取值
-  remind: string             # 违反时注入的正文
+- id: string                      # 唯一标识，用于节流状态与诊断行
+  intent: string                  # 这条判据守的是什么约定——给人读，不进模型上下文
+  enabled: boolean                # 默认 true
+  watch: turn | output            # 看哪一侧，判据级；见下方「两侧」
+  when:                           # 触发条件；省略 = 每轮都适用
+    userText: regex               # 本轮用户消息的文本匹配
+  require:                        # 「到期」时必须已出现的动作
+    toolCall: string              # 工具名（精确匹配）
+  throttle: per-turn              # 同一轮至多动作一次
+  act: remind | observe | steer   # 违反时做什么
+  remind: string                  # act 为 remind / steer 时注入的正文
 ```
 
-求值语义（一次 `pre-step`）：
+**两侧**（2026-10-15 定：都支持，但 `watch` 是**判据级**的——每条判据选一侧）：
+
+| | `watch: turn`（输入侧） | `watch: output`（收尾侧） |
+|---|---|---|
+| 触发点 | `agent/pre-step`，每步之前 | `agent/turn-stopping`，本轮收尾 |
+| 看什么 | 本轮**至今**的事件：用户文本 + 已发生的工具调用 | 本轮**最终产出**：末条助手消息的块构成 + 完整工具调用序列 |
+| 动作 | 返回 `{ kind: 'enter', messages }`——提醒**搭在同一请求里** | `agent.steer(message)`——让本轮**再跑一步**，或只诊断 |
+| 代价 | 零额外生成 | **多一次模型生成**（所以默认停在 `observe`） |
+
+**为什么两侧都要**：用户纠正信号里学出来的习惯大多长在输出侧（「回答太长了」「你没检查就交了」），
+而流程类约定长在输入侧（「以后提交前先跑一遍 review」）。只做输入侧，则 habit 学到的多数习惯
+一条都执行不了。两侧共用同一份观察数据，只是触发点与动作不同。
+
+求值——共同三步：
 
 1. 取本轮窗口内的事件：`session.snapshotEvents()` 里 `turn === 当前 turn` 的部分。
 2. 本轮用户文本：扫 `user/message`（`data.source.kind === 'user'`），按 seq 归属到本轮，
    与 `data.content` 拼接。`when.userText` 缺省视为匹配。
 3. `require.toolCall`：本轮窗口内是否已出现同名 `tool/call`。
-4. 触发条件成立 + 要求未满足 + 节流放行 → 注入一条 `notice`，然后推进节流状态。
+4. 触发成立 + 要求未满足 + 节流放行 → 按 `act` 动作，然后推进节流状态。
+
+**收尾侧的观察面有现成先例**：`dsh-allostasis/src/tail.ts` 的 `tailSamples()` / `measureTail()` /
+`shapeOf()` 已经把「末条助手消息的块构成（reasoning / text / tool-call）」做成了纯函数判定，
+取样方式可直接照抄；排除用户中止用 `signal.aborted`（同文件所在插件的 turn-stopping 监听即此法）。
+
+**两条档位约束**：
+
+1. **输入侧的 `remind` 不设观察期**——它不加额外生成，只是搭车一句话；误报的代价是模型多看到
+   一行字。
+2. **收尾侧的 `steer` 默认停在 `observe`**——判定与留痕必须先跑起来，否则「这个现象有多频繁、
+   判据准不准」永远没有数据。这个理由 `dsh-allostasis` 已经写进代码注释，直接沿用。
 
 ---
 
@@ -54,19 +79,20 @@
 ```yaml
 - id: skill-recall-on-delivery-actions
   intent: 用户点名「提交 / 拉取 / 审查 / 发版 / 同步代码」这类交付动作时，本轮应当出现一次 skill 调用
+  watch: turn
   when:
     userText: '提交|拉取|审查|发版|同步代码'
   require:
     toolCall: skill
-  window: turn
   throttle: per-turn
+  act: remind
   remind: |
     ⚠️ 用户点名了交付类动作（提交 / 拉取 / 审查 / 发版），本轮到目前为止没有调用 skill。
     先看一眼有没有现成流程可套——有就调它；没有就继续手上的做法，并说明为什么不套。
 ```
 
 形状是通的：约定的三个成分（**什么算到期**、**要求什么动作**、**违反了说什么**）各有着落，
-没有哪个成分需要写代码才能表达。
+没有哪个成分需要写代码才能表达。这条是输入侧的判据——提醒搭在同一请求里送出去，来得及纠。
 
 ---
 
@@ -95,8 +121,8 @@
 
 ## 五、未决
 
-1. **判据住在哪**：`cordis.patch.yml` 的 config（人写、可 diff、进 git）还是 `ctx.storageDomain`
-   （程序写、模型炼完落库）。两者都可用，见方向文档 §5.2；选择取决于「谁炼」。
+1. **判据住在哪**：两条路都可用（见方向文档 §5.2）。用户已定「**LLM 炼是主路径、人炼是兜底**」，
+   所以主路径落在存储侧（`ctx.storageDomain` 或 habit 现有的自有存储区），config 留给硬约定。
 2. **`require` 要不要留扩展位**：例如按参数匹配工具调用（`toolCallArgs`）。第一版不加——
    那会从「有没有调用」滑向「调到哪个」，正是 4.1 要避开的。
 3. **误报怎么收**：`when.userText` 的正则太宽会命中讨论而非指令（「提交了吗」也会命中）。
@@ -107,6 +133,11 @@
 
 ## 六、下一步
 
-写第一版实现：挂 `agent/pre-step`，从载体读判据，扫本轮事件，命中则注入一条 `notice`。
-第一个验收样本是现成的——调研留下的那份「用户点名但没调用」轮次清单，里面的
-「整体审查一遍」「你拉取一下三库最新代码」都是明确漏用，可直接当回归语料。
+第一版实现落在 `@max-null/dsh-habit`（落点决策见方向文档 §六），分两步：
+
+1. **执行端**：判据库 + 求值引擎 + 两侧动作。第一版先只做 `watch: turn`（输入侧）——
+   「来得及」的价值最高，且 skill 召回这条用例正是它。
+2. **接上「炼」**：把 judge 的产物分叉出判据这一支，让学到的约定直接进判据库。
+
+验收语料是现成的：调研留下的那份「用户点名但没调用」轮次清单，里面的「整体审查一遍」
+「你拉取一下三库最新代码」都是明确漏用。
