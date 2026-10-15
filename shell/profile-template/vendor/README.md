@@ -79,6 +79,21 @@ HTTP 路由一直正常，是因为壳转发前会删掉 `origin` 头 —— 同
   均 0 命中，而 vendor 版分别有 2 / 3 / 1 处。所以**本目录仍需保留**，侧边栏继续走
   `file:` 形态。下次判断能否撤除时，先跑这三条判据再下结论 —— 只核 PR 状态或只核
   前两处修复，会漏掉第三处。
+- **第三处修复已于 2026-10-15 提上游 PR**：
+  [omdsh-dev/DSH-better-sidebar#966](https://github.com/omdsh-dev/DSH-better-sidebar/pull/966)
+  （分支 `Max-Null:fix/upload-rename-contention`，基于 `main@454afaf` 重放，两个文件
+  +110/−11）。撤除本目录的条件不变、且现在有了明确的等待对象：**等 #966 合并并随版本
+  发到 npm 之后**，再跑一次上面三条判据 —— 全中才可切回 npm。
+- 提 PR 时的负对照（**上游代码在本机真实复现，不需要自己造场景**）：`main` 原样跑全量
+  测试，`tests/fs-operations.spec.ts` 的并发用例就红在
+  `EPERM: operation not permitted, rename …` @ `src/fs-operations.ts:107`（正是那行裸
+  `rename`）；补丁下 29/29 绿、连跑 6 次稳定，把 `renameIntoPlace` 换回裸 rename 则当场
+  变红。本机复现率远高于旧记录：2 方并发下 58/100 轮有碰撞（旧记的「约十轮一次」偏低，
+  已按本次实测更正）。
+- 本地产物来源那两支分支的关系：`third-party-plugins/DSH-better-sidebar` 的
+  `fix/ws-base-0241`（前两处，已随 #797 合并）与 `fix/upload-rename-race`（含第三处）；
+  本次提 PR 另建 `fix/upload-rename-contention`（只含第三处，基于最新 `main`），避免把
+  已合并的前两处再带一遍。
 - 第二处修复的来源：上游 PR 评论中 @davidshilr8 的独立报告（在 0.2.0-rc.2 的安装上抓到
   真实握手）。该结论先在本地壳代码里坐实 —— `.ssid-build/checkout/apps/desktop/src/web-document.ts`
   的 `forwardWebRequest` 校验 origin 后删掉该头再转发，正是「HTTP 全好、WS 全坏」的原因。
