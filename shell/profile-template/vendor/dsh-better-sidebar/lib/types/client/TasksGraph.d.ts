@@ -20,7 +20,7 @@
  * empty canvas shows the same hint as the tree (`loading`).
  */
 import { type ReactNode } from 'react';
-import type { TasksAgentNode, TasksNode, TasksWorkflowNode } from './tasks-model.ts';
+import type { TasksAgentNode, TasksFoldNode, TasksNode, TasksWorkflowNode } from './tasks-model.ts';
 export interface TasksGraphProps {
     nodes: readonly TasksNode[];
     folded: boolean;
@@ -32,8 +32,8 @@ export interface TasksGraphProps {
     onOpenTask(taskId: string, anchor: HTMLElement): void;
     /** The control cluster's global fold switch (settled leaves). */
     onToggleFold(): void;
-    /** The fold AGGREGATE's click: expand everything (global + manual folds). */
-    onExpandFold(): void;
+    /** The fold AGGREGATE's click: reveal THIS group's members only. */
+    onExpandGroup(node: TasksFoldNode): void;
     /** Fold ONE settled node into its parent's aggregate (the bar's chevron). */
     onFoldNode(node: TasksAgentNode): void;
     mode: 'graph' | 'tree';

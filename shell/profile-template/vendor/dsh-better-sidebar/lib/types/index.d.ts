@@ -1,15 +1,17 @@
 import type { Context } from './context-types.ts';
 import { Config, type ResolvedSidebarConfig, type SidebarConfig } from './config.ts';
 import { type SidebarFsEntry } from './fs-tree.ts';
+import { FS_TREES_MAX_PATHS } from './fs-batch.ts';
 export { Config };
 export type { SidebarConfig, ResolvedSidebarConfig };
 export type { Context } from './context-types.ts';
 export type { BetterSidebarService, TabDescriptor, TabComponentProps, FileViewerDescriptor, FileViewerProps, FileFetchStrategy, } from './client/service.ts';
-export { archiveNameOf, collectZipEntries, contentDispositionOf, disambiguateArchiveNames } from './archive-route.ts';
+export { contentDispositionOf } from './archive-route.ts';
 /** Plugin identity for cordis.yml rows. */
 export declare const name = "dsh-better-sidebar";
-/** Row bound of one `fs.trees` batch request (a mount/refresh sends what it shows). */
-export declare const FS_TREES_MAX_PATHS = 64;
+/** Row bound of one `fs.trees` batch request (a mount/refresh sends what it
+ *  shows, split into cap-sized batches by the client — see `fs-batch.ts`). */
+export { FS_TREES_MAX_PATHS };
 /** One level of an `fs.trees` batch: either a listing or that level's failure. */
 export interface SidebarFsLevel {
     path: string;
@@ -22,6 +24,23 @@ export interface SidebarFsLevel {
 export declare const inject: string[];
 /** Content type served by /sidebar/file (binary-safe fallback for unknowns). */
 export declare function mediaTypeForPath(path: string): string;
+/** One file read, in the shape the client's viewer dispatch consumes. */
+export type SidebarReadResult = {
+    kind: 'text';
+    content: string;
+    size: number;
+    mtimeMs: number;
+} | {
+    kind: 'binary';
+    size: number;
+    mtimeMs: number;
+    head: string;
+} | {
+    kind: 'too-large';
+    size: number;
+    mtimeMs: number;
+    head: string;
+};
 /**
  * The live face of the side card settings namespace, bound to the settings
  * service when it is mounted. The DSH settings RPC domain only serves

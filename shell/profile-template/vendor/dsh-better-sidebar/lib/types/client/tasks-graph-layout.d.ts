@@ -14,10 +14,24 @@ import type { TasksNode } from './tasks-model.ts';
  *  NARROW native right sidebar (~360px): a 190px card fits two per row plus
  *  the gutter, and the card's own rows stay readable at the fit's floor. */
 export declare const GRAPH_NODE_W = 190;
-/** Badges + TWO title lines + the mono meta line + the state bar: long agent
- *  names are clamped to two lines instead of ellipsizing to a couple of
- *  characters (see `.cardName` in tasks-graph.module.css), so the reserve
- *  covers that second line. */
+/** Lines the text tail may show at most. */
+export declare const NODE_TEXT_MAX_LINES = 3;
+/** The most a card's text tail can add to its height. */
+export declare const GRAPH_TEXT_MAX_H: number;
+/**
+ * An AGENT card: badges + TWO title lines + the state bar. Long agent names are
+ * clamped to two lines instead of ellipsizing to a couple of characters (see
+ * `.cardName` in tasks-graph.module.css), so the reserve covers that second
+ * line. The mode word moved into the badge row, so an agent card carries no
+ * mono meta line — reserving one left a visible 16px hole above the bar.
+ */
+export declare const GRAPH_AGENT_NODE_H: number;
+/**
+ * The tallest card on the canvas: a workflow RUN keeps its mono meta line
+ * (status · member tally), which no badge can express. {@link rowStrideFor}
+ * narrows the row pitch back to {@link GRAPH_AGENT_NODE_H} for a model without
+ * runs, so agent-only trees do not grow 16px of empty gutter per row.
+ */
 export declare const GRAPH_NODE_H: number;
 /** Extra height of an agent node carrying a shared-task line (team members). */
 export declare const GRAPH_TASK_H: number;
@@ -30,9 +44,18 @@ export declare const GRAPH_FIT_MIN_SCALE = 0.78;
 export declare const GRAPH_GAP_X = 28;
 export declare const GRAPH_GAP_Y = 53;
 export declare const GRAPH_PAD = 16;
-/** The row stride (one row of cards plus the vertical gutter). Every card
- *  shape must fit inside it — see {@link nodeHeight} for the tallest one. */
+/** The tallest row stride (the run card plus the vertical gutter). */
 export declare const GRAPH_ROW_STRIDE: number;
+/**
+ * The row pitch one model actually needs: the tallest card it draws plus the
+ * gutter. Card heights differ by kind and by content (a run keeps its meta line;
+ * an agent may add a task row and up to {@link NODE_TEXT_MAX_LINES} lines of text
+ * tail), so the pitch is measured from the model instead of hard-picked — a card
+ * taller than the pitch would overlap the row below it and its phase frame.
+ *
+ * @param nodes - the model's node list.
+ */
+export declare function rowStrideFor(nodes: readonly TasksNode[]): number;
 /** One laid-out node. */
 export interface GraphBox {
     id: string;
@@ -52,6 +75,18 @@ export interface LayoutOptions {
     /** Columns per sibling band before it wraps to the next row (default 4). */
     maxBandCols?: number;
 }
+/**
+ * How many lines a card's text tail takes, 0 when the node has none.
+ *
+ * An ESTIMATE by character width, because the layout runs before the browser
+ * wraps anything: CJK reads at the font's full size and latin at a bit over
+ * half of it, over the card's inner width. Floored on purpose (see
+ * {@link nodeHeight}), and capped at {@link NODE_TEXT_MAX_LINES}.
+ *
+ * @param text - the child's newest assistant text (flattened by the caller).
+ * @param cardWidth - the card's outer width (defaults to the graph's).
+ */
+export declare function textTailLines(text: string | undefined, cardWidth?: number): number;
 /**
  * Lay out the model top-down, wrapping wide sibling bands.
  * @param nodes - the model's pre-order node list (roots = parentless rows).

@@ -11,7 +11,8 @@ export { LazyMermaidMarkdown } from './mermaid-lazy.tsx';
 export interface MarkdownHtmlMedia {
     scope: SessionScope;
     path: string;
-    origin: string;
+    /** The injected transport base, reverse-proxy prefix included. */
+    baseUrl: string;
 }
 interface MarkdownDocumentProps {
     info: AnalyzedMarkdownHtml;

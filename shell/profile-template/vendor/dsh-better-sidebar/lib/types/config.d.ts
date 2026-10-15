@@ -15,23 +15,14 @@
  */
 import z from '@deepseek-ai/schemastery';
 import { type SidebarPrefs } from './prefs-shared.ts';
-export { SIDEBAR_PREFS_DEFAULTS, SIDEBAR_PREFS_NS, TITLE_BAR_STRIP_DEFAULT, TITLE_BAR_STRIP_MAX, TITLE_BAR_STRIP_MIN, type SidebarPrefs, } from './prefs-shared.ts';
+export { EXPLORER_EXCLUDE_DEFAULTS, SIDEBAR_PREFS_DEFAULTS, SIDEBAR_PREFS_NS, type SidebarPrefs, } from './prefs-shared.ts';
 /** Tunable sidebar host limits (every field optional; defaults fill in). */
 export interface SidebarConfig {
-    /** Read cap of one text file (bytes); larger files return truncated. */
-    readLimit?: number;
-    /** Media route cap (bytes); larger binaries are refused. */
-    mediaLimit?: number;
-    /** Upload route cap (bytes); larger files are refused without touching disk. */
-    uploadLimit?: number;
     /** Explorer row bound of one level. */
     listLimit?: number;
 }
 /** Fully defaulted sidebar host settings. */
 export interface ResolvedSidebarConfig {
-    readLimit: number;
-    mediaLimit: number;
-    uploadLimit: number;
     listLimit: number;
 }
 /**
@@ -48,7 +39,10 @@ export declare function resolveSidebarConfig(config: SidebarConfig | undefined):
  * Asserted as `z<SidebarPrefs>` (the interface lives in `prefs-shared.ts`; the
  * explicit annotation is also what keeps the emitted declaration portable).
  * Unknown keys are TOLERATED by this schema and pass through untouched, which
- * is what keeps a legacy `workspaceFence: true` in an old profile harmless.
+ * is what keeps a legacy `workspaceFence: true` — or the retired title-bar
+ * compatibility keys (`titleBarScheme` / `titleBarPresetId` /
+ * `titleBarCompat` / `titleBarStripPx`, removed with the whole strip
+ * mechanism) — in an old profile harmless instead of fatal.
  */
 export declare const PrefsSchema: z<SidebarPrefs>;
 /**

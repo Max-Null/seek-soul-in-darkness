@@ -13,14 +13,15 @@
  *   "Which session that is" comes from the controller's `mounted` observation
  *   ({@link mountedSessions}) — never from the session list, which has no
  *   current-session field. The controller also carries `openTabIn` /
- *   `openResourceIn` / `closeIn`, which act on any session whose store the
- *   runtime has minted; both are probed at call time, and an open for a
- *   session that has no store yet is QUEUED and replayed when that session
- *   comes on screen;
+ *   `openResourceIn` / `closeIn`, but the two open faces are silent no-ops for
+ *   a session whose store the runtime never minted or adopted — they report
+ *   nothing back — so an open aimed at a session that is not on screen is NOT
+ *   handed to them: it stays QUEUED and is replayed once that session comes
+ *   on screen;
  * - layout state is memory-only, so a queued open is not durable either.
  */
 import type { Context } from '../../context-types.ts';
-import type { SidebarSurface } from '../service.ts';
+import type { NativePathTab, SidebarSurface } from '../service.ts';
 import type { NativeTabRecords } from './tab-adapter.tsx';
 /**
  * The observation "which session's seat is on screen": DSH 0.1.7 publishes it
@@ -38,6 +39,8 @@ export interface NativeSurface extends SidebarSurface {
     flushPending(): void;
     /** Stop observing the session list and the mounted-seat feed. */
     dispose(): void;
+    /** Every native tab bound to a path (see {@link SidebarSurface.pathTabs}). */
+    pathTabs(): NativePathTab[];
 }
 /**
  * The on-screen-session feed, as anything outside this module should read it.

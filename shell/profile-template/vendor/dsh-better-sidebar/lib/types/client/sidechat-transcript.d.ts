@@ -17,6 +17,10 @@
  * text and reasoning deltas (DSH 0.1.5 publishes them outside the session
  * log — see assistant-live.ts). The mapping accumulates both per block and
  * supersedes them with the assembled message once it lands (settled rows).
+ *
+ * Failures: a provider/agent error used to end a turn with nothing on screen.
+ * The terminal `turn/end` reason and a failed attempt's embedded finish chunk
+ * both map onto one visible `error` row per turn.
  */
 import type { DiffHunk, ReadBlockLine } from '@deepseek-ai/dsh-client-ui-primitives';
 import type { SidebarHistoryEntry } from '../context-types.ts';
@@ -48,16 +52,31 @@ export type SidechatToolCard = {
  *  source event's log sequence — stable row identity for React keys across
  *  polls (streaming caches ride the key, so window slides must not re-key
  *  rows). */
-export type SidechatTranscriptRow = {
+export type SidechatTranscriptRow = 
+/** `messageId` is the durable message identity the log records on the event
+ *  (`data.id`); the view uses it to dedupe a still-pending inbox row against
+ *  the durable row the claim eventually writes. Older logs may lack it. */
+{
     kind: 'user';
     seq: number;
     text: string;
+    messageId?: string;
 }
 /** A context injection (the side boundary prompt + the parked in-progress
  *  snapshot, or any plugin-sourced context): rendered as one collapsible
  *  row, never as a user bubble. */
  | {
     kind: 'injection';
+    seq: number;
+    text: string;
+}
+/** A provider/agent FAILURE, which used to end a turn silently: either a
+ *  `turn/end` carrying `reason.kind === 'error'` or a failed
+ *  `assistant/attempt` (its stream's terminal `finish` chunk). One row per
+ *  turn — the attempt error and the turn/end that follows it are the same
+ *  failure. */
+ | {
+    kind: 'error';
     seq: number;
     text: string;
 }
@@ -119,7 +138,9 @@ export declare function toolArgsSummary(args: string | undefined): string;
  * deltas accumulate into streaming rows per (turn, step, block) and are
  * superseded by the assembled `assistant/message`, and tool invocations
  * render one expandable line each (arguments, paired result text, failure
- * marker; a still-executing call is marked until its result lands).
+ * marker; a still-executing call is marked until its result lands). A failed
+ * turn renders exactly one `error` row — the attempt's stream error and the
+ * `turn/end` reason are the same failure.
  * @param entries - history rows (event + host-computed view) in seq order,
  *   the live deltas of the in-flight attempt appended after the durable tail.
  * @returns display rows in log order.

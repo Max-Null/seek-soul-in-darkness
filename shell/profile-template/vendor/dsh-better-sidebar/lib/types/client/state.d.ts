@@ -41,6 +41,13 @@ export interface SidebarTab {
     type: TabType;
     title: string;
     path?: string;
+    /** The 1-based line a file reference named (`a/b.c#L131`, `a/b.c:131`).
+     *  Transient by design: `sanitizePersistedTab` copies a whitelist of known
+     *  fields, and this one is deliberately left out — a link's landing line is
+     *  a one-shot navigation target, and a reload that yanked the reader back
+     *  to a line they scrolled away from days ago would be worse than starting
+     *  at the top. Same spirit as `revealed`. */
+    line?: number;
     diff?: SidebarDiffRef;
     /** Plugin-owned state (v0.12.0+): MUST be JSON-serializable — it is
      *  persisted with the layout and restored verbatim on reload. */
@@ -76,6 +83,15 @@ export interface SidebarState {
      * unhighlighted.
      */
     revealed: string[];
+    /**
+     * Tab types whose page the reader has not looked at yet: written when a
+     * background activation opens its page WITHOUT taking the column over
+     * (src/client/sidebar/use-host-feeds.ts) and cleared the moment that page
+     * becomes the one on screen. Deliberately NOT transient — it survives the
+     * tab body's unmount, a session switch and a reload, because an unread page
+     * stays unread until it is read.
+     */
+    unread: TabType[];
     /** Whether the bottom panel (the plugin's one workbench) is open. */
     bottomOpen: boolean;
     /** The bottom panel's height (clamped to the contract range). */
@@ -142,11 +158,27 @@ export declare function removeLeafAt(node: SplitNode, paneId: string): SplitNode
 export declare function closeTab(state: SidebarState, paneId: string, tabId: string): SidebarState;
 /** Activate a tab in its pane (the pane's own tree). */
 export declare function activateTab(state: SidebarState, paneId: string, tabId: string): SidebarState;
+/**
+ * Mark one tab TYPE as having a page the reader has not looked at yet (the
+ * dot drawn on its tab). Identity-preserving when it is already marked, so a
+ * repeat activation does not churn the store (and therefore localStorage).
+ */
+export declare function markUnread(state: SidebarState, type: TabType): SidebarState;
+/** Clear one tab type's unread mark (the reader just looked at its page). */
+export declare function clearUnread(state: SidebarState, type: TabType): SidebarState;
+/** Whether one tab type is currently marked unread. */
+export declare function isUnread(state: SidebarState | undefined, type: TabType): boolean;
 /** Update the display fields of one open tab (title / path / meta) without
  *  re-opening it. The browser tab persists its current URL and hostname
  *  title through this reducer so a reload restores the visited page. A
  *  missing tab id is a no-op. The tab may live in either tree or a free
- *  window. */
+ *  window.
+ *
+ *  A PATH CHANGE is a new open: the transient landing line (#826) is dropped
+ *  with it. `line` belongs to the navigation that delivered the file, not to
+ *  the tab — an in-place switch or a rename that kept it would send the next
+ *  file to the previous file's line (and force a markdown file into the
+ *  editor, which is how the reader gets stuck). */
 export declare function patchTab(state: SidebarState, tabId: string, patch: {
     title?: string;
     path?: string;
@@ -192,6 +224,15 @@ export declare function toggleBottomPanel(state: SidebarState): SidebarState;
 export declare function setBottomHeight(state: SidebarState, height: number): SidebarState;
 /** Toggle a directory in the explorer expansion set. */
 export declare function toggleExpanded(state: SidebarState, path: string): SidebarState;
+/**
+ * The absolute ancestor directories between the explorer root (`cwd`) and each
+ * given path, EXCLUDING the paths themselves: the levels a lazy tree must have
+ * expanded before those rows can exist. Empty strings and non-strings are
+ * skipped; the result is de-duplicated in first-seen order.
+ * @param cwd - the explorer's root (session working directory).
+ * @param files - absolute paths whose ancestors are wanted.
+ */
+export declare function ancestorDirs(cwd: string | undefined, files: readonly string[]): string[];
 /**
  * Reveal files in the explorer: expand every ancestor directory between the
  * explorer root and each file (so the lazy tree actually shows the row) and
@@ -271,6 +312,33 @@ export declare class SidebarStore {
     /** Select a session (or none); loads its persisted state. */
     setSession(sessionId: string | undefined): void;
     subscribe(listener: () => void): () => void;
+    /**
+     * Mark one tab type as unread in the CURRENT session (the dot on its tab).
+     *
+     * Reached from the background-activation path alone, so it refuses to
+     * notify when there is nothing to draw: a repeat mark keeps the state
+     * reference AND skips the listener fan-out, which is what lets a test (and
+     * the render path) treat a notification as "the marker really changed".
+     * Returns whether the marker was set.
+     */
+    markUnread(type: TabType): boolean;
+    /**
+     * Clear one tab type's unread mark in a NAMED session — the reader switched
+     * to that page. The current session goes through the publishing path (the
+     * dot has to disappear from the shell AND from the native chip, both of
+     * which read the published snapshot); a session that is not on screen takes
+     * the targeted path, which publishes nothing: its stored state is updated so
+     * the mark is already gone when the reader switches to it.
+     *
+     * `reduceFor` is deliberately not used for the current session: it never
+     * touches the published snapshot, so reading the mark back (or rendering
+     * from it) would keep seeing the old value.
+     *
+     * A type that is not marked is a strict no-op in both paths — no notify, no
+     * persist — so a carrier can call this on every visibility change.
+     * Returns whether a mark was cleared.
+     */
+    clearUnread(type: TabType, sessionId?: string): boolean;
     getSnapshot(): SidebarSnapshot;
     /** Mutate the current session's state (no-op without a session). */
     update(mutator: (draft: SidebarState) => void): void;
@@ -305,6 +373,23 @@ export declare class SidebarStore {
      */
     reduceFor(sessionId: string, reducer: (state: SidebarState) => SidebarState): void;
     private schedulePersist;
+    /**
+     * Fan one store change out to every subscribed listener. A throwing
+     * listener is CONTAINED instead of aborting the loop.
+     *
+     * `service.subscribeState` hands this store's own `subscribe` to consumer
+     * plugins, and `notify()` runs inline in whatever call site mutated the
+     * store — `setSession` from the Sidebar's mount effect, `reduce` from a
+     * click handler. An exception escaping here therefore surfaces as a
+     * render/commit-phase error, and the shell's ROOT RenderBoundary swaps the
+     * ENTIRE sidebar for its error strip: one plugin misreading a field this
+     * store no longer carries (0.19.0 dropped the right column's `splits`
+     * tree) takes the panel down for every other plugin and for the user.
+     *
+     * Isolating per listener also keeps the remaining listeners running —
+     * React's own useSyncExternalStore callback shares this loop, so a crash
+     * in one subscriber no longer costs the healthy ones their re-render.
+     */
     private notify;
 }
 /**

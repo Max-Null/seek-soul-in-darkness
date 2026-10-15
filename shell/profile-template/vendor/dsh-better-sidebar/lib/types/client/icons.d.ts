@@ -5,11 +5,8 @@
  * (`descriptor.icon`), not in a type-keyed switch — the icon mapping was
  * registry-ized with the tab types.
  */
-import type { IconProps } from '@deepseek-ai/dsh-client-ui-primitives';
-/**
- * Bottom-panel toggle glyph (the "底栏" button): a frame with a filled strip
- * along its BOTTOM edge, in the app's outline style.
- */
+import { type IconProps } from '@deepseek-ai/dsh-client-ui-primitives';
+/** Bottom toggle: reuse the native panel glyph, rotated toward the bottom. */
 export declare const IconPanelBottomOutline16: ({ size, className }: IconProps) => import("react").JSX.Element;
 /**
  * Terminal glyph in the app's outline style (1.5px stroke, currentColor):

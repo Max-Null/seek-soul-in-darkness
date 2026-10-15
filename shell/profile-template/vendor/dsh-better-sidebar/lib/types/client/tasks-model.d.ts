@@ -17,12 +17,16 @@
  *   the lead's roster row lands on the root node;
  * - fold: per parent, settled agent LEAVES (state done/error, never the
  *   current session, never a workflow member's run node) collapse into one
- *   trailing `fold` node carrying the member ids and label previews.
+ *   trailing `fold` node per GROUP (finished work / waiting members) carrying
+ *   the member ids and label previews; a group the reader opened
+ *   ({@link TasksModelInput.expandedGroups}) keeps its members visible while
+ *   its sibling group stays folded.
  */
 import type { SidebarSessionSummary, SidebarSubagentAddress, SidebarSubagentCatalogEntry, SidebarTeamMemberProjection, SidebarTeamTaskView } from '../context-types.ts';
 import type { SidebarChildLiveView } from '../context-types.ts';
 import type { WorkflowRunView } from '../workflow-runs.ts';
 import { type SubagentCatalogView } from './subagent-catalog.ts';
+import type { SessionMetrics } from './session-metrics.ts';
 import type { TeamMemberRow } from './team-projection.ts';
 /** Display state of one agent node (drives the dot + fold candidacy). */
 export type TasksNodeState = 'running' | 'idle' | 'done' | 'error';
@@ -52,6 +56,8 @@ export interface TasksAgentNode {
     current: boolean;
     /** Live tail of a running child (the merged activity + newest text). */
     live?: SidebarChildLiveView;
+    /** Token usage + turn timing of the node's own session (see ./session-metrics.ts). */
+    metrics?: SessionMetrics;
     /** Team enrichment (roster row matched by session id). */
     team?: {
         role: 'lead' | 'teammate';
@@ -128,6 +134,13 @@ export interface TasksModelInput {
     rootId: string;
     currentSessionId: string;
     live: Readonly<Record<string, SidebarChildLiveView | undefined>>;
+    /**
+     * Per-session token usage and turn timing, keyed by session id (the same
+     * shape as {@link TasksModelInput.live}). Both are host projections, so a
+     * session the snapshot does not carry simply has no metrics and the popover
+     * hides the row.
+     */
+    metrics?: Readonly<Record<string, SessionMetrics | undefined>>;
     runs: readonly WorkflowRunView[];
     teamMembers: readonly TeamMemberRow[];
     /** The team's shared tasks; each lands on its OWNER's node. */
@@ -138,11 +151,21 @@ export interface TasksModelInput {
      * Nodes the READER folded by hand (a settled card's bar chevron). This is a
      * PER-NODE trigger, not a second copy of the global rule, so it only has to
      * satisfy the guards that protect the reader from hiding live work: never a
-     * running node, never the current session, never a branching one. It is
-     * deliberately NOT subject to {@link isAutoFoldable} — the chevron is drawn
-     * on every settled card, and a trigger that cannot fire is a dead control.
+     * running node, never the current session. It is deliberately NOT subject to
+     * {@link isAutoFoldable} — the chevron is drawn on every settled card, and a
+     * trigger that cannot fire is a dead control.
      */
     foldedIds?: ReadonlySet<string>;
+    /**
+     * The fold GROUPS the reader expanded by clicking their aggregate card
+     * ({@link foldGroupId}). A group listed here shows its members while every
+     * other group stays folded — expanding one aggregate must never unfold the
+     * page. It is consulted only where a member would otherwise be folded, and it
+     * yields to {@link foldedIds}: folding one node back by hand is the reader's
+     * newest explicit intent, and a group that ignored it would leave that card's
+     * own chevron dead.
+     */
+    expandedGroups?: ReadonlySet<string>;
 }
 /**
  * How many IDLE team members one parent needs before the page-level rule
@@ -158,6 +181,16 @@ export interface TasksModelInput {
  * aggregate row names the counts and expands on one click.
  */
 export declare const FOLD_IDLE_MIN = 3;
+/**
+ * The id of one fold GROUP (the aggregate card a set of folded members
+ * collapses into). Derived from the parent and the group kind only, so the id
+ * is stable while membership changes underneath it — the page keys the
+ * reader's per-group expansions by exactly this string.
+ *
+ * @param foldKind - which group (`done` = finished/failed, `idle` = waiting).
+ * @param parentId - the parent whose children were folded.
+ */
+export declare function foldGroupId(foldKind: TasksFoldKind, parentId: string): string;
 /**
  * Build the ordered (pre-order) node list of the Tasks page. The result is
  * stable for a stable input set: catalog order is preserved, runs follow

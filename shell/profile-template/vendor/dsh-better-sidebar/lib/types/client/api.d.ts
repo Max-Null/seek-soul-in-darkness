@@ -1,4 +1,4 @@
-import type { SidechatLiveEvent, SidechatLogEvent, SidechatThreadInfo } from '../sidechat-core.ts';
+import type { SidechatLiveEvent, SidechatLogEvent, SidechatModelCatalog, SidechatModelSelection, SidechatPendingInput, SidechatThreadInfo } from '../sidechat-core.ts';
 import type { SidebarCreateTeamTaskRequest, SidebarChildLiveView, SidebarSessionEvent, SidebarTeamTaskView, SidebarUpdateTeamTaskRequest } from '../context-types.ts';
 import type { WorkflowRunView } from '../workflow-runs.ts';
 /** One wire failure. */
@@ -16,6 +16,9 @@ export interface FsEntry {
     isSymlink: boolean;
     /** For symlinks: the target is missing or unreadable (stat failed). */
     broken: boolean;
+    /** Directory rows only: the contents are exactly one non-symlink child
+     *  — the explorer folds such chains into one breadcrumb row. */
+    compact?: boolean;
 }
 /** One level of a `fs.trees` batch: a listing, or that level's failure. */
 export interface FsLevel {
@@ -25,10 +28,23 @@ export interface FsLevel {
     /** Present only when THIS level failed (the batch itself succeeded). */
     error?: string;
 }
+/** One changed path's line-count summary (host git shape, mirroring
+ *  `GitLineCounts` in `src/git.ts`). A binary change is its own variant: git
+ *  reports `-`/`-` for it, so there are no counts to show. */
+export type GitLineCounts = {
+    additions: number;
+    deletions: number;
+} | {
+    binary: true;
+};
 /** Git status entry (host git shape). */
 export interface GitStatusEntry {
     path: string;
     xy: string;
+    /** Lines gained/lost, index and worktree sides summed. ABSENT when git has
+     *  no numstat row for the path — untracked files never have one — so the row
+     *  must not read that absence as `0`. */
+    counts?: GitLineCounts;
 }
 /** Git status snapshot. */
 export interface GitStatusResult {
@@ -48,6 +64,38 @@ export interface GitWorktree {
     current: boolean;
     changes: number;
 }
+/** One model a provider advertises (the pinned commit-message dropdown). */
+export interface GitModelInfo {
+    /** Provider-side model id (dispatched verbatim). */
+    id: string;
+    /** Display name; equals `id` when the adapter reports none. */
+    name: string;
+}
+/** One provider route with the models its adapter advertises. */
+export interface GitModelProvider {
+    provider: string;
+    name: string;
+    models: GitModelInfo[];
+}
+/** The model catalog `git.models` answers with. It merges three sources so
+ *  the picker is usable even before a conversation has run:
+ *  - `providers`: the adapters' own catalog (`llm.listModels`),
+ *  - `recent`: routes THIS session already used (newest first),
+ *  - `default`: the harness default selection (`agent-default-model`), which
+ *    exists without any session at all.
+ *  `llm` says whether the harness exposes an LLM surface: an empty catalog is
+ *  then "no adapters registered", not "the route failed". */
+export interface GitModelCatalog {
+    llm: boolean;
+    providers: GitModelProvider[];
+    recent: GitModelRoute[];
+    default?: GitModelRoute;
+}
+/** One pinned-model value: the route the host dispatches on. */
+export interface GitModelRoute {
+    provider: string;
+    model: string;
+}
 /** One git log row. */
 export interface GitLogEntry {
     /** Short hash (7+ chars, display). */
@@ -61,19 +109,61 @@ export interface GitLogEntry {
     /** Ref decorations (--decorate=short), e.g. `HEAD -> main, origin/main`; '' when none. */
     refs: string;
 }
-/** Text read result. */
+/** One `git blame --porcelain` row (the editor's hover blame). */
+export interface GitBlameLine {
+    /** 1-based line number in the file as it exists in the worktree. */
+    line: number;
+    /** The blamed commit (40 hex chars; all zeros for an uncommitted line). */
+    hash: string;
+    author: string;
+    /** ISO 8601 author time carrying the author's own UTC offset. */
+    date: string;
+    /** The commit's subject line. */
+    summary: string;
+}
+/** Text read result. `mtimeMs` is the save route's conflict baseline. */
 export interface FsTextResult {
     kind: 'text';
     content: string;
-    truncated: boolean;
+    size: number;
+    mtimeMs?: number;
 }
 /** Binary read result (no content; images load through the media route).
  *  `head` carries the first bytes (base64) for viewer detect sniffing. */
 export interface FsBinaryResult {
     kind: 'binary';
     size: number;
-    truncated: boolean;
+    mtimeMs?: number;
     head: string;
+}
+/**
+ * The file is above the editable threshold: the host sends no document, only
+ * the size and a 4 KiB sniff head. The viewer answers with a read-only paged
+ * preview, and the head still lets a `detect`-based viewer claim the file.
+ */
+export interface FsTooLargeResult {
+    kind: 'too-large';
+    size: number;
+    mtimeMs?: number;
+    head: string;
+}
+/** One `fs.read` outcome. */
+export type FsReadResult = FsTextResult | FsBinaryResult | FsTooLargeResult;
+/** One page of a large text file (see `fs.readPage`). */
+export interface FsPageResult {
+    kind: 'text';
+    /** The page's decoded lines (normally whole lines — the host trims at a break). */
+    text: string;
+    /** The byte offset this page started at (echoed back). */
+    offset: number;
+    /** Where the next page starts; equals `size` once the file is exhausted. */
+    nextOffset: number;
+    eof: boolean;
+    /** The file's size in bytes. */
+    size: number;
+    mtimeMs?: number;
+    /** The encoding the first page established (later pages decode identically). */
+    encoding: string;
 }
 /** The `subagents.live` response: one row per tree child (and the root). */
 export type SubagentLiveResult = {
@@ -104,8 +194,7 @@ export type TeamsTaskMutationResult = {
     code?: string;
     message: string;
 };
-/** One request's session scope: the conversation id plus its cwd when known. */
-export interface SessionScope {
+/** One request's session scope: the conversation id plus its cwd when known. */ export interface SessionScope {
     sessionId: string;
     /** The session's working directory from the client list summary (optional). */
     cwd?: string;
@@ -139,7 +228,7 @@ export declare const api: {
         root: string;
         parent: string | null;
     }>;
-    fsTree: (scope: SessionScope, path: string, signal?: AbortSignal) => Promise<{
+    fsTree: (scope: SessionScope, path: string, exclude?: readonly string[], signal?: AbortSignal) => Promise<{
         path: string;
         entries: FsEntry[];
         truncated: boolean;
@@ -148,19 +237,44 @@ export declare const api: {
      * Batch listing: every requested level in ONE request (the tree's mount and
      * refresh send the expanded set instead of N `fsTree` calls). A level that
      * failed carries `error` in place — the batch itself still succeeds.
+     * `exclude` carries the explorerExclude pref: matched entries never arrive
+     * (the host filters, so no client-side pass is needed).
      */
-    fsTrees: (scope: SessionScope, paths: readonly string[], signal?: AbortSignal) => Promise<{
+    fsTrees: (scope: SessionScope, paths: readonly string[], exclude?: readonly string[], signal?: AbortSignal) => Promise<{
         levels: FsLevel[];
     }>;
-    /** Global recursive file-name search rooted at the session cwd (the editor
-     *  side panel's search box); matches are cwd-relative '/'-separated paths. */
-    fsSearch: (scope: SessionScope, query: string, signal?: AbortSignal) => Promise<{
+    /** Global recursive file search rooted at the session cwd (the editor
+     *  side panel's search box). A name query matches cwd-relative
+     *  '/'-separated paths; a separator-carrying fragment matches by PATH;
+     *  a query naming one path (absolute, `~/…`, `./x`, `../x`) is stat'ed
+     *  through the same resolution fs.read uses and yields the RESOLVED
+     *  absolute target as the single match. `dirs` names the subset that is a
+     *  directory (the list navigates the tree for those — `fs.read` refuses a
+     *  directory). `exclude` carries the explorerExclude pref: matched entries
+     *  never match and are never descended (host-side, in lockstep with the
+     *  tree; a pasted direct-open path is explicit intent and skips it). */
+    fsSearch: (scope: SessionScope, query: string, exclude?: readonly string[], signal?: AbortSignal) => Promise<{
         matches: string[];
+        dirs: string[];
         truncated: boolean;
     }>;
-    fsRead: (scope: SessionScope, path: string, signal?: AbortSignal) => Promise<FsTextResult | FsBinaryResult>;
-    fsWrite: (scope: SessionScope, path: string, content: string) => Promise<{
+    fsRead: (scope: SessionScope, path: string, signal?: AbortSignal) => Promise<FsReadResult>;
+    /** One page of a large text file, for the read-only paged preview.
+     *  `offset` is the byte position to start at (0 for the first page); the
+     *  response carries where to continue. */
+    fsReadPage: (scope: SessionScope, path: string, offset: number, signal?: AbortSignal) => Promise<FsPageResult>;
+    /** Save a file through the raw `/sidebar/write` route (the document IS the
+     *  request body — no JSON escaping, so nothing caps the saved size).
+     *  `expectedMtimeMs` is the mtime the draft was based on: a file that
+     *  changed on disk since refuses with code `fs-conflict` (the editor then
+     *  offers a reload) instead of clobbering those bytes — and so does a file
+     *  that is no longer there at all, because a numeric baseline proves it was
+     *  read from an existing file. `null` (the file did not exist yet) and
+     *  omitted (older callers) both mean no gate. The response carries the
+     *  fresh baseline. */
+    fsWrite: (scope: SessionScope, path: string, content: string, expectedMtimeMs?: number | null) => Promise<{
         ok: true;
+        mtimeMs?: number;
     }>;
     /** Rename one tree row within its directory (single-segment name; the
      *  server refuses existing destinations, the workspace root, and — while
@@ -177,6 +291,12 @@ export declare const api: {
      *  refuses existing destinations, the workspace root, and — while the fence
      *  is armed — anything resolving outside the workspace). */
     fsMkdir: (scope: SessionScope, path: string, name: string) => Promise<{
+        path: string;
+    }>;
+    /** Create one EMPTY file row inside `path` (single-segment name; the server
+     *  refuses existing destinations — without truncating them — plus the
+     *  characters and Windows device names a file name may not use). */
+    fsCreateFile: (scope: SessionScope, path: string, name: string) => Promise<{
         path: string;
     }>;
     /** Upload one file's raw bytes into `dir` (keeps the folder tree via
@@ -199,6 +319,35 @@ export declare const api: {
     gitCommit: (scope: SessionScope, message: string, worktree?: string) => Promise<{
         ok: true;
     }>;
+    /** Push the selected checkout's branch to its upstream; git's own failure
+     *  message (no upstream, auth, non-fast-forward) crosses the wire as-is. */
+    gitPush: (scope: SessionScope, worktree?: string) => Promise<{
+        ok: true;
+    }>;
+    /** Pull into the selected checkout (`--ff-only` host-side: a diverged branch
+     *  fails loudly rather than opening a merge editor nobody can answer). */
+    gitPull: (scope: SessionScope, worktree?: string) => Promise<{
+        ok: true;
+    }>;
+    /** Ask the host to generate a commit message from the pending changes: it
+     *  streams the diff through the harness LLM on the pinned route (or the
+     *  conversation's own) and answers with the route actually used.
+     *  `language` follows the sidebar's active locale ('zh' | 'en'). */
+    gitSuggestMessage: (scope: SessionScope, language: "zh" | "en", worktree?: string) => Promise<{
+        message: string;
+        provider: string;
+        model: string;
+    }>;
+    /** The discoverable provider/model catalog for the Git card's pinned-route
+     *  setting (advisory; empty when the harness exposes no LLM service). */
+    gitModels: (scope: SessionScope, signal?: AbortSignal) => Promise<GitModelCatalog>;
+    /** The route the NEXT commit-message suggestion would use (pinned → the
+     *  conversation's own → the harness default); absent when none resolves.
+     *  Cheaper than `gitModels`: no catalog discovery. */
+    gitCommitModel: (scope: SessionScope, signal?: AbortSignal) => Promise<{
+        route?: GitModelRoute;
+        pinned: boolean;
+    }>;
     gitBranch: (scope: SessionScope, worktree?: string, signal?: AbortSignal) => Promise<{
         current: string;
         names: string[];
@@ -217,6 +366,19 @@ export declare const api: {
      *  reads both sides' full contents through this. */
     gitShow: (scope: SessionScope, rev: string, path: string, worktree?: string, signal?: AbortSignal) => Promise<{
         content: string | null;
+    }>;
+    /** ONE file's whole uncommitted change (worktree against HEAD, staged and
+     *  unstaged in one patch). The editor's change gutter maps this onto the
+     *  buffer's line numbers; untracked files are marked from the status store
+     *  instead, because no diff side ever lists them. */
+    gitDiffHead: (scope: SessionScope, path: string, worktree?: string, signal?: AbortSignal) => Promise<{
+        diff: string;
+    }>;
+    /** Blame ONE line range (`git blame --porcelain -L`). Never throws: every
+     *  failure (untracked file, not a repository, command failure) answers with
+     *  an empty list. Called on hover only — a file is never prefetched. */
+    gitBlame: (scope: SessionScope, path: string, startLine: number, endLine: number, worktree?: string, signal?: AbortSignal) => Promise<{
+        lines: GitBlameLine[];
     }>;
     /** The session's file-tool events for the changes tab's session lens: the
      *  `tool/call` + `tool/result` rows past `afterSeq` (0 = whole window),
@@ -281,10 +443,33 @@ export declare const api: {
      *  `afterSeq` narrows the response to the delta beyond it (poll tail).
      *  `live` is the thread's in-flight model deltas (DSH 0.1.5 publishes them
      *  outside the session log) — the CURRENT attempt on every pull, never a
-     *  delta, so the caller replaces its live set instead of appending. */
+     *  delta, so the caller replaces its live set instead of appending.
+     *  `pending` is the thread's live UNCLAIMED inbox in claim order (all
+     *  `next-step` entries, then the queued turns): the view renders those as
+     *  pending bubbles, deduped by id against the durable `user/message` rows
+     *  the claim later writes. */
     sidechatEvents: (childId: string, afterSeq?: number, signal?: AbortSignal) => Promise<{
         events: SidechatLogEvent[];
         live: SidechatLiveEvent[];
+        pending: SidechatPendingInput[];
+    }>;
+    /** Drop one pending inbox message (no `messageId` = drop the whole queue).
+     *  `removed` is how many the host actually took out; a cold thread answers
+     *  `0` rather than failing. */
+    sidechatDequeue: (childId: string, messageId?: string) => Promise<{
+        accepted: true;
+        removed: number;
+    }>;
+    /** The host's own model catalog for the per-thread picker. `available:
+     *  false` means no catalog was readable (headless or older host) — the
+     *  picker then offers only "inherit the parent conversation". */
+    sidechatModels: () => Promise<SidechatModelCatalog>;
+    /** Pin one Side Chat thread's model route (the host disables its own picker
+     *  for subagent-origin sessions, so this is the only switch a side thread
+     *  has). `reasoningEffort` is omitted unless chosen. */
+    sidechatModel: (childId: string, provider: string, model: string, reasoningEffort?: string) => Promise<{
+        accepted: true;
+        selection: SidechatModelSelection;
     }>;
     /** Read the side card preferences (plugin-global, no session scope). */
     settingsGet: () => Promise<{
@@ -308,29 +493,31 @@ export declare function mediaUrl(scope: SessionScope, path: string): string;
  *  `Content-Disposition: attachment`, so the browser saves the file. */
 export declare function downloadUrl(scope: SessionScope, path: string): string;
 /**
- * Start one archive build. The host fences and walks the selection, then
- * returns an id IMMEDIATELY — the zip itself is produced in the background and
- * polled through {@link api.archiveStatus}. `paths` are absolute paths in the
- * session's namespace (the same values `fsTree` / `downloadUrl` take).
+ * Start one archive build. The host fences the selection and returns an id
+ * IMMEDIATELY — the system's `zip` (or `tar`) packs it into a temp file in the
+ * background, polled through {@link api.archiveStatus}. `paths` are absolute
+ * paths in the session's namespace (the same values `fsTree` / `downloadUrl`
+ * take); `name` is a STEM, because the host appends the extension of the tool
+ * it actually has and returns the final name with the id.
  */
 export declare function archiveBuild(scope: SessionScope, paths: readonly string[], name: string): Promise<{
     id: string;
+    name: string;
     entries: number;
 }>;
-/** One archive build's progress (the shape `archive.status` returns). */
+/** One archive build's state (the shape `archive.status` returns). */
 export interface ArchiveBuildStatus {
     state: 'building' | 'ready' | 'error';
-    /** Entries finished so far. */
-    done: number;
-    /** Entries the archive will contain. */
-    total: number;
-    /** Uncompressed bytes read so far. */
+    /** Bytes written to the archive so far. */
     bytes: number;
-    /** Present only when `state === 'error'`. */
+    /** Present only when `state === 'error'` (the tool's own stderr tail). */
     error?: string;
 }
-/** Poll one archive build (its id came from {@link archiveBuild}). */
-export declare function archiveStatus(id: string): Promise<ArchiveBuildStatus>;
+/** Poll one archive build (its id came from {@link archiveBuild}). The session
+ *  scope rides along exactly like `archive.build`: the host requires BOTH keys
+ *  (`requireString(payload, 'id')` + `requireString(payload, 'sessionId')`), so
+ *  a bare `{ id }` payload is refused with a 400 and the status is never read. */
+export declare function archiveStatus(scope: SessionScope, id: string): Promise<ArchiveBuildStatus>;
 /**
  * Absolute URL of one FINISHED archive's bytes (the `archive.status` result
  * must be `ready` first): GET /sidebar/archive?id=…&sessionId=… The session
@@ -346,4 +533,18 @@ export declare function archiveDownloadUrl(scope: SessionScope, id: string): str
  * client-side platform signal is needed.
  */
 export declare function htmlUrl(scope: SessionScope, path: string): string;
+/** One session-phase read: whether the session is still blank (no messages). */
+export interface SessionPhase {
+    /** True while the session has neither a user nor an assistant message. */
+    blank: boolean;
+}
+/**
+ * Read one session's blank phase. Blank sessions do not render the host's
+ * session header, so the plugin's header-registered dock entry is unreachable
+ * there (issue #698/#623) — the client uses this to render its fallback entry.
+ * @param sessionId - the session to read.
+ * @param signal - optional abort signal.
+ * @returns the phase (`blank: false` when the session does not exist).
+ */
+export declare function sessionPhase(sessionId: string, signal?: AbortSignal): Promise<SessionPhase>;
 export {};

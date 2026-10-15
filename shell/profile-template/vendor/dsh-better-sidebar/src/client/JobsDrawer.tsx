@@ -33,6 +33,7 @@ import {
   type TreeJob,
 } from './subagent-jobs.ts'
 import { FloatingWindow } from './FloatingWindow.tsx'
+import { useAutoAnimateRef } from './use-auto-animate.ts'
 import { t } from './locales.ts'
 import css from './tasks-graph.module.css'
 
@@ -69,6 +70,9 @@ export function JobsDrawer(props: JobsDrawerProps): ReactNode {
   /** Manual override; undefined = follow the auto rule. */
   const [manualOpen, setManualOpen] = useState<boolean | undefined>(undefined)
   const open = manualOpen ?? autoOpen
+  /** The rows: a job arriving or settling slides in instead of blinking. */
+  const rowsRef = useRef<HTMLDivElement>(null)
+  useAutoAnimateRef(rowsRef)
   const [armedId, setArmedId] = useState<string | undefined>(undefined)
   const [killingId, setKillingId] = useState<string | undefined>(undefined)
   const [killErrorId, setKillErrorId] = useState<string | undefined>(undefined)
@@ -134,7 +138,7 @@ export function JobsDrawer(props: JobsDrawerProps): ReactNode {
       </button>
       {!autoOpen && <div className={css.jobsAutoNote}>{t('jobsAutoCollapsed')}</div>}
       {open && (
-        <div className={css.jobsDrawerBody}>
+        <div className={css.jobsDrawerBody} ref={rowsRef}>
           {rows.map((row) => {
             const { job } = row
             const live = isJobLive(job)

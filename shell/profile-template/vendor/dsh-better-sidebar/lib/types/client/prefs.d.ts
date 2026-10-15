@@ -9,9 +9,9 @@
  * must keep working exactly as composed when the settings surface is missing.
  */
 import type { api } from './api.ts';
-import { clampTitleBarStrip, SIDEBAR_PREFS_DEFAULTS, TITLE_BAR_SCHEMES, TITLE_BAR_STRIP_DEFAULT, type SidebarPrefs, type TitleBarScheme } from '../prefs-shared.ts';
-export { SIDEBAR_PREFS_DEFAULTS, TITLE_BAR_SCHEMES, TITLE_BAR_STRIP_DEFAULT, clampTitleBarStrip, };
-export type { SidebarPrefs, TitleBarScheme };
+import { EXPLORER_EXCLUDE_DEFAULTS, SIDEBAR_PREFS_DEFAULTS, type SidebarPrefs } from '../prefs-shared.ts';
+export { EXPLORER_EXCLUDE_DEFAULTS, SIDEBAR_PREFS_DEFAULTS, };
+export type { SidebarPrefs };
 /** The settings wire face the preferences need (a subset of the plugin api). */
 export type SidebarSettingsClient = Pick<typeof api, 'settingsGet' | 'settingsUpdate'>;
 /** Validate one raw resolved value into {@link SidebarPrefs}. Used for the

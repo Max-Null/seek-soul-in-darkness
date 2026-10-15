@@ -1,6 +1,6 @@
 /**
- * Path projection helpers shared by the explorer rows: a path relative to
- * the session cwd (for the @-reference button and "copy relative path").
+ * Path projection helpers shared by the explorer rows: workspace-relative
+ * mentions and session-cwd-relative "copy relative path".
  * The fs-tree joins with '/' even on Windows, so both separators normalize
  * to '/' before comparison.
  *
@@ -33,6 +33,14 @@ export declare function isAbsolutePath(path: string): boolean;
  * relative text keeps the caller's own casing.
  */
 export declare function relativeTo(cwd: string, path: string): string;
+/**
+ * Project an absolute explorer entry against the host-confirmed workspace
+ * root. Unlike copy-relative-path's `relativeTo`, mention insertion must
+ * never fall back to an absolute token. Unknown roots, traversal components
+ * and paths outside the workspace are refused. Windows drive/UNC paths are
+ * case-insensitive; POSIX paths retain their case-sensitive distinction.
+ */
+export declare function workspaceRelativePath(root: string | undefined, path: string): string | undefined;
 /**
  * Whether `target` lies under `base` (or equals it), tolerant of separator
  * style and — on Windows-style drive paths — of letter case. A client-side

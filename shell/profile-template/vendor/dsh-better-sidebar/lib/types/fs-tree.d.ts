@@ -1,3 +1,4 @@
+import type { ExcludeMatcher } from './exclude-patterns.ts';
 /** One explorer row. */
 export interface SidebarFsEntry {
     name: string;
@@ -8,6 +9,14 @@ export interface SidebarFsEntry {
     isSymlink: boolean;
     /** For symlinks: the target is missing or unreadable (stat failed). */
     broken: boolean;
+    /**
+     * Directory rows only: the contents are EXACTLY one child — the explorer
+     * folds such singleton chains into one breadcrumb row (VSCode's "compact
+     * folders"). The terminal link (sole child is a FILE) is marked too, so
+     * the row label never shifts when the chain expands. Symlink children
+     * never qualify: a self-referential link would otherwise fold forever.
+     */
+    compact?: boolean;
 }
 /** One listed level. */
 export interface SidebarFsListing {
@@ -45,10 +54,40 @@ export declare function invalidateDirectoryCache(path?: string): void;
  * List one directory level (cached for {@link DIRECTORY_CACHE_TTL_MS}).
  * @param path - absolute directory path.
  * @param maxEntries - row bound of one level (extra rows flag `truncated`).
+ * @param exclude - compiled exclude-pattern probe (the explorerExclude pref):
+ *  matched entries are dropped from the listing AND the singleton fold probe,
+ *  so they never render nor block a breadcrumb fold.
+ * @param gate - optional shared probe budget; a batch listing many levels
+ *  passes ONE gate ({@link createProbeGate}) so the per-level probe bounds do
+ *  not multiply. Cache hits never touch it.
  * @returns the sorted listing.
  * @throws {SidebarError} fs-error when the level is unreadable or not a directory.
  */
-export declare function listDirectory(path: string, maxEntries?: number): Promise<SidebarFsListing>;
+export declare function listDirectory(path: string, maxEntries?: number, exclude?: ExcludeMatcher, gate?: ProbeGate): Promise<SidebarFsListing>;
+/**
+ * In-flight filesystem probes ONE listing request may run across ALL of its
+ * levels. The per-level bounds below are exactly that — per level — while a
+ * batch request lists up to `FS_TREES_MAX_PATHS` levels concurrently
+ * (`fs.trees`), so without a shared budget a cold mount of a wide tree could
+ * hold levels × per-level probes open at once (64 × 32). Equal to the
+ * per-level constant on purpose: a single-level listing behaves as before.
+ */
+export declare const PROBE_BUDGET = 32;
+/** A FIFO gate bounding how many probe operations run at the same time. */
+export interface ProbeGate {
+    /**
+     * Run one probe operation under the gate.
+     * @param task - the probe; it must not acquire the gate itself.
+     * @returns the task's own result.
+     */
+    run<T>(task: () => Promise<T>): Promise<T>;
+}
+/**
+ * Create the probe gate one listing request shares across its levels.
+ * @param limit - maximum probes in flight; below 1 is clamped to 1.
+ * @returns the gate.
+ */
+export declare function createProbeGate(limit?: number): ProbeGate;
 /** The root row label of a listing: the last path segment (or the full path at the filesystem root). */
 export declare function rootLabel(path: string): string;
 /** Parent of a path, or undefined at the filesystem root (the explorer's "up" target). */

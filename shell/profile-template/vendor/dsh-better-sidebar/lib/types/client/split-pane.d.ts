@@ -27,4 +27,10 @@ export declare function Workbench(props: {
     renderTab: (tab: SidebarTab, active: boolean, paneId: string) => ReactNode;
     getTabIcon?: (tab: SidebarTab) => ReactNode;
     getTabBadge?: (tab: SidebarTab) => ReactNode;
+    /** Unread mark resolver (see TabBar's `isTabUnread`). */
+    isTabUnread?: (tab: SidebarTab) => boolean;
+    getTabRightActions?: (tab: SidebarTab, paneId: string) => ReactNode;
+    /** Reveal a tab's file in the OS file manager (see TabBar); absent → the
+     *  tab context menu's reveal row is disabled. */
+    onRevealInFileManager?: (path: string) => void;
 }): import("react").JSX.Element;

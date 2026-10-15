@@ -30,17 +30,19 @@ import type { Context } from '../context-types.ts'
 import { api, mediaUrl, type SessionScope } from './api.ts'
 import { BinaryDownload } from './binary-download.tsx'
 import { planFirstMatch, planFsReadOutcome, type EditorLoadAction } from './editor-load.ts'
+import { clearEditorDirty, setEditorDirty } from './editor-dirty.ts'
 import { baseName } from './FileTree.tsx'
 import { createFrameBatcher } from './frame-batcher.ts'
-import { openSidebarFile } from './sidebar-file.ts'
+import { openClaimedNativeFile, openSidebarFile } from './sidebar-file.ts'
 import { openWithSshActive, openWithUrl, parseOpenWithConfig, resolveOpenWithTargets } from './open-with.ts'
+import { fileOpKey, useFileOpStream } from './ops-stream.ts'
 import { updatePluginSettings } from './plugin-settings.ts'
 import { createOpenInApp } from './open-in-app.ts'
 import { TreePanel } from './TreePanel.tsx'
 import { t } from './locales.ts'
 import { relativeTo } from './paths.ts'
 import { resolveSidebarPath } from './paths.ts'
-import { closePathTabs, retargetPathTabs } from './tree-mutations.ts'
+import { clearRetargetedPath, closePathTabs, consumeRetargetedPath, pathTabKey, retargetPathTabs } from './tree-mutations.ts'
 import type { EditorToolbarControls, EditorToolbarState, FileViewerDescriptor } from './service.ts'
 import { firstLeaf, insertLeafAt, leafWithTab, mintTabId, type SidebarStore, type SidebarTab } from './state.ts'
 import css from './sidebar.module.css'
@@ -48,7 +50,7 @@ import css from './sidebar.module.css'
 type EditorLoad =
   | { status: 'loading' }
   | { status: 'error'; message: string }
-  | { status: 'ready'; viewer: FileViewerDescriptor; content?: string; truncated?: boolean; mediaUrl?: string; customData?: unknown }
+  | { status: 'ready'; viewer: FileViewerDescriptor; content?: string; size?: number; largeFile?: { size: number }; mtimeMs?: number; mediaUrl?: string; customData?: unknown }
   | { status: 'binary' }
 
 /** The docked tree panel's width bounds (drag-resize clamps into them). */
@@ -83,14 +85,32 @@ function treeWidthOf(tab: SidebarTab): number {
     : TREE_WIDTH_DEFAULT
 }
 
-/** Merge a patch into the tab's persisted meta (rides the layout). */
-function patchMeta(ctx: Context, tab: SidebarTab, patch: Record<string, unknown>): void {
-  ctx.get('betterSidebar')?.updateTab(tab.id, { meta: { ...metaOf(tab), ...patch } })
+/**
+ * Merge a patch into the tab's persisted meta (rides the layout).
+ *
+ * `sessionId` is the seat session: native ids restart per session and every
+ * visited tab's body stays mounted (0.1.7 `keepMounted`), so the tab this call
+ * means must be named, not inferred from whichever seat is on screen.
+ */
+function patchMeta(ctx: Context, tab: SidebarTab, sessionId: string, patch: Record<string, unknown>): void {
+  ctx.get('betterSidebar')?.updateTab(tab.id, { meta: { ...metaOf(tab), ...patch } }, sessionId)
 }
 
 /** Clamp one dock width into the contract range. */
 function clampTreeWidth(value: number): number {
   return Math.min(TREE_WIDTH_MAX, Math.max(TREE_WIDTH_MIN, Math.round(value)))
+}
+
+/** Whether one external-open call was accepted: a rejected launch is logged
+ *  for diagnosis and answered `false`, so the caller can surface it. */
+function accepted(pending: Promise<unknown>): Promise<boolean> {
+  return pending.then(
+    () => true,
+    (error: unknown) => {
+      console.error('open external failed', error)
+      return false
+    },
+  )
 }
 
 export function EditorHost(props: {
@@ -120,6 +140,25 @@ export function EditorHost(props: {
   // with the same path/scope — the only reload entry besides open/close.
   const [reloadSeq, setReloadSeq] = useState(0)
 
+  // The reference's landing line, SPENT once per open (#826).
+  //
+  // `tab.line` is one navigation, but the record keeps it for as long as the
+  // tab is open (the host re-delivers its navigation on every notification).
+  // The viewer cannot own that memory: a reload REMOUNTS it — this host swaps
+  // in the loading row — and a fresh instance starts at preview mode with an
+  // empty journal, so it would apply the same line again. For markdown/html
+  // that means re-forcing the file into the editor, and since the preview
+  // button reloads by design (#167 part B), the reader could never get back to
+  // preview. This host survives every reload, so the spent line is remembered
+  // here; the key carries the line, so a NEW reference re-arms it, and a file
+  // switch drops it (coming back to a file is a fresh open).
+  const [spentLine, setSpentLine] = useState<string | null>(null)
+  const lineKey = tab.line === undefined ? null : `${path}#${tab.line}`
+  const onLineConsumed = useCallback(() => {
+    if (lineKey !== null) setSpentLine(lineKey)
+  }, [lineKey])
+  useEffect(() => { setSpentLine(null) }, [path])
+
   // Manual refresh (issue #167 + PR #228): a dirty draft is dropped by the
   // reload (the editor instance remounts), so confirm before discarding it.
   const refreshFile = (): void => {
@@ -138,6 +177,15 @@ export function EditorHost(props: {
   const inPlace = useSyncExternalStore(
     useCallback((callback: () => void) => store.subscribe(callback), [store]),
     useCallback(() => store.getSnapshot().prefs.editorExplorer, [store]),
+  )
+  // The exclude-pattern list (VS Code files.exclude style): the HOST filters
+  // the listing with it, so a changed list reloads the tree (FileTree wipes
+  // its level cache when the list's VALUE changes). The snapshot array
+  // identity is stable until prefs are rewritten, so useSyncExternalStore
+  // stays quiet.
+  const exclude = useSyncExternalStore(
+    useCallback((callback: () => void) => store.subscribe(callback), [store]),
+    useCallback(() => store.getSnapshot().prefs.explorerExclude, [store]),
   )
   // The DSH-native "open with" capability (host open-in-app): one adapter per
   // window, shared by every row menu below. The plugin no longer owns a
@@ -174,10 +222,18 @@ export function EditorHost(props: {
    * Open a file from THIS window (tree click / search row / path input):
    * merged mode switches this tab in place (stable id, meta survives);
    * split mode opens a per-path dedupe tab through openSidebarFile.
+   *
+   * A file another native tab type claims (a `.drawio` canvas, say) diverts
+   * to THAT type's tab in BOTH modes (#695) — an in-place switch would
+   * swallow it into this plugin's editor, and the claiming type could never
+   * render from the tree. Both helpers fall back verbatim for every other
+   * file, so the editor keeps exactly its previous behavior.
    */
   const openFile = (absolute: string): void => {
     if (inPlace) {
-      ctx.get('betterSidebar')?.updateTab(tab.id, { path: absolute, title: baseName(absolute) })
+      if (!openClaimedNativeFile(ctx, scope.sessionId, scope.cwd, absolute)) {
+        ctx.get('betterSidebar')?.updateTab(tab.id, { path: absolute, title: baseName(absolute) }, scope.sessionId)
+      }
     } else {
       openSidebarFile(ctx, scope.sessionId, absolute)
     }
@@ -205,6 +261,10 @@ export function EditorHost(props: {
     // workbench's splits. A natively-hosted tab (right Sidebar) is absent
     // from them even while it is on screen.
     if (service !== undefined && !store.tabOpen(scope.sessionId, tab.id)) {
+      // The seed names the editor type, but the native branch of openTab
+      // turns an editor PATH seed into a resource address and lets the HOST's
+      // tab registry decide the claiming type (#695) — a third-party type
+      // with a more specific pattern receives this side gesture too.
       service.openTab({ type: 'editor', path: absolute, target: 'side' }, scope)
       return
     }
@@ -226,22 +286,23 @@ export function EditorHost(props: {
    *  manager, or hand the target's URL to its opener — local `file` URLs go
    *  to the host's external opener, while the SSH-remote form for
    *  VSCode-family editors launches on the browser/client machine (see
-   *  api.openExternal). Failures are logged only — a missing handler is the
-   *  OS's/browser's dialog, not a sidebar error. */
-  const openWith = (targetId: string, absolute: string): void => {
+   *  api.openExternal).
+   *
+   *  Answers whether the hand-off was accepted. The host route now reports a
+   *  real failure when EVERY opener candidate fails (see
+   *  `src/open-external.ts`) instead of the old silent `{ started: true }`, so
+   *  a refusal is returned to the tree, which renders it — the log stays for
+   *  diagnosis. A missing handler on the other machine is still the OS's or
+   *  browser's own dialog. */
+  const openWith = (targetId: string, absolute: string): Promise<boolean> => {
     const target = openWithTargets.find(item => item.id === targetId)
-    if (target === undefined) return
+    if (target === undefined) return Promise.resolve(false)
     if (target.kind === 'reveal') {
-      void api.openExternal({ action: 'reveal', path: absolute }).catch(
-        (error: unknown) => { console.error('open external failed', error) },
-      )
-      return
+      return accepted(api.openExternal({ action: 'reveal', path: absolute }))
     }
     const url = openWithUrl(target, absolute, openWithConfig)
-    if (url === undefined) return
-    void api.openExternal({ action: 'url', url }).catch(
-      (error: unknown) => { console.error('open external failed', error) },
-    )
+    if (url === undefined) return Promise.resolve(false)
+    return accepted(api.openExternal({ action: 'url', url }))
   }
 
   /** Toggle one target's pinned state. The write is serialized (see
@@ -263,7 +324,7 @@ export function EditorHost(props: {
     retargetPathTabs(ctx, store, oldPath, newPath)
   }
   const onPathDeleted = (path: string): void => {
-    closePathTabs(ctx, store, path)
+    closePathTabs(ctx, store, path, t('closeUnsavedConfirm'))
   }
 
   // The viewer's toolbar, hoisted into THIS header: the text editor reports
@@ -277,6 +338,17 @@ export function EditorHost(props: {
   const onToolbarControls = useCallback((controls: EditorToolbarControls | null) => {
     controlsRef.current = controls
   }, [])
+
+  // Publish this tab's unsaved-draft state to the close/unload guards: the
+  // toolbar report already carries `dirty`, so no extra plumbing is needed.
+  // A path-less window (the files home) and folder windows never register.
+  // The cleanup clears on unmount (tab closed, session switched, in-place
+  // path switch remounts the viewer) so a guard can never outlive its draft.
+  useEffect(() => {
+    if (path === '' || isDir) return
+    setEditorDirty(tab.id, toolbar?.dirty === true, scope.sessionId, path)
+    return () => { clearEditorDirty(tab.id, scope.sessionId) }
+  }, [tab.id, toolbar?.dirty, scope.sessionId, path, isDir])
 
   // The docked panel's drag-resize: pointer capture on the handle itself
   // (no window listeners — the captured pointer keeps tracking even off the
@@ -317,10 +389,38 @@ export function EditorHost(props: {
     dragRef.current = null
     setDragWidth(null)
     const finalWidth = clampTreeWidth(drag.startWidth + (drag.startX - event.clientX))
-    if (finalWidth !== treeWidthOf(tab)) patchMeta(ctx, tab, { treeWidth: finalWidth })
+    if (finalWidth !== treeWidthOf(tab)) patchMeta(ctx, tab, scope.sessionId, { treeWidth: finalWidth })
   }
 
+  /** The rename-marker key for this tab (see `pathTabKey`): the session this
+   *  editor reads and writes in, plus the tab id. */
+  const retargetKey = pathTabKey(scope.sessionId, tab.id)
+  /** The path this editor last loaded (or was mounted on) — the rename retarget
+   *  announces itself as a move away from it. */
+  const loadedPathRef = useRef(path)
+  // A mounted editor is the only thing that can claim a retarget: once it is
+  // gone the announcement can never be applied, so it must not sit in the map
+  // for the rest of the page's life. A remount loads the record's current path
+  // either way, which is exactly what the marker would have preserved.
+  useEffect(() => () => { clearRetargetedPath(retargetKey) }, [retargetKey])
   useEffect(() => {
+    // A rename moved the file, not its bytes: the tab follows the new name
+    // (tree-mutations' retargetPathTabs) while the loaded document — and an
+    // unsaved draft, which lives only in the editor instance — stays put.
+    // Reloading here would swap the content for the very same bytes and drop
+    // the draft with it, so the retarget is consumed instead; the next save
+    // simply lands on the new name. A path that moved WITHOUT that marker is a
+    // real switch to another file, which must load as usual.
+    //
+    // This runs BEFORE the toolbar reset below: nothing reloads, so the viewer
+    // keeps reporting the state it already has — clearing it here dropped the
+    // dirty mark (and with it the close guard) of a draft that was still
+    // unsaved.
+    const previousPath = loadedPathRef.current
+    const pathChanged = previousPath !== path
+    loadedPathRef.current = path
+    if (pathChanged && consumeRetargetedPath(retargetKey, previousPath, path)) return
+    if (!pathChanged) clearRetargetedPath(retargetKey)
     // A (re)load or a path-less tab clears any hoisted toolbar state — the
     // fresh viewer re-registers its own.
     setToolbar(null)
@@ -345,7 +445,8 @@ export function EditorHost(props: {
             status: 'ready',
             viewer: action.viewer,
             content: action.content,
-            truncated: action.truncated,
+            size: action.size,
+            largeFile: action.largeFile,
             mediaUrl: action.mediaUrl,
             customData: action.customData,
           })
@@ -362,14 +463,13 @@ export function EditorHost(props: {
         case 'fetchFsRead':
           api.fsRead(scope, path).then((result) => {
             if (cancelled) return
-            // Binary reads carry the head bytes for the detect re-match.
-            const outcome = planFsReadOutcome(action.viewer, {
-              binary: result.kind === 'binary',
-              content: result.kind === 'text' ? result.content : '',
-              truncated: result.truncated,
-              head: result.kind === 'binary' ? result.head : undefined,
-            }, (head) => ctx.get('betterSidebar')?.matchFileViewer(path, head), mediaUrlOf)
-            apply(outcome)
+            // The host answers one of three shapes; binary and too-large both
+            // carry the head bytes for the detect re-match (see editor-load.ts).
+            const outcome = planFsReadOutcome(action.viewer, result, (head) => ctx.get('betterSidebar')?.matchFileViewer(path, head), mediaUrlOf)
+            // Carry the read's mtime into the rendered viewer: the text
+            // editor uses it as the save baseline (fs-conflict on drift).
+            if (outcome.kind === 'render') setLoad({ ...outcome, status: 'ready', mtimeMs: result.mtimeMs })
+            else apply(outcome)
           }).catch((error: unknown) => {
             if (cancelled) return
             setLoad({ status: 'error', message: error instanceof Error ? error.message : String(error) })
@@ -397,9 +497,48 @@ export function EditorHost(props: {
     prevSaveState.current = current
   }, [toolbar?.saveState, toolbar?.mode])
 
+  // Model-write auto-refresh (issue #855): a `write` / `edit` tool call of THIS
+  // session that settled without an error and named THIS file reloads the
+  // preview — silently, through the very same load path the header's refresh
+  // button uses (so that manual entry keeps working untouched).
+  //
+  // The signal is the plugin's own `changes.ops` delta stream, consumed by ONE
+  // shared poller per session (see ops-stream.ts): this tab joins it only while
+  // it is on screen with a real file, so a parked tab costs no requests, and a
+  // tab of another session never sees these touches at all.
+  const ops = useFileOpStream(scope, visible && !showEmpty && !isDir)
+  /** The stream revision this tab's current path is known fresh at. */
+  const opBaseline = useRef<{ key: string; revision: number } | null>(null)
+  useEffect(() => {
+    const key = `${scope.sessionId}\u0000${path}`
+    const seen = opBaseline.current
+    if (seen === null || seen.key !== key) {
+      // A (re)targeted tab has just loaded the file: only a touch published
+      // AFTER this moment may reload it. Without this, every already-settled
+      // write of the session would fire on open.
+      opBaseline.current = { key, revision: ops.revision }
+      return
+    }
+    const touch = ops.touched.get(fileOpKey(scope.cwd, path))
+    if (touch === undefined || touch.revision <= seen.revision) return
+    // Consume the touch whatever we decide: the file on disk moved past this
+    // tab, and neither branch may fire twice for the same revision.
+    opBaseline.current = { key, revision: ops.revision }
+    // Dirty priority (#228, #855): a draft lives only in the editor instance,
+    // and reloading remounts it — the user's unsaved input must never be
+    // overwritten by what the model wrote. An open edit session is skipped for
+    // the same reason (it would drop the caret); the pre-existing
+    // edit→preview edge reloads on the way back, and the header's refresh
+    // button stays the explicit escape hatch in both cases.
+    if (toolbar?.dirty === true || toolbar?.mode === 'edit') return
+    setReloadSeq(sequence => sequence + 1)
+    // Granular deps: the scope object's identity churns, so only its
+    // sessionId / cwd fields gate this decision.
+  }, [ops, path, scope.sessionId, scope.cwd, toolbar?.dirty, toolbar?.mode])
+
   const treeOpen = treeOpenOf(tab)
   /** Persist the panel flag on the tab (survives reloads with the layout). */
-  const toggleTree = (): void => { patchMeta(ctx, tab, { treeOpen: !treeOpen }) }
+  const toggleTree = (): void => { patchMeta(ctx, tab, scope.sessionId, { treeOpen: !treeOpen }) }
   const saveLabel = toolbar === null ? ''
     : toolbar.saveState === 'saving' ? t('loading')
       : toolbar.saveState === 'saved' ? t('saved')
@@ -434,6 +573,7 @@ export function EditorHost(props: {
           onReferenceFile={onReferenceFile}
           onPathRenamed={onPathRenamed}
           onPathDeleted={onPathDeleted}
+          exclude={exclude}
           service={ctx.get('betterSidebar')}
         />
       </div>
@@ -472,7 +612,7 @@ export function EditorHost(props: {
           </div>
         )}
         {toolbar?.dirty === true && <span className={css.dirtyDot} title={t('unsaved')} />}
-        {toolbar?.editable === true && (
+        {toolbar?.editable === true && toolbar?.largeFile !== true && (
           <button
             type="button"
             className={css.iconButton}
@@ -517,14 +657,25 @@ export function EditorHost(props: {
           {!showEmpty && load.status === 'ready' && createElement(load.viewer.component, {
             ctx, store, scope, path, title,
             viewerId: load.viewer.id,
+            // The reference's landing line, if the address carried one (#826)
+            // AND this open has not spent it yet. Only the text viewer acts on
+            // it; a markdown/html/image viewer gets the field and ignores it.
+            line: lineKey !== null && lineKey !== spentLine ? tab.line : undefined,
+            onLineConsumed,
             content: load.content,
-            truncated: load.truncated,
+            size: load.size,
+            largeFile: load.largeFile,
+            mtimeMs: load.mtimeMs,
             mediaUrl: load.mediaUrl,
             customData: load.customData,
             // The viewer's toolbar always hoists into this host's header.
             toolbar: 'host',
+            // Native tabs stay mounted while parked; an over-limit preview
+            // reads pages only while somebody is looking (see FileViewerProps).
+            visible,
             onToolbarState,
             onToolbarControls,
+            onReload: refreshFile,
           })}
         </div>
         {treeOpen && (
@@ -559,6 +710,7 @@ export function EditorHost(props: {
               onReferenceFile={onReferenceFile}
               onPathRenamed={onPathRenamed}
               onPathDeleted={onPathDeleted}
+              exclude={exclude}
               service={ctx.get('betterSidebar')}
             />
           </div>

@@ -11,7 +11,8 @@ import type { BetterSidebarService } from '../service.ts';
 /**
  * Register all built-in tabs and viewers with the service. Returns a
  * disposer that unregisters everything (cordis auto-invokes it on fiber
- * disposal). The `ctx` is threaded into tab descriptors that need it
- * (EditorHost reads `ctx.betterSidebar` for file-viewer matching).
+ * disposal). The `ctx` is threaded into the descriptor factory that needs it
+ * (the bottom terminal's `onClose` probes `ctx.webTerminals` to end the host
+ * process; components read `ctx.betterSidebar` from their props).
  */
 export declare function registerBuiltins(ctx: Context, service: BetterSidebarService): () => void;

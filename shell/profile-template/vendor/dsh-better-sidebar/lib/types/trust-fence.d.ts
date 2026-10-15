@@ -13,12 +13,16 @@ import type { IncomingHttpHeaders } from 'node:http';
 /** The request facts the fence reads (structural subset of IncomingMessage). */
 interface ApiTrustRequest {
     headers: IncomingHttpHeaders;
+    /** Present on a real node request; the bfcache exception is media-route only. */
+    method?: string;
+    url?: string;
 }
 /** Whether a normalized URL hostname names the local loopback authority. */
 export declare function isLoopbackHostname(hostname: string): boolean;
 /**
  * Decide whether one sidebar request may reach the plugin routes.
- * @param request - node HTTP request facts (headers).
+ * @param request - node HTTP request facts (headers, and the method/url the
+ *   media-route exception is scoped to).
  * @param trustedHosts - non-loopback authorities this deployment serves.
  * @returns true when the Host is ours (loopback or trusted) and browser markers are same-origin.
  */

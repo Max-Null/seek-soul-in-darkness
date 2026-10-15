@@ -74,23 +74,50 @@ export declare function placeComposerCaretAfterInsert(expectedDraft: string, car
  */
 export declare function appendToDraft(ctx: Context, sessionId: string, text: string): boolean;
 /**
- * The DSH `@file` spelling for one relative path, mirroring the host grammar
+ * The DSH `@` spelling for one relative path, mirroring the host grammar
  * (`formatFileMention` in `@deepseek-ai/dsh-file-reference`): plain when
  * there is no whitespace, quoted when there is, and `undefined` when the
  * path contains a control character or an embedded quote the editor grammar
  * cannot represent.
+ *
+ * Files and folders share this one constructor so the quoting rule cannot
+ * drift between them. A folder spells the trailing slash *inside* the quotes
+ * (`@"my dir/"`, `@docs/`): the host's folder token matcher
+ * (`FOLDER_REF_RE` in `dsh-client-ui-conversation`) only accepts a quoted
+ * directory once the quote closes, and the message bubble's tokenizer
+ * (`@"[^"\n]+"` in `dsh-client-ui-primitives`) only classifies a closed
+ * quoted token as a folder — unquoted `@my dir/` decorates as a file chip
+ * covering just `my`. The host's own picker emits the *open* form
+ * (`@"my dir/`) while the user is still descending through completion; a
+ * programmatic reference is a finished mention, so it closes the quote.
  */
-export declare function fileMention(relativePath: string): {
+export declare function mentionFor(relativePath: string, kind: 'file' | 'folder'): {
     mention: string;
     label: string;
 } | undefined;
+/**
+ * A complete directory token (`@docs/`, `@"my dir/"`): the explorer inserts a
+ * finished mention, so the trailing slash sits inside the closing quote.
+ * Separators normalize to '/' first (the fs-tree spelling); the spelling
+ * itself is {@link mentionFor}'s single job, folder kind — this helper adds no
+ * quoting rule of its own.
+ */
+export declare function directoryMention(relativePath: string): string | undefined;
+/**
+ * Insert an explorer entry using WorkspaceView.path, selected by exact
+ * session membership (the same lookup as the native conversation shell).
+ * Read the public workspace snapshot at click time so reconnects and session
+ * changes cannot leave a captured root stale. Missing/unready membership or
+ * an unrepresentable path is a logged no-op; never guess from session cwd.
+ */
+export declare function insertWorkspaceReference(ctx: Context, sessionId: string, path: string, isDir: boolean): boolean;
 /**
  * Insert one FILE reference as a structured chip (like DSH's own `@` picker).
  * The chip displays `@<basename>` but serializes to `@<relative path>` on
  * send, so the reference stays a single link from trigger to basename.
  *
- * Directories are NOT handled here: DSH's folder grammar wants the trailing
- * slash as plain text (`@dir/`) so completion can descend, which
- * `appendToDraft` already covers.
+ * Directories keep the sidebar's plain-text completion behavior (`@dir/`)
+ * through `insertWorkspaceReference`. The rc.1 picker also supports folder
+ * chips on explicit selection; its drill action still inserts plain text.
  */
 export declare function insertFileReference(ctx: Context, sessionId: string, relativePath: string): boolean;

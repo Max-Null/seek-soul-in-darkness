@@ -162,7 +162,7 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
   const patchMeta = (patch: ChangesMeta): void => {
     ctx.get('betterSidebar')?.updateTab(tab.id, {
       meta: { ...(tab.meta as ChangesMeta | undefined ?? {}), ...patch },
-    })
+    }, scope.sessionId)
   }
 
   const chooseLens = (next: Lens): void => {
@@ -247,6 +247,7 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
         <DiffPane
           key={previewKey(previewTarget)}
           target={previewTarget}
+          ctx={ctx}
           scope={scope}
           height={paneHeight}
           onHeightCommit={(height) => { setPaneHeight(height); patchMeta({ previewH: height }) }}

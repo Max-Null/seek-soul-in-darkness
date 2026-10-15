@@ -32,13 +32,9 @@ window.__ModuleLoader__.load({
 		let _deepseek_ai_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
 		let react_jsx_runtime = require("react/jsx-runtime");
 		let react_dom = require("react-dom");
-		/** The title-bar / shell compatibility schemes (see {@link SidebarPrefs.titleBarScheme}). */
-		const TITLE_BAR_SCHEMES = [
-			"auto",
-			"web",
-			"preset",
-			"custom"
-		];
+		//#region src/prefs-shared.ts
+		/** The stock exclude list (VS Code ships a similar files.exclude default). */
+		const EXPLORER_EXCLUDE_DEFAULTS = [".DS_Store", "Thumbs.db"];
 		/** Fallback prefs used whenever the settings document is unreachable or malformed. */
 		const SIDEBAR_PREFS_DEFAULTS = {
 			autoOpenSubagent: true,
@@ -48,21 +44,15 @@ window.__ModuleLoader__.load({
 			mobileDefaultTree: true,
 			agentOpenTools: false,
 			editorExplorer: false,
-			titleBarScheme: "auto",
-			titleBarPresetId: "",
+			editorGitGutter: true,
+			explorerExclude: [...EXPLORER_EXCLUDE_DEFAULTS],
 			customCss: "",
-			titleBarCompat: false,
-			titleBarStripPx: 40,
 			htmlViewerNoSandbox: false,
 			htmlViewerDefaultUnsafe: false,
 			tabsEnabled: {},
 			viewersEnabled: {},
 			pluginSettings: {}
 		};
-		/** Clamp one title-bar strip height into the contract range (shared by schema and client reads). */
-		function clampTitleBarStrip(value) {
-			return Math.min(120, Math.max(0, Math.round(value)));
-		}
 		let nextIdCounter = 0;
 		/** Unique pane/tab id within one state instance. */
 		function uid(prefix) {
@@ -121,6 +111,7 @@ window.__ModuleLoader__.load({
 				nextBrowser: 1,
 				expanded: [],
 				revealed: [],
+				unread: [],
 				bottomOpen: false,
 				bottomHeight: 220,
 				bottomSplits: bottomLeaf
@@ -209,14 +200,14 @@ window.__ModuleLoader__.load({
 			const source = leafWithTab(node, tabId);
 			if (source === void 0) return state;
 			const tab = source.tabs.find((candidate) => candidate.id === tabId);
-			let emptied = false;
-			let splits = mapLeaf(node, source.id, (leaf) => {
-				leaf.tabs = leaf.tabs.filter((candidate) => candidate.id !== tabId);
-				if (leaf.active === tabId) leaf.active = leaf.tabs[leaf.tabs.length - 1]?.id ?? null;
-				if (leaf.tabs.length === 0) emptied = true;
-			});
-			if (emptied) splits = removeLeafAt(splits, source.id);
 			if (zone === "center") {
+				let emptied = false;
+				let splits = mapLeaf(node, source.id, (leaf) => {
+					leaf.tabs = leaf.tabs.filter((candidate) => candidate.id !== tabId);
+					if (leaf.active === tabId) leaf.active = leaf.tabs[leaf.tabs.length - 1]?.id ?? null;
+					if (leaf.tabs.length === 0) emptied = true;
+				});
+				if (emptied) splits = removeLeafAt(splits, source.id);
 				splits = mapLeaf(splits, toPane, (leaf) => {
 					leaf.tabs = [...leaf.tabs, tab];
 					leaf.active = tab.id;
@@ -227,11 +218,18 @@ window.__ModuleLoader__.load({
 					activePane: toPane
 				};
 			}
-			const result = insertLeafAt(splits, toPane, zone === "left" || zone === "right" ? "row" : "col", tab, zone === "left" || zone === "up");
+			const inserted = insertLeafAt(node, toPane, zone === "left" || zone === "right" ? "row" : "col", tab, zone === "left" || zone === "up");
+			let emptied = false;
+			let splits = mapLeaf(inserted.node, source.id, (leaf) => {
+				leaf.tabs = leaf.tabs.filter((candidate) => candidate.id !== tabId);
+				if (leaf.active === tabId) leaf.active = leaf.tabs[leaf.tabs.length - 1]?.id ?? null;
+				if (leaf.tabs.length === 0) emptied = true;
+			});
+			if (emptied) splits = removeLeafAt(splits, source.id);
 			return {
 				...state,
-				bottomSplits: result.node,
-				activePane: result.leafId
+				bottomSplits: splits,
+				activePane: inserted.leafId
 			};
 		}
 		/**
@@ -282,11 +280,40 @@ window.__ModuleLoader__.load({
 				})
 			};
 		}
+		/**
+		* Mark one tab TYPE as having a page the reader has not looked at yet (the
+		* dot drawn on its tab). Identity-preserving when it is already marked, so a
+		* repeat activation does not churn the store (and therefore localStorage).
+		*/
+		function markUnread(state, type) {
+			return state.unread.includes(type) ? state : {
+				...state,
+				unread: [...state.unread, type]
+			};
+		}
+		/** Clear one tab type's unread mark (the reader just looked at its page). */
+		function clearUnread(state, type) {
+			if (!state.unread.includes(type)) return state;
+			return {
+				...state,
+				unread: state.unread.filter((entry) => entry !== type)
+			};
+		}
+		/** Whether one tab type is currently marked unread. */
+		function isUnread(state, type) {
+			return state !== void 0 && state.unread.includes(type);
+		}
 		/** Update the display fields of one open tab (title / path / meta) without
 		*  re-opening it. The browser tab persists its current URL and hostname
 		*  title through this reducer so a reload restores the visited page. A
 		*  missing tab id is a no-op. The tab may live in either tree or a free
-		*  window. */
+		*  window.
+		*
+		*  A PATH CHANGE is a new open: the transient landing line (#826) is dropped
+		*  with it. `line` belongs to the navigation that delivered the file, not to
+		*  the tab — an in-place switch or a rename that kept it would send the next
+		*  file to the previous file's line (and force a markdown file into the
+		*  editor, which is how the reader gets stuck). */
 		function patchTab(state, tabId, patch) {
 			let changed = false;
 			const apply = (tab) => {
@@ -295,7 +322,8 @@ window.__ModuleLoader__.load({
 					...tab,
 					...patch.title !== void 0 ? { title: patch.title } : {},
 					...patch.path !== void 0 ? { path: patch.path } : {},
-					...patch.meta !== void 0 ? { meta: patch.meta } : {}
+					...patch.meta !== void 0 ? { meta: patch.meta } : {},
+					...patch.path !== void 0 && patch.path !== tab.path && tab.line !== void 0 ? { line: void 0 } : {}
 				};
 			};
 			const walk = (node) => {
@@ -436,6 +464,26 @@ window.__ModuleLoader__.load({
 				expanded
 			};
 		}
+		/**
+		* The absolute ancestor directories between the explorer root (`cwd`) and each
+		* given path, EXCLUDING the paths themselves: the levels a lazy tree must have
+		* expanded before those rows can exist. Empty strings and non-strings are
+		* skipped; the result is de-duplicated in first-seen order.
+		* @param cwd - the explorer's root (session working directory).
+		* @param files - absolute paths whose ancestors are wanted.
+		*/
+		function ancestorDirs(cwd, files) {
+			const found = /* @__PURE__ */ new Set();
+			const rootParts = (cwd ?? "").split(/[\\/]+/).filter((part) => part !== "");
+			for (const file of files) {
+				if (typeof file !== "string" || file === "") continue;
+				const parts = file.split(/[\\/]+/).filter((part) => part !== "" && part !== ".");
+				const separator = file.includes("\\") ? "\\" : "/";
+				const prefix = file.startsWith("/") ? "/" : file.startsWith("\\\\") ? "\\\\" : file.startsWith("\\") ? "\\" : "";
+				for (let i = rootParts.length; i < parts.length - 1; i++) found.add(prefix + parts.slice(0, i + 1).join(separator));
+			}
+			return [...found];
+		}
 		/** Adjust one split divider: `i` is the left/top child index, delta in fractions. */
 		function resizeSplit(node, splitId, index, delta) {
 			if (node.kind === "leaf") return node;
@@ -513,6 +561,7 @@ window.__ModuleLoader__.load({
 			const nextBrowser = typeof record.nextBrowser === "number" && Number.isInteger(record.nextBrowser) && record.nextBrowser >= 1 ? record.nextBrowser : 1;
 			if (typeof record.activePane !== "string" && record.activePane !== null) return void 0;
 			if (!Array.isArray(record.expanded) || record.expanded.some((item) => typeof item !== "string")) return void 0;
+			const unread = Array.isArray(record.unread) ? record.unread.filter((item) => typeof item === "string") : [];
 			const seen = /* @__PURE__ */ new Set();
 			const reid = /* @__PURE__ */ new Map();
 			const bottomOpen = record.bottomOpen === true;
@@ -532,6 +581,7 @@ window.__ModuleLoader__.load({
 				nextBrowser,
 				expanded: record.expanded,
 				revealed: [],
+				unread,
 				bottomOpen,
 				bottomHeight,
 				bottomSplits
@@ -717,6 +767,51 @@ window.__ModuleLoader__.load({
 					this.listeners.delete(listener);
 				};
 			}
+			/**
+			* Mark one tab type as unread in the CURRENT session (the dot on its tab).
+			*
+			* Reached from the background-activation path alone, so it refuses to
+			* notify when there is nothing to draw: a repeat mark keeps the state
+			* reference AND skips the listener fan-out, which is what lets a test (and
+			* the render path) treat a notification as "the marker really changed".
+			* Returns whether the marker was set.
+			*/
+			markUnread(type) {
+				const state = this.snapshot.state;
+				if (state === void 0 || state.unread.includes(type)) return false;
+				this.reduce((current) => markUnread(current, type));
+				return true;
+			}
+			/**
+			* Clear one tab type's unread mark in a NAMED session — the reader switched
+			* to that page. The current session goes through the publishing path (the
+			* dot has to disappear from the shell AND from the native chip, both of
+			* which read the published snapshot); a session that is not on screen takes
+			* the targeted path, which publishes nothing: its stored state is updated so
+			* the mark is already gone when the reader switches to it.
+			*
+			* `reduceFor` is deliberately not used for the current session: it never
+			* touches the published snapshot, so reading the mark back (or rendering
+			* from it) would keep seeing the old value.
+			*
+			* A type that is not marked is a strict no-op in both paths — no notify, no
+			* persist — so a carrier can call this on every visibility change.
+			* Returns whether a mark was cleared.
+			*/
+			clearUnread(type, sessionId) {
+				const state = this.snapshot.state;
+				const target = sessionId ?? this.snapshot.sessionId;
+				if (target === void 0) return false;
+				if (target === this.snapshot.sessionId) {
+					if (state === void 0 || !state.unread.includes(type)) return false;
+					this.reduce((current) => clearUnread(current, type));
+					return true;
+				}
+				const stored = this.bySession.get(target);
+				if (stored === void 0 || !stored.unread.includes(type)) return false;
+				this.bySession.set(target, clearUnread(stored, type));
+				return true;
+			}
 			getSnapshot() {
 				return this.snapshot;
 			}
@@ -808,8 +903,29 @@ window.__ModuleLoader__.load({
 				}, 200);
 				this.persistTimers.set(sessionId, timer);
 			}
+			/**
+			* Fan one store change out to every subscribed listener. A throwing
+			* listener is CONTAINED instead of aborting the loop.
+			*
+			* `service.subscribeState` hands this store's own `subscribe` to consumer
+			* plugins, and `notify()` runs inline in whatever call site mutated the
+			* store — `setSession` from the Sidebar's mount effect, `reduce` from a
+			* click handler. An exception escaping here therefore surfaces as a
+			* render/commit-phase error, and the shell's ROOT RenderBoundary swaps the
+			* ENTIRE sidebar for its error strip: one plugin misreading a field this
+			* store no longer carries (0.19.0 dropped the right column's `splits`
+			* tree) takes the panel down for every other plugin and for the user.
+			*
+			* Isolating per listener also keeps the remaining listeners running —
+			* React's own useSyncExternalStore callback shares this loop, so a crash
+			* in one subscriber no longer costs the healthy ones their re-render.
+			*/
 			notify() {
-				for (const listener of [...this.listeners]) listener();
+				for (const listener of [...this.listeners]) try {
+					listener();
+				} catch (error) {
+					console.error("[dsh-better-sidebar] store listener error:", error);
+				}
 			}
 		};
 		/**
@@ -825,8 +941,8 @@ window.__ModuleLoader__.load({
 		//#endregion
 		//#region src/client/paths.ts
 		/**
-		* Path projection helpers shared by the explorer rows: a path relative to
-		* the session cwd (for the @-reference button and "copy relative path").
+		* Path projection helpers shared by the explorer rows: workspace-relative
+		* mentions and session-cwd-relative "copy relative path".
 		* The fs-tree joins with '/' even on Windows, so both separators normalize
 		* to '/' before comparison.
 		*
@@ -846,7 +962,7 @@ window.__ModuleLoader__.load({
 		* comment — so a produced UNC path is never joined onto the cwd.
 		*/
 		function isAbsolutePath$1(path) {
-			return path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path) || /^[\\/]{2}[^\\/]/.test(path);
+			return path === "~" || path.startsWith("~/") || path.startsWith("~\\") || path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path) || /^[\\/]{2}[^\\/]/.test(path);
 		}
 		/**
 		* The path relative to the session's working directory.
@@ -868,6 +984,26 @@ window.__ModuleLoader__.load({
 			if (nPath === nBase) return ".";
 			if (nPath.toLowerCase().startsWith(`${nBase.toLowerCase()}/`)) return nPath.slice(nBase.length + 1);
 			return path;
+		}
+		/**
+		* Project an absolute explorer entry against the host-confirmed workspace
+		* root. Unlike copy-relative-path's `relativeTo`, mention insertion must
+		* never fall back to an absolute token. Unknown roots, traversal components
+		* and paths outside the workspace are refused. Windows drive/UNC paths are
+		* case-insensitive; POSIX paths retain their case-sensitive distinction.
+		*/
+		function workspaceRelativePath(root, path) {
+			if (root === void 0 || !isAbsolutePath$1(root) || !isAbsolutePath$1(path)) return void 0;
+			const norm = (value) => value.replace(/\\/g, "/").replace(/\/+$/, "");
+			const base = norm(root);
+			const target = norm(path);
+			if ([base, target].some((value) => value.split("/").some((part) => part === "." || part === ".."))) return void 0;
+			const windows = /^[A-Za-z]:\//.test(root.replace(/\\/g, "/")) || /^[\\/]{2}/.test(root);
+			const compare = (value) => windows ? value.toLowerCase() : value;
+			if (compare(target) === compare(base)) return ".";
+			if (!compare(target).startsWith(`${compare(base)}/`)) return void 0;
+			const relative = target.slice(base.length + 1);
+			return relative === "" || isAbsolutePath$1(relative) ? void 0 : relative;
 		}
 		/**
 		* Whether `target` lies under `base` (or equals it), tolerant of separator
@@ -915,6 +1051,130 @@ window.__ModuleLoader__.load({
 			if (base === "") return path;
 			const separator = base.includes("\\") ? "\\" : "/";
 			return `${base.replace(/[\\/]+$/, "")}${separator}${path}`;
+		}
+		//#endregion
+		//#region src/client/desktop-env.ts
+		/**
+		* Absolute base for the plugin's own host transports — the HTTP routes
+		* (`/sidebar/api/*`, `/sidebar/file`, `/sidebar/bundle/*`, …) and the
+		* WebSockets (`/sidebar/ws/*`) resolve through the same source
+		* (see `host-route-url.ts`).
+		*
+		* A desktop shell may serve the GUI from a custom scheme: the official Electron
+		* shell uses `dsh-app://app/`, whose `location.host` is the literal string
+		* `app`. Resolving a route against that origin produces `ws://app/...`, which
+		* can never complete a DNS lookup — every socket the sidebar opens then fails
+		* with a connection error. The shell publishes the Host's real base through
+		* `__DSH_TRANSPORT__.streamBaseUrl`, the same source DSH's own downlink mux
+		* resolves through (`stream-client.ts` in `@deepseek-ai/dsh-api-gateway`), so
+		* prefer it and fall back to `document.baseURI` for ordinary http(s) pages —
+		* that base is also what carries a reverse-proxy directory prefix.
+		*
+		* This is the ONE shell fact the client still reads: the shell's own desktop
+		* stamps (`dsh-desktop-mode` / `-platform` / `-titlebar-inset`) and the
+		* `ctx.desktopWindow` geometry contract used to feed a title-bar "strip" the
+		* sidebar yielded at the top; that whole mechanism was removed (the plugin
+		* draws no top chrome, so nothing ever consumed the value — see
+		* docs/plans/2026-10-05-remove-titlebar-compat-strip.md).
+		* @returns A URL string usable as the base argument of `new URL`, or '' when
+		* neither source exists (non-DOM specs); route resolution then substitutes a
+		* placeholder origin it never actually requests.
+		*/
+		function hostTransportBase() {
+			const base = globalThis.__DSH_TRANSPORT__?.streamBaseUrl;
+			if (base !== void 0 && base !== "") return base;
+			return typeof document !== "undefined" && typeof document.baseURI === "string" ? document.baseURI : "";
+		}
+		/**
+		* Base for the plugin's own HTTP routes (`/sidebar/api/*`, `/sidebar/file`,
+		* `/sidebar/bundle/*`, …): the PAGE's own base, not the injected transport
+		* origin.
+		*
+		* The desktop shell makes those two different — page `dsh-app://app/`, injected
+		* `streamBaseUrl` = the Host's `http://127.0.0.1:<port>`. HTTP must stay on the
+		* page: the shell's `protocol.handle` forwards every non-static `dsh-app://app`
+		* path to the Host same-origin (that is how `fetch('/sidebar/api/…')` reached it
+		* before the prefix fix), while the Host's plugin routes answer no
+		* `Access-Control-Allow-*` headers, so a cross-origin `fetch` to the injected
+		* origin is blocked by the browser outright ("Failed to fetch"). WebSockets go
+		* the other way round — see `hostTransportBase` and `host-route-url.ts`.
+		*
+		* `document.baseURI` carries a reverse-proxy directory prefix too, so one rule
+		* covers both deployments.
+		* @returns A URL string usable as the base argument of `new URL`; the transport
+		* base only when no page base exists (specs, SSR).
+		*/
+		function hostHttpBase() {
+			const base = typeof document !== "undefined" ? document.baseURI : void 0;
+			if (typeof base === "string" && base !== "") return base;
+			return hostTransportBase();
+		}
+		//#endregion
+		//#region src/client/host-route-url.ts
+		/**
+		* Prefix-safe resolution of the plugin's own host routes (HTTP and WebSocket).
+		*
+		* The client half talks to the Host at `/sidebar/*`. Built with a leading
+		* slash those URLs pin themselves to the ORIGIN ROOT, so a GUI served under a
+		* reverse-proxy directory (`https://host/dataops/proxy/3080/`) sends every
+		* request OUTSIDE the prefix: the JSON API answers 404, lazy chunks never
+		* load, media and HTML previews stay blank, and the WebSockets close with
+		* 1006. Resolving a RELATIVE path against the page's own base keeps the
+		* request under the page's own directory.
+		*
+		* The two transports need DIFFERENT bases, and the desktop shell is why:
+		*
+		* - **HTTP** rides the PAGE base (`document.baseURI`). In the Electron shell
+		*   the page is `dsh-app://app/`, and the shell's protocol handler forwards
+		*   every non-static path to the Host (`protocol.handle` → `forwardWebRequest`
+		*   in the shell's `main.js`), so `dsh-app://app/sidebar/api/…` reaches the
+		*   Host same-origin — the exact shape `fetch('/sidebar/api/…')` produced
+		*   before the prefix fix. The shell also publishes
+		*   `__DSH_TRANSPORT__.streamBaseUrl` = the Host's real origin
+		*   (`new URL(hostUrl).origin`), which is a DIFFERENT origin from the page:
+		*   sending the plugin's JSON POSTs there makes them cross-origin, and the
+		*   plugin's routes answer no `Access-Control-Allow-*` headers (the shell's own
+		*   UI avoids this by going through the same-origin forwarding), so the browser
+		*   rejects them — every tree/git/editor request fails as "Failed to fetch".
+		* - **WebSocket** needs that injected base: a custom scheme cannot host `ws:`,
+		*   and `dsh-app://app`'s host is the literal string `app`, whose DNS lookup
+		*   never completes (see `desktop-env.ts`). The Host accepts the shell page's
+		*   origin on those sockets.
+		*/
+		/** Placeholder origin for the non-DOM case (specs / SSR): resolution needs an
+		*  absolute base, but the caller never issues the resulting request. */
+		const PLACEHOLDER_ORIGIN = "http://dsh.internal/";
+		/**
+		* Resolve one host route against the injected base. Leading slashes are
+		* stripped on purpose — keeping one would discard a reverse-proxy prefix.
+		* @param path - The route, with or without a leading slash
+		* (`sidebar/api/fs.tree`, `sidebar/ws/fs-watch`).
+		* @param baseUrl - Override for the shared transport base; specs pass a static
+		* prefix so resolution stays pure.
+		* @returns The absolute route URL (the base's origin + any prefix included).
+		*/
+		function hostRouteUrl(path, baseUrl = hostHttpBase()) {
+			return new URL(path.replace(/^\/+/, ""), directoryBase(baseUrl));
+		}
+		/** {@link hostRouteUrl} with the `ws:`/`wss:` scheme `WebSocket` requires. */
+		function hostWebSocketUrl(path, baseUrl = hostTransportBase()) {
+			const url = hostRouteUrl(path, baseUrl);
+			url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+			return url;
+		}
+		/**
+		* Turn any transport base into a directory base: drop the query (the launch
+		* token rides there) and the hash, then force a trailing slash. DSH serves the
+		* GUI from a directory, so a base without the final slash is the same prefix
+		* with the browser's own trailing-slash elision — resolving against it
+		* verbatim would replace its last segment instead of appending to it.
+		*/
+		function directoryBase(baseUrl) {
+			const url = new URL(baseUrl === "" ? PLACEHOLDER_ORIGIN : baseUrl, PLACEHOLDER_ORIGIN);
+			url.search = "";
+			url.hash = "";
+			if (!url.pathname.endsWith("/")) url.pathname += "/";
+			return url.href;
 		}
 		//#endregion
 		//#region src/client/file-icons.tsx
@@ -996,7 +1256,7 @@ window.__ModuleLoader__.load({
 		* The plugin version this service instance reports. Keep in lockstep with
 		* `package.json`'s version — `tests/service.spec.ts` asserts the pair.
 		*/
-		const SIDEBAR_SERVICE_VERSION = "0.24.1";
+		const SIDEBAR_SERVICE_VERSION = "0.26.0";
 		/**
 		* Monotonic capability list consumers use to gate new API usage (features
 		* are never removed). Each string names a v0.12.0+ capability:
@@ -1014,6 +1274,10 @@ window.__ModuleLoader__.load({
 		*   external file-tree icons overriding the built-in glyphs, matched by
 		*   extension (`exts`), exact file name (`names`), or directory name
 		*   (`folderNames`).
+		* - 'rightActions' (v0.25.0): TabDescriptor.rightActions — the active tab's
+		*   right-aligned action area rendered at the tab strip's right end.
+		* - 'settingPatterns': SidebarSettingToggle type 'patterns' (editable
+		*   string-list row, committed as one string[] value).
 		*
 		* v0.19.0 REMOVED 'floatWindows': the free-window feature is gone (DSH 0.1.5
 		* owns the right column, so the plugin keeps only its bottom workbench).
@@ -1030,7 +1294,10 @@ window.__ModuleLoader__.load({
 			"pluginSettings",
 			"urlTarget",
 			"settingSelect",
-			"fileIcons"
+			"fileIcons",
+			"rightActions",
+			"settingPatterns",
+			"hostRouteUrl"
 		];
 		/** Run one plugin callback; a throw is logged and never breaks the caller. */
 		function safeCall(fn) {
@@ -1060,6 +1327,19 @@ window.__ModuleLoader__.load({
 				return () => {
 					listeners.delete(listener);
 				};
+			};
+			/**
+			* Retire one session's unread mark for a tab type. The argument ORDER is
+			* the service's own `(type, sessionId)` — this is the implementation of
+			* {@link BetterSidebarService.clearUnread} and takes its parameter list
+			* verbatim, so the facade cannot silently swap them.
+			*
+			* Named-session aware on purpose (see {@link SidebarStore.clearUnread}): the
+			* current session publishes the change so both carriers re-render, while a
+			* session that is not on screen is updated in place without waking the shell.
+			*/
+			const clearUnreadFor = (type, sessionId) => {
+				store.clearUnread(type, sessionId);
 			};
 			const registerTab = (descriptor) => {
 				if (tabs.has(descriptor.id)) throw new Error(`[dsh-better-sidebar] tab type "${descriptor.id}" already registered`);
@@ -1172,33 +1452,37 @@ window.__ModuleLoader__.load({
 				const targetSessionId = scope?.sessionId ?? store.getSnapshot().sessionId;
 				if (targetSessionId === void 0) return;
 				const callbackScope = scope ?? { sessionId: targetSessionId };
-				if (surface !== void 0 && seed.target !== "bottom") {
+				if (surface !== void 0 && seed.target !== "bottom" && descriptor.bottomOnly !== true) {
 					const side = seed.target === "side";
 					const state = store.getSnapshot().state;
 					const minted = descriptor.createTab === void 0 || state === void 0 ? void 0 : descriptor.createTab(state);
 					if (minted === null) return;
 					const title = seed.title ?? minted?.tab.title ?? (typeof descriptor.title === "function" ? descriptor.title() : descriptor.title);
 					const revealIfOpened = descriptor.createTab === void 0;
+					const reveal = seed.reveal !== false && !side;
+					const componentPath = seed.path ?? seed.url;
 					const synthetic = {
 						id: seed.id ?? minted?.tab.id ?? seed.type,
 						type: seed.type,
 						title,
-						...seed.path === void 0 ? {} : { path: seed.path },
+						...componentPath === void 0 ? {} : { path: componentPath },
 						...seed.diff === void 0 ? {} : { diff: seed.diff },
+						...seed.line === void 0 ? {} : { line: seed.line },
 						...seed.meta === void 0 && minted?.tab.meta === void 0 ? {} : { meta: seed.meta ?? minted?.tab.meta }
 					};
 					if (seed.type === "editor") {
 						if (seed.path !== void 0) surface.openResource({
 							sessionId: targetSessionId,
 							address: surface.fileAddress(targetSessionId, scope?.cwd, seed.path),
-							revealIfOpened: side ? false : true,
+							revealIfOpened: reveal,
+							...seed.line === void 0 ? {} : { line: seed.line },
 							...side ? { preferNewPane: true } : {}
 						});
 						else surface.openTab({
 							sessionId: targetSessionId,
 							kind: "files",
 							params: {},
-							revealIfOpened: true
+							revealIfOpened: reveal
 						});
 					} else surface.openTab({
 						sessionId: targetSessionId,
@@ -1210,7 +1494,7 @@ window.__ModuleLoader__.load({
 							...seed.diff === void 0 ? {} : { diff: seed.diff },
 							...synthetic.meta === void 0 ? {} : { meta: synthetic.meta }
 						},
-						revealIfOpened: side ? false : revealIfOpened,
+						revealIfOpened: reveal && revealIfOpened,
 						...side ? { preferNewPane: true } : {}
 					});
 					safeCall(() => descriptor.onOpen?.(synthetic, callbackScope));
@@ -1240,6 +1524,7 @@ window.__ModuleLoader__.load({
 							title: seed.title ?? (typeof descriptor.title === "function" ? descriptor.title() : descriptor.title),
 							...seed.path !== void 0 ? { path: seed.path } : {},
 							...seed.diff !== void 0 ? { diff: seed.diff } : {},
+							...seed.line !== void 0 ? { line: seed.line } : {},
 							...seed.meta !== void 0 ? { meta: seed.meta } : {}
 						};
 						next = applyDedupe(state, tab, descriptor, land);
@@ -1280,7 +1565,8 @@ window.__ModuleLoader__.load({
 						if (descriptor !== void 0) safeCall(() => descriptor.onClose?.({
 							id: tabId,
 							type: closedNative.type,
-							title: closedNative.title
+							title: closedNative.title,
+							...closedNative.meta === void 0 ? {} : { meta: closedNative.meta }
 						}, scope ?? { sessionId }));
 						return;
 					}
@@ -1305,8 +1591,8 @@ window.__ModuleLoader__.load({
 			/** Store changes: session switch, state mutations, prefs writes. */
 			const subscribeState = (listener) => store.subscribe(listener);
 			/** Patch an open tab's display fields (a missing tab id is a no-op). */
-			const updateTab = (tabId, patch) => {
-				if (surface?.update(tabId, patch) === true) return;
+			const updateTab = (tabId, patch, sessionId) => {
+				if (surface?.update(tabId, patch, sessionId) === true) return;
 				store.reduce((state) => patchTab(state, tabId, {
 					...patch.title !== void 0 ? { title: patch.title } : {},
 					...patch.path !== void 0 ? { path: patch.path } : {},
@@ -1315,7 +1601,12 @@ window.__ModuleLoader__.load({
 			};
 			/** Activate an open tab (the tab-bar activation path; fires onActivate). */
 			const activateTab$1 = (tabId, scope) => {
-				if (surface?.activate(tabId) === true) return;
+				const activatedSessionId = scope?.sessionId ?? store.getSnapshot().sessionId;
+				if (activatedSessionId !== void 0) {
+					const type = surface?.tabTypeOf?.(activatedSessionId, tabId);
+					if (type !== void 0) clearUnreadFor(type, activatedSessionId);
+				}
+				if (surface?.activate(tabId, scope?.sessionId) === true) return;
 				let activated;
 				store.reduce((state) => {
 					if (!tabOpenIn(state, tabId)) return state;
@@ -1326,6 +1617,7 @@ window.__ModuleLoader__.load({
 				if (activated !== void 0) {
 					const sessionId = scope?.sessionId ?? store.getSnapshot().sessionId;
 					if (sessionId !== void 0) {
+						clearUnreadFor(activated.type, sessionId);
 						const descriptor = tabs.get(activated.type);
 						safeCall(() => descriptor?.onActivate?.(activated, scope ?? { sessionId }));
 					}
@@ -1333,7 +1625,15 @@ window.__ModuleLoader__.load({
 			};
 			/** Open a file in the sidebar editor of `scope`'s session (title defaults
 			*  to the file name; the tab id is path-derived, like the internal
-			*  open-path interception, so distinct files open side by side). */
+			*  open-path interception, so distinct files open side by side).
+			*
+			*  The `editor` seed does NOT hard-code the winner (#695): with the native
+			*  surface installed, `openTab`'s native branch turns the path seed into a
+			*  resource address and the HOST's tab registry decides the claiming type —
+			*  a third-party type registered with a more specific pattern (a `.drawio`
+			*  canvas, say) renders its own tab, and the plugin's editor only takes
+			*  files nobody else claims. (This module holds no ctx, so the probe used
+			*  by the tree's own carriers lives in sidebar-file.ts instead.) */
 			const openFile = (scope, path, title) => {
 				openTab({
 					type: "editor",
@@ -1367,9 +1667,12 @@ window.__ModuleLoader__.load({
 				updateTab,
 				activateTab: activateTab$1,
 				openFile,
+				hostRouteUrl: (path) => hostRouteUrl(path).href,
 				setSurface: (next) => {
 					surface = next;
-				}
+				},
+				nativePathTabs: () => surface?.pathTabs?.() ?? [],
+				clearUnread: clearUnreadFor
 			};
 		}
 		/**
@@ -1395,6 +1698,58 @@ window.__ModuleLoader__.load({
 		//#endregion
 		//#region src/client/chunk-loader.ts
 		/**
+		* Lazy chunk loader for the client bundle. The heavy preview libraries
+		* (CodeMirror's editor stack, mermaid — several MB) live in separate
+		* build-time bundles (`lib/client-<name>.js`) fetched only on first use of
+		* the feature that needs them, so startup downloads/parses only the ~1MB
+		* core bundle. (The office stack — Univer / docx-preview /
+		* pptx-renderer — is no longer bundled here: Office previews moved to the
+		* recommended office plugin, see plugins-viewers.ts.)
+		*
+		* How a chunk script works (see tsdown.config.ts chunkBundle):
+		*
+		*   globalThis.__dshChunks__ = globalThis.__dshChunks__ || {};
+		*   globalThis.__dshChunks__["editor"] = (require) => { ...exports };
+		*
+		* The script registers its factory on a plugin-owned global registry (NOT
+		* through window.__ModuleLoader__.load — the module loader's import() only
+		* resolves seed words, shell-own modules, registered factories, and boot
+		* graph rows; a chunk id is none of those, so resolution would be version-
+		* dependent). Materialization is plugin-owned:
+		*
+		* 1. inject <script src="/sidebar/bundle/<name>.js"> (classic same-origin
+		*    script; the official /plugins/<id>/client.js route cannot serve
+		*    arbitrary file names, so the plugin's own host route serves the chunks),
+		* 2. read the factory from the global registry,
+		* 3. call it with a require that resolves the platform externals through
+		*    the injected module system's `import(spec)` (the `ctx.modules` service)
+		*    — the seed-word branch, the one part of the module system that is
+		*    stable across versions.
+		*
+		* Caching contract (three layers, each with a failure path):
+		* - In-memory: one in-flight promise per chunk, memoized until
+		*   {@link resetChunks}; a failed load removes its entry so the next call
+		*   retries from scratch. HMR re-activation keeps the resolved exports of
+		*   unchanged chunks (ETag revalidation via
+		*   {@link revalidateChunksOnReactivate}) — the next lazy open skips the
+		*   re-inject / re-execute.
+		* - Script execution: each re-execution overwrites the global registry slot
+		*   (assignment, never registration) — no "duplicate factory registration"
+		*   class of errors; a failed materialization clears the cache so the retry
+		*   re-injects and re-executes.
+		* - HTTP: the bundle route revalidates every request (`cache-control:
+		*   no-cache` + ETag, 304 when unchanged), so page refreshes and HMR
+		*   re-activations never re-download a multi-MB chunk that did not change.
+		*
+		* HMR: each plugin activation calls {@link revalidateChunksOnReactivate},
+		* which HEADs every loaded chunk against the bundle route and keeps the
+		* in-memory cache for the ones whose ETag is unchanged (a hot-reloaded core
+		* bundle therefore does not re-execute multi-MB chunk scripts). Chunk-only
+		* source edits still need a manual page refresh (the HMR poll watches only
+		* client.js); an edit that does land while a core HMR happens is caught by
+		* the ETag comparison on the next activation.
+		*/
+		/**
 		* The platform externals a chunk bundle may require (mirror of
 		* CLIENT_EXTERNALS in tsdown.config.ts — the chunk builds keep these
 		* external and the loader resolves them here). A superset is safe: the
@@ -1415,7 +1770,7 @@ window.__ModuleLoader__.load({
 			"@deepseek-ai/dsh-client-ui-primitives"
 		];
 		/** Chunk script endpoint served by the plugin host half (src/bundle-route.ts). */
-		const CHUNK_URL = (name) => `/sidebar/bundle/${name}.js`;
+		const CHUNK_URL = (name) => hostRouteUrl(`sidebar/bundle/${name}.js`).href;
 		/** Bound on the revalidation HEAD round-trip. A timeout fails open (drop +
 		*  re-fetch on the next open) so a stuck bundle route can never wedge lazy
 		*  chunk loads behind the revalidation barrier. */
@@ -1593,8 +1948,8 @@ window.__ModuleLoader__.load({
 			return task;
 		}
 		//#endregion
-		//#region \0dsh-css:H:\MaxNull\WorkStation\third-party-plugins\DSH-better-sidebar\src\client\builtins\tab-icons.module.css.mjs
-		const css$12 = ".t2mDiG_files{color:var(--dsw-alias-brand-primary,var(--dsw-alias-label-primary))}.t2mDiG_changes{color:var(--dsw-alias-state-success-primary,var(--dsw-alias-brand-primary,var(--dsw-alias-label-primary)))}.t2mDiG_tasks{color:var(--dsw-alias-state-warn-primary,var(--dsw-alias-label-primary))}.t2mDiG_sidechat{color:var(--dsw-alias-state-business-primary,var(--dsw-alias-brand-primary,var(--dsw-alias-label-primary)))}.t2mDiG_terminal{color:var(--dsw-alias-label-primary)}.t2mDiG_browser{color:var(--dsw-alias-state-business-primary,var(--dsw-alias-brand-primary,var(--dsw-alias-label-primary)))}";
+		//#region \0dsh-css:/home/runner/work/DSH-better-sidebar/DSH-better-sidebar/src/client/builtins/tab-icons.module.css.mjs
+		const css$12 = ".SyUHSa_files{color:var(--dsw-alias-brand-primary,var(--dsw-alias-label-primary))}.SyUHSa_changes{color:var(--dsw-alias-state-success-primary,var(--dsw-alias-brand-primary,var(--dsw-alias-label-primary)))}.SyUHSa_tasks{color:var(--dsw-alias-state-warn-primary,var(--dsw-alias-label-primary))}.SyUHSa_sidechat{color:var(--dsw-alias-state-business-primary,var(--dsw-alias-brand-primary,var(--dsw-alias-label-primary)))}.SyUHSa_terminal{color:var(--dsw-alias-label-primary)}.SyUHSa_browser{color:var(--dsw-alias-state-business-primary,var(--dsw-alias-brand-primary,var(--dsw-alias-label-primary)))}";
 		const tagId$11 = "dsh-external/dsh-better-sidebar/tab-icons.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$11) + "]") === null) {
 			const tag = document.createElement("style");
@@ -1604,12 +1959,12 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var tab_icons_module_css_default = {
-			"terminal": "t2mDiG_terminal",
-			"files": "t2mDiG_files",
-			"changes": "t2mDiG_changes",
-			"tasks": "t2mDiG_tasks",
-			"browser": "t2mDiG_browser",
-			"sidechat": "t2mDiG_sidechat"
+			"changes": "SyUHSa_changes",
+			"terminal": "SyUHSa_terminal",
+			"browser": "SyUHSa_browser",
+			"files": "SyUHSa_files",
+			"tasks": "SyUHSa_tasks",
+			"sidechat": "SyUHSa_sidechat"
 		};
 		//#endregion
 		//#region node_modules/.pnpm/react-icons@5.7.0_react@18.2.0/node_modules/react-icons/lib/iconContext.mjs
@@ -1727,6 +2082,20 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region node_modules/.pnpm/react-icons@5.7.0_react@18.2.0/node_modules/react-icons/vsc/index.mjs
+		function VscTerminal(props) {
+			return GenIcon({
+				"tag": "svg",
+				"attr": {
+					"viewBox": "0 0 24 24",
+					"fill": "currentColor"
+				},
+				"child": [{
+					"tag": "path",
+					"attr": { "d": "M18.75 1.5H5.25C3.1815 1.5 1.5 3.183 1.5 5.25V18.75C1.5 20.8185 3.1815 22.5 5.25 22.5H18.75C20.8185 22.5 22.5 20.8185 22.5 18.75V5.25C22.5 3.183 20.8185 1.5 18.75 1.5ZM21 18.75C21 19.9905 19.9905 21 18.75 21H5.25C4.0095 21 3 19.9905 3 18.75V5.25C3 4.0095 4.0095 3 5.25 3H18.75C19.9905 3 21 4.0095 21 5.25V18.75ZM10.281 13.281L5.781 17.781C5.634 17.928 5.442 18 5.25 18C5.058 18 4.866 17.9265 4.719 17.781C4.4265 17.4885 4.4265 17.013 4.719 16.7205L8.688 12.7515L4.719 8.7825C4.4265 8.49 4.4265 8.0145 4.719 7.722C5.0115 7.4295 5.487 7.4295 5.7795 7.722L10.2795 12.222C10.572 12.5145 10.572 12.99 10.2795 13.2825L10.281 13.281ZM19.5 17.25C19.5 17.664 19.164 18 18.75 18H11.25C10.836 18 10.5 17.664 10.5 17.25C10.5 16.836 10.836 16.5 11.25 16.5H18.75C19.164 16.5 19.5 16.836 19.5 17.25Z" },
+					"child": []
+				}]
+			})(props);
+		}
 		function VscPinned(props) {
 			return GenIcon({
 				"tag": "svg",
@@ -1866,6 +2235,12 @@ window.__ModuleLoader__.load({
 		const tasksTabIcon = (size) => themed(css$11.tasks, /* @__PURE__ */ (0, react_jsx_runtime.jsx)(VscLayers, { size }));
 		/** Side chat — the conversational/secondary accent. */
 		const sidechatTabIcon = (size) => themed(css$11.sidechat, /* @__PURE__ */ (0, react_jsx_runtime.jsx)(VscCommentDiscussion, { size }));
+		/**
+		* Terminal — primary ink, the shell is text. Rendered one step down from the
+		* strip's 14px: the VSCodicon terminal is a wide filled rectangle and read
+		* heavier than its neighbours at full size.
+		*/
+		const terminalTabIcon = (size) => themed(css$11.terminal, /* @__PURE__ */ (0, react_jsx_runtime.jsx)(VscTerminal, { size: Math.max(10, Math.round(size * .85)) }));
 		//#endregion
 		//#region src/client/locales.ts
 		/**
@@ -1930,6 +2305,11 @@ window.__ModuleLoader__.load({
 			editorExplorerMergedDesc: "文件在同一窗口内原地切换；新窗口默认展开文件树",
 			editorExplorerSplit: "独立",
 			editorExplorerSplitDesc: "无路径窗口即资源管理器（仅文件树）；文件各自新开窗口（带文件树，默认收起）",
+			explorerExclude: "排除模式",
+			explorerExcludeDesc: "从文件树与搜索中彻底移除匹配条目（支持 * 与 ?，双星杠头匹配任意深度）；匹配项不阻塞面包屑折叠",
+			explorerExcludePlaceholder: "添加模式，如 node_modules、*.log、**/.git",
+			explorerExcludeAdd: "添加",
+			explorerExcludeRemove: "移除",
 			editorTreeToggle: "文件树面板",
 			editorPathPlaceholder: "输入文件路径（相对会话目录或绝对路径），Enter 打开",
 			editorSearchPlaceholder: "按文件名搜索…",
@@ -1938,12 +2318,12 @@ window.__ModuleLoader__.load({
 			editorEmptyHint: "从右侧文件树或上方路径输入框选择文件开始预览",
 			openFileNewTab: "在新 Tab 中打开",
 			openFileSide: "在侧边打开",
-			zipProgress: "正在打包 {done}/{total}",
 			settingsOpenWithPluginTitle: "始终显示插件自研的打开方式",
 			settingsOpenWithPluginDesc: "默认只在宿主探测不到本机关联应用时显示插件自研的打开方式（资源管理器 / VS Code / Cursor / Zed / 自定义编辑器、SSH 远端）；打开后宿主应用与插件目标并存",
 			zipDownload: "压缩并下载",
 			zipDownloadCount: "压缩并下载（{count} 项）",
 			zipFailed: "打包失败：{message}",
+			archiveToolMissing: "系统上没有可用的打包命令（zip 或 tar 都没有），无法打包下载",
 			openWithMenu: "在应用中打开",
 			openWithSshSuffix: " (SSH)",
 			pinOpenWith: "固定到菜单",
@@ -1977,6 +2357,14 @@ window.__ModuleLoader__.load({
 			newFolder: "新建文件夹",
 			newFolderPlaceholder: "文件夹名称",
 			newFolderInvalid: "文件夹名称无效",
+			newFile: "新建文件",
+			newFilePlaceholder: "文件名称",
+			newFileInvalid: "文件名称无效",
+			newFileExists: "同名文件已存在",
+			sort: "排序",
+			sortByName: "按名称排序",
+			sortByType: "按类型排序",
+			sortFoldersFirst: "文件夹优先",
 			filesTruncated: "该目录条目过多，仅显示前一部分",
 			gitStatusModified: "已修改",
 			gitStatusAdded: "新增",
@@ -1986,14 +2374,18 @@ window.__ModuleLoader__.load({
 			gitStatusConflict: "有冲突",
 			changesClean: "工作区没有变更",
 			changesNoHistory: "还没有提交历史",
+			changesNewFile: "新文件",
 			changesStageFailed: "暂存失败：{message}",
 			changesOpGone: "该操作已不在会话记录中",
 			newTab: "新建标签页",
 			brokenSymlink: "失效的软链接",
 			close: "关闭",
 			closeOtherTabs: "关闭其他页签",
+			tabUnread: "有未查看的新页面",
 			closeLeftTabs: "关闭左侧页签",
 			closeRightTabs: "关闭右侧页签",
+			closeAllTabs: "关闭全部页签",
+			revealTabInFileManager: "在资源管理器中定位",
 			pinTerminal: "固定终端",
 			pinAgentTerminal: "固定 Agent 终端",
 			pinToWorkspace: "固定到工作区",
@@ -2010,6 +2402,9 @@ window.__ModuleLoader__.load({
 			terminalDepsHint: "在 DSH 所在环境的终端或 cmd 中执行以下命令修复，然后点重试（node-pty 与 DSH 核心保持同一版本）：",
 			terminalDepsProfile: "（检测到 profile：{profile}）",
 			terminalShellNotFound: "未找到配置的 Shell：{name}，请到 设置 → 侧边卡片 → 终端 检查 Shell 路径",
+			terminalUnavailable: "宿主未提供终端能力",
+			terminalGone: "该终端进程已不存在，可新建一个",
+			terminalNew: "新建终端",
 			preview: "预览",
 			toc: "目录",
 			edit: "编辑",
@@ -2020,11 +2415,43 @@ window.__ModuleLoader__.load({
 			mermaidZoomHint: "滚轮缩放 · 拖拽平移 · Esc 关闭",
 			refresh: "刷新",
 			refreshUnsavedConfirm: "文件已在磁盘更新，刷新将丢弃未保存编辑。继续吗？",
+			closeUnsavedConfirm: "该文件有未保存的编辑，关闭后将丢弃。继续吗？",
 			save: "保存",
 			saved: "已保存",
 			unsaved: "未保存",
 			saveFailed: "保存失败",
-			truncation: "文件过大，仅显示前 512KB",
+			saveConflict: "文件已在磁盘上被其他来源修改。保存已中止，你的修改仍在编辑器中。",
+			saveConflictReload: "重新载入磁盘内容",
+			previewOnlyNotice: "文件过大（{size}），仅提供分页预览；{limit} 以内可编辑",
+			largeFileEmpty: "（空文件）",
+			pagedLineRange: "第 {from}–{to} 行",
+			loadAll: "加载全部",
+			loadAllProgress: "加载中 {loaded} / {total}",
+			previewRowLimit: "已达 {rows} 行的预览上限，其余请下载查看",
+			jsonlRecordRange: "第 {from}–{to} 条记录",
+			jsonlInvalidRecord: "这一行不是合法 JSON",
+			jsonCopyPath: "复制路径",
+			jsonCopyPrettyJson: "复制为格式化 JSON",
+			jsonCopyCompactJson: "复制为紧凑 JSON",
+			jsonCopyFailed: "复制失败",
+			jsonCollapseNode: "折叠",
+			jsonExpandNode: "展开",
+			jsonCopyButtonTitle: "复制：{action}",
+			searchFind: "查找",
+			searchReplace: "替换",
+			searchNext: "下一个",
+			searchPrevious: "上一个",
+			searchAll: "全选匹配",
+			searchMatchCase: "区分大小写",
+			searchWholeWord: "全词匹配",
+			searchRegexp: "正则表达式",
+			searchReplaceAll: "全部替换",
+			searchCurrentMatch: "当前匹配",
+			searchOnLine: "所在行号",
+			searchReplacedMatches: "已替换 $ 处匹配",
+			searchReplacedMatchOnLine: "已替换第 $ 行的匹配",
+			searchGoToLine: "跳转到行",
+			searchGo: "跳转",
 			binary: "二进制文件，无法预览",
 			loading: "加载中…",
 			error: "加载失败",
@@ -2035,8 +2462,28 @@ window.__ModuleLoader__.load({
 			unstage: "取消暂存",
 			stageAll: "全部暂存",
 			unstageAll: "全部取消暂存",
-			commitPlaceholder: "提交信息 (Ctrl+Enter)",
+			commitPlaceholder: "提交信息 (Ctrl+G 生成，Ctrl+Enter 提交)",
 			commit: "提交",
+			generateCommitMessage: "生成提交信息",
+			generateCommitMessageWith: "生成提交信息（使用 {model}）",
+			generatingCommitMessage: "正在生成提交信息…",
+			committingMessage: "正在提交…",
+			suggestCommitError: "生成提交信息失败",
+			suggestCommitEmpty: "当前没有可提交的改动",
+			commitModelTitle: "提交信息生成模型",
+			commitModelDesc: "选择生成提交信息时使用的模型；默认跟随当前对话所用的模型。",
+			commitModelFollow: "跟随当前对话",
+			commitModelSearchPlaceholder: "搜索：输入 provider/model",
+			commitModelCurrent: "当前：{route}",
+			commitModelInvalid: "请按 provider/model 格式填写",
+			commitModelUnavailable: "当前部署未暴露模型服务，只能跟随当前对话",
+			commitModelEmpty: "未发现可用模型（可在上方直接输入 provider/model）",
+			commitModelDefaultNote: "默认",
+			commitModelRecentNote: "本会话用过",
+			push: "推送",
+			pull: "拉取",
+			pushError: "推送失败",
+			pullError: "拉取失败",
 			branch: "分支",
 			worktree: "工作树",
 			checkoutError: "切换分支失败",
@@ -2120,27 +2567,16 @@ window.__ModuleLoader__.load({
 			settingsDone: "完成",
 			settingsOpenToolsTitle: "为模型注入侧边栏打开工具",
 			settingsOpenToolsDesc: "开启后，模型可通过 sidebar_open 工具在侧边栏主动打开文件、文件夹和 HTTP(S) 网页（默认关闭）",
-			settingsTitleBarTitle: "位置兼容模式",
-			settingsTitleBarDesc: "选择顶栏兼容方案：自动检测（默认，保守）/ DSH官方Web / 已知桌面壳 / 自定义方案（下移距离 + 自定义 CSS）",
-			settingsTitleBarStripTitle: "下移距离",
-			settingsTitleBarStripDesc: "标题栏条带高度：侧边栏按钮与内容下移的像素数（0–120，默认 40；自定义方案下生效）",
-			settingsSchemeAutoTitle: "自动检测",
-			settingsSchemeAutoDesc: "保守方案：仅在 Window Controls Overlay 标准 API 可用时按真实标题栏高度让位；网页环境下不做任何修改",
-			settingsSchemeWebTitle: "DSH官方Web",
-			settingsSchemeWebDesc: "显式声明运行在官方网页版：不做任何适配（连标准 WCO 几何也不适用）",
-			settingsSchemeCustomTitle: "自定义方案",
-			settingsSchemeCustomDesc: "完全由你控制：注入自定义 CSS（可覆盖内置样式），并指定标题栏下移距离",
-			settingsSchemeDetectedSuffix: "已检测",
 			settingsCustomCssTitle: "自定义 CSS",
-			settingsCustomCssPlaceholder: "/* 例：为自绘标题栏的壳预留 36px */\nhtml[data-dsh-title-bar-height=\"36\"] {\n  --dsh-title-bar-strip: 36px !important;\n}",
+			settingsCustomCssPlaceholder: "/* 例：底部工作台面板换用等宽字体 */\n[data-dsh-bottom-panel] {\n  font-family: var(--dsw-font-mono);\n}",
 			settingsSaveFailed: "保存失败",
 			settingsConflict: "设置已被其他窗口修改，请重试",
 			binaryNoPreview: "此文件类型不支持预览",
 			downloadToView: "下载查看",
 			settingsSubagentTitle: "检测到子代理时自动激活任务管理页",
-			settingsSubagentDesc: "当前会话产生新的子代理时，自动激活任务管理页；宽屏同时展开侧边栏，窄屏不强制展开全屏抽屉；关闭后需手动打开",
+			settingsSubagentDesc: "当前会话产生新的子代理时，在侧边栏创建任务管理页并标记未读红点；若侧边栏正展开在其他页面则不抢焦点，点红点即可前往；宽屏同时展开侧边栏，窄屏不强制展开全屏抽屉；关闭后不再自动创建",
 			settingsJobsTitle: "有新后台任务时自动激活任务管理页",
-			settingsJobsDesc: "当前会话出现新的后台任务时，自动激活任务管理页（每个新任务都会触发）；宽屏同时展开侧边栏，窄屏不强制展开全屏抽屉；关闭后需手动打开",
+			settingsJobsDesc: "当前会话出现新的后台任务时，在侧边栏创建任务管理页并标记未读红点（每个新任务都会触发）；若侧边栏正展开在其他页面则不抢焦点，点红点即可前往；宽屏同时展开侧边栏，窄屏不强制展开全屏抽屉；关闭后不再自动创建",
 			settingsToolsTitle: "为模型注入终端工具",
 			settingsToolsDesc: "开启后，模型可通过 terminal_create 等 8 个工具创建并操作侧边栏终端（默认关闭）",
 			settingsBottomTerminalTitle: "底部面板首次展开自动开终端",
@@ -2169,6 +2605,7 @@ window.__ModuleLoader__.load({
 			viewerMarkdown: "Markdown",
 			viewerCode: "代码",
 			viewerHtml: "HTML",
+			viewerJsonl: "JSONL",
 			browser: "浏览器",
 			browserPlaceholder: "输入网址，例如 example.com",
 			browserGo: "前往",
@@ -2186,6 +2623,8 @@ window.__ModuleLoader__.load({
 			settingsHtmlDefaultUnsafeDesc: "开启后，每次打开 HTML 文件时预览默认处于非沙箱状态（与界面同源，可读取会话文件与内部接口）；可在状态行临时恢复沙箱",
 			settingsHtmlSandboxTitle: "关闭 HTML 预览沙箱（不安全）",
 			settingsHtmlSandboxDesc: "关闭后，预览的 HTML 将与界面同源运行，可读取会话文件、本地存储并调用内部接口。仅对完全可信的文件开启",
+			settingsEditorGitGutterTitle: "编辑器未提交变更提示",
+			settingsEditorGitGutterDesc: "在代码编辑器的行号槽用颜色标出未提交的变更，并在鼠标悬停时显示该行 blame（作者、时间与提交摘要）；关闭后编辑器不显示任何变更标记",
 			settingsBrowserSandboxTitle: "关闭浏览器沙箱（不安全）",
 			settingsBrowserSandboxDesc: "关闭后，访问的任何网站都将与界面同源运行，可读取会话数据并冒充你的登录状态。仅对完全可信的站点开启",
 			settingsBrowserLoopbackTitle: "允许访问的本机地址",
@@ -2215,9 +2654,18 @@ window.__ModuleLoader__.load({
 			sideChatThreads: "切换线程 / 新建",
 			sideChatSave: "保存为新会话",
 			sideChatSaveTitle: "把该线程提升为顶层会话，出现在主会话列表中",
+			sideChatArchive: "归档这条侧边对话（在会话列表的「显示已归档」里可找回）",
+			sideChatArchiveRunning: "该线程正在运行，停止后才能归档",
 			sideChatSaved: "已保存为新会话",
 			sideChatNoTurn: "至少完成一轮对话后才能保存",
 			sideChatPendingDrop: "最后一条未完成的追问不会包含在新会话中",
+			sideChatQueued: "排队中",
+			sideChatSending: "发送中…",
+			sideChatDequeue: "从队列移除",
+			sideChatRunError: "运行失败：{message}",
+			sideChatModel: "模型",
+			sideChatModelInherit: "继承主对话（宿主未提供模型目录）",
+			sideChatReasoning: "推理强度",
 			sideChatFirstPlaceholder: "输入第一个问题，已继承当前会话上下文…",
 			sideChatComposerPlaceholder: "追问…",
 			sideChatThinking: "正在深入…",
@@ -2276,7 +2724,7 @@ window.__ModuleLoader__.load({
 			settingsViewModeGraphDesc: "分层节点图，可缩放平移",
 			settingsViewModeTree: "树状图",
 			settingsViewModeTreeDesc: "经典缩进树，键盘可导航",
-			tasksFoldIdleGroup: "N 个待命",
+			tasksFoldIdleGroup: "{count} 个待命",
 			tasksFoldIdle: "{count} 待命",
 			tasksFoldCompleted: "✓ {count} 已完成",
 			tasksFoldOne: "收进已完成聚合",
@@ -2289,10 +2737,17 @@ window.__ModuleLoader__.load({
 			tasksNodeDetail: "节点详情",
 			workflowRun: "工作流",
 			tasksNodeState: "状态",
+			tasksFoldExpandShort: "展开",
+			tasksTreeCollapseAll: "全部收起",
+			tasksTreeExpandAll: "全部展开",
+			tasksTreeCollapseRow: "收起子级",
+			tasksTreeExpandRow: "展开子级",
+			tasksNodeTokens: "Token 用量",
+			tasksNodeDuration: "耗时",
+			tasksNodeOpenMain: "在主窗口中打开",
 			tasksNodeMode: "模式",
 			tasksNodeModel: "模型",
 			tasksNodeTeamRole: "团队角色",
-			tasksNodeActivity: "最近活动",
 			tasksStateRunning: "运行中",
 			tasksStateIdle: "待命",
 			tasksStateProvisioning: "部署中",
@@ -2360,44 +2815,56 @@ window.__ModuleLoader__.load({
 			openPlugin: "跳转",
 			copyInstall: "复制安装命令",
 			pluginMdExportDesc: "在 better-sidebar 的 Markdown 工具栏上新增「导出」按钮：一键把当前 .md 渲染为独立 HTML（表格/代码块/Mermaid 图表内联，布局跟随预览主题）直接保存到同目录，或通过打印对话框导出为 PDF",
+			pluginAgentPersonaDesc: "按工作区或会话分发 system prompt 人设：一条人设可同时作用于多个工作区目录与会话，支持完全一致 / 前缀 / 包含 / 正则，越具体越优先，可标一条默认人设兜底；在设置页与对话页「人设」Tab 里管理，改完下一条消息生效",
 			pluginOfficeDesc: "为 better-sidebar 编辑器提供 Office 三件套预览（.docx / .xlsx / .pptx），把重型 Office 渲染库拆出主包、按需安装",
 			pluginFlowglassDesc: "实时会话流程图：三列泳道展示用户、助手与工具调用，支持并行分组、子代理支线、逐层钻取和实时状态；安装 better-sidebar 后注册原生「流镜」Tab，未安装时保留独立抽屉",
 			pluginGitForgeDesc: "better-sidebar「Git 凭据」Tab：GitHub/Gitea 等 Forge 账号库 + 按项目授权 + push 策略硬拦；token 仅存本地 secrets，不进模型上下文；提供只读 GitForge 工具与 agent HTTPS credential helper",
 			pluginGithubWorkbenchDesc: "better-sidebar「GitHub 工作台」Tab：远端仓库目录树 + Issues / Pull requests / Actions 页签，读之外支持新建 Issue/PR、评论、编辑、关闭重开、squash·merge·rebase 合并（强确认）与重跑/取消 CI；仓库弹层自动拉取有权限列表并支持公开仓搜索；未装 better-sidebar 时自动降级为独立右侧面板",
+			pluginIdeGitDesc: "better-sidebar「Git」Tab：分支树（ahead/behind 角标、worktree 占用标记）、提交图谱与文本/分支/作者/日期/路径筛选、逐文件行级 diff、变更分组与提交框，外加合并、变基、优选、重置、贮藏与标签操作；破坏性动作二次确认，删除与丢弃工作区都可撤回。未装 better-sidebar 时自动注册到 DSH 原生右侧栏，可单独使用",
 			pluginSuhuangScrollDesc: "把本地苏黄共阅 Runtime 接入 DSH 设置与 better-sidebar，支持模型配置、连接测试和连续阅卷控制；使用前需安装 Suhuang Scroll Runtime 与 dsh-better-sidebar",
 			pluginBetterOverleafDesc: "better-sidebar 的 Overleaf 标签页：直连 CDP 浏览器登录（支持第三方 Chromium），项目列表/切换，<workspace>/overleaf/ 本地 git 镜像，git 双向同步（API 只读兜底），文件预览走侧边栏工作台",
-			pluginGitRemotesDesc: "better-sidebar Git 远程 Tab：看分支/上游/ahead-behind，fetch（可 prune）、ff-only pull、确认后才 push。不替换内置 Git 的暂存/提交，也不提供 force-push 或模型自动推送",
 			pluginSentinelDesc: "条件驱动的 agent 唤醒系统：文件/进程/端口/HTTP/命令/webhook 传感器，条件达成自动唤醒休眠会话；注册「哨兵」Tab 展示服务器全局监控表",
 			pluginServerDeckDesc: "服务器卡片仪表盘：每台服务器一张卡片，展示在线状态、OS、运行时长、CPU/内存/磁盘用量与延迟；点卡片进入 xterm.js 交互终端，支持 ~/.ssh/config 一键导入（自动跳过 Git 托管别名）；安装 better-sidebar 后注册原生「服务器」Tab，未安装时保留独立抽屉",
 			pluginSidebarQaDesc: "基于 better-sidebar 的划选提问tab分页: 对话划选 → 右侧面板提问 → 同工作区独立追问会话（❓追问·主题）：快速无思考模型压缩主对话上下文后与引文一起注入，不打断主对话；追问可嵌套、可继续、可归档",
 			pluginSidenoteDesc: "Codex 风格侧边聊天与划选注释：从当前会话 fork 出独立侧边会话（归档隐藏、多实例并存、/side 命令、刷新/重启后恢复、模型跟随主会话）；assistant 消息划选 → 编号角标 + 注解编辑器 →「N 条注释」chip 随消息发出，也可直接进入侧边聊天提问",
 			pluginSshTunnelDesc: "better-sidebar「SSH 隧道」Tab：多机主机清单 + 按项目授权 + 密钥本地保管；模型工具 SSHManager（exec/SFTP/会话策略）；中央交互终端与双栏 SFTP",
-			pluginTurnReviewDesc: "对「刚刚这一回合」的 diff 做 Approve / Request changes 的人闸门：只审上一回合，不 fork 会话；文件按主会话/子代理/未归因分组，按文件勾选打回 + 可选评语，点文件先看回合开始快照 vs 现在的 diff。不是 /rewind",
-			pluginVideoPreviewDesc: "在 better-sidebar 编辑器内联预览视频文件（.mp4/.webm/.mov/.mkv/.avi 等），自带支持 HTTP Range（206）的 /video 宿主路由，可拖动进度条、不受 20MB mediaLimit 限制",
+			pluginVideoPreviewDesc: "在 better-sidebar 编辑器内联预览视频文件（.mp4/.webm/.mov/.mkv/.avi 等），自带支持 HTTP Range（206）的 /video 宿主路由，无需整份下载即可播放，进度条可随意拖动",
+			pluginAudioDesc: "在 better-sidebar 编辑器内联预览音频文件（.mp3/.wav/.flac/.ogg/.m4a/.aac/.opus），自带波形播放器与实时频谱：可缩放波形、点击/拖动定位、A-B 循环、声道切换、实时频谱与全曲频谱图；媒体路由支持 HTTP Range，任意大小都能拖动进度",
 			pluginCodeNavDesc: "代码预览导航：按文件类型自动识别语言并高亮语法，符号大纲（类/方法/变量筛选 + 一键跳转），文件内查找（全部匹配高亮、上/下一处、区分大小写），接管 better-sidebar 的代码文件预览",
+			pluginDevGitGraphDesc: "vscode-git-graph 忠实移植的提交图 Tab：唯一入口为 better-sidebar 原生 tab，自动绑定会话工作区，checkout/merge/rebase/push/tag/stash 全套 git 操作，明暗主题跟随，点文件 diff 直接打开内置 DiffTab；需先安装 dsh-better-sidebar",
 			pluginDocsPanelDesc: "DSH 侧边栏里的「全局文档」：全局 Markdown 笔记，任何工作区随时可读——列表点选阅读、悬浮大纲跳转、Chrome / VS Code 外部打开、代码复制，目录可配置（默认 ~/.dsh/docs）",
+			pluginTylinaDesc: "Typst 文档编辑工具：与当前会话共用工作区，WYSIWYG 编辑排版 Typst 文档，可用于编写和排版论文、报告、试卷、简历、图表、海报、乐谱和 PPTX 格式导出的 Slides",
 			pluginEgoBrowserDesc: "把 CitroLabs/ego-lite 接进 DeepSeek Harness 的 agent 浏览器：32 个 ego_* 工具驱动真实 Chromium，侧边栏原生「ego 浏览器」Tab 实时观察 agent 逛的每个页面，可直接点击/拖拽/输入接管；装 better-sidebar 时自动注册 Tab，没装则退回浮动浮窗",
 			pluginBilingualReaderDesc: "在 DSH 侧边栏读论文 PDF：原生 PDF 显示，选中一段文字即用大模型划词翻译，结合上下文、完全隔离主对话，只作阅读辅助",
+			pluginDshMemoryDeltaDesc: "跨会话记忆：只注入变化的部分（无变化时零注入），带到期复核提醒、相关度排序检索和侧边栏页签。",
+			pluginAgentPersonaName: "dsh-agent-persona Agent 人设",
 			pluginSentinelName: "dsh-sentinel 唤醒系统",
+			pluginFileTraceName: "dsh-file-trace 文件追踪",
+			pluginFileTraceDesc: "记录模型读取/写入/编辑的每一个文件，按文件分组查看内容与逐行 diff；含 Markdown 阅读模式与敏感内容脱敏，未装 better-sidebar 时为独立浮动窗",
+			pluginMnemeName: "dsh-mneme 记忆库",
+			pluginMnemeDesc: "跨会话记忆引擎：autoDream 后台巩固、会话总结与用户画像，SQLite + 可人工编辑的 Markdown 镜像，完全离线私有；安装 better-sidebar 后注册「记忆库」Tab（记忆/实体/状态/设置四视图），未安装时保留侧边栏独立面板",
 			pluginEgoBrowserName: "ego-browser Agent 浏览器",
 			pluginBetterOverleafName: "dsh-better-overleaf Overleaf 标签页",
 			pluginDocsPanelName: "dsh-docs-panel 全局文档",
+			pluginTylinaName: "dsh-tylina Typst 文档编辑器",
 			pluginFlowglassName: "dsh-flowglass 流镜",
 			pluginGitForgeName: "dsh-git-forge Git 凭据",
-			pluginGitRemotesName: "dsh-git-remotes Git 远程",
 			pluginGithubWorkbenchName: "dsh-github-workbench GitHub 工作台",
+			pluginIdeGitName: "dsh-ide-git Git 工具窗口",
 			pluginSidebarQaName: "dsh-sidebar-qa 划选追问",
 			pluginSidenoteName: "dsh-sidenote 侧边聊天",
 			pluginServerDeckName: "dsh-server-deck 服务器甲板",
 			pluginSuhuangScrollName: "dsh-suhuang-scroll 苏黄共阅",
 			pluginSshTunnelName: "dsh-ssh-tunnel SSH 隧道",
-			pluginTurnReviewName: "dsh-turn-review 本轮审查",
 			pluginBilingualReaderName: "dsh-bilingual-reader 双语阅读",
 			pluginOfficeName: "Office 预览插件",
 			pluginMdExportName: "Markdown 导出插件",
 			pluginCodeNavName: "代码预览导航",
 			pluginVideoPreviewName: "视频预览插件",
-			presetDshDesktopDesc: "Electron 高级模式（无边框）：macOS 顶栏 20px、Windows 无 WCO 时 32px 标题栏让位"
+			pluginAudioName: "音频预览插件",
+			pluginTurnOutlineName: "dsh-turn-outline 轮次轨迹",
+			pluginTurnOutlineDesc: "把会话按用户轮次折叠成「输入 + 工具步骤 + 输出」摘要，点击任意步骤一键跳回对话原位；零 LLM 调用、只读",
+			pluginDshMemoryDeltaName: "dsh-memory-delta 记忆"
 		};
 		/** The en dictionary (key-set-equal to zh, enforced by the type annotation). */
 		const en = {
@@ -2439,6 +2906,11 @@ window.__ModuleLoader__.load({
 			editorExplorerMergedDesc: "Files switch in place in the same window; new windows start with the tree open",
 			editorExplorerSplit: "Separate",
 			editorExplorerSplitDesc: "Path-less windows are the standalone explorer (tree only); each file opens its own window (tree docked, closed by default)",
+			explorerExclude: "Exclude patterns",
+			explorerExcludeDesc: "Remove matching entries from the file tree and search entirely (VS Code files.exclude style; * and ? wildcards, a doublestar-slash head matches any depth); excluded entries never block the breadcrumb fold",
+			explorerExcludePlaceholder: "Add a pattern, e.g. node_modules, *.log, **/.git",
+			explorerExcludeAdd: "Add",
+			explorerExcludeRemove: "Remove",
 			editorTreeToggle: "File tree panel",
 			editorPathPlaceholder: "File path (relative to the session directory or absolute), Enter to open",
 			editorSearchPlaceholder: "Search files by name…",
@@ -2447,12 +2919,12 @@ window.__ModuleLoader__.load({
 			editorEmptyHint: "Pick a file from the tree panel or the path input above to start previewing",
 			openFileNewTab: "Open in New Tab",
 			openFileSide: "Open to the Side",
-			zipProgress: "Archiving {done}/{total}",
 			settingsOpenWithPluginTitle: "Always show the plugin’s own Open with targets",
 			settingsOpenWithPluginDesc: "By default the plugin’s own targets (file manager / VS Code / Cursor / Zed / custom editors, SSH remotes) show only when the host reports no local associated application; turn this on to keep both side by side",
 			zipDownload: "Zip and download",
 			zipDownloadCount: "Zip and download ({count} items)",
 			zipFailed: "Archive failed: {message}",
+			archiveToolMissing: "No archive command is available on this system (neither zip nor tar), so the selection cannot be packed for download",
 			openWithMenu: "Open with",
 			openWithSshSuffix: " (SSH)",
 			pinOpenWith: "Pin to menu",
@@ -2486,6 +2958,14 @@ window.__ModuleLoader__.load({
 			newFolder: "New folder",
 			newFolderPlaceholder: "Folder name",
 			newFolderInvalid: "Invalid folder name",
+			newFile: "New file",
+			newFilePlaceholder: "File name",
+			newFileInvalid: "Invalid file name",
+			newFileExists: "A file with this name already exists",
+			sort: "Sort",
+			sortByName: "Sort by name",
+			sortByType: "Sort by type",
+			sortFoldersFirst: "Folders first",
 			filesTruncated: "This folder has too many entries; only the first ones are shown",
 			gitStatusModified: "Modified",
 			gitStatusAdded: "Added",
@@ -2495,14 +2975,18 @@ window.__ModuleLoader__.load({
 			gitStatusConflict: "Conflicted",
 			changesClean: "No changes in the working tree",
 			changesNoHistory: "No commits yet",
+			changesNewFile: "New file",
 			changesStageFailed: "Staging failed: {message}",
 			changesOpGone: "This operation is no longer in the session log",
 			newTab: "New tab",
 			brokenSymlink: "Broken symlink",
 			close: "Close",
 			closeOtherTabs: "Close Other Tabs",
+			tabUnread: "There is a new page you have not viewed",
 			closeLeftTabs: "Close Tabs to the Left",
 			closeRightTabs: "Close Tabs to the Right",
+			closeAllTabs: "Close All Tabs",
+			revealTabInFileManager: "Reveal in File Manager",
 			pinTerminal: "Pin Terminal",
 			pinAgentTerminal: "Pin Agent Terminal",
 			pinToWorkspace: "Pin to Workspace",
@@ -2519,6 +3003,9 @@ window.__ModuleLoader__.load({
 			terminalDepsHint: "Run the command below in a terminal or cmd on the DSH machine to repair it, then retry (node-pty stays in sync with the DSH core version):",
 			terminalDepsProfile: " (detected profile: {profile})",
 			terminalShellNotFound: "Configured shell not found: {name} — check the shell path under Settings → Side card → Terminal",
+			terminalUnavailable: "The host provides no terminal capability",
+			terminalGone: "That terminal no longer exists — start a new one",
+			terminalNew: "New terminal",
 			preview: "Preview",
 			toc: "Table of contents",
 			edit: "Edit",
@@ -2529,11 +3016,43 @@ window.__ModuleLoader__.load({
 			mermaidZoomHint: "Scroll to zoom · drag to pan · Esc to close",
 			refresh: "Refresh",
 			refreshUnsavedConfirm: "The file changed on disk. Refreshing will discard unsaved edits. Continue?",
+			closeUnsavedConfirm: "This file has unsaved edits. Closing the tab will discard them. Continue?",
 			save: "Save",
 			saved: "Saved",
 			unsaved: "Unsaved",
 			saveFailed: "Save failed",
-			truncation: "File too large — showing the first 512KB",
+			saveConflict: "The file changed on disk since it was loaded. The save was stopped; your edits are still in the editor.",
+			saveConflictReload: "Reload from disk",
+			previewOnlyNotice: "File is too large ({size}) — paged preview only; editable up to {limit}",
+			largeFileEmpty: "(empty file)",
+			pagedLineRange: "Lines {from}–{to}",
+			loadAll: "Load all",
+			loadAllProgress: "Loading {loaded} / {total}",
+			previewRowLimit: "Preview is capped at {rows} rows — download the rest",
+			jsonlRecordRange: "Records {from}–{to}",
+			jsonlInvalidRecord: "This line is not valid JSON",
+			jsonCopyPath: "Copy path",
+			jsonCopyPrettyJson: "Copy as formatted JSON",
+			jsonCopyCompactJson: "Copy as compact JSON",
+			jsonCopyFailed: "Copy failed",
+			jsonCollapseNode: "Collapse",
+			jsonExpandNode: "Expand",
+			jsonCopyButtonTitle: "Copy: {action}",
+			searchFind: "Find",
+			searchReplace: "Replace",
+			searchNext: "next",
+			searchPrevious: "previous",
+			searchAll: "all",
+			searchMatchCase: "match case",
+			searchWholeWord: "by word",
+			searchRegexp: "regexp",
+			searchReplaceAll: "replace all",
+			searchCurrentMatch: "current match",
+			searchOnLine: "on line",
+			searchReplacedMatches: "replaced $ matches",
+			searchReplacedMatchOnLine: "replaced match on line $",
+			searchGoToLine: "Go to line",
+			searchGo: "go",
 			binary: "Binary file, preview unavailable",
 			loading: "Loading…",
 			error: "Failed to load",
@@ -2544,8 +3063,28 @@ window.__ModuleLoader__.load({
 			unstage: "Unstage",
 			stageAll: "Stage all",
 			unstageAll: "Unstage all",
-			commitPlaceholder: "Commit message (Ctrl+Enter)",
+			commitPlaceholder: "Commit message (Ctrl+G generate, Ctrl+Enter commit)",
 			commit: "Commit",
+			generateCommitMessage: "Generate commit message",
+			generateCommitMessageWith: "Generate commit message (using {model})",
+			generatingCommitMessage: "Generating commit message…",
+			committingMessage: "Committing…",
+			suggestCommitError: "Failed to generate commit message",
+			suggestCommitEmpty: "No pending changes to summarize",
+			commitModelTitle: "Commit message model",
+			commitModelDesc: "Pick the model that drafts commit messages; by default it follows the model of the current conversation.",
+			commitModelFollow: "Follow the conversation",
+			commitModelSearchPlaceholder: "Search: type provider/model",
+			commitModelCurrent: "Current: {route}",
+			commitModelInvalid: "use the provider/model form",
+			commitModelUnavailable: "this deployment exposes no model service; only following is possible",
+			commitModelEmpty: "No models discovered (type provider/model above instead)",
+			commitModelDefaultNote: "default",
+			commitModelRecentNote: "used here",
+			push: "Push",
+			pull: "Pull",
+			pushError: "Push failed",
+			pullError: "Pull failed",
 			branch: "Branch",
 			worktree: "Worktree",
 			checkoutError: "Branch switch failed",
@@ -2629,27 +3168,16 @@ window.__ModuleLoader__.load({
 			settingsDone: "Done",
 			settingsOpenToolsTitle: "Inject the sidebar-open tool for the model",
 			settingsOpenToolsDesc: "When enabled, the model can actively open files, folders, and HTTP(S) pages in the sidebar through the sidebar_open tool (off by default)",
-			settingsTitleBarTitle: "Position compatibility mode",
-			settingsTitleBarDesc: "Pick the title-bar compatibility scheme: auto-detect (default, conservative) / DSH official web / known desktop shells / custom (shift distance + custom CSS)",
-			settingsTitleBarStripTitle: "Shift distance",
-			settingsTitleBarStripDesc: "Title-bar strip height: how far the sidebar buttons and content move down in px (0–120, default 40; applies under the custom scheme)",
-			settingsSchemeAutoTitle: "Auto-detect",
-			settingsSchemeAutoDesc: "Conservative: only the standard Window Controls Overlay API contributes (real caption-overlay height); plain web environments get no modification",
-			settingsSchemeWebTitle: "DSH official web",
-			settingsSchemeWebDesc: "Explicitly declare the official web UI: no adaptation at all (not even standard WCO geometry)",
-			settingsSchemeCustomTitle: "Custom",
-			settingsSchemeCustomDesc: "Full control: inject custom CSS (can override built-in styles) and set the title-bar shift distance",
-			settingsSchemeDetectedSuffix: "detected",
 			settingsCustomCssTitle: "Custom CSS",
-			settingsCustomCssPlaceholder: "/* e.g. reserve 36px for a shell with a custom-drawn title bar */\nhtml[data-dsh-title-bar-height=\"36\"] {\n  --dsh-title-bar-strip: 36px !important;\n}",
+			settingsCustomCssPlaceholder: "/* e.g. switch the bottom workbench to the monospace font */\n[data-dsh-bottom-panel] {\n  font-family: var(--dsw-font-mono);\n}",
 			settingsSaveFailed: "Failed to save",
 			settingsConflict: "The setting changed in another window — please retry",
 			binaryNoPreview: "This file type cannot be previewed",
 			downloadToView: "Download to view",
 			settingsSubagentTitle: "Auto-activate the Tasks page when a subagent appears",
-			settingsSubagentDesc: "Activate the Tasks page when the current conversation spawns a new subagent; wide viewports also expand the side card, while narrow full-screen drawers are not forced open; turn off to open it manually",
+			settingsSubagentDesc: "When the current conversation spawns a new subagent, create the Tasks page in the side card and mark it with an unread dot; a side card already expanded on another page is left alone instead of being taken over — click the dot to go there; wide viewports also expand the side card, while narrow full-screen drawers are not forced open; turn off to stop creating it automatically",
 			settingsJobsTitle: "Auto-activate the Tasks page on a new background job",
-			settingsJobsDesc: "Activate the Tasks page whenever a new background job appears for the current conversation (every new job triggers); wide viewports also expand the side card, while narrow full-screen drawers are not forced open; turn off to open it manually",
+			settingsJobsDesc: "Whenever a new background job appears for the current conversation, create the Tasks page in the side card and mark it with an unread dot (every new job triggers); a side card already expanded on another page is left alone instead of being taken over — click the dot to go there; wide viewports also expand the side card, while narrow full-screen drawers are not forced open; turn off to stop creating it automatically",
 			settingsToolsTitle: "Inject terminal tools for the model",
 			settingsToolsDesc: "When enabled, the model can create and drive sidebar terminals through the 8 terminal_* tools (off by default)",
 			settingsBottomTerminalTitle: "Auto-open a terminal on the bottom panel's first expansion",
@@ -2678,6 +3206,7 @@ window.__ModuleLoader__.load({
 			viewerMarkdown: "Markdown",
 			viewerCode: "Code",
 			viewerHtml: "HTML",
+			viewerJsonl: "JSONL",
 			browser: "Browser",
 			browserPlaceholder: "Enter a URL, e.g. example.com",
 			browserGo: "Go",
@@ -2695,6 +3224,8 @@ window.__ModuleLoader__.load({
 			settingsHtmlDefaultUnsafeDesc: "When on, every newly opened HTML preview starts in the unsandboxed state (same origin as the GUI — it can read session files and internal APIs); the status row still offers a one-tap restore",
 			settingsHtmlSandboxTitle: "Disable HTML preview sandbox (unsafe)",
 			settingsHtmlSandboxDesc: "With the sandbox off, previewed HTML runs with the same origin as the GUI: it can read session files, local storage and call internal APIs. Only enable for fully trusted files",
+			settingsEditorGitGutterTitle: "Editor uncommitted-change markers",
+			settingsEditorGitGutterDesc: "Tint the line-number gutter of the code editor for uncommitted changes and show that line's blame (author, time and commit summary) on hover; off hides every marker",
 			settingsBrowserSandboxTitle: "Disable browser sandbox (unsafe)",
 			settingsBrowserSandboxDesc: "With the sandbox off, any visited site runs with the same origin as the GUI: it can read session data and act as your logged-in session. Only enable for fully trusted sites",
 			settingsBrowserLoopbackTitle: "Allowed local addresses",
@@ -2724,9 +3255,18 @@ window.__ModuleLoader__.load({
 			sideChatThreads: "Switch thread / new",
 			sideChatSave: "Save as new session",
 			sideChatSaveTitle: "Promote this thread to a top-level session in the main session list",
+			sideChatArchive: "Archive this side conversation (find it again via “Show archived” in the session list)",
+			sideChatArchiveRunning: "This thread is running — stop it before archiving",
 			sideChatSaved: "Saved as a new session",
 			sideChatNoTurn: "Save is available after the first completed turn",
 			sideChatPendingDrop: "The last unanswered follow-up will not be included in the saved session",
+			sideChatQueued: "Queued",
+			sideChatSending: "Sending…",
+			sideChatDequeue: "Remove from the queue",
+			sideChatRunError: "Run failed: {message}",
+			sideChatModel: "Model",
+			sideChatModelInherit: "Inherit the main conversation (no model catalog available)",
+			sideChatReasoning: "Reasoning effort",
 			sideChatFirstPlaceholder: "Ask the first question — context inherited…",
 			sideChatComposerPlaceholder: "Ask a follow-up…",
 			sideChatThinking: "Deep diving…",
@@ -2785,7 +3325,7 @@ window.__ModuleLoader__.load({
 			settingsViewModeGraphDesc: "Layered node graph with zoom and pan",
 			settingsViewModeTree: "Tree",
 			settingsViewModeTreeDesc: "Classic indentation tree, keyboard navigable",
-			tasksFoldIdleGroup: "N waiting",
+			tasksFoldIdleGroup: "{count} waiting",
 			tasksFoldIdle: "Idle {count}",
 			tasksFoldCompleted: "✓ {count} completed",
 			tasksFoldOne: "Fold into completed",
@@ -2798,10 +3338,17 @@ window.__ModuleLoader__.load({
 			tasksNodeDetail: "Node detail",
 			workflowRun: "Workflow",
 			tasksNodeState: "State",
+			tasksFoldExpandShort: "Expand",
+			tasksTreeCollapseAll: "Collapse all",
+			tasksTreeExpandAll: "Expand all",
+			tasksTreeCollapseRow: "Collapse children",
+			tasksTreeExpandRow: "Expand children",
+			tasksNodeTokens: "Tokens",
+			tasksNodeDuration: "Duration",
+			tasksNodeOpenMain: "Open in the main window",
 			tasksNodeMode: "Mode",
 			tasksNodeModel: "Model",
 			tasksNodeTeamRole: "Team role",
-			tasksNodeActivity: "Latest activity",
 			tasksStateRunning: "Running",
 			tasksStateIdle: "Idle",
 			tasksStateProvisioning: "Provisioning",
@@ -2869,44 +3416,56 @@ window.__ModuleLoader__.load({
 			openPlugin: "Open",
 			copyInstall: "Copy install command",
 			pluginMdExportDesc: "Adds an \"Export\" button to the Markdown toolbar in better-sidebar: one click renders the current .md into standalone HTML (tables / code blocks / Mermaid diagrams inlined, layout follows the preview theme) and saves it next to the .md, or exports to PDF via the print dialog",
+			pluginAgentPersonaDesc: "System-prompt personas by workspace or session: one persona can cover several workspace directories and several sessions, matched exactly, by prefix, by substring or by regex, most specific wins, and one persona can be marked as the default; managed from a settings page and a 「人设」tab on the conversation, effective on the next message",
 			pluginOfficeDesc: "Office-suite preview (.docx / .xlsx / .pptx) for the better-sidebar editor, keeping the heavy Office render libraries out of the core bundle",
 			pluginFlowglassDesc: "Live session flowgraph with three lanes for user, assistant, and tool calls, plus parallel groups, sub-agent branches, drill-down, and live status; registers a native Flowglass tab when better-sidebar is installed and keeps its standalone drawer as a fallback",
 			pluginGitForgeDesc: "Git Forge tab: GitHub/Gitea (and other forge) account library + per-project grants + hard push policy; tokens stay in local secrets (never in model context); read-only GitForge tool and agent HTTPS credential helper",
 			pluginGithubWorkbenchDesc: "GitHub Workbench tab: remote repo tree + Issues / Pull requests / Actions with full write support — create Issue/PR, comment, edit, close/reopen, squash·merge·rebase merge (strong confirm), re-run/cancel CI; the repo switcher auto-lists accessible repos and searches public ones; falls back to a standalone right-side panel without better-sidebar",
-			pluginGitRemotesDesc: "Git Remotes tab: branch/upstream/ahead-behind, fetch (optional prune), ff-only pull, and push only after an in-tab confirm. Does not replace the built-in Git stage/commit tab, and does not offer force-push or a model auto-push tool",
+			pluginIdeGitDesc: "Git tab for better-sidebar: branch tree (ahead/behind badges, worktree marker), commit graph with text/branch/author/date/path filters, per-file line diff, changes and commit box, plus merge, rebase, cherry-pick, reset, stash and tags; destructive actions confirm first and deletes or discards can be undone. Without better-sidebar it registers into the DSH right sidebar instead, so it works on its own",
 			pluginServerDeckDesc: "Server card dashboard: one card per host showing online status, OS, uptime and CPU/mem/disk usage with latency; click a card to open an interactive xterm.js terminal; one-click ~/.ssh/config import (git-hosting aliases auto-skipped). Registers a native \"Servers\" tab when better-sidebar is installed and keeps its standalone drawer as a fallback",
 			pluginSentinelDesc: "Condition-driven agent wakeup: file/process/port/http/command/webhook sensors wake dormant sessions when conditions fire; registers a \"Sentinel\" tab with the server-wide watch table",
 			pluginSidebarQaDesc: "Select-and-ask: Select conversation text → ask in the right-side panel → a dedicated follow-up session (❓追问) in the same workspace; a fast no-thinking model compresses the main context and injects it with the quote, without interrupting the main conversation. Follow-ups nest, continue, and archive",
 			pluginSidenoteDesc: "Codex-style side chat + selection annotations: fork the current session into a persistent side panel (archived out of the session list, multi-instance, /side command, survives reload, model follows the main session); select assistant text → numbered badge + note editor → an \"N annotations\" chip that rides your next message, or ask straight into a side chat",
 			pluginSshTunnelDesc: "SSH Tunnel tab: multi-host inventory + per-project grants + local secrets; SSHManager tool (exec/SFTP/session strategies); center interactive terminal and dual-pane SFTP",
 			pluginSuhuangScrollDesc: "Connect the local Suhuang Scroll Runtime to DSH settings and better-sidebar for model configuration, connection tests, and continuous grading controls; requires Suhuang Scroll Runtime and dsh-better-sidebar",
-			pluginTurnReviewDesc: "A human gate on the just-finished turn: Approve / Request changes per path with an optional comment; paths grouped by main session / subagent / unattributed; inline snapshot-vs-now diff before you decide. No fork, no /rewind",
-			pluginVideoPreviewDesc: "Inline video preview (.mp4/.webm/.mov/.mkv/.avi etc.) for the better-sidebar editor, backed by a dedicated /video host route with HTTP Range (206) support — scrubbing works and files are not capped by the 20MB mediaLimit",
+			pluginVideoPreviewDesc: "Inline video preview (.mp4/.webm/.mov/.mkv/.avi etc.) for the better-sidebar editor, backed by a dedicated /video host route with HTTP Range (206) support — scrubbing works and playback starts before the whole file is fetched",
+			pluginAudioDesc: "Inline audio preview (.mp3/.wav/.flac/.ogg/.m4a/.aac/.opus) for the better-sidebar editor: a zoomable waveform player (click/drag seek, A-B loop, channel switch) plus a live spectrum and a whole-file spectrogram — its own media route supports HTTP Range, so any size seeks",
 			pluginCodeNavDesc: "Code preview navigator: detects the language by file type and highlights syntax, symbol outline (class / method / variable filters + one-click jump), and in-file search (highlight all matches, prev/next, match case) — takes over code file preview in the better-sidebar editor",
+			pluginDevGitGraphDesc: "A vscode-git-graph-faithful commit-graph tab: mounts as a better-sidebar native tab auto-bound to the session workspace, with the full git toolset (checkout/merge/rebase/push/tag/stash), light/dark theme tracking, and click-a-file diff via the built-in DiffTab; requires dsh-better-sidebar installed first",
 			pluginDocsPanelDesc: "Global docs in the DSH sidebar: read your own Markdown notes from any workspace — a file list, an outline, open in Chrome / VS Code, and copy buttons; the docs directory is configurable (default ~/.dsh/docs)",
+			pluginTylinaDesc: "A Typst document editor sharing the current session workspace, with WYSIWYG typesetting for papers, reports, exams, resumes, charts, posters, sheet music, and slides exported as PPTX",
 			pluginEgoBrowserDesc: "The agent browser for DeepSeek Harness: 32 ego_* tools drive a real Chromium, with a native sidebar \"ego browser\" tab giving a live view of every page the agent visits — you can click, drag, and type to take over. Registers the tab automatically when better-sidebar is present, otherwise falls back to a floating bubble",
 			pluginBetterOverleafDesc: "Overleaf tab for better-sidebar: direct-CDP browser login (third-party Chromium supported), project list/switch, local git mirrors under <workspace>/overleaf/, two-way git sync with read-only API fallback, and file preview through the sidebar workbench",
 			pluginBilingualReaderDesc: "Read paper PDFs in the DSH sidebar: native PDF rendering, select text to translate it with the LLM, using context while staying fully isolated from the main conversation — a reading aid only",
+			pluginDshMemoryDeltaDesc: "Cross-session memory that injects only what changed — nothing at all when nothing changed — with review-date reminders, relevance-ranked search and a sidebar tab.",
+			pluginAgentPersonaName: "dsh-agent-persona Personas",
 			pluginSentinelName: "dsh-sentinel Wake-up System",
+			pluginFileTraceName: "dsh-file-trace File Tracing",
+			pluginFileTraceDesc: "Records every file the model reads, writes, or edits; grouped list with content and line diffs, Markdown reading mode and secret redaction; standalone floating window without better-sidebar",
+			pluginMnemeName: "dsh-mneme Memory Library",
+			pluginMnemeDesc: "Cross-session memory engine: autoDream background consolidation, session summarization and user profile; SQLite + human-editable Markdown mirrors, fully offline and private. Registers a \"Memory Library\" tab (memories/entities/status/settings views) when better-sidebar is present and keeps its standalone sidebar panel as a fallback",
 			pluginEgoBrowserName: "ego-browser Agent Browser",
 			pluginBetterOverleafName: "dsh-better-overleaf Overleaf Tab",
 			pluginDocsPanelName: "dsh-docs-panel Global Docs",
+			pluginTylinaName: "dsh-tylina Typst Document Editor",
 			pluginFlowglassName: "dsh-flowglass Flowglass",
 			pluginGitForgeName: "dsh-git-forge Git Credentials",
-			pluginGitRemotesName: "dsh-git-remotes Git Remotes",
 			pluginGithubWorkbenchName: "dsh-github-workbench GitHub Workbench",
+			pluginIdeGitName: "dsh-ide-git Git Tool Window",
 			pluginSidebarQaName: "dsh-sidebar-qa Select & Ask",
 			pluginSidenoteName: "dsh-sidenote Side Chat",
 			pluginServerDeckName: "dsh-server-deck Server Deck",
 			pluginSuhuangScrollName: "dsh-suhuang-scroll Suhuang Scroll",
 			pluginSshTunnelName: "dsh-ssh-tunnel SSH Tunnel",
-			pluginTurnReviewName: "dsh-turn-review Turn Review",
 			pluginBilingualReaderName: "dsh-bilingual-reader Bilingual Reader",
 			pluginOfficeName: "Office Preview",
 			pluginMdExportName: "Markdown Export",
 			pluginCodeNavName: "Code Preview Navigator",
 			pluginVideoPreviewName: "Video Preview",
-			presetDshDesktopDesc: "Electron advanced (frameless) mode: macOS reserves a 20px top strip; Windows reserves a 32px title bar when WCO is unavailable"
+			pluginAudioName: "Audio Preview",
+			pluginTurnOutlineName: "dsh-turn-outline Turn Outline",
+			pluginTurnOutlineDesc: "Fold the session into user turns (input + tool steps + output) and click any step to jump back to its exact spot in the conversation — no LLM calls, read-only",
+			pluginDshMemoryDeltaName: "dsh-memory-delta Memory"
 		};
 		/**
 		* The dictionary namespace this plugin owns in the DSH locale registry
@@ -3013,6 +3572,12 @@ window.__ModuleLoader__.load({
 			if (params !== void 0) for (const [name, value] of Object.entries(params)) text = text.replaceAll(`{${name}}`, String(value));
 			return text;
 		}
+		/** Whether the active locale is Chinese (used for selectors). */
+		function isZh() {
+			const dshActive = localeService?.getSnapshot().active ?? "";
+			if (betterLocaleStore?.isOverrideActive(dshActive) === true) return false;
+			return activeLocale().toLowerCase().startsWith("zh");
+		}
 		/** Format an ISO 8601 author date relative to now (刚刚 / N 分钟前 / N 小时前 / 昨天 / date). */
 		function relativeTime(iso) {
 			const then = Date.parse(iso);
@@ -3027,27 +3592,214 @@ window.__ModuleLoader__.load({
 			return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 		}
 		//#endregion
-		//#region src/client/sidebar-file.ts
+		//#region src/client/resource-address.ts
 		/**
-		* Open a file in the sidebar's editor.
+		* The DSH resource-address grammar for files (`dsh-resource://file/…`).
+		*
+		* DSH's right Sidebar opens content by ADDRESS, and a file's address IS the
+		* tab's content identity: the same address is the same tab. Two scopes exist:
+		*
+		* - `dsh-resource://file/session/<sessionId>/<path>` names a file by its path
+		*   relative to that session's workspace root OR by its absolute path kept
+		*   absolute inside the session scope (`src/a.ts` vs `/outside/a.ts` — the
+		*   leading `/` survives; the host resolves it against the root it holds for
+		*   the session);
+		* - `dsh-resource://file/absolute/<path>` names a file by its absolute path
+		*   with the leading `/` dropped (`absolute/home/me/x.txt`; Windows
+		*   `absolute/C:/x/y.txt`; a UNC path keeps an empty first segment,
+		*   `absolute//server/share/x.txt`). It carries no session. `fileAddressFor`
+		*   no longer produces this scope on DSH 0.1.5-alpha.2, but it must keep
+		*   parsing: legacy and third-party addresses still spell it.
+		*
+		* Every id and path segment is component-encoded, so a name carrying `#`, `?`
+		* or a space survives the round trip; `:` stays literal so a drive letter
+		* reads as written.
+		*
+		* The plugin parses these addresses itself instead of importing
+		* `@deepseek-ai/dsh-util-workspace-path`: the client bundle's purity gate
+		* forbids value-importing an unlisted `@deepseek-ai/*` package. This module
+		* mirrors that package's implementation — `packages/util/workspace-path/src/file-address.ts`
+		* and `fileAddressFor` in `packages/util/workspace-path/src/index.ts` in
+		* DSH 0.1.5-alpha.2 (github.com/deepseek-ai/deepseek-harness, tag
+		* `dsh-v0.1.5-alpha.2`) — and is pinned by tests/resource-address.spec.ts.
+		*/
+		/** The scheme and type every file address opens with. */
+		const FILE_ADDRESS_PREFIX = "dsh-resource://file/";
+		/** Component-encode one id or path segment, keeping `:` literal for drive letters. */
+		function encodeSegment(segment) {
+			return encodeURIComponent(segment).replace(/%3A/gi, ":");
+		}
+		/** Encode a `/`-separated path segment by segment. */
+		function encodePath(path) {
+			return path.split("/").map(encodeSegment).join("/");
+		}
+		/** Whether a decoded first path segment is a Windows drive (`C:`). */
+		function isDriveSegment(segment) {
+			return segment !== void 0 && /^[A-Za-z]:$/.test(segment);
+		}
+		/**
+		* Build the address of a file read through one session.
+		* @param sessionId - the session whose workspace root resolves the path.
+		* @param path - absolute or workspace-relative path; backslashes are normalized
+		*   to `/`, and leading `./` prefixes are dropped (a leading `/` is KEPT: an
+		*   absolute path stays absolute inside the session scope).
+		* @returns the `dsh-resource://file/session/<sessionId>/<path>` address.
+		*/
+		function sessionFileAddress(sessionId, path) {
+			const normalized = path.replace(/\\/g, "/").replace(/^(?:\.\/)+/, "");
+			return `${FILE_ADDRESS_PREFIX}session/${encodeSegment(sessionId)}/${encodePath(normalized)}`;
+		}
+		/**
+		* Read a file address back into its parts without resolving `.` or `..`.
+		* Query and fragment suffixes are ignored; encoded path segments are decoded.
+		* @param address - a candidate address.
+		* @returns the parts, or `undefined` when the string is not a
+		*   `dsh-resource://file/` URI in a known scope with a path, or a segment is
+		*   not validly encoded.
+		*/
+		function parseFileAddress(address) {
+			try {
+				if (!address.startsWith("dsh-resource://file/")) return void 0;
+				const end = address.search(/[?#]/);
+				const [scope, ...rest] = address.slice(20, end === -1 ? void 0 : end).split("/");
+				if (scope === "session") {
+					const [id, ...segments] = rest;
+					if (id === void 0 || id === "" || segments.length === 0) return void 0;
+					return {
+						scope,
+						sessionId: decodeURIComponent(id),
+						path: segments.map(decodeURIComponent).join("/")
+					};
+				}
+				if (scope === "absolute") {
+					const unc = rest[0] === "" && rest.length > 1;
+					const segments = (unc ? rest.slice(1) : rest).map(decodeURIComponent);
+					if (segments.length === 0 || segments[0] === "") return void 0;
+					if (unc) return {
+						scope,
+						path: `//${segments.join("/")}`
+					};
+					return {
+						scope,
+						path: isDriveSegment(segments[0]) ? segments.join("/") : `/${segments.join("/")}`
+					};
+				}
+				return;
+			} catch {
+				return;
+			}
+		}
+		/** Whether a path is absolute in either spelling the host accepts. */
+		function isAbsolutePath(path) {
+			return path.startsWith("/") || /^[A-Za-z]:[/\\]/.test(path) || path.startsWith("\\\\");
+		}
+		/**
+		* The address for a path as a caller holds it: ALWAYS session-scoped. A
+		* relative path, or an absolute path inside the session's workspace, becomes
+		* the relative spelling; an absolute path outside it, or one whose workspace
+		* root is unknown, keeps its absolute path in that session's address. (Mirror
+		* of `fileAddressFor` — on alpha.2 this helper no longer produces the
+		* `absolute` scope, though such addresses still parse.)
+		* @param sessionId - the session the path is read in.
+		* @param cwd - that session's workspace root, when known.
+		* @param path - absolute or workspace-relative path, either separator spelling.
+		* @returns the `dsh-resource://file/…` address.
+		*/
+		function fileAddressFor(sessionId, cwd, path) {
+			const normalized = path.replace(/\\/g, "/");
+			if (!isAbsolutePath(normalized)) return sessionFileAddress(sessionId, normalized);
+			const root = cwd === void 0 ? "" : cwd.replace(/\\/g, "/").replace(/\/+$/, "");
+			if (root !== "" && normalized === root) return sessionFileAddress(sessionId, "");
+			if (root !== "" && normalized.startsWith(`${root}/`)) return sessionFileAddress(sessionId, normalized.slice(root.length + 1));
+			return sessionFileAddress(sessionId, normalized);
+		}
+		//#endregion
+		//#region src/client/sidebar-file.ts
+		/** The kind this plugin's own file editor registers its tab type under. */
+		const EDITOR_KIND$2 = "editor";
+		/**
+		* The tab type that would open `address` besides this plugin's own editor.
+		*
+		* Probing is the whole fix for #695: the registry's ranking — not this
+		* plugin's hard-coded `editor` — decides who owns a file address, and the
+		* plugin itself already relies on that ranking (its editor holds
+		* `dsh-resource://file/**` at the `extension` band, which is why it beats the
+		* built-in `text` preview at `fallback` in the first place). For a file no
+		* other type claims, the editor IS the best candidate, so the answer is
+		* undefined and every caller keeps its previous path verbatim.
+		*
+		* @param ctx - client context; `ctx.get` is used because the registry is
+		* optional (a stripped-down host may not provide it).
+		* @param address - the `dsh-resource://file/…` address of the file being opened.
+		* @returns the claiming type's kind, or undefined when the editor ranks first
+		* (or the probe cannot run — the probe is best-effort by contract).
+		*/
+		function claimingNativeKind(ctx, address) {
+			try {
+				const tabs = ctx.get("sidebarRightTabs");
+				if (tabs === void 0 || typeof tabs.candidates !== "function") return void 0;
+				const best = tabs.candidates(address)[0];
+				return best !== void 0 && best.kind !== void 0 && best.kind !== EDITOR_KIND$2 ? best.kind : void 0;
+			} catch (error) {
+				console.error("[dsh-better-sidebar] tab-claim probe failed", error);
+				return;
+			}
+		}
+		/**
+		* Open one file through the native surface when a type other than this
+		* plugin's editor claims it.
+		*
+		* The address is built WITH the session cwd (the same spelling the host's
+		* conversation file links produce), so a claimed file opened here dedupes
+		* against the tab the chat path already opened for the same file.
+		*
+		* @param ctx - client context (`sidebarRightTabs` for the probe,
+		* `sidebarRight` for the open).
+		* @param sessionId - the session whose workspace the path resolves in.
+		* @param cwd - that session's workspace root, when known.
+		* @param path - absolute or session-relative file path.
+		* @returns true when the claiming type was handed the file; false leaves the
+		* caller on its editor path (unclaimed file, no registry, or no surface).
+		*/
+		function openClaimedNativeFile(ctx, sessionId, cwd, path) {
+			const address = fileAddressFor(sessionId, cwd, path);
+			if (claimingNativeKind(ctx, address) === void 0) return false;
+			let opener;
+			try {
+				opener = ctx.get("sidebarRight");
+			} catch {
+				opener = void 0;
+			}
+			if (opener === void 0 || typeof opener.openResource !== "function") return false;
+			opener.openResource(address);
+			return true;
+		}
+		/**
+		* Open a file in the sidebar's editor — unless a native type claims it.
 		*
 		* Routes through the sidebar service so the editor descriptor's dedupeKey
 		* (per-path) applies; the id is path-derived so multiple editors coexist.
 		* @param ctx - client context carrying `betterSidebar`.
 		* @param sessionId - the session whose cwd resolves a relative path.
 		* @param path - absolute or session-relative file path.
+		* @param line - the 1-based line a file reference named (`a.c#L131`, #826).
+		* Omitted on an ordinary open. It rides the open as a transient navigation:
+		* the editor lands on it once (leaving preview, which renders no source
+		* lines) and the record forgets it afterwards.
 		* @returns nothing.
 		*/
-		function openSidebarFile(ctx, sessionId, path) {
+		function openSidebarFile(ctx, sessionId, path, line) {
 			const summary = ctx.sessions.list.getSnapshot().byId[sessionId];
 			const absolute = resolveSidebarPath(summary?.cwd, path);
+			if (openClaimedNativeFile(ctx, sessionId, summary?.cwd, absolute)) return;
 			const at = Math.max(absolute.lastIndexOf("/"), absolute.lastIndexOf("\\"));
 			const title = at === -1 ? absolute : absolute.slice(at + 1);
 			ctx.get("betterSidebar")?.openTab({
 				type: "editor",
 				title,
 				path: absolute,
-				id: `editor:${absolute}`
+				id: `editor:${absolute}`,
+				...line === void 0 ? {} : { line }
 			});
 		}
 		//#endregion
@@ -3078,11 +3830,12 @@ window.__ModuleLoader__.load({
 		//#endregion
 		//#region src/client/api.ts
 		/**
-		* Typed fetch wrapper over the /sidebar JSON API. Every call posts to
-		* `/sidebar/api/<method>` with the sessionId and — when known — the session's
-		* cwd from the client's own list summary. The host prefers its attached
-		* session header and uses the summary cwd only while the session is still
-		* hydrating at page load (a detached session would otherwise fail the
+		* Typed fetch wrapper over the /sidebar JSON API. Every call posts through
+		* {@link hostRouteUrl} to `/sidebar/api/<method>` with the sessionId and —
+		* when known — the session's cwd from the client's own list summary (the
+		* route keeps a reverse-proxy prefix; see host-route-url.ts). The host prefers
+		* its attached session header and uses the summary cwd only while the session
+		* is still hydrating at page load (a detached session would otherwise fail the
 		* request). Failures surface as {@link SidebarApiError} with the wire code.
 		*/
 		/** One wire failure. */
@@ -3108,7 +3861,7 @@ window.__ModuleLoader__.load({
 		async function call(method, payload, signal) {
 			let response;
 			try {
-				response = await fetch(`/sidebar/api/${method}`, {
+				response = await fetch(hostRouteUrl(`sidebar/api/${method}`).href, {
 					method: "POST",
 					headers: { "content-type": "application/json" },
 					body: JSON.stringify(payload),
@@ -3159,7 +3912,7 @@ window.__ModuleLoader__.load({
 			if (scope.cwd !== void 0 && scope.cwd !== "") params.set("cwd", scope.cwd);
 			let response;
 			try {
-				response = await fetch(`/sidebar/upload?${params.toString()}`, {
+				response = await fetch(hostRouteUrl(`sidebar/upload?${params.toString()}`).href, {
 					method: "POST",
 					headers: { "content-type": "application/octet-stream" },
 					body,
@@ -3167,6 +3920,41 @@ window.__ModuleLoader__.load({
 				});
 			} catch (error) {
 				if (error instanceof DOMException && error.name === "AbortError") throw error;
+				throw new SidebarApiError("network", error instanceof Error ? error.message : String(error));
+			}
+			return readEnvelope(response);
+		}
+		/**
+		* Save one document through the sidebar's raw write route: the text IS the
+		* POST body, so the request never grows a JSON escaping layer and nothing caps
+		* the size a save can carry.
+		*
+		* The document is transported with LF line endings (CodeMirror has no other
+		* line model); the host restores the file's own encoding and line ending
+		* before writing, exactly as the old JSON route did.
+		*
+		* @param scope - the session scope.
+		* @param path - the file to write (absolute or session-relative).
+		* @param content - the document, LF line endings.
+		* @param expectedMtimeMs - the draft's baseline; a mismatch refuses with
+		*  `fs-conflict`. Omitted = no gate.
+		* @returns the fresh mtime baseline after the write.
+		*/
+		async function fetchWrite(scope, path, content, expectedMtimeMs) {
+			const params = new URLSearchParams({
+				sessionId: scope.sessionId,
+				path
+			});
+			if (scope.cwd !== void 0 && scope.cwd !== "") params.set("cwd", scope.cwd);
+			if (expectedMtimeMs !== void 0) params.set("expectedMtimeMs", String(expectedMtimeMs));
+			let response;
+			try {
+				response = await fetch(hostRouteUrl(`sidebar/write?${params.toString()}`).href, {
+					method: "POST",
+					headers: { "content-type": "text/plain; charset=utf-8" },
+					body: content
+				});
+			} catch (error) {
 				throw new SidebarApiError("network", error instanceof Error ? error.message : String(error));
 			}
 			return readEnvelope(response);
@@ -3221,21 +4009,53 @@ window.__ModuleLoader__.load({
 		/** The sidebar API surface (session scope threaded through every call). */
 		const api = {
 			sessionCwd: (scope, signal) => call("session.cwd", scopePayload(scope, {}), signal),
-			fsTree: (scope, path, signal) => call("fs.tree", scopePayload(scope, { path }), signal),
+			fsTree: (scope, path, exclude, signal) => call("fs.tree", scopePayload(scope, {
+				path,
+				exclude
+			}), signal),
 			/**
 			* Batch listing: every requested level in ONE request (the tree's mount and
 			* refresh send the expanded set instead of N `fsTree` calls). A level that
 			* failed carries `error` in place — the batch itself still succeeds.
+			* `exclude` carries the explorerExclude pref: matched entries never arrive
+			* (the host filters, so no client-side pass is needed).
 			*/
-			fsTrees: (scope, paths, signal) => call("fs.trees", scopePayload(scope, { paths: [...paths] }), signal),
-			/** Global recursive file-name search rooted at the session cwd (the editor
-			*  side panel's search box); matches are cwd-relative '/'-separated paths. */
-			fsSearch: (scope, query, signal) => call("fs.search", scopePayload(scope, { query }), signal),
+			fsTrees: (scope, paths, exclude, signal) => call("fs.trees", scopePayload(scope, {
+				paths: [...paths],
+				exclude
+			}), signal),
+			/** Global recursive file search rooted at the session cwd (the editor
+			*  side panel's search box). A name query matches cwd-relative
+			*  '/'-separated paths; a separator-carrying fragment matches by PATH;
+			*  a query naming one path (absolute, `~/…`, `./x`, `../x`) is stat'ed
+			*  through the same resolution fs.read uses and yields the RESOLVED
+			*  absolute target as the single match. `dirs` names the subset that is a
+			*  directory (the list navigates the tree for those — `fs.read` refuses a
+			*  directory). `exclude` carries the explorerExclude pref: matched entries
+			*  never match and are never descended (host-side, in lockstep with the
+			*  tree; a pasted direct-open path is explicit intent and skips it). */
+			fsSearch: (scope, query, exclude, signal) => call("fs.search", scopePayload(scope, {
+				query,
+				exclude
+			}), signal),
 			fsRead: (scope, path, signal) => call("fs.read", scopePayload(scope, { path }), signal),
-			fsWrite: (scope, path, content) => call("fs.write", scopePayload(scope, {
+			/** One page of a large text file, for the read-only paged preview.
+			*  `offset` is the byte position to start at (0 for the first page); the
+			*  response carries where to continue. */
+			fsReadPage: (scope, path, offset, signal) => call("fs.readPage", scopePayload(scope, {
 				path,
-				content
-			})),
+				offset
+			}), signal),
+			/** Save a file through the raw `/sidebar/write` route (the document IS the
+			*  request body — no JSON escaping, so nothing caps the saved size).
+			*  `expectedMtimeMs` is the mtime the draft was based on: a file that
+			*  changed on disk since refuses with code `fs-conflict` (the editor then
+			*  offers a reload) instead of clobbering those bytes — and so does a file
+			*  that is no longer there at all, because a numeric baseline proves it was
+			*  read from an existing file. `null` (the file did not exist yet) and
+			*  omitted (older callers) both mean no gate. The response carries the
+			*  fresh baseline. */
+			fsWrite: (scope, path, content, expectedMtimeMs) => fetchWrite(scope, path, content, expectedMtimeMs ?? void 0),
 			/** Rename one tree row within its directory (single-segment name; the
 			*  server refuses existing destinations, the workspace root, and — while
 			*  the fence is armed — anything resolving outside the workspace). */
@@ -3253,6 +4073,13 @@ window.__ModuleLoader__.load({
 				path,
 				name
 			})),
+			/** Create one EMPTY file row inside `path` (single-segment name; the server
+			*  refuses existing destinations — without truncating them — plus the
+			*  characters and Windows device names a file name may not use). */
+			fsCreateFile: (scope, path, name) => call("fs.createFile", scopePayload(scope, {
+				path,
+				name
+			})),
 			/** Upload one file's raw bytes into `dir` (keeps the folder tree via
 			*  `relativePath`); the host streams it under the session workspace. */
 			uploadFile: (scope, dir, relativePath, body, signal) => fetchUpload(scope, dir, relativePath, body, signal),
@@ -3265,6 +4092,24 @@ window.__ModuleLoader__.load({
 			gitStage: (scope, path, worktree) => call("git.stage", gitPayload(scope, worktree, { ...path !== void 0 ? { path } : {} })),
 			gitUnstage: (scope, path, worktree) => call("git.unstage", gitPayload(scope, worktree, { ...path !== void 0 ? { path } : {} })),
 			gitCommit: (scope, message, worktree) => call("git.commit", gitPayload(scope, worktree, { message })),
+			/** Push the selected checkout's branch to its upstream; git's own failure
+			*  message (no upstream, auth, non-fast-forward) crosses the wire as-is. */
+			gitPush: (scope, worktree) => call("git.push", gitPayload(scope, worktree, {})),
+			/** Pull into the selected checkout (`--ff-only` host-side: a diverged branch
+			*  fails loudly rather than opening a merge editor nobody can answer). */
+			gitPull: (scope, worktree) => call("git.pull", gitPayload(scope, worktree, {})),
+			/** Ask the host to generate a commit message from the pending changes: it
+			*  streams the diff through the harness LLM on the pinned route (or the
+			*  conversation's own) and answers with the route actually used.
+			*  `language` follows the sidebar's active locale ('zh' | 'en'). */
+			gitSuggestMessage: (scope, language, worktree) => call("git.suggest-message", gitPayload(scope, worktree, { language })),
+			/** The discoverable provider/model catalog for the Git card's pinned-route
+			*  setting (advisory; empty when the harness exposes no LLM service). */
+			gitModels: (scope, signal) => call("git.models", scopePayload(scope, {}), signal),
+			/** The route the NEXT commit-message suggestion would use (pinned → the
+			*  conversation's own → the harness default); absent when none resolves.
+			*  Cheaper than `gitModels`: no catalog discovery. */
+			gitCommitModel: (scope, signal) => call("git.commit-model", scopePayload(scope, {}), signal),
 			gitBranch: (scope, worktree, signal) => call("git.branch", gitPayload(scope, worktree, {}), signal),
 			gitCheckout: (scope, branch, worktree) => call("git.checkout", gitPayload(scope, worktree, { branch })),
 			/** Recent commit history, lazily pageable (skip/count; defaults 0/30). */
@@ -3280,6 +4125,19 @@ window.__ModuleLoader__.load({
 			gitShow: (scope, rev, path, worktree, signal) => call("git.show", gitPayload(scope, worktree, {
 				rev,
 				path
+			}), signal),
+			/** ONE file's whole uncommitted change (worktree against HEAD, staged and
+			*  unstaged in one patch). The editor's change gutter maps this onto the
+			*  buffer's line numbers; untracked files are marked from the status store
+			*  instead, because no diff side ever lists them. */
+			gitDiffHead: (scope, path, worktree, signal) => call("git.diff-head", gitPayload(scope, worktree, { path }), signal),
+			/** Blame ONE line range (`git blame --porcelain -L`). Never throws: every
+			*  failure (untracked file, not a repository, command failure) answers with
+			*  an empty list. Called on hover only — a file is never prefetched. */
+			gitBlame: (scope, path, startLine, endLine, worktree, signal) => call("git.blame", gitPayload(scope, worktree, {
+				path,
+				startLine,
+				endLine
 			}), signal),
 			/** The session's file-tool events for the changes tab's session lens: the
 			*  `tool/call` + `tool/result` rows past `afterSeq` (0 = whole window),
@@ -3339,11 +4197,35 @@ window.__ModuleLoader__.load({
 			*  `afterSeq` narrows the response to the delta beyond it (poll tail).
 			*  `live` is the thread's in-flight model deltas (DSH 0.1.5 publishes them
 			*  outside the session log) — the CURRENT attempt on every pull, never a
-			*  delta, so the caller replaces its live set instead of appending. */
+			*  delta, so the caller replaces its live set instead of appending.
+			*  `pending` is the thread's live UNCLAIMED inbox in claim order (all
+			*  `next-step` entries, then the queued turns): the view renders those as
+			*  pending bubbles, deduped by id against the durable `user/message` rows
+			*  the claim later writes. */
 			sidechatEvents: (childId, afterSeq, signal) => call("sidechat.events", {
 				childId,
 				...afterSeq !== void 0 ? { afterSeq } : {}
 			}, signal),
+			/** Drop one pending inbox message (no `messageId` = drop the whole queue).
+			*  `removed` is how many the host actually took out; a cold thread answers
+			*  `0` rather than failing. */
+			sidechatDequeue: (childId, messageId) => call("sidechat.dequeue", {
+				childId,
+				...messageId !== void 0 ? { messageId } : {}
+			}),
+			/** The host's own model catalog for the per-thread picker. `available:
+			*  false` means no catalog was readable (headless or older host) — the
+			*  picker then offers only "inherit the parent conversation". */
+			sidechatModels: () => call("sidechat.models", {}),
+			/** Pin one Side Chat thread's model route (the host disables its own picker
+			*  for subagent-origin sessions, so this is the only switch a side thread
+			*  has). `reasoningEffort` is omitted unless chosen. */
+			sidechatModel: (childId, provider, model, reasoningEffort) => call("sidechat.model", {
+				childId,
+				provider,
+				model,
+				...reasoningEffort !== void 0 ? { reasoningEffort } : {}
+			}),
 			/** Read the side card preferences (plugin-global, no session scope). */
 			settingsGet: () => call("settings.get", {}),
 			/** Merge a patch into the side card preferences (revision-guarded). */
@@ -3366,10 +4248,12 @@ window.__ModuleLoader__.load({
 			return fileUrl(scope, path, true);
 		}
 		/**
-		* Start one archive build. The host fences and walks the selection, then
-		* returns an id IMMEDIATELY — the zip itself is produced in the background and
-		* polled through {@link api.archiveStatus}. `paths` are absolute paths in the
-		* session's namespace (the same values `fsTree` / `downloadUrl` take).
+		* Start one archive build. The host fences the selection and returns an id
+		* IMMEDIATELY — the system's `zip` (or `tar`) packs it into a temp file in the
+		* background, polled through {@link api.archiveStatus}. `paths` are absolute
+		* paths in the session's namespace (the same values `fsTree` / `downloadUrl`
+		* take); `name` is a STEM, because the host appends the extension of the tool
+		* it actually has and returns the final name with the id.
 		*/
 		function archiveBuild(scope, paths, name) {
 			return call("archive.build", scopePayload(scope, {
@@ -3377,9 +4261,12 @@ window.__ModuleLoader__.load({
 				name
 			}));
 		}
-		/** Poll one archive build (its id came from {@link archiveBuild}). */
-		function archiveStatus(id) {
-			return call("archive.status", { id });
+		/** Poll one archive build (its id came from {@link archiveBuild}). The session
+		*  scope rides along exactly like `archive.build`: the host requires BOTH keys
+		*  (`requireString(payload, 'id')` + `requireString(payload, 'sessionId')`), so
+		*  a bare `{ id }` payload is refused with a 400 and the status is never read. */
+		function archiveStatus(scope, id) {
+			return call("archive.status", scopePayload(scope, { id }));
 		}
 		/**
 		* Absolute URL of one FINISHED archive's bytes (the `archive.status` result
@@ -3387,20 +4274,20 @@ window.__ModuleLoader__.load({
 		* scope rides along because the host answers only the session that built it.
 		*/
 		function archiveDownloadUrl(scope, id) {
-			return `/sidebar/archive?${new URLSearchParams({
+			return hostRouteUrl(`sidebar/archive?${new URLSearchParams({
 				sessionId: scope.sessionId,
 				id
-			}).toString()}`;
+			}).toString()}`).href;
 		}
 		/** Shared URL builder for the /sidebar/file route (media vs download). */
 		function fileUrl(scope, path, download) {
 			const params = new URLSearchParams({
 				sessionId: scope.sessionId,
-				path
+				path: resolveSidebarPath(scope.cwd, path)
 			});
 			if (scope.cwd !== void 0 && scope.cwd !== "") params.set("cwd", scope.cwd);
 			if (download) params.set("download", "1");
-			return `/sidebar/file?${params.toString()}`;
+			return hostRouteUrl(`sidebar/file?${params.toString()}`).href;
 		}
 		/**
 		* Absolute URL of the HTML preview route (see html-route.ts): the path is
@@ -3411,11 +4298,22 @@ window.__ModuleLoader__.load({
 		* client-side platform signal is needed.
 		*/
 		function htmlUrl(scope, path) {
-			return encodeHtmlUrl(scope.sessionId, path);
+			return hostRouteUrl(encodeHtmlUrl(scope.sessionId, resolveSidebarPath(scope.cwd, path))).href;
+		}
+		/**
+		* Read one session's blank phase. Blank sessions do not render the host's
+		* session header, so the plugin's header-registered dock entry is unreachable
+		* there (issue #698/#623) — the client uses this to render its fallback entry.
+		* @param sessionId - the session to read.
+		* @param signal - optional abort signal.
+		* @returns the phase (`blank: false` when the session does not exist).
+		*/
+		async function sessionPhase(sessionId, signal) {
+			return call("session.phase", { sessionId }, signal);
 		}
 		//#endregion
-		//#region \0dsh-css:H:\MaxNull\WorkStation\third-party-plugins\DSH-better-sidebar\src\client\sidebar.module.css.mjs
-		const css$10 = "[data-dsh-panel-host]{z-index:25;pointer-events:none;position:fixed;inset:0;overflow:clip}html[data-platform] body>[data-dsh-better-sidebar],[data-dsh-panel-host]{-webkit-app-region:initial!important}[data-dsh-panel-host]>*{-webkit-app-region:no-drag}[data-dsh-panel-host][data-dsh-panel-host-degraded]{position:absolute;top:0;left:0}._8zY6WW_toggleButton{width:28px;height:28px;color:var(--dsw-alias-label-secondary);cursor:pointer;transition:background var(--ds-transition-duration-slow) var(--ds-ease-in-out), color var(--ds-transition-duration-slow) var(--ds-ease-in-out);background:0 0;border:none;border-radius:50%;justify-content:center;align-items:center;display:flex}._8zY6WW_toggleButton:hover:not(:disabled):not([aria-disabled=true]){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}._8zY6WW_toggleButton:disabled,._8zY6WW_toggleButton[aria-disabled=true]{opacity:.4;cursor:default}._8zY6WW_panelBody{flex:1;min-width:0;min-height:0;display:flex}._8zY6WW_bottomPanel{z-index:40;background:var(--dsw-alias-bg-layer-1);border-top:1px solid var(--dsw-alias-border-l2);pointer-events:auto;padding-bottom:env(safe-area-inset-bottom);transition:transform var(--ds-transition-duration-slow) var(--ds-ease-in-out), height var(--ds-transition-duration-slow) var(--ds-ease-in-out);flex-direction:column;display:flex;position:absolute;bottom:0}._8zY6WW_bottomPanelHidden{pointer-events:none;visibility:hidden;transition:transform var(--ds-transition-duration-slow) var(--ds-ease-in-out), height var(--ds-transition-duration-slow) var(--ds-ease-in-out), visibility 0s linear var(--ds-transition-duration-slow);transform:translateY(102%)}._8zY6WW_bottomPanel[data-dragging]{transition:none}._8zY6WW_bottomPanel{contain:layout style}body[data-dsh-sidebar-dragging] ._8zY6WW_panel,body[data-dsh-sidebar-dragging] ._8zY6WW_bottomPanel{will-change:transform}._8zY6WW_bottomResize{cursor:row-resize;z-index:2;touch-action:none;height:8px;position:absolute;top:-4px;left:0;right:0}._8zY6WW_bottomResizeActive{background:var(--dsw-alias-interactive-bg-hover-accent)}._8zY6WW_bottomClose{z-index:4;width:28px;height:28px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:50%;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex;position:absolute;top:3px;right:6px}._8zY6WW_bottomClose:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}._8zY6WW_bottomPanel ._8zY6WW_tabBar{padding-right:40px}._8zY6WW_toggleButton,._8zY6WW_tabBar{-webkit-app-region:no-drag}._8zY6WW_iconButton{width:28px;height:28px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:50%;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex}._8zY6WW_iconButton:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}._8zY6WW_iconButton:disabled{opacity:.4;cursor:default}._8zY6WW_workbench,._8zY6WW_split{flex:1;min-width:0;min-height:0;display:flex}._8zY6WW_splitRow{flex-direction:row}._8zY6WW_splitCol{flex-direction:column}._8zY6WW_splitChild{display:flex;position:relative;overflow:hidden}._8zY6WW_divider{z-index:3;touch-action:none;flex:none;position:relative}._8zY6WW_dividerRow:after,._8zY6WW_dividerCol:after{content:\"\";background:var(--dsw-alias-border-l2);transition:background var(--ds-transition-duration-slow) var(--ds-ease-in-out);position:absolute}._8zY6WW_dividerRow{cursor:col-resize;width:7px;margin:0 -2px}._8zY6WW_dividerRow:after{width:1px;top:0;bottom:0;left:50%;transform:translate(-50%)}._8zY6WW_dividerCol{cursor:row-resize;height:7px;margin:-2px 0}._8zY6WW_dividerCol:after{height:1px;top:50%;left:0;right:0;transform:translateY(-50%)}._8zY6WW_divider:hover:after,._8zY6WW_dividerActive:after{background:var(--dsw-alias-interactive-bg-hover-accent)}._8zY6WW_pane{background:var(--dsw-alias-bg-base);flex-direction:column;flex:1;min-width:0;min-height:0;display:flex;position:relative}._8zY6WW_paneDrop{outline:1px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}._8zY6WW_dropOverlay{z-index:6;pointer-events:none;background:var(--dsw-alias-interactive-bg-hover-accent);opacity:.5;position:absolute}._8zY6WW_dropLeft{width:25%;top:0;bottom:0;left:0}._8zY6WW_dropRight{width:25%;top:0;bottom:0;right:0}._8zY6WW_dropUp{height:25%;top:0;left:0;right:0}._8zY6WW_dropDown{height:25%;bottom:0;left:0;right:0}._8zY6WW_dropCenter{outline:2px dashed var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-2px;background:0 0;inset:25%}._8zY6WW_paneContent{flex-direction:column;flex:1;min-height:0;display:flex;overflow:hidden}._8zY6WW_chipIcon{flex:none;align-items:center;margin-right:6px;display:inline-flex}._8zY6WW_paneTab{flex-direction:column;flex:1;min-height:0;display:flex}._8zY6WW_paneTabHidden{display:none}._8zY6WW_paneEmptyCards{flex:1;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));align-content:start;gap:12px;min-height:0;padding:12px;display:grid;overflow:hidden}._8zY6WW_paneCard{box-sizing:border-box;border:.5px solid var(--dsw-alias-border-l4);background:var(--dsw-alias-bg-layer-1);min-width:0;min-height:56px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-s-strong-14);cursor:pointer;text-align:left;border-radius:24px;flex-direction:row;justify-content:flex-start;align-items:center;gap:14px;padding:14px 20px;display:flex}._8zY6WW_paneCard>svg{color:var(--dsw-alias-label-secondary);flex:none}._8zY6WW_paneCard:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l4)}._8zY6WW_paneCard:disabled{opacity:.45;cursor:default}._8zY6WW_tabBar{border-bottom:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);flex:none;align-items:stretch;height:34px;display:flex}._8zY6WW_tabBarDrop{outline:1px dashed var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}._8zY6WW_tabList{scrollbar-width:none;flex:1;min-width:0;display:flex;overflow-x:auto}._8zY6WW_tabList::-webkit-scrollbar{display:none}._8zY6WW_tab{min-width:64px;max-width:160px;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-secondary);border-right:1px solid var(--dsw-alias-border-l1);cursor:pointer;user-select:none;background:0 0;flex:none;align-items:center;gap:4px;padding:0 4px 0 10px;display:flex}._8zY6WW_tab:hover{background:var(--dsw-alias-interactive-bg-hover)}._8zY6WW_tabActive{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-active)}._8zY6WW_tabTitle{text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;overflow:hidden}._8zY6WW_tabBadge{min-width:16px;height:15px;font:var(--dsw-font-xxxs-strong-11);background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-brand-primary);border-radius:8px;flex:none;justify-content:center;align-items:center;padding:0 4px;display:inline-flex}._8zY6WW_tabClose{width:18px;height:18px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:4px;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex}._8zY6WW_tabClose:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}._8zY6WW_tabBarPlus{background:var(--dsw-alias-bg-layer-1);width:22px;height:22px;color:var(--dsw-alias-label-tertiary);cursor:pointer;border:none;border-radius:5px;flex:none;justify-content:center;align-self:center;align-items:center;margin:0 6px;padding:0;display:inline-flex;position:sticky;right:0}._8zY6WW_tabBarPlus:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}._8zY6WW_explorer{flex-direction:column;flex:1;min-height:0;display:flex}._8zY6WW_explorerHeader{flex:none;justify-content:space-between;align-items:center;gap:8px;height:36px;padding:0 8px 0 12px;display:flex}._8zY6WW_explorerRoot{font:var(--dsw-font-s-14);color:var(--dsw-alias-label-secondary);text-overflow:ellipsis;white-space:nowrap;overflow:hidden}._8zY6WW_explorerBody{flex:1;min-height:0;padding:4px 8px 8px;overflow:hidden auto}._8zY6WW_explorerRow{box-sizing:border-box;width:100%;max-width:100%;height:28px;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer;white-space:nowrap;animation:_8zY6WW_dsh-row-in .15s var(--ds-ease-in-out);background:0 0;border:none;border-radius:4px;align-items:center;gap:6px;padding:0 8px;display:flex;position:relative}._8zY6WW_explorerRow:hover{background:var(--dsw-alias-interactive-bg-hover)}._8zY6WW_explorerRowSelected{background:var(--dsw-alias-interactive-bg-active)}._8zY6WW_explorerRowSelected:before{content:\"\";background:var(--dsw-alias-state-business-primary);border-radius:1px;width:2px;position:absolute;top:4px;bottom:4px;left:0}._8zY6WW_explorerGitName[data-git-tone=modified]{color:var(--dsw-alias-state-warn-primary)}._8zY6WW_explorerGitName[data-git-tone=added],._8zY6WW_explorerGitName[data-git-tone=untracked]{color:var(--dsw-alias-state-success-primary)}._8zY6WW_explorerGitName[data-git-tone=deleted]{color:var(--dsw-alias-state-error-primary)}._8zY6WW_explorerGitName[data-git-tone=renamed]{color:var(--dsw-alias-state-business-primary)}._8zY6WW_explorerGitName[data-git-tone=copied]{color:var(--dsw-alias-state-success-primary)}._8zY6WW_explorerGitName[data-git-tone=conflict]{color:var(--dsw-alias-state-error-primary)}._8zY6WW_explorerDirChanged{color:var(--dsw-alias-state-business-primary)}._8zY6WW_explorerRowRevealed{background:var(--dsw-alias-state-business-tertiary)}._8zY6WW_explorerRowRevealed+._8zY6WW_explorerRowRevealed{border-top-left-radius:0;border-top-right-radius:0}._8zY6WW_explorerRowRevealed:has(+._8zY6WW_explorerRowRevealed){border-bottom-right-radius:0;border-bottom-left-radius:0}._8zY6WW_explorerDir{font:var(--dsw-font-xxs-strong-12)}._8zY6WW_explorerHidden{opacity:.45}._8zY6WW_explorerSymlink{color:var(--dsw-alias-label-tertiary);flex:none}._8zY6WW_explorerBroken ._8zY6WW_explorerName{color:var(--dsw-alias-state-error-primary)}._8zY6WW_explorerName{text-overflow:ellipsis;white-space:nowrap;min-width:0;overflow:hidden}._8zY6WW_explorerRenaming{cursor:text}._8zY6WW_explorerRenameInput{box-sizing:border-box;border:1px solid var(--dsw-alias-state-business-primary);background:var(--dsw-alias-bg-layer-1);min-width:0;height:22px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:3px;flex:auto;padding:0 6px}._8zY6WW_explorerRenameInput:focus{border-color:var(--dsw-alias-state-business-primary);outline:none}._8zY6WW_explorerActionError{box-sizing:border-box;border:1px solid var(--dsw-alias-state-error-primary);background:var(--dsw-alias-bg-layer-1);border-radius:8px;align-items:flex-start;gap:6px;width:100%;margin-bottom:4px;padding:6px 8px;display:flex}._8zY6WW_explorerActionErrorText{overflow-wrap:anywhere;min-width:0;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);flex:auto}._8zY6WW_explorerSelectionBar{z-index:1;box-sizing:border-box;background:var(--dsw-alias-bg-layer-2);border-radius:4px;align-items:center;gap:6px;width:100%;min-height:28px;margin-top:4px;padding:2px 8px;display:flex;position:sticky;bottom:0}._8zY6WW_explorerSelectionText{text-overflow:ellipsis;white-space:nowrap;min-width:0;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-secondary);flex:auto;overflow:hidden}._8zY6WW_explorerSelectionActions{flex-wrap:wrap;flex:none;justify-content:flex-end;gap:4px;max-width:72%;display:flex}._8zY6WW_explorerAppIcon{object-fit:contain;width:14px;height:14px;display:block}._8zY6WW_explorerHiddenPane{display:none}._8zY6WW_explorerRef,._8zY6WW_explorerCopied{margin-left:auto}._8zY6WW_explorerRef{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);height:20px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxxs-strong-11);cursor:pointer;border-radius:999px;flex:none;align-items:center;padding:0 8px;display:none}._8zY6WW_explorerRef:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}._8zY6WW_explorerRow:hover ._8zY6WW_explorerRef,._8zY6WW_explorerRow:focus-within ._8zY6WW_explorerRef{display:inline-flex}._8zY6WW_explorerCopied{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary);flex:none}._8zY6WW_explorerError{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);cursor:default}@keyframes _8zY6WW_dsh-row-in{0%{opacity:0}}._8zY6WW_explorerEmpty{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);text-align:center;padding:16px}._8zY6WW_explorerRowDropTarget{background:var(--dsw-alias-interactive-bg-hover-accent);outline:1px dashed var(--dsw-alias-state-business-primary);outline-offset:-1px}._8zY6WW_uploadDropMask{z-index:1001;pointer-events:none;background:color-mix(in srgb, var(--dsw-alias-bg-base) 62%, transparent);animation:_8zY6WW_dsh-row-in .15s var(--ds-ease-in-out);position:fixed;inset:0}._8zY6WW_uploadDropZone{z-index:1002;pointer-events:none;border:2px dashed var(--dsw-alias-border-l2);background:color-mix(in srgb, var(--dsw-alias-state-business-primary) 4%, transparent);animation:_8zY6WW_dsh-row-in .15s var(--ds-ease-in-out);border-radius:8px;justify-content:center;align-items:flex-start;padding:12px;display:flex;position:fixed}._8zY6WW_uploadDropHero{flex-direction:column;align-items:center;gap:8px;max-width:100%;padding-top:8px;display:flex}._8zY6WW_uploadDropArtPrimary{color:var(--dsw-alias-state-business-primary)}._8zY6WW_uploadDropArtAccent{color:var(--dsw-alias-state-business-tertiary)}._8zY6WW_uploadDropArtCut{color:var(--dsw-alias-bg-layer-1)}._8zY6WW_uploadDropZonePill{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);max-width:100%;height:28px;box-shadow:var(--dsw-shadow-lv2);color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxxs-11);border-radius:999px;align-items:center;gap:6px;padding:0 12px;display:flex}._8zY6WW_uploadDropZoneText{white-space:nowrap;text-overflow:ellipsis;overflow:hidden}._8zY6WW_uploadDropChatHint{z-index:1003;pointer-events:none;animation:_8zY6WW_dsh-row-in .15s var(--ds-ease-in-out);justify-content:center;align-items:center;padding:24px;display:flex;position:fixed;top:0;bottom:0;left:0}._8zY6WW_uploadDropChatCard{text-align:center;max-width:100%;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-strong-12);flex-direction:column;align-items:center;gap:10px;display:flex}._8zY6WW_uploadOverlay{z-index:30;background:var(--dsw-alias-bg-mask-1);backdrop-filter:var(--dsw-mask-blur);animation:_8zY6WW_dsh-row-in .15s var(--ds-ease-in-out);justify-content:center;align-items:center;display:flex;position:absolute;inset:0}._8zY6WW_uploadOverlayCard{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);min-width:240px;max-width:min(420px,100% - 48px);box-shadow:var(--dsw-shadow-lv3);border-radius:8px;flex-direction:column;gap:10px;padding:16px;display:flex}._8zY6WW_uploadOverlayTitle{font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary);align-items:center;gap:6px;display:flex}._8zY6WW_uploadOverlayTitle>svg{flex:none}._8zY6WW_uploadOverlayTitle>span{white-space:nowrap;text-overflow:ellipsis;min-width:0;overflow:hidden}._8zY6WW_uploadOverlayProgress{background:var(--dsw-alias-border-l2);border-radius:3px;height:6px;overflow:hidden}._8zY6WW_uploadOverlayProgressFill{background:var(--dsw-alias-interactive-bg-hover-accent);height:100%;transition:width .15s var(--ds-ease-in-out);border-radius:3px}._8zY6WW_uploadOverlayStatus{min-height:1em;font:var(--dsw-font-xxxs-11);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary);white-space:nowrap;text-overflow:ellipsis;overflow:hidden}._8zY6WW_uploadOverlayCancel{border:1px solid var(--dsw-alias-border-l2);height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-strong-12);cursor:pointer;background:0 0;border-radius:4px;align-self:flex-end;padding:0 12px}._8zY6WW_uploadOverlayCancel:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l2)}._8zY6WW_uploadOverlayCancel:disabled{opacity:.4;cursor:default}._8zY6WW_editor{flex-direction:column;flex:1;min-height:0;display:flex}._8zY6WW_editorHeader{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:6px;padding:6px 8px;display:flex}._8zY6WW_editorTitle{min-width:0;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-secondary);text-overflow:ellipsis;white-space:nowrap;flex:1;overflow:hidden}._8zY6WW_editorPathInput{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);min-width:0;height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:6px;flex:1;padding:0 10px}._8zY6WW_editorPathInput:focus{border-color:var(--dsw-alias-border-l2);outline:none}._8zY6WW_editorTreeToggleActive{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-active)}._8zY6WW_editorBody{flex:1;min-height:0;display:flex}._8zY6WW_editorMain{flex-direction:column;flex:1;min-width:0;min-height:0;display:flex}._8zY6WW_editorTreeDock{border-left:1px solid var(--dsw-alias-border-l1);flex:none;min-height:0;display:flex;position:relative}._8zY6WW_editorTreeResize{cursor:col-resize;touch-action:none;z-index:3;width:6px;position:absolute;top:0;bottom:0;left:0}._8zY6WW_editorTreeResize:hover{background:var(--dsw-alias-border-l2)}._8zY6WW_editorTreePanel{flex-direction:column;flex:1;min-width:0;min-height:0;display:flex;position:relative}._8zY6WW_editorTreePanelFull{flex:1}._8zY6WW_editorTreeSearch{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:6px;padding:6px 8px;display:flex}._8zY6WW_editorSearchInput{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);min-width:0;height:26px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:6px;flex:1;padding:0 10px}._8zY6WW_editorSearchInput:focus{border-color:var(--dsw-alias-border-l2);outline:none}._8zY6WW_editorSearchHint{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);padding:8px 12px}._8zY6WW_editorSearchResult{box-sizing:border-box;width:100%;height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);text-align:left;cursor:pointer;text-overflow:ellipsis;white-space:nowrap;background:0 0;border:none;border-radius:4px;padding:0 8px;line-height:28px;display:block;overflow:hidden}._8zY6WW_editorSearchResult:hover{background:var(--dsw-alias-interactive-bg-hover)}._8zY6WW_editorStatus{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary)}._8zY6WW_editorStatusError{color:var(--dsw-alias-state-error-primary)}._8zY6WW_dirtyDot{background:var(--dsw-alias-state-warn-primary);border-radius:50%;flex:none;width:7px;height:7px}._8zY6WW_editorPlaceholder{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);text-align:center;flex:1;justify-content:center;align-items:center;padding:16px;display:flex}._8zY6WW_orphanedType{opacity:.7;overflow-wrap:anywhere;margin-top:8px;font-size:12px;display:block}._8zY6WW_editorBinary{text-align:center;flex-direction:column;flex:1;justify-content:center;align-items:center;gap:12px;padding:24px 16px;display:flex}._8zY6WW_editorBinaryNotice{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary)}._8zY6WW_editorDownloadLink{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-strong-12);cursor:pointer;transition:background var(--ds-transition-duration-slow) var(--ds-ease-in-out), border-color var(--ds-transition-duration-slow) var(--ds-ease-in-out);border-radius:6px;align-items:center;gap:6px;padding:6px 14px;text-decoration:none;display:inline-flex}._8zY6WW_editorDownloadLink:hover{background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l2)}._8zY6WW_editorError{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);padding:12px 16px}._8zY6WW_editorBanner{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-state-warn-label);background:var(--dsw-alias-state-warn-tertiary);flex:none;padding:4px 8px}._8zY6WW_sandboxStatus{font:var(--dsw-font-xxxs-11);flex:none;align-items:center;gap:8px;padding:4px 10px;display:flex}._8zY6WW_sandboxStatusOn{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-1);border-bottom:1px solid var(--dsw-alias-border-l1)}._8zY6WW_sandboxStatusOff{color:var(--dsw-alias-state-error-primary);background:color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent);border-bottom:1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 45%, transparent)}._8zY6WW_sandboxDot{background:var(--dsw-alias-state-success-primary);border-radius:50%;flex:none;width:6px;height:6px}._8zY6WW_sandboxStatusOff ._8zY6WW_sandboxDot{background:var(--dsw-alias-state-error-primary)}._8zY6WW_sandboxStatusText{text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;overflow:hidden}._8zY6WW_sandboxAction{border:1px solid var(--dsw-alias-border-l2);font:inherit;color:inherit;cursor:pointer;background:0 0;border-radius:6px;flex:none;padding:2px 8px}._8zY6WW_sandboxAction:hover{background:var(--dsw-alias-interactive-bg-hover)}._8zY6WW_editorHtml{background:var(--dsw-alias-bg-base);border:none;flex:1;width:100%;min-height:0}._8zY6WW_browser{flex-direction:column;flex:1;min-height:0;display:flex}._8zY6WW_browserBar{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:4px;padding:6px 8px;display:flex}._8zY6WW_browserInput{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);min-width:0;height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:6px;flex:1;padding:0 10px}._8zY6WW_browserInput:focus{border-color:var(--dsw-alias-border-l2);outline:none}._8zY6WW_browserMessage{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-state-warn-label);background:var(--dsw-alias-state-warn-tertiary);flex:none;padding:4px 12px}._8zY6WW_browserFrame{background:var(--dsw-alias-bg-base);border:none;flex:1;width:100%;min-height:0}._8zY6WW_browserStart{text-align:center;min-height:0;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-tertiary);flex:1;justify-content:center;align-items:center;padding:20px;display:flex}._8zY6WW_browserBlocked{text-align:center;min-height:0;color:var(--dsw-alias-state-warn-primary);flex-direction:column;flex:1;justify-content:center;align-items:center;gap:6px;padding:24px;display:flex}._8zY6WW_browserBlockedTitle{font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary)}._8zY6WW_browserBlockedDesc{max-width:280px;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-secondary)}._8zY6WW_browserBlockedActions{gap:8px;margin-top:6px;display:flex}._8zY6WW_browserBlockedButton{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxxs-11);cursor:pointer;border-radius:6px;padding:4px 12px}._8zY6WW_browserBlockedButton:hover{background:var(--dsw-alias-interactive-bg-hover)}._8zY6WW_editorCm{background:0 0;flex:1;min-height:0;overflow:hidden}._8zY6WW_editorCmHidden{display:none}._8zY6WW_editorCm .cm-editor{height:100%}._8zY6WW_editorCm .cm-scroller{padding:12px 16px}._8zY6WW_editorCm .cm-editor.cm-focused{outline:none}._8zY6WW_editorModeToggle{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);border-radius:6px;flex:none;align-items:center;gap:2px;padding:2px;display:inline-flex}._8zY6WW_editorModeButton{color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxxs-11);cursor:pointer;background:0 0;border:none;border-radius:4px;padding:2px 8px}._8zY6WW_editorModeButton:hover{color:var(--dsw-alias-label-primary)}._8zY6WW_editorModeActive{background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}._8zY6WW_editorMd{min-height:0;font:var(--dsw-font-xs-13);flex:1;padding:12px 16px;overflow-y:auto}._8zY6WW_editorMd .md-code-block:not([data-mermaid-processed])>div:first-child{z-index:auto;position:static}._8zY6WW_mermaidWrap{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);border-radius:6px;margin:6px 0;overflow:hidden}._8zY6WW_mermaidHeader{border-bottom:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);justify-content:space-between;align-items:center;gap:6px;padding:4px 8px;display:flex}._8zY6WW_mermaidInfo{font:var(--dsw-font-xxxs-strong-11);color:var(--dsw-alias-label-tertiary)}._8zY6WW_mermaidCopy{height:20px;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxxs-11);cursor:pointer;background:0 0;border:none;border-radius:4px;align-items:center;gap:4px;padding:0 6px;display:inline-flex}._8zY6WW_mermaidCopy:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}._8zY6WW_mermaidBody{cursor:zoom-in;justify-content:center;padding:10px;display:flex;overflow:auto}._8zY6WW_mermaidBody svg{max-width:100%;height:auto}._8zY6WW_mermaidError{border-bottom:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-state-error-primary);font:var(--dsw-font-xxxs-11);padding:6px 10px}._8zY6WW_mermaidCode{font:var(--dsw-font-xxxs-11);margin:0;padding:8px 10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow:auto}._8zY6WW_mermaidMarkdown .md-code-block[data-mermaid-processed]{display:contents}._8zY6WW_mermaidModal{z-index:1000;background:var(--dsw-alias-bg-mask-1);backdrop-filter:blur(2px);flex-direction:column;justify-content:center;align-items:center;display:flex;position:fixed;inset:0;-webkit-app-region:initial!important}._8zY6WW_mermaidModalToolbar{z-index:10;gap:8px;display:flex;position:absolute;top:16px;right:16px}._8zY6WW_mermaidModalButton{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);width:36px;height:36px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xs-strong-13);cursor:pointer;border-radius:8px;justify-content:center;align-items:center;display:inline-flex}._8zY6WW_mermaidModalButton:hover{background:var(--dsw-alias-interactive-bg-hover)}._8zY6WW_mermaidModalStage{justify-content:center;align-items:center;width:90vw;height:80vh;display:flex;position:relative;overflow:hidden}._8zY6WW_mermaidModalStage svg{cursor:grab;transform-origin:50%;user-select:none;-webkit-user-drag:none;background:var(--dsw-alias-bg-layer-1);border-radius:12px;max-width:none;max-height:none;padding:16px}._8zY6WW_mermaidModalStage svg:active{cursor:grabbing}._8zY6WW_mermaidModalHint{color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxxs-11);pointer-events:none;position:absolute;bottom:16px;left:50%;transform:translate(-50%)}._8zY6WW_selectionPopup{z-index:60;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxxs-strong-11);white-space:nowrap;cursor:pointer;border-radius:6px;align-items:center;padding:0 10px;display:inline-flex;position:fixed;transform:translate(-50%,calc(-100% - 8px))}._8zY6WW_selectionPopup:hover{background:var(--dsw-alias-interactive-bg-hover)}._8zY6WW_editorPdf{background:var(--dsw-alias-bg-base);flex-direction:column;flex:1;min-height:0;display:flex}._8zY6WW_editorPdfToolbar{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;justify-content:flex-end;padding:6px 8px;display:flex}._8zY6WW_editorPdfStage{flex:1;min-height:0;display:flex;position:relative}._8zY6WW_editorPdfFrame{background:var(--dsw-alias-bg-base);border:none;flex:1;width:100%;min-height:0}._8zY6WW_editorPdfFrameBlocked{pointer-events:none}._8zY6WW_editorPdfDragShield{z-index:4;pointer-events:none;background:0 0;position:absolute;inset:0}._8zY6WW_editorPdfDragShieldActive{pointer-events:auto}body[data-dsh-tab-dragging] ._8zY6WW_editorPdfFrame{pointer-events:none!important}body[data-dsh-tab-dragging] ._8zY6WW_editorPdfDragShield{pointer-events:auto!important}._8zY6WW_boundaryError{z-index:50;background:var(--dsw-alias-bg-layer-1);border-left:1px solid var(--dsw-alias-border-l2);font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);flex-direction:column;align-items:flex-start;gap:8px;padding:16px;display:flex;position:fixed;top:0;bottom:0;right:0;overflow:auto}._8zY6WW_terminalRetry{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxxs-strong-11);cursor:pointer;border-radius:999px;flex:none;padding:1px 8px}._8zY6WW_terminalRetry:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}._8zY6WW_tabBoundaryError{min-height:0;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);flex-direction:column;flex:1;align-items:flex-start;gap:8px;padding:12px 16px;display:flex;overflow:auto}._8zY6WW_nativeTabHost{flex-direction:column;height:100%;min-height:0;display:flex}._8zY6WW_gitEmpty{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);padding:4px 12px 8px}._8zY6WW_gitPlaceholder{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);text-align:center;padding:16px}._8zY6WW_gitError{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);white-space:pre-wrap;padding:8px 12px}._8zY6WW_gitDiffTab{flex-direction:column;flex:1;min-width:0;min-height:0;display:flex;overflow:hidden auto}._8zY6WW_gitDiffTabHeader{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:8px;height:36px;padding:0 8px 0 12px;display:flex}._8zY6WW_gitDiffTabTitle{text-overflow:ellipsis;white-space:nowrap;min-width:0;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary);flex:1;overflow:hidden}._8zY6WW_toggleButton:focus-visible,._8zY6WW_bottomClose:focus-visible,._8zY6WW_iconButton:focus-visible,._8zY6WW_tab:focus-visible,._8zY6WW_tabClose:focus-visible,._8zY6WW_tabBarPlus:focus-visible,._8zY6WW_paneCard:focus-visible,._8zY6WW_explorerRow:focus-visible,._8zY6WW_explorerRef:focus-visible,._8zY6WW_terminalRetry:focus-visible,._8zY6WW_editorModeButton:focus-visible,._8zY6WW_editorDownloadLink:focus-visible,._8zY6WW_editorPptxButton:focus-visible,._8zY6WW_editorDocxZoomRange:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}@media (prefers-reduced-motion:reduce){._8zY6WW_bottomPanel,._8zY6WW_bottomPanelHidden,._8zY6WW_toggleButton,._8zY6WW_tab,._8zY6WW_tabBarPlus,._8zY6WW_paneCard,._8zY6WW_explorerRow,._8zY6WW_divider,._8zY6WW_dividerRow:after,._8zY6WW_dividerCol:after{transition:none;animation:none}}@media (width<=767px){._8zY6WW_tab{min-width:48px;max-width:128px}}._8zY6WW_openWithLabel{align-items:center;gap:8px;width:100%;min-width:0;display:flex}._8zY6WW_openWithName{text-overflow:ellipsis;white-space:nowrap;flex:auto;min-width:0;overflow:hidden}._8zY6WW_openWithChevron{color:var(--dsw-alias-label-tertiary);flex:none}._8zY6WW_openWithPin{width:16px;height:16px;color:var(--dsw-alias-label-tertiary);cursor:pointer;border-radius:5px;flex:none;justify-content:center;align-items:center;display:inline-flex}._8zY6WW_openWithPin:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}._8zY6WW_openWithPinActive{color:var(--dsw-alias-state-business-primary)}._8zY6WW_editorHtmlBlock{margin:8px 0}._8zY6WW_editorHtmlBlock img,._8zY6WW_editorHtmlBlock video{max-width:100%}._8zY6WW_editorHtmlBlock details{margin:4px 0;padding:4px 0}._8zY6WW_editorHtmlBlock summary{cursor:pointer}._8zY6WW_tocBar{z-index:7;pointer-events:none;justify-content:flex-end;height:0;display:flex;position:sticky;top:0}._8zY6WW_tocButton{pointer-events:auto;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);width:26px;height:26px;color:var(--dsw-alias-label-secondary);cursor:pointer;border-radius:6px;justify-content:center;align-items:center;margin:4px 2px 0 0;padding:0;display:inline-flex}._8zY6WW_tocButton:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}._8zY6WW_tocPanel{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);width:min(300px,82%);max-height:60vh;box-shadow:var(--dsw-shadow-lv2);pointer-events:auto;border-radius:8px;flex-direction:column;padding:4px;display:flex;position:absolute;top:32px;right:2px;overflow-y:auto}._8zY6WW_tocItem{min-width:0;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxs-12);text-align:left;cursor:pointer;background:0 0;border:none;border-radius:6px;align-items:baseline;gap:8px;padding:4px 8px;display:flex}._8zY6WW_tocItem:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}._8zY6WW_tocItem[data-level=\"2\"]{padding-left:18px}._8zY6WW_tocItem[data-level=\"3\"]{padding-left:28px}._8zY6WW_tocItem[data-level=\"4\"]{padding-left:38px}._8zY6WW_tocItem[data-level=\"5\"]{padding-left:48px}._8zY6WW_tocItem[data-level=\"6\"]{padding-left:58px}._8zY6WW_tocItemLevel{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary);flex:none}._8zY6WW_tocItemText{text-overflow:ellipsis;white-space:nowrap;flex:auto;min-width:0;overflow:hidden}@keyframes _8zY6WW_dsh-toc-flash{0%,60%{background:var(--dsw-alias-interactive-bg-hover)}to{background:0 0}}._8zY6WW_tocFlash{border-radius:4px;animation:1.2s ease-out _8zY6WW_dsh-toc-flash}";
+		//#region \0dsh-css:/home/runner/work/DSH-better-sidebar/DSH-better-sidebar/src/client/sidebar.module.css.mjs
+		const css$10 = "[data-dsh-panel-host]{z-index:25;pointer-events:none;height:100vh;position:fixed;inset:0;overflow:clip}html[data-platform] body>[data-dsh-better-sidebar],[data-dsh-panel-host]{-webkit-app-region:initial!important}[data-dsh-panel-host]>*{-webkit-app-region:no-drag}[data-dsh-panel-host][data-dsh-panel-host-degraded]{position:absolute;top:0;left:0}.nArs4W_dockFallback{z-index:40;align-items:center;gap:2px;display:inline-flex;position:fixed}.nArs4W_toggleButton{width:28px;height:28px;color:var(--dsw-alias-label-secondary);cursor:pointer;transition:background var(--ds-transition-duration-slow) var(--ds-ease-in-out), color var(--ds-transition-duration-slow) var(--ds-ease-in-out);background:0 0;border:none;border-radius:50%;justify-content:center;align-items:center;display:flex}.nArs4W_toggleButton:hover:not(:disabled):not([aria-disabled=true]){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_toggleButton:disabled,.nArs4W_toggleButton[aria-disabled=true]{opacity:.4;cursor:default}.nArs4W_panelBody{flex:1;min-width:0;min-height:0;display:flex}.nArs4W_bottomPanel{z-index:40;background:var(--dsw-alias-bg-layer-1);border-top:1px solid var(--dsw-alias-border-l2);pointer-events:auto;padding-bottom:env(safe-area-inset-bottom);transition:transform var(--ds-transition-duration-slow) var(--ds-ease-in-out), height var(--ds-transition-duration-slow) var(--ds-ease-in-out);flex-direction:column;display:flex;position:absolute;bottom:0}.nArs4W_bottomPanelHidden{pointer-events:none;visibility:hidden;transition:transform var(--ds-transition-duration-slow) var(--ds-ease-in-out), height var(--ds-transition-duration-slow) var(--ds-ease-in-out), visibility 0s linear var(--ds-transition-duration-slow);transform:translateY(102%)}.nArs4W_bottomPanel[data-dragging]{transition:none}.nArs4W_bottomPanel{contain:layout style}body[data-dsh-sidebar-dragging] .nArs4W_panel,body[data-dsh-sidebar-dragging] .nArs4W_bottomPanel{will-change:transform}.nArs4W_bottomResize{cursor:row-resize;z-index:2;touch-action:none;height:8px;position:absolute;top:-4px;left:0;right:0}.nArs4W_bottomResizeActive{background:var(--dsw-alias-interactive-bg-hover-accent)}.nArs4W_bottomClose{z-index:4;width:28px;height:28px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:50%;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex;position:absolute;top:3px;right:6px}.nArs4W_bottomClose:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_bottomPanel .nArs4W_tabBar{padding-right:40px}.nArs4W_toggleButton,.nArs4W_tabBar{-webkit-app-region:no-drag}.nArs4W_iconButton{width:28px;height:28px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:50%;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex}.nArs4W_iconButton:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_iconButton:disabled{opacity:.4;cursor:default}.nArs4W_workbench,.nArs4W_split{flex:1;min-width:0;min-height:0;display:flex}.nArs4W_splitRow{flex-direction:row}.nArs4W_splitCol{flex-direction:column}.nArs4W_splitChild{display:flex;position:relative;overflow:hidden}.nArs4W_divider{z-index:3;touch-action:none;flex:none;position:relative}.nArs4W_dividerRow:after,.nArs4W_dividerCol:after{content:\"\";background:var(--dsw-alias-border-l2);transition:background var(--ds-transition-duration-slow) var(--ds-ease-in-out);position:absolute}.nArs4W_dividerRow{cursor:col-resize;width:7px;margin:0 -2px}.nArs4W_dividerRow:after{width:1px;top:0;bottom:0;left:50%;transform:translate(-50%)}.nArs4W_dividerCol{cursor:row-resize;height:7px;margin:-2px 0}.nArs4W_dividerCol:after{height:1px;top:50%;left:0;right:0;transform:translateY(-50%)}.nArs4W_divider:hover:after,.nArs4W_dividerActive:after{background:var(--dsw-alias-interactive-bg-hover-accent)}.nArs4W_pane{background:var(--dsw-alias-bg-base);flex-direction:column;flex:1;min-width:0;min-height:0;display:flex;position:relative}.nArs4W_paneDrop{outline:1px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}.nArs4W_dropOverlay{z-index:6;pointer-events:none;background:var(--dsw-alias-interactive-bg-hover-accent);opacity:.5;position:absolute}.nArs4W_dropLeft{width:25%;top:0;bottom:0;left:0}.nArs4W_dropRight{width:25%;top:0;bottom:0;right:0}.nArs4W_dropUp{height:25%;top:0;left:0;right:0}.nArs4W_dropDown{height:25%;bottom:0;left:0;right:0}.nArs4W_dropCenter{outline:2px dashed var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-2px;background:0 0;inset:25%}.nArs4W_paneContent{flex-direction:column;flex:1;min-height:0;display:flex;overflow:hidden}.nArs4W_chipIcon{flex:none;align-items:center;margin-right:6px;display:inline-flex}.nArs4W_chipUnread{background:var(--dsw-alias-danger);vertical-align:middle;border-radius:50%;width:6px;height:6px;margin-left:6px;display:inline-block}.nArs4W_tabUnreadDot{background:var(--dsw-alias-danger);border-radius:50%;flex:none;width:7px;height:7px}.nArs4W_paneTab{flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_paneTabHidden{display:none}.nArs4W_paneEmptyCards{flex:1;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));align-content:start;gap:12px;min-height:0;padding:12px;display:grid;overflow:hidden}.nArs4W_paneCard{box-sizing:border-box;border:.5px solid var(--dsw-alias-border-l4);background:var(--dsw-alias-bg-layer-1);min-width:0;min-height:56px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-s-strong-14);cursor:pointer;text-align:left;border-radius:24px;flex-direction:row;justify-content:flex-start;align-items:center;gap:14px;padding:14px 20px;display:flex}.nArs4W_paneCard>svg{color:var(--dsw-alias-label-secondary);flex:none}.nArs4W_paneCard:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l4)}.nArs4W_paneCard:disabled{opacity:.45;cursor:default}.nArs4W_tabBar{border-bottom:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);flex:none;align-items:stretch;height:34px;display:flex}.nArs4W_tabBarDrop{outline:1px dashed var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}.nArs4W_tabList{scrollbar-width:none;flex:1;min-width:0;display:flex;overflow-x:auto}.nArs4W_tabList::-webkit-scrollbar{display:none}.nArs4W_tab{min-width:64px;max-width:160px;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-secondary);border-right:1px solid var(--dsw-alias-border-l1);cursor:pointer;user-select:none;background:0 0;flex:none;align-items:center;gap:4px;padding:0 4px 0 10px;display:flex}.nArs4W_tab:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_tabActive{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-active)}.nArs4W_tabTitle{text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;overflow:hidden}.nArs4W_tabBadge{min-width:16px;height:15px;font:var(--dsw-font-xxxs-strong-11);background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-brand-primary);border-radius:8px;flex:none;justify-content:center;align-items:center;padding:0 4px;display:inline-flex}.nArs4W_tabClose{width:18px;height:18px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:4px;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex}.nArs4W_tabClose:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_tabBarPlus{background:var(--dsw-alias-bg-layer-1);width:22px;height:22px;color:var(--dsw-alias-label-tertiary);cursor:pointer;border:none;border-radius:5px;flex:none;justify-content:center;align-self:center;align-items:center;margin:0 6px;padding:0;display:inline-flex;position:sticky;right:0}.nArs4W_tabBarPlus:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_tabBarRightActions{flex:0 auto;justify-content:flex-end;align-items:center;gap:2px;min-width:0;padding-right:4px;display:flex;overflow:hidden}.nArs4W_explorer{flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_explorerHeader{flex:none;justify-content:space-between;align-items:center;gap:8px;height:36px;padding:0 8px 0 12px;display:flex}.nArs4W_explorerRoot{font:var(--dsw-font-s-14);color:var(--dsw-alias-label-secondary);text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.nArs4W_explorerBody{flex:1;min-height:0;padding:4px 8px 8px;overflow:hidden auto}.nArs4W_explorerRow{box-sizing:border-box;width:100%;max-width:100%;height:28px;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer;white-space:nowrap;animation:nArs4W_dsh-row-in .15s var(--ds-ease-in-out);background:0 0;border:none;border-radius:4px;align-items:center;gap:6px;padding:0 8px;display:flex;position:relative}.nArs4W_explorerRow:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_explorerRowSelected{background:var(--dsw-alias-interactive-bg-active)}.nArs4W_explorerRowSelected:before{content:\"\";background:var(--dsw-alias-state-business-primary);border-radius:1px;width:2px;position:absolute;top:4px;bottom:4px;left:0}.nArs4W_explorerGitName[data-git-tone=modified]{color:var(--dsw-alias-state-warn-primary)}.nArs4W_explorerGitName[data-git-tone=added],.nArs4W_explorerGitName[data-git-tone=untracked]{color:var(--dsw-alias-state-success-primary)}.nArs4W_explorerGitName[data-git-tone=deleted]{color:var(--dsw-alias-state-error-primary)}.nArs4W_explorerGitName[data-git-tone=renamed]{color:var(--dsw-alias-state-business-primary)}.nArs4W_explorerGitName[data-git-tone=copied]{color:var(--dsw-alias-state-success-primary)}.nArs4W_explorerGitName[data-git-tone=conflict]{color:var(--dsw-alias-state-error-primary)}.nArs4W_explorerDirChanged{color:var(--dsw-alias-state-business-primary)}.nArs4W_explorerRowRevealed{background:var(--dsw-alias-state-business-tertiary)}.nArs4W_explorerRowRevealed+.nArs4W_explorerRowRevealed{border-top-left-radius:0;border-top-right-radius:0}.nArs4W_explorerRowRevealed:has(+.nArs4W_explorerRowRevealed){border-bottom-right-radius:0;border-bottom-left-radius:0}.nArs4W_explorerDir{font:var(--dsw-font-xxs-strong-12)}.nArs4W_explorerHidden{opacity:.45}.nArs4W_explorerSymlink{color:var(--dsw-alias-label-tertiary);flex:none}.nArs4W_explorerBroken .nArs4W_explorerName{color:var(--dsw-alias-state-error-primary)}.nArs4W_explorerName{text-overflow:ellipsis;white-space:nowrap;min-width:0;overflow:hidden}.nArs4W_explorerRenaming{cursor:text}.nArs4W_explorerRenameInput{box-sizing:border-box;border:1px solid var(--dsw-alias-state-business-primary);background:var(--dsw-alias-bg-layer-1);min-width:0;height:22px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:3px;flex:auto;padding:0 6px}.nArs4W_explorerRenameInput:focus{border-color:var(--dsw-alias-state-business-primary);outline:none}.nArs4W_explorerActionError{box-sizing:border-box;border:1px solid var(--dsw-alias-state-error-primary);background:var(--dsw-alias-bg-layer-1);border-radius:8px;align-items:flex-start;gap:6px;width:100%;margin-bottom:4px;padding:6px 8px;display:flex}.nArs4W_explorerActionErrorText{overflow-wrap:anywhere;min-width:0;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);flex:auto}.nArs4W_explorerSelectionBar{z-index:1;box-sizing:border-box;background:var(--dsw-alias-bg-layer-2);border-radius:4px;align-items:center;gap:6px;width:100%;min-height:28px;margin-top:4px;padding:2px 8px;display:flex;position:sticky;bottom:0}.nArs4W_explorerSelectionText{text-overflow:ellipsis;white-space:nowrap;min-width:0;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-secondary);flex:auto;overflow:hidden}.nArs4W_explorerSelectionActions{flex-wrap:wrap;flex:none;justify-content:flex-end;gap:4px;max-width:72%;display:flex}.nArs4W_explorerAppIcon{object-fit:contain;width:14px;height:14px;display:block}.nArs4W_explorerHiddenPane{display:none}.nArs4W_explorerRef,.nArs4W_explorerCopied{margin-left:auto}.nArs4W_explorerRef{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);height:20px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxxs-strong-11);cursor:pointer;border-radius:999px;flex:none;align-items:center;padding:0 8px;display:none}.nArs4W_explorerRef:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_explorerRow:hover .nArs4W_explorerRef,.nArs4W_explorerRow:focus-within .nArs4W_explorerRef{display:inline-flex}.nArs4W_explorerCopied{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary);flex:none}.nArs4W_explorerError{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);cursor:default}@keyframes nArs4W_dsh-row-in{0%{opacity:0}}.nArs4W_explorerEmpty{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);text-align:center;padding:16px}.nArs4W_explorerRowDropTarget{background:var(--dsw-alias-interactive-bg-hover-accent);outline:1px dashed var(--dsw-alias-state-business-primary);outline-offset:-1px}.nArs4W_uploadDropMask{z-index:1001;pointer-events:none;background:color-mix(in srgb, var(--dsw-alias-bg-base) 62%, transparent);animation:nArs4W_dsh-row-in .15s var(--ds-ease-in-out);position:fixed;inset:0}.nArs4W_uploadDropZone{z-index:1002;pointer-events:none;border:2px dashed var(--dsw-alias-border-l2);background:color-mix(in srgb, var(--dsw-alias-state-business-primary) 4%, transparent);animation:nArs4W_dsh-row-in .15s var(--ds-ease-in-out);border-radius:8px;justify-content:center;align-items:flex-start;padding:12px;display:flex;position:fixed}.nArs4W_uploadDropHero{flex-direction:column;align-items:center;gap:8px;max-width:100%;padding-top:8px;display:flex}.nArs4W_uploadDropArtPrimary{color:var(--dsw-alias-state-business-primary)}.nArs4W_uploadDropArtAccent{color:var(--dsw-alias-state-business-tertiary)}.nArs4W_uploadDropArtCut{color:var(--dsw-alias-bg-layer-1)}.nArs4W_uploadDropZonePill{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);max-width:100%;height:28px;box-shadow:var(--dsw-shadow-lv2);color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxxs-11);border-radius:999px;align-items:center;gap:6px;padding:0 12px;display:flex}.nArs4W_uploadDropZoneText{white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.nArs4W_uploadDropChatHint{z-index:1003;pointer-events:none;animation:nArs4W_dsh-row-in .15s var(--ds-ease-in-out);justify-content:center;align-items:center;padding:24px;display:flex;position:fixed;top:0;bottom:0;left:0}.nArs4W_uploadDropChatCard{text-align:center;max-width:100%;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-strong-12);flex-direction:column;align-items:center;gap:10px;display:flex}.nArs4W_uploadOverlay{z-index:30;background:var(--dsw-alias-bg-mask-1);backdrop-filter:var(--dsw-mask-blur);animation:nArs4W_dsh-row-in .15s var(--ds-ease-in-out);justify-content:center;align-items:center;display:flex;position:absolute;inset:0}.nArs4W_uploadOverlayCard{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);min-width:240px;max-width:min(420px,100% - 48px);box-shadow:var(--dsw-shadow-lv3);border-radius:8px;flex-direction:column;gap:10px;padding:16px;display:flex}.nArs4W_uploadOverlayTitle{font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary);align-items:center;gap:6px;display:flex}.nArs4W_uploadOverlayTitle>svg{flex:none}.nArs4W_uploadOverlayTitle>span{white-space:nowrap;text-overflow:ellipsis;min-width:0;overflow:hidden}.nArs4W_uploadOverlayProgress{background:var(--dsw-alias-border-l2);border-radius:3px;height:6px;overflow:hidden}.nArs4W_uploadOverlayProgressFill{background:var(--dsw-alias-interactive-bg-hover-accent);height:100%;transition:width .15s var(--ds-ease-in-out);border-radius:3px}.nArs4W_uploadOverlayStatus{min-height:1em;font:var(--dsw-font-xxxs-11);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary);white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.nArs4W_uploadOverlayCancel{border:1px solid var(--dsw-alias-border-l2);height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-strong-12);cursor:pointer;background:0 0;border-radius:4px;align-self:flex-end;padding:0 12px}.nArs4W_uploadOverlayCancel:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l2)}.nArs4W_uploadOverlayCancel:disabled{opacity:.4;cursor:default}.nArs4W_editor{flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_editorHeader{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:6px;padding:6px 8px;display:flex}.nArs4W_editorTitle{min-width:0;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-secondary);text-overflow:ellipsis;white-space:nowrap;flex:1;overflow:hidden}.nArs4W_editorPathInput{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);min-width:0;height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:6px;flex:1;padding:0 10px}.nArs4W_editorPathInput:focus{border-color:var(--dsw-alias-border-l2);outline:none}.nArs4W_editorTreeToggleActive{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-active)}.nArs4W_editorBody{flex:1;min-height:0;display:flex}.nArs4W_editorMain{flex-direction:column;flex:1;min-width:0;min-height:0;display:flex}.nArs4W_editorTreeDock{border-left:1px solid var(--dsw-alias-border-l1);flex:none;min-height:0;display:flex;position:relative}.nArs4W_editorTreeResize{cursor:col-resize;touch-action:none;z-index:3;width:6px;position:absolute;top:0;bottom:0;left:0}.nArs4W_editorTreeResize:hover{background:var(--dsw-alias-border-l2)}.nArs4W_editorTreePanel{flex-direction:column;flex:1;min-width:0;min-height:0;display:flex;position:relative}.nArs4W_editorTreePanelFull{flex:1}.nArs4W_editorTreeSearch{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:6px;padding:6px 8px;display:flex}.nArs4W_editorSearchInput{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);min-width:0;height:26px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:6px;flex:1;padding:0 10px}.nArs4W_editorSearchInput:focus{border-color:var(--dsw-alias-border-l2);outline:none}.nArs4W_editorSearchHint{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);padding:8px 12px}.nArs4W_editorSearchResult{box-sizing:border-box;width:100%;height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);text-align:left;cursor:pointer;background:0 0;border:none;border-radius:4px;align-items:center;gap:6px;padding:0 8px;line-height:28px;display:flex;overflow:hidden}.nArs4W_editorSearchResultDir{color:var(--dsw-alias-label-secondary)}.nArs4W_editorSearchResultLabel{text-overflow:ellipsis;white-space:nowrap;min-width:0;overflow:hidden}.nArs4W_editorSearchResult:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_editorStatus{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary)}.nArs4W_editorStatusError{color:var(--dsw-alias-state-error-primary)}.nArs4W_dirtyDot{background:var(--dsw-alias-state-warn-primary);border-radius:50%;flex:none;width:7px;height:7px}.nArs4W_editorPlaceholder{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);text-align:center;flex:1;justify-content:center;align-items:center;padding:16px;display:flex}.nArs4W_orphanedType{opacity:.7;overflow-wrap:anywhere;margin-top:8px;font-size:12px;display:block}.nArs4W_editorBinary{text-align:center;flex-direction:column;flex:1;justify-content:center;align-items:center;gap:12px;padding:24px 16px;display:flex}.nArs4W_editorBinaryNotice{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary)}.nArs4W_editorDownloadLink{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-strong-12);cursor:pointer;transition:background var(--ds-transition-duration-slow) var(--ds-ease-in-out), border-color var(--ds-transition-duration-slow) var(--ds-ease-in-out);border-radius:6px;align-items:center;gap:6px;padding:6px 14px;text-decoration:none;display:inline-flex}.nArs4W_editorDownloadLink:hover{background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l2)}.nArs4W_editorError{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);padding:12px 16px}.nArs4W_editorBanner{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-state-warn-label);background:var(--dsw-alias-state-warn-tertiary);flex:none;padding:4px 8px}.nArs4W_editorBannerAction{font:inherit;color:inherit;cursor:pointer;background:0 0;border:0;margin-left:8px;padding:0;text-decoration:underline}.nArs4W_editorGitAdd{color:var(--dsw-alias-state-success-primary)}.nArs4W_editorGitMod{color:var(--dsw-alias-state-warn-primary)}.nArs4W_editorGitDel{color:var(--dsw-alias-state-error-primary)}.nArs4W_editorGitBarGutter{width:2px;min-width:2px}.nArs4W_editorGitBar,.nArs4W_editorGitBarSpacer{width:2px;height:100%}.nArs4W_editorGitBarAdd{background:var(--dsw-alias-state-success-primary)}.nArs4W_editorGitBarMod{background:var(--dsw-alias-state-warn-primary)}.nArs4W_editorGitBarDel{background:var(--dsw-alias-state-error-primary)}.nArs4W_editorBlame{max-width:420px;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-primary);padding:4px 8px}.nArs4W_editorBlameHead{color:var(--dsw-alias-label-secondary)}.nArs4W_editorBlameSummary{color:var(--dsw-alias-label-primary);white-space:pre-wrap;overflow-wrap:anywhere;margin-top:2px}.nArs4W_sandboxStatus{font:var(--dsw-font-xxxs-11);flex:none;align-items:center;gap:8px;padding:4px 10px;display:flex}.nArs4W_sandboxStatusOn{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-1);border-bottom:1px solid var(--dsw-alias-border-l1)}.nArs4W_sandboxStatusOff{color:var(--dsw-alias-state-error-primary);background:color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent);border-bottom:1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 45%, transparent)}.nArs4W_sandboxDot{background:var(--dsw-alias-state-success-primary);border-radius:50%;flex:none;width:6px;height:6px}.nArs4W_sandboxStatusOff .nArs4W_sandboxDot{background:var(--dsw-alias-state-error-primary)}.nArs4W_sandboxStatusText{text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;overflow:hidden}.nArs4W_sandboxAction{border:1px solid var(--dsw-alias-border-l2);font:inherit;color:inherit;cursor:pointer;background:0 0;border-radius:6px;flex:none;padding:2px 8px}.nArs4W_sandboxAction:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_editorHtml{background:var(--dsw-alias-bg-base);border:none;flex:1;width:100%;min-height:0}.nArs4W_browser{flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_browserBar{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:4px;padding:6px 8px;display:flex}.nArs4W_browserInput{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);min-width:0;height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:6px;flex:1;padding:0 10px}.nArs4W_browserInput:focus{border-color:var(--dsw-alias-border-l2);outline:none}.nArs4W_browserMessage{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-state-warn-label);background:var(--dsw-alias-state-warn-tertiary);flex:none;padding:4px 12px}.nArs4W_browserFrame{background:var(--dsw-alias-bg-base);border:none;flex:1;width:100%;min-height:0}.nArs4W_browserStart{text-align:center;min-height:0;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-tertiary);flex:1;justify-content:center;align-items:center;padding:20px;display:flex}.nArs4W_browserBlocked{text-align:center;min-height:0;color:var(--dsw-alias-state-warn-primary);flex-direction:column;flex:1;justify-content:center;align-items:center;gap:6px;padding:24px;display:flex}.nArs4W_browserBlockedTitle{font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary)}.nArs4W_browserBlockedDesc{max-width:280px;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-secondary)}.nArs4W_browserBlockedActions{gap:8px;margin-top:6px;display:flex}.nArs4W_browserBlockedButton{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxxs-11);cursor:pointer;border-radius:6px;padding:4px 12px}.nArs4W_browserBlockedButton:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_editorCm{background:0 0;flex:1;min-height:0;overflow:hidden}.nArs4W_editorCmHidden{display:none}.nArs4W_editorCm .cm-editor{height:100%}.nArs4W_editorCm .cm-scroller{padding:12px 16px}.nArs4W_editorCm .cm-editor.cm-focused{outline:none}.nArs4W_editorModeToggle{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);border-radius:6px;flex:none;align-items:center;gap:2px;padding:2px;display:inline-flex}.nArs4W_editorModeButton{color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxxs-11);cursor:pointer;background:0 0;border:none;border-radius:4px;padding:2px 8px}.nArs4W_editorModeButton:hover{color:var(--dsw-alias-label-primary)}.nArs4W_editorModeActive{background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}.nArs4W_editorMd{min-height:0;font:var(--dsw-font-xs-13);flex:1;padding:12px 16px;overflow-y:auto}.nArs4W_editorMd .md-code-block:not([data-mermaid-processed])>div:first-child{z-index:auto;position:static}.nArs4W_mermaidWrap{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);border-radius:6px;margin:6px 0;overflow:hidden}.nArs4W_mermaidHeader{border-bottom:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);justify-content:space-between;align-items:center;gap:6px;padding:4px 8px;display:flex}.nArs4W_mermaidInfo{font:var(--dsw-font-xxxs-strong-11);color:var(--dsw-alias-label-tertiary)}.nArs4W_mermaidCopy{height:20px;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxxs-11);cursor:pointer;background:0 0;border:none;border-radius:4px;align-items:center;gap:4px;padding:0 6px;display:inline-flex}.nArs4W_mermaidCopy:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_mermaidBody{cursor:zoom-in;justify-content:center;padding:10px;display:flex;overflow:auto}.nArs4W_mermaidBody svg{max-width:100%;height:auto}.nArs4W_mermaidError{border-bottom:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-state-error-primary);font:var(--dsw-font-xxxs-11);padding:6px 10px}.nArs4W_mermaidCode{font:var(--dsw-font-xxxs-11);margin:0;padding:8px 10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow:auto}.nArs4W_mermaidMarkdown .md-code-block[data-mermaid-processed]{display:contents}.nArs4W_mermaidModal{z-index:1000;background:var(--dsw-alias-bg-mask-1);backdrop-filter:blur(2px);flex-direction:column;justify-content:center;align-items:center;display:flex;position:fixed;inset:0;-webkit-app-region:initial!important}.nArs4W_mermaidModalToolbar{z-index:10;gap:8px;display:flex;position:absolute;top:16px;right:16px}.nArs4W_mermaidModalButton{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);width:36px;height:36px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xs-strong-13);cursor:pointer;border-radius:8px;justify-content:center;align-items:center;display:inline-flex}.nArs4W_mermaidModalButton:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_mermaidModalStage{justify-content:center;align-items:center;width:90vw;height:80vh;display:flex;position:relative;overflow:hidden}.nArs4W_mermaidModalStage svg{cursor:grab;transform-origin:50%;user-select:none;-webkit-user-drag:none;background:var(--dsw-alias-bg-layer-1);border-radius:12px;max-width:none;max-height:none;padding:16px}.nArs4W_mermaidModalStage svg:active{cursor:grabbing}.nArs4W_mermaidModalHint{color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxxs-11);pointer-events:none;position:absolute;bottom:16px;left:50%;transform:translate(-50%)}.nArs4W_selectionPopup{z-index:60;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-specific-menu);height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxxs-strong-11);white-space:nowrap;cursor:pointer;border-radius:6px;align-items:center;padding:0 10px;display:inline-flex;position:fixed;transform:translate(-50%,calc(-100% - 8px))}.nArs4W_selectionPopup:hover{background:var(--dsw-alias-interactive-bg-hover-solid)}.nArs4W_editorPdf{background:var(--dsw-alias-bg-base);flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_editorPdfToolbar{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;justify-content:flex-end;padding:6px 8px;display:flex}.nArs4W_editorPdfStage{flex:1;min-height:0;display:flex;position:relative}.nArs4W_editorPdfFrame{background:var(--dsw-alias-bg-base);border:none;flex:1;width:100%;min-height:0}.nArs4W_editorPdfFrameBlocked{pointer-events:none}.nArs4W_editorPdfDragShield{z-index:4;pointer-events:none;background:0 0;position:absolute;inset:0}.nArs4W_editorPdfDragShieldActive{pointer-events:auto}body[data-dsh-tab-dragging] .nArs4W_editorPdfFrame{pointer-events:none!important}body[data-dsh-tab-dragging] .nArs4W_editorPdfDragShield{pointer-events:auto!important}.nArs4W_boundaryError{z-index:50;background:var(--dsw-alias-bg-layer-1);border-left:1px solid var(--dsw-alias-border-l2);font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);flex-direction:column;align-items:flex-start;gap:8px;padding:16px;display:flex;position:fixed;top:0;bottom:0;right:0;overflow:auto}.nArs4W_terminalRetry{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxxs-strong-11);cursor:pointer;border-radius:999px;flex:none;padding:1px 8px}.nArs4W_terminalRetry:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_tabBoundaryError{min-height:0;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);flex-direction:column;flex:1;align-items:flex-start;gap:8px;padding:12px 16px;display:flex;overflow:auto}.nArs4W_nativeTabHost{flex-direction:column;height:100%;min-height:0;display:flex}.nArs4W_gitEmpty{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);padding:4px 12px 8px}.nArs4W_gitPlaceholder{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);text-align:center;padding:16px}.nArs4W_gitError{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);white-space:pre-wrap;padding:8px 12px}.nArs4W_gitDiffTab{flex-direction:column;flex:1;min-width:0;min-height:0;display:flex;overflow:hidden auto}.nArs4W_gitDiffTabHeader{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:8px;height:36px;padding:0 8px 0 12px;display:flex}.nArs4W_gitDiffTabTitle{text-overflow:ellipsis;white-space:nowrap;min-width:0;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary);flex:1;overflow:hidden}.nArs4W_toggleButton:focus-visible,.nArs4W_bottomClose:focus-visible,.nArs4W_iconButton:focus-visible,.nArs4W_tab:focus-visible,.nArs4W_tabClose:focus-visible,.nArs4W_tabBarPlus:focus-visible,.nArs4W_paneCard:focus-visible,.nArs4W_explorerRow:focus-visible,.nArs4W_explorerRef:focus-visible,.nArs4W_terminalRetry:focus-visible,.nArs4W_editorModeButton:focus-visible,.nArs4W_editorDownloadLink:focus-visible,.nArs4W_editorPptxButton:focus-visible,.nArs4W_editorDocxZoomRange:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}@media (prefers-reduced-motion:reduce){.nArs4W_bottomPanel,.nArs4W_bottomPanelHidden,.nArs4W_toggleButton,.nArs4W_tab,.nArs4W_tabBarPlus,.nArs4W_paneCard,.nArs4W_explorerRow,.nArs4W_divider,.nArs4W_dividerRow:after,.nArs4W_dividerCol:after{transition:none;animation:none}}@media (width<=767px){.nArs4W_tab{min-width:48px;max-width:128px}}.nArs4W_openWithLabel{align-items:center;gap:8px;width:100%;min-width:0;display:flex}.nArs4W_openWithName{text-overflow:ellipsis;white-space:nowrap;flex:auto;min-width:0;overflow:hidden}.nArs4W_openWithChevron{color:var(--dsw-alias-label-tertiary);flex:none}.nArs4W_openWithPin{width:16px;height:16px;color:var(--dsw-alias-label-tertiary);cursor:pointer;border-radius:5px;flex:none;justify-content:center;align-items:center;display:inline-flex}.nArs4W_openWithPin:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_openWithPinActive{color:var(--dsw-alias-state-business-primary)}.nArs4W_editorHtmlBlock{margin:8px 0}.nArs4W_editorHtmlBlock img,.nArs4W_editorHtmlBlock video{max-width:100%}.nArs4W_editorHtmlBlock details{margin:4px 0;padding:4px 0}.nArs4W_editorHtmlBlock summary,.nArs4W_editorMd details>summary{cursor:pointer}.nArs4W_tocBar{z-index:7;pointer-events:none;justify-content:flex-end;height:0;display:flex;position:sticky;top:0}.nArs4W_tocButton{pointer-events:auto;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);width:26px;height:26px;color:var(--dsw-alias-label-secondary);cursor:pointer;border-radius:6px;justify-content:center;align-items:center;margin:4px 2px 0 0;padding:0;display:inline-flex}.nArs4W_tocButton:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_tocPanel{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);width:min(300px,82%);max-height:60vh;box-shadow:var(--dsw-shadow-lv2);pointer-events:auto;border-radius:8px;flex-direction:column;padding:4px;display:flex;position:absolute;top:32px;right:2px;overflow-y:auto}.nArs4W_tocItem{min-width:0;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxs-12);text-align:left;cursor:pointer;background:0 0;border:none;border-radius:6px;align-items:baseline;gap:8px;padding:4px 8px;display:flex}.nArs4W_tocItem:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_tocItem[data-level=\"2\"]{padding-left:18px}.nArs4W_tocItem[data-level=\"3\"]{padding-left:28px}.nArs4W_tocItem[data-level=\"4\"]{padding-left:38px}.nArs4W_tocItem[data-level=\"5\"]{padding-left:48px}.nArs4W_tocItem[data-level=\"6\"]{padding-left:58px}.nArs4W_tocItemLevel{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary);flex:none}.nArs4W_tocItemText{text-overflow:ellipsis;white-space:nowrap;flex:auto;min-width:0;overflow:hidden}@keyframes nArs4W_dsh-toc-flash{0%,60%{background:var(--dsw-alias-interactive-bg-hover)}to{background:0 0}}.nArs4W_tocFlash{border-radius:4px;animation:1.2s ease-out nArs4W_dsh-toc-flash}.nArs4W_largeFile{flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_largeFileNotice{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-state-warn-label);background:var(--dsw-alias-state-warn-tertiary);flex:none;align-items:baseline;gap:8px;padding:4px 8px;display:flex}.nArs4W_largeFileDownload{color:inherit;text-decoration:underline}.nArs4W_largeFileNoticeAction{font:inherit;color:inherit;cursor:pointer;background:0 0;border:1px solid;border-radius:4px;margin-left:auto;padding:0 6px}.nArs4W_largeFileNoticeAction:disabled{opacity:.5;cursor:default}.nArs4W_largeFileBody{flex:1;min-height:0;overflow:auto}.nArs4W_largeFileRecords{padding:4px 0}.nArs4W_largeFileList{margin:0;padding:0;list-style:none}.nArs4W_largeFileRecord{gap:8px;padding:2px 8px;display:flex}.nArs4W_largeFileRecordExpanded{background:var(--dsw-alias-bg-layer-1)}.nArs4W_largeFileRecordInvalid{color:var(--dsw-alias-state-error-primary)}.nArs4W_largeFileRecordNo{text-align:right;min-width:4ch;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary);user-select:none;flex:none}.nArs4W_largeFileRecordBody{flex:1;min-width:0}.nArs4W_largeFileRecordSummary{text-align:left;width:100%;font:var(--ds-font-family-code);color:var(--dsw-alias-label-primary);white-space:pre;text-overflow:ellipsis;cursor:pointer;background:0 0;border:0;padding:0;font-size:12px;display:block;overflow:hidden}.nArs4W_largeFileRecordSummary:disabled{cursor:default}.nArs4W_largeFileRecordRaw{font:var(--ds-font-family-code);white-space:pre-wrap;word-break:break-all;overflow-wrap:anywhere;margin:2px 0 0;font-size:12px}.nArs4W_largeFileRecordTree{font:var(--ds-font-family-code);margin-top:2px;font-size:12px}.nArs4W_largeFileLines{font:var(--ds-font-family-code);white-space:pre;padding:4px 0;font-size:12px}.nArs4W_largeFileLine{gap:8px;padding:0 8px;display:flex}.nArs4W_largeFileLineNo{text-align:right;min-width:5ch;color:var(--dsw-alias-label-tertiary);user-select:none;flex:none}.nArs4W_largeFileLineText{color:var(--dsw-alias-label-primary);flex:none}.nArs4W_largeFilePager{border-top:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);flex:none;align-items:center;gap:4px;padding:2px 8px;display:flex}.nArs4W_largeFilePageLabel{text-align:center;min-width:0;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-secondary);white-space:nowrap;text-overflow:ellipsis;flex:1;overflow:hidden}";
 		const tagId$10 = "dsh-external/dsh-better-sidebar/sidebar.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$10) + "]") === null) {
 			const tag = document.createElement("style");
@@ -3425,189 +4323,229 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var sidebar_module_css_default = {
-			"bottomResizeActive": "_8zY6WW_bottomResizeActive",
-			"uploadOverlayStatus": "_8zY6WW_uploadOverlayStatus",
-			"dividerCol": "_8zY6WW_dividerCol",
-			"uploadDropChatCard": "_8zY6WW_uploadDropChatCard",
-			"editorHtml": "_8zY6WW_editorHtml",
-			"browserBlockedDesc": "_8zY6WW_browserBlockedDesc",
-			"pane": "_8zY6WW_pane",
-			"mermaidInfo": "_8zY6WW_mermaidInfo",
-			"editorDocxZoomRange": "_8zY6WW_editorDocxZoomRange",
-			"explorerRow": "_8zY6WW_explorerRow",
-			"explorerRenaming": "_8zY6WW_explorerRenaming",
-			"editorTreePanelFull": "_8zY6WW_editorTreePanelFull",
-			"splitCol": "_8zY6WW_splitCol",
-			"tabActive": "_8zY6WW_tabActive",
-			"dropOverlay": "_8zY6WW_dropOverlay",
-			"explorerRowSelected": "_8zY6WW_explorerRowSelected",
-			"chipIcon": "_8zY6WW_chipIcon",
-			"bottomResize": "_8zY6WW_bottomResize",
-			"explorerRenameInput": "_8zY6WW_explorerRenameInput",
-			"explorerSelectionActions": "_8zY6WW_explorerSelectionActions",
-			"explorerSelectionBar": "_8zY6WW_explorerSelectionBar",
-			"browserFrame": "_8zY6WW_browserFrame",
-			"explorerError": "_8zY6WW_explorerError",
-			"splitRow": "_8zY6WW_splitRow",
-			"tabBadge": "_8zY6WW_tabBadge",
-			"editorTreePanel": "_8zY6WW_editorTreePanel",
-			"mermaidCode": "_8zY6WW_mermaidCode",
-			"mermaidModalButton": "_8zY6WW_mermaidModalButton",
-			"uploadDropArtAccent": "_8zY6WW_uploadDropArtAccent",
-			"gitDiffTab": "_8zY6WW_gitDiffTab",
-			"openWithPinActive": "_8zY6WW_openWithPinActive",
-			"explorerDir": "_8zY6WW_explorerDir",
-			"toggleButton": "_8zY6WW_toggleButton",
-			"browserBlockedButton": "_8zY6WW_browserBlockedButton",
-			"editorPdfDragShieldActive": "_8zY6WW_editorPdfDragShieldActive",
-			"paneTab": "_8zY6WW_paneTab",
-			"tabBoundaryError": "_8zY6WW_tabBoundaryError",
-			"paneDrop": "_8zY6WW_paneDrop",
-			"editorCm": "_8zY6WW_editorCm",
-			"browserBar": "_8zY6WW_browserBar",
-			"editorHtmlBlock": "_8zY6WW_editorHtmlBlock",
-			"explorerBroken": "_8zY6WW_explorerBroken",
-			"tocItemLevel": "_8zY6WW_tocItemLevel",
-			"editorStatusError": "_8zY6WW_editorStatusError",
-			"editorPlaceholder": "_8zY6WW_editorPlaceholder",
-			"editorPdfToolbar": "_8zY6WW_editorPdfToolbar",
-			"mermaidModalToolbar": "_8zY6WW_mermaidModalToolbar",
-			"explorer": "_8zY6WW_explorer",
-			"divider": "_8zY6WW_divider",
-			"dsh-toc-flash": "_8zY6WW_dsh-toc-flash",
-			"iconButton": "_8zY6WW_iconButton",
-			"explorerRoot": "_8zY6WW_explorerRoot",
-			"editorTreeSearch": "_8zY6WW_editorTreeSearch",
-			"editorPdf": "_8zY6WW_editorPdf",
-			"tocItemText": "_8zY6WW_tocItemText",
-			"uploadOverlay": "_8zY6WW_uploadOverlay",
-			"mermaidMarkdown": "_8zY6WW_mermaidMarkdown",
-			"editorPptxButton": "_8zY6WW_editorPptxButton",
-			"mermaidModalStage": "_8zY6WW_mermaidModalStage",
-			"uploadOverlayTitle": "_8zY6WW_uploadOverlayTitle",
-			"editorBinary": "_8zY6WW_editorBinary",
-			"uploadDropZone": "_8zY6WW_uploadDropZone",
-			"editorHeader": "_8zY6WW_editorHeader",
-			"browserStart": "_8zY6WW_browserStart",
-			"nativeTabHost": "_8zY6WW_nativeTabHost",
-			"tabClose": "_8zY6WW_tabClose",
-			"explorerHidden": "_8zY6WW_explorerHidden",
-			"dividerActive": "_8zY6WW_dividerActive",
-			"bottomPanelHidden": "_8zY6WW_bottomPanelHidden",
-			"uploadOverlayProgress": "_8zY6WW_uploadOverlayProgress",
-			"editorTreeDock": "_8zY6WW_editorTreeDock",
-			"editorPdfStage": "_8zY6WW_editorPdfStage",
-			"editorBody": "_8zY6WW_editorBody",
-			"gitDiffTabTitle": "_8zY6WW_gitDiffTabTitle",
-			"editorDownloadLink": "_8zY6WW_editorDownloadLink",
-			"dropLeft": "_8zY6WW_dropLeft",
-			"dropUp": "_8zY6WW_dropUp",
-			"sandboxDot": "_8zY6WW_sandboxDot",
-			"dsh-row-in": "_8zY6WW_dsh-row-in",
-			"editorModeButton": "_8zY6WW_editorModeButton",
-			"openWithChevron": "_8zY6WW_openWithChevron",
-			"bottomPanel": "_8zY6WW_bottomPanel",
-			"editorPathInput": "_8zY6WW_editorPathInput",
-			"mermaidCopy": "_8zY6WW_mermaidCopy",
-			"editorStatus": "_8zY6WW_editorStatus",
-			"orphanedType": "_8zY6WW_orphanedType",
-			"editorMd": "_8zY6WW_editorMd",
-			"explorerSelectionText": "_8zY6WW_explorerSelectionText",
-			"explorerHeader": "_8zY6WW_explorerHeader",
-			"sandboxStatusOn": "_8zY6WW_sandboxStatusOn",
-			"uploadDropZonePill": "_8zY6WW_uploadDropZonePill",
-			"tabTitle": "_8zY6WW_tabTitle",
-			"editorBanner": "_8zY6WW_editorBanner",
-			"explorerGitName": "_8zY6WW_explorerGitName",
-			"tabBarPlus": "_8zY6WW_tabBarPlus",
-			"workbench": "_8zY6WW_workbench",
-			"mermaidError": "_8zY6WW_mermaidError",
-			"browserBlockedTitle": "_8zY6WW_browserBlockedTitle",
-			"editorTreeResize": "_8zY6WW_editorTreeResize",
-			"mermaidModal": "_8zY6WW_mermaidModal",
-			"mermaidModalHint": "_8zY6WW_mermaidModalHint",
-			"selectionPopup": "_8zY6WW_selectionPopup",
-			"terminalRetry": "_8zY6WW_terminalRetry",
-			"editorPdfFrame": "_8zY6WW_editorPdfFrame",
-			"openWithName": "_8zY6WW_openWithName",
-			"tocBar": "_8zY6WW_tocBar",
-			"tocItem": "_8zY6WW_tocItem",
-			"tocFlash": "_8zY6WW_tocFlash",
-			"uploadDropMask": "_8zY6WW_uploadDropMask",
-			"editorSearchInput": "_8zY6WW_editorSearchInput",
-			"editor": "_8zY6WW_editor",
-			"explorerRowDropTarget": "_8zY6WW_explorerRowDropTarget",
-			"editorError": "_8zY6WW_editorError",
-			"paneCard": "_8zY6WW_paneCard",
-			"browser": "_8zY6WW_browser",
-			"tab": "_8zY6WW_tab",
-			"explorerName": "_8zY6WW_explorerName",
-			"editorSearchHint": "_8zY6WW_editorSearchHint",
-			"sandboxStatusText": "_8zY6WW_sandboxStatusText",
-			"dropRight": "_8zY6WW_dropRight",
-			"dropCenter": "_8zY6WW_dropCenter",
-			"dirtyDot": "_8zY6WW_dirtyDot",
-			"uploadOverlayCancel": "_8zY6WW_uploadOverlayCancel",
-			"mermaidHeader": "_8zY6WW_mermaidHeader",
-			"dividerRow": "_8zY6WW_dividerRow",
-			"editorPdfDragShield": "_8zY6WW_editorPdfDragShield",
-			"boundaryError": "_8zY6WW_boundaryError",
-			"gitEmpty": "_8zY6WW_gitEmpty",
-			"split": "_8zY6WW_split",
-			"gitPlaceholder": "_8zY6WW_gitPlaceholder",
-			"explorerBody": "_8zY6WW_explorerBody",
-			"uploadDropArtPrimary": "_8zY6WW_uploadDropArtPrimary",
-			"browserBlockedActions": "_8zY6WW_browserBlockedActions",
-			"uploadDropArtCut": "_8zY6WW_uploadDropArtCut",
-			"mermaidBody": "_8zY6WW_mermaidBody",
-			"editorBinaryNotice": "_8zY6WW_editorBinaryNotice",
-			"paneContent": "_8zY6WW_paneContent",
-			"uploadDropZoneText": "_8zY6WW_uploadDropZoneText",
-			"sandboxStatusOff": "_8zY6WW_sandboxStatusOff",
-			"explorerActionErrorText": "_8zY6WW_explorerActionErrorText",
-			"editorModeActive": "_8zY6WW_editorModeActive",
-			"uploadOverlayCard": "_8zY6WW_uploadOverlayCard",
-			"tabList": "_8zY6WW_tabList",
-			"editorTitle": "_8zY6WW_editorTitle",
-			"editorModeToggle": "_8zY6WW_editorModeToggle",
-			"uploadDropChatHint": "_8zY6WW_uploadDropChatHint",
-			"explorerRowRevealed": "_8zY6WW_explorerRowRevealed",
-			"editorSearchResult": "_8zY6WW_editorSearchResult",
-			"tabBarDrop": "_8zY6WW_tabBarDrop",
-			"mermaidWrap": "_8zY6WW_mermaidWrap",
-			"splitChild": "_8zY6WW_splitChild",
-			"bottomClose": "_8zY6WW_bottomClose",
-			"editorPdfFrameBlocked": "_8zY6WW_editorPdfFrameBlocked",
-			"explorerRef": "_8zY6WW_explorerRef",
-			"explorerSymlink": "_8zY6WW_explorerSymlink",
-			"browserBlocked": "_8zY6WW_browserBlocked",
-			"openWithLabel": "_8zY6WW_openWithLabel",
-			"panel": "_8zY6WW_panel",
-			"explorerHiddenPane": "_8zY6WW_explorerHiddenPane",
-			"browserMessage": "_8zY6WW_browserMessage",
-			"editorTreeToggleActive": "_8zY6WW_editorTreeToggleActive",
-			"paneTabHidden": "_8zY6WW_paneTabHidden",
-			"tabBar": "_8zY6WW_tabBar",
-			"gitDiffTabHeader": "_8zY6WW_gitDiffTabHeader",
-			"tocButton": "_8zY6WW_tocButton",
-			"browserInput": "_8zY6WW_browserInput",
-			"explorerActionError": "_8zY6WW_explorerActionError",
-			"sandboxAction": "_8zY6WW_sandboxAction",
-			"openWithPin": "_8zY6WW_openWithPin",
-			"tocPanel": "_8zY6WW_tocPanel",
-			"sandboxStatus": "_8zY6WW_sandboxStatus",
-			"explorerAppIcon": "_8zY6WW_explorerAppIcon",
-			"editorCmHidden": "_8zY6WW_editorCmHidden",
-			"uploadDropHero": "_8zY6WW_uploadDropHero",
-			"dropDown": "_8zY6WW_dropDown",
-			"explorerEmpty": "_8zY6WW_explorerEmpty",
-			"uploadOverlayProgressFill": "_8zY6WW_uploadOverlayProgressFill",
-			"panelBody": "_8zY6WW_panelBody",
-			"explorerCopied": "_8zY6WW_explorerCopied",
-			"editorMain": "_8zY6WW_editorMain",
-			"gitError": "_8zY6WW_gitError",
-			"paneEmptyCards": "_8zY6WW_paneEmptyCards",
-			"explorerDirChanged": "_8zY6WW_explorerDirChanged"
+			"mermaidWrap": "nArs4W_mermaidWrap",
+			"browserBar": "nArs4W_browserBar",
+			"mermaidModal": "nArs4W_mermaidModal",
+			"largeFileRecordBody": "nArs4W_largeFileRecordBody",
+			"editorTreeSearch": "nArs4W_editorTreeSearch",
+			"pane": "nArs4W_pane",
+			"tabList": "nArs4W_tabList",
+			"mermaidMarkdown": "nArs4W_mermaidMarkdown",
+			"editorPdfDragShield": "nArs4W_editorPdfDragShield",
+			"largeFileRecordRaw": "nArs4W_largeFileRecordRaw",
+			"editorGitBarGutter": "nArs4W_editorGitBarGutter",
+			"openWithPinActive": "nArs4W_openWithPinActive",
+			"largeFileRecordTree": "nArs4W_largeFileRecordTree",
+			"largeFileLines": "nArs4W_largeFileLines",
+			"browserInput": "nArs4W_browserInput",
+			"dropRight": "nArs4W_dropRight",
+			"uploadOverlay": "nArs4W_uploadOverlay",
+			"gitDiffTab": "nArs4W_gitDiffTab",
+			"uploadOverlayCancel": "nArs4W_uploadOverlayCancel",
+			"editorSearchResult": "nArs4W_editorSearchResult",
+			"toggleButton": "nArs4W_toggleButton",
+			"gitEmpty": "nArs4W_gitEmpty",
+			"terminalRetry": "nArs4W_terminalRetry",
+			"editorDocxZoomRange": "nArs4W_editorDocxZoomRange",
+			"explorerRowRevealed": "nArs4W_explorerRowRevealed",
+			"largeFileDownload": "nArs4W_largeFileDownload",
+			"uploadDropMask": "nArs4W_uploadDropMask",
+			"editorTreeResize": "nArs4W_editorTreeResize",
+			"dropUp": "nArs4W_dropUp",
+			"browserFrame": "nArs4W_browserFrame",
+			"explorerAppIcon": "nArs4W_explorerAppIcon",
+			"uploadOverlayCard": "nArs4W_uploadOverlayCard",
+			"explorerSymlink": "nArs4W_explorerSymlink",
+			"bottomResizeActive": "nArs4W_bottomResizeActive",
+			"sandboxStatus": "nArs4W_sandboxStatus",
+			"browserBlockedActions": "nArs4W_browserBlockedActions",
+			"mermaidBody": "nArs4W_mermaidBody",
+			"tabUnreadDot": "nArs4W_tabUnreadDot",
+			"explorerDirChanged": "nArs4W_explorerDirChanged",
+			"paneEmptyCards": "nArs4W_paneEmptyCards",
+			"uploadDropArtCut": "nArs4W_uploadDropArtCut",
+			"editorStatusError": "nArs4W_editorStatusError",
+			"editorGitBarSpacer": "nArs4W_editorGitBarSpacer",
+			"mermaidInfo": "nArs4W_mermaidInfo",
+			"mermaidModalToolbar": "nArs4W_mermaidModalToolbar",
+			"tocBar": "nArs4W_tocBar",
+			"bottomPanelHidden": "nArs4W_bottomPanelHidden",
+			"browserBlockedButton": "nArs4W_browserBlockedButton",
+			"largeFileBody": "nArs4W_largeFileBody",
+			"editorSearchResultDir": "nArs4W_editorSearchResultDir",
+			"splitChild": "nArs4W_splitChild",
+			"boundaryError": "nArs4W_boundaryError",
+			"tabBadge": "nArs4W_tabBadge",
+			"uploadOverlayStatus": "nArs4W_uploadOverlayStatus",
+			"dropDown": "nArs4W_dropDown",
+			"editorTreePanel": "nArs4W_editorTreePanel",
+			"paneTabHidden": "nArs4W_paneTabHidden",
+			"tabBarPlus": "nArs4W_tabBarPlus",
+			"explorerRef": "nArs4W_explorerRef",
+			"bottomResize": "nArs4W_bottomResize",
+			"dirtyDot": "nArs4W_dirtyDot",
+			"explorer": "nArs4W_explorer",
+			"editorBinary": "nArs4W_editorBinary",
+			"editorMd": "nArs4W_editorMd",
+			"editorPptxButton": "nArs4W_editorPptxButton",
+			"editorBanner": "nArs4W_editorBanner",
+			"openWithName": "nArs4W_openWithName",
+			"editorDownloadLink": "nArs4W_editorDownloadLink",
+			"openWithChevron": "nArs4W_openWithChevron",
+			"editorGitBar": "nArs4W_editorGitBar",
+			"split": "nArs4W_split",
+			"explorerBroken": "nArs4W_explorerBroken",
+			"uploadDropZonePill": "nArs4W_uploadDropZonePill",
+			"editorMain": "nArs4W_editorMain",
+			"largeFileLineNo": "nArs4W_largeFileLineNo",
+			"divider": "nArs4W_divider",
+			"largeFileRecord": "nArs4W_largeFileRecord",
+			"dockFallback": "nArs4W_dockFallback",
+			"dividerRow": "nArs4W_dividerRow",
+			"uploadDropChatCard": "nArs4W_uploadDropChatCard",
+			"browserBlocked": "nArs4W_browserBlocked",
+			"tabTitle": "nArs4W_tabTitle",
+			"editorGitAdd": "nArs4W_editorGitAdd",
+			"explorerEmpty": "nArs4W_explorerEmpty",
+			"chipIcon": "nArs4W_chipIcon",
+			"mermaidHeader": "nArs4W_mermaidHeader",
+			"mermaidCopy": "nArs4W_mermaidCopy",
+			"browserMessage": "nArs4W_browserMessage",
+			"iconButton": "nArs4W_iconButton",
+			"browserBlockedDesc": "nArs4W_browserBlockedDesc",
+			"editorHtmlBlock": "nArs4W_editorHtmlBlock",
+			"editorBannerAction": "nArs4W_editorBannerAction",
+			"largeFileList": "nArs4W_largeFileList",
+			"largeFileNotice": "nArs4W_largeFileNotice",
+			"tab": "nArs4W_tab",
+			"explorerRowDropTarget": "nArs4W_explorerRowDropTarget",
+			"workbench": "nArs4W_workbench",
+			"uploadDropHero": "nArs4W_uploadDropHero",
+			"explorerActionErrorText": "nArs4W_explorerActionErrorText",
+			"mermaidModalButton": "nArs4W_mermaidModalButton",
+			"editorTreeDock": "nArs4W_editorTreeDock",
+			"chipUnread": "nArs4W_chipUnread",
+			"editorGitBarDel": "nArs4W_editorGitBarDel",
+			"splitCol": "nArs4W_splitCol",
+			"explorerSelectionActions": "nArs4W_explorerSelectionActions",
+			"largeFileRecords": "nArs4W_largeFileRecords",
+			"sandboxStatusOn": "nArs4W_sandboxStatusOn",
+			"largeFileLine": "nArs4W_largeFileLine",
+			"editorPdfStage": "nArs4W_editorPdfStage",
+			"orphanedType": "nArs4W_orphanedType",
+			"explorerBody": "nArs4W_explorerBody",
+			"editorCmHidden": "nArs4W_editorCmHidden",
+			"editorPdfToolbar": "nArs4W_editorPdfToolbar",
+			"openWithPin": "nArs4W_openWithPin",
+			"explorerActionError": "nArs4W_explorerActionError",
+			"editorBlameSummary": "nArs4W_editorBlameSummary",
+			"editorBlame": "nArs4W_editorBlame",
+			"tabClose": "nArs4W_tabClose",
+			"editorPathInput": "nArs4W_editorPathInput",
+			"gitDiffTabTitle": "nArs4W_gitDiffTabTitle",
+			"editorSearchResultLabel": "nArs4W_editorSearchResultLabel",
+			"splitRow": "nArs4W_splitRow",
+			"editorPdf": "nArs4W_editorPdf",
+			"dropLeft": "nArs4W_dropLeft",
+			"uploadOverlayTitle": "nArs4W_uploadOverlayTitle",
+			"largeFilePager": "nArs4W_largeFilePager",
+			"bottomPanel": "nArs4W_bottomPanel",
+			"largeFilePageLabel": "nArs4W_largeFilePageLabel",
+			"editorBinaryNotice": "nArs4W_editorBinaryNotice",
+			"editorModeActive": "nArs4W_editorModeActive",
+			"editorPlaceholder": "nArs4W_editorPlaceholder",
+			"explorerName": "nArs4W_explorerName",
+			"editorPdfFrame": "nArs4W_editorPdfFrame",
+			"largeFileRecordInvalid": "nArs4W_largeFileRecordInvalid",
+			"gitPlaceholder": "nArs4W_gitPlaceholder",
+			"explorerRenameInput": "nArs4W_explorerRenameInput",
+			"sandboxDot": "nArs4W_sandboxDot",
+			"largeFileLineText": "nArs4W_largeFileLineText",
+			"editorGitDel": "nArs4W_editorGitDel",
+			"tocItem": "nArs4W_tocItem",
+			"explorerSelectionBar": "nArs4W_explorerSelectionBar",
+			"dividerCol": "nArs4W_dividerCol",
+			"tocItemLevel": "nArs4W_tocItemLevel",
+			"uploadDropChatHint": "nArs4W_uploadDropChatHint",
+			"editorStatus": "nArs4W_editorStatus",
+			"largeFileRecordNo": "nArs4W_largeFileRecordNo",
+			"largeFileRecordSummary": "nArs4W_largeFileRecordSummary",
+			"editorBlameHead": "nArs4W_editorBlameHead",
+			"explorerError": "nArs4W_explorerError",
+			"dropOverlay": "nArs4W_dropOverlay",
+			"browser": "nArs4W_browser",
+			"gitError": "nArs4W_gitError",
+			"editorPdfFrameBlocked": "nArs4W_editorPdfFrameBlocked",
+			"uploadOverlayProgressFill": "nArs4W_uploadOverlayProgressFill",
+			"tabBar": "nArs4W_tabBar",
+			"explorerHidden": "nArs4W_explorerHidden",
+			"bottomClose": "nArs4W_bottomClose",
+			"tabBoundaryError": "nArs4W_tabBoundaryError",
+			"tocButton": "nArs4W_tocButton",
+			"mermaidModalStage": "nArs4W_mermaidModalStage",
+			"editorCm": "nArs4W_editorCm",
+			"editorHeader": "nArs4W_editorHeader",
+			"paneCard": "nArs4W_paneCard",
+			"explorerRowSelected": "nArs4W_explorerRowSelected",
+			"explorerRenaming": "nArs4W_explorerRenaming",
+			"uploadDropArtAccent": "nArs4W_uploadDropArtAccent",
+			"uploadOverlayProgress": "nArs4W_uploadOverlayProgress",
+			"explorerSelectionText": "nArs4W_explorerSelectionText",
+			"selectionPopup": "nArs4W_selectionPopup",
+			"gitDiffTabHeader": "nArs4W_gitDiffTabHeader",
+			"dropCenter": "nArs4W_dropCenter",
+			"editorModeButton": "nArs4W_editorModeButton",
+			"panelBody": "nArs4W_panelBody",
+			"paneTab": "nArs4W_paneTab",
+			"tabActive": "nArs4W_tabActive",
+			"editorGitBarMod": "nArs4W_editorGitBarMod",
+			"mermaidError": "nArs4W_mermaidError",
+			"nativeTabHost": "nArs4W_nativeTabHost",
+			"openWithLabel": "nArs4W_openWithLabel",
+			"paneContent": "nArs4W_paneContent",
+			"uploadDropZone": "nArs4W_uploadDropZone",
+			"tocItemText": "nArs4W_tocItemText",
+			"tocFlash": "nArs4W_tocFlash",
+			"editorError": "nArs4W_editorError",
+			"mermaidModalHint": "nArs4W_mermaidModalHint",
+			"largeFile": "nArs4W_largeFile",
+			"largeFileRecordExpanded": "nArs4W_largeFileRecordExpanded",
+			"editorBody": "nArs4W_editorBody",
+			"largeFileNoticeAction": "nArs4W_largeFileNoticeAction",
+			"dividerActive": "nArs4W_dividerActive",
+			"explorerRoot": "nArs4W_explorerRoot",
+			"sandboxStatusOff": "nArs4W_sandboxStatusOff",
+			"tocPanel": "nArs4W_tocPanel",
+			"editorSearchHint": "nArs4W_editorSearchHint",
+			"editor": "nArs4W_editor",
+			"paneDrop": "nArs4W_paneDrop",
+			"explorerCopied": "nArs4W_explorerCopied",
+			"editorSearchInput": "nArs4W_editorSearchInput",
+			"panel": "nArs4W_panel",
+			"sandboxStatusText": "nArs4W_sandboxStatusText",
+			"explorerHiddenPane": "nArs4W_explorerHiddenPane",
+			"explorerGitName": "nArs4W_explorerGitName",
+			"sandboxAction": "nArs4W_sandboxAction",
+			"editorHtml": "nArs4W_editorHtml",
+			"uploadDropZoneText": "nArs4W_uploadDropZoneText",
+			"browserStart": "nArs4W_browserStart",
+			"editorModeToggle": "nArs4W_editorModeToggle",
+			"mermaidCode": "nArs4W_mermaidCode",
+			"editorPdfDragShieldActive": "nArs4W_editorPdfDragShieldActive",
+			"editorTitle": "nArs4W_editorTitle",
+			"editorGitBarAdd": "nArs4W_editorGitBarAdd",
+			"explorerDir": "nArs4W_explorerDir",
+			"editorTreeToggleActive": "nArs4W_editorTreeToggleActive",
+			"dsh-toc-flash": "nArs4W_dsh-toc-flash",
+			"tabBarDrop": "nArs4W_tabBarDrop",
+			"tabBarRightActions": "nArs4W_tabBarRightActions",
+			"uploadDropArtPrimary": "nArs4W_uploadDropArtPrimary",
+			"explorerHeader": "nArs4W_explorerHeader",
+			"explorerRow": "nArs4W_explorerRow",
+			"editorTreePanelFull": "nArs4W_editorTreePanelFull",
+			"editorGitMod": "nArs4W_editorGitMod",
+			"dsh-row-in": "nArs4W_dsh-row-in",
+			"browserBlockedTitle": "nArs4W_browserBlockedTitle"
 		};
 		//#endregion
 		//#region src/client/binary-download.tsx
@@ -3663,19 +4601,24 @@ window.__ModuleLoader__.load({
 		/**
 		* Decide what an fsRead result means for the editor.
 		* - Text: the first match stands (content is valid for any fsRead viewer).
+		* - Too large to edit: the viewer still renders, but with `largeFile` instead
+		*   of a document — it shows the read-only paged preview. The head bytes ride
+		*   the result so a `detect` viewer gets the same chance it gets on a binary
+		*   read, which is what keeps a media viewer working for a huge image and what
+		*   lets a plugin claim an oversized format it recognises.
 		* - Binary: the host head bytes enable a re-match — a `detect` viewer (e.g.
 		*   a plugin sniffing a binary format) may claim the file. `custom` viewers
 		*   load their own bytes; `mediaUrl`/`none` viewers render the media route;
 		*   an fsRead viewer or nothing cannot render binary → download UI.
 		*/
 		function planFsReadOutcome(viewer, result, rematch, mediaUrlOf) {
-			if (!result.binary) return {
+			if (result.kind === "text") return {
 				kind: "render",
 				viewer,
 				content: result.content,
-				truncated: result.truncated
+				size: result.size
 			};
-			const claimed = result.head === void 0 ? void 0 : rematch(decodeHead(result.head));
+			const claimed = rematch(decodeHead(result.head));
 			if (claimed !== void 0 && claimed.fetchStrategy === "custom") return {
 				kind: "customLoad",
 				viewer: claimed
@@ -3685,7 +4628,113 @@ window.__ModuleLoader__.load({
 				viewer: claimed,
 				mediaUrl: mediaUrlOf()
 			};
+			if (result.kind === "too-large") {
+				if (viewer.fetchStrategy !== "fsRead") return { kind: "binary" };
+				return {
+					kind: "render",
+					viewer,
+					size: result.size,
+					largeFile: { size: result.size }
+				};
+			}
 			return { kind: "binary" };
+		}
+		//#endregion
+		//#region src/client/editor-dirty.ts
+		const dirtyTabs = /* @__PURE__ */ new Map();
+		const listeners = /* @__PURE__ */ new Set();
+		/** Monotonic change counter: a stable `useSyncExternalStore` snapshot. */
+		let revision = 0;
+		/** The map key of one tab: ids only identify a tab inside their session. */
+		function keyOf(sessionId, tabId) {
+			return `${sessionId}::${tabId}`;
+		}
+		/** Notify every subscriber (the `beforeunload` guard). */
+		function notify$1() {
+			revision += 1;
+			for (const listener of [...listeners]) listener();
+		}
+		/**
+		* Publish one tab's dirty state: `true` registers the draft (session + path
+		* ride along for scoped queries), `false` / `undefined` clears it.
+		*/
+		function setEditorDirty(tabId, dirty, sessionId, path) {
+			const key = keyOf(sessionId, tabId);
+			if (!dirty) {
+				if (dirtyTabs.delete(key)) notify$1();
+				return;
+			}
+			const previous = dirtyTabs.get(key);
+			if (previous !== void 0 && previous.path === path) return;
+			dirtyTabs.set(key, {
+				tabId,
+				path
+			});
+			notify$1();
+		}
+		/**
+		* Drop a tab's entry (its editor host unmounted). Idempotent.
+		* @param sessionId - the owning session; omitted drops the id in EVERY session
+		*  (the shape tests use for cleanup — a caller that knows its session should
+		*  always name it, or it would clear a same-numbered tab elsewhere).
+		*/
+		function clearEditorDirty(tabId, sessionId) {
+			if (sessionId !== void 0) {
+				if (dirtyTabs.delete(keyOf(sessionId, tabId))) notify$1();
+				return;
+			}
+			let removed = false;
+			for (const [key, entry] of dirtyTabs) {
+				if (entry.tabId !== tabId) continue;
+				dirtyTabs.delete(key);
+				removed = true;
+			}
+			if (removed) notify$1();
+		}
+		/**
+		* Whether one tab holds an unsaved draft.
+		* @param sessionId - the owning session; omitted matches the id in any session
+		*  (the conservative read: a caller that cannot name the session should still
+		*  warn rather than pass a live draft through).
+		*/
+		function isEditorDirty(tabId, sessionId) {
+			if (sessionId !== void 0) return dirtyTabs.has(keyOf(sessionId, tabId));
+			for (const entry of dirtyTabs.values()) if (entry.tabId === tabId) return true;
+			return false;
+		}
+		/** How many tabs hold unsaved drafts across every session (the unload guard). */
+		function dirtyCount() {
+			return dirtyTabs.size;
+		}
+		/** Subscribe to dirty-set changes; returns the disposer. */
+		function subscribeEditorDirty(listener) {
+			listeners.add(listener);
+			return () => {
+				listeners.delete(listener);
+			};
+		}
+		/** The change counter (a stable `useSyncExternalStore` snapshot). */
+		function editorDirtyRevision() {
+			return revision;
+		}
+		/**
+		* Ask before dropping `tabId`'s unsaved draft. Returns true when the caller
+		* may proceed (the tab is clean, the user confirmed, or no `confirm` is
+		* available — letting a tab become unclosable would be worse than skipping one
+		* prompt). On confirm the entry is cleared immediately, so a follow-up close in
+		* the same tick does not double-prompt; the editor host's own cleanup would do
+		* it one commit later anyway.
+		*
+		* Shared by the sidebar's tab close and the file tree's close-on-delete so
+		* both paths warn exactly once, with the same copy.
+		* @param sessionId - the owning session (see {@link isEditorDirty} for the
+		*  omitted case).
+		*/
+		function confirmDiscardDraft(tabId, message, sessionId) {
+			if (!isEditorDirty(tabId, sessionId)) return true;
+			const confirmed = typeof window.confirm === "function" ? window.confirm(message) : true;
+			if (confirmed) clearEditorDirty(tabId, sessionId);
+			return confirmed;
 		}
 		//#endregion
 		//#region node_modules/.pnpm/react-icons@5.7.0_react@18.2.0/node_modules/react-icons/si/index.mjs
@@ -3717,36 +4766,140 @@ window.__ModuleLoader__.load({
 				}]
 			})(props);
 		}
+		/**
+		* The fold chain starting at `entry`: successive sole directory children
+		* while each link's level is loaded, still holds exactly one healthy
+		* directory child, and the chain stays within the depth cap. The returned
+		* chain always starts with `entry` itself; its LAST element is the level
+		* the expanded row renders.
+		*/
+		function compactChain(entry, levelOf) {
+			const chain = [entry];
+			const visited = /* @__PURE__ */ new Set([entry.path]);
+			let current = entry;
+			while (current.compact === true && chain.length < 32) {
+				const level = levelOf(current.path);
+				if (level === void 0 || level.error !== void 0 || level.entries === void 0) break;
+				const visible = level.entries.filter((entry) => entry.hidden !== true);
+				if (visible.length !== 1) break;
+				const child = visible[0];
+				if (!child.isDir || child.broken || visited.has(child.path)) break;
+				visited.add(child.path);
+				chain.push(child);
+				current = child;
+			}
+			return chain;
+		}
+		/**
+		* The collapsed singleton directories whose levels still need loading, so
+		* fold chains can extend past what the user has expanded. Walks down from the
+		* RENDERED levels (`roots` — the workspace root plus every expanded
+		* directory) along the very same {@link compactChain} the row renderer builds
+		* its label with, so the walk inherits that chain's
+		* {@link MAX_COMPACT_DEPTH} cap: past the cap the breadcrumb stops folding and
+		* the preload stops asking for links the renderer would never draw. (The
+		* previous every-loaded-level scan kept pulling link 33, 34, … for a chain
+		* the row had already stopped folding at 32 — one serial POST plus one
+		* whole-tree render per wasted link.)
+		*
+		* Each arrival may reveal the next link, so the caller re-runs this after
+		* every cache update. `visited` dedupes that walk and keeps it terminating:
+		* chains cannot cycle (the host never marks symlink children).
+		* @param levels - the tree's level cache, keyed by absolute path.
+		* @param roots - the levels the tree actually renders, in any order.
+		* @returns the absolute paths of the frontier links still to load.
+		*/
+		function compactLoadTargets(levels, roots) {
+			const targets = /* @__PURE__ */ new Set();
+			const visited = /* @__PURE__ */ new Set();
+			const pending = [...roots];
+			while (pending.length > 0) {
+				const dir = pending.pop();
+				if (visited.has(dir)) continue;
+				visited.add(dir);
+				const level = levels[dir];
+				if (level?.entries === void 0) continue;
+				for (const entry of level.entries) {
+					if (!entry.isDir) continue;
+					const chain = compactChain(entry, (path) => levels[path]);
+					const tail = chain[chain.length - 1];
+					if (tail.compact === true && levels[tail.path] === void 0) {
+						targets.add(tail.path);
+						continue;
+					}
+					if (chain.length < 32) pending.push(tail.path);
+				}
+			}
+			return [...targets];
+		}
+		//#endregion
+		//#region src/client/file-tree-sort.ts
+		/** The default choice — byte-for-byte the order the host listing arrives in. */
+		const DEFAULT_FILE_TREE_SORT = {
+			key: "name",
+			dirsFirst: true
+		};
+		/**
+		* The extension shown as a row's "type": the text after the LAST dot,
+		* lowercased, `''` for a directory or a dot-less name (a leading dot is a
+		* hidden file's marker, not an extension, so `.gitignore` has none).
+		*/
+		function typeOf(name, isDir) {
+			if (isDir) return "";
+			const at = name.lastIndexOf(".");
+			return at <= 0 ? "" : name.slice(at + 1).toLowerCase();
+		}
+		/**
+		* Case-insensitive name order with the host's deterministic tie-break: names
+		* that only differ in case keep their original code-point order (`A` before
+		* `a`), so the order is total and stable.
+		*/
+		function compareName(a, b) {
+			const la = a.name.toLowerCase();
+			const lb = b.name.toLowerCase();
+			if (la !== lb) return la < lb ? -1 : 1;
+			if (a.name === b.name) return 0;
+			return a.name < b.name ? -1 : 1;
+		}
+		/**
+		* Order one level's rows for display. The input is never mutated (the level
+		* cache is shared), and with {@link DEFAULT_FILE_TREE_SORT} the result equals
+		* `fs-tree.ts`'s server order for every input.
+		*
+		* @param entries - the level's rows, in host order.
+		* @param sort - the caller's choice (key + folders-first switch).
+		* @returns a new array; the rows themselves are the same objects.
+		*/
+		function sortEntries(entries, sort) {
+			return [...entries].sort((a, b) => {
+				if (sort.dirsFirst && a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+				if (sort.key === "type") {
+					const ta = typeOf(a.name, a.isDir);
+					const tb = typeOf(b.name, b.isDir);
+					if (ta !== tb) return ta < tb ? -1 : 1;
+				}
+				return compareName(a, b);
+			});
+		}
 		//#endregion
 		//#region src/client/icons.tsx
 		/**
-		* Bottom-panel toggle glyph (the "底栏" button): a frame with a filled strip
-		* along its BOTTOM edge, in the app's outline style.
+		* Icons the sidebar needs beyond the primitives set: a terminal glyph (the
+		* icon library has none), a diff glyph, and the bottom-workbench toggle.
+		* Per-tab icons live on the tab descriptors
+		* (`descriptor.icon`), not in a type-keyed switch — the icon mapping was
+		* registry-ized with the tab types.
 		*/
-		const IconPanelBottomOutline16 = ({ size = 16, className }) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("svg", {
-			width: size,
-			height: size,
+		/** Bottom toggle: reuse the native panel glyph, rotated toward the bottom. */
+		const IconPanelBottomOutline16 = ({ size = 16, className }) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 			className,
-			viewBox: "0 0 16 16",
-			fill: "none",
-			xmlns: "http://www.w3.org/2000/svg",
-			children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("rect", {
-				x: "1.5",
-				y: "2",
-				width: "13",
-				height: "12",
-				rx: "2.5",
-				stroke: "currentColor",
-				strokeWidth: "1.5"
-			}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("rect", {
-				x: "3.25",
-				y: "10",
-				width: "9.5",
-				height: "2.75",
-				rx: "1",
-				fill: "currentColor",
-				stroke: "none"
-			})]
+			style: {
+				display: "inline-flex",
+				width: size,
+				height: size,
+				transform: "rotate(-90deg)"
+			},
+			children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPanelLeftOutlineRegular, { size })
 		});
 		/** Upload glyph in the app's outline style: an arrow rising into a tray
 		*  (the file-manager "upload into the workspace" action). */
@@ -3926,15 +5079,61 @@ window.__ModuleLoader__.load({
 		* composition keys. The browser's native IME processing is untouched:
 		* stopPropagation only silences page JS, not the default action.
 		*
-		* The composition signal follows the DSH core convention (InputBar's IME
-		* guard, issue #535): `isComposing` for modern engines, keyCode 229 as the
-		* legacy signal engines emit without isComposing.
+		* TWO predicates, deliberately different, because the two kinds of call site
+		* pay different prices for a false positive:
+		*
+		* - `isImeComposition` — the capture guard's decision (narrow). A false
+		*   positive here costs `stopPropagation()`: the key is swallowed for EVERY
+		*   downstream listener, page-wide. Trusting a bare legacy 229 outside a
+		*   composition window did exactly that to layout-switcher utilities (#833,
+		*   see below), so 229 only counts while a composition is live.
+		* - `isLikelyImeKey` — the conservative disjunction
+		*   `isComposing || keyCode === 229`, for NON-intercepting callers that use
+		*   the answer as an early return (FileTree's rename / new-folder commit
+		*   handlers). A false positive there costs one skipped key while a false
+		*   negative commits a half-composed name, so the over-approximation wins.
+		*
+		* The conservative shape is also what DSH core itself uses, but only because
+		* no core call site stops propagation: `QuestionComposer` (ui-user-questions)
+		* has no composition tracking at all — just `isComposing || keyCode === 229` —
+		* and `InputBar` (ui-conversation, issue #535) ORs a live composition ref
+		* with the bare 229. This module is the one place where the wider rule is
+		* wrong, which is why the narrow decision lives behind its own name here.
+		*
+		* The legacy 229 signal is only trusted by the capture guard while (or right
+		* after) a real composition is running. Legacy engines (Safari) emit 229
+		* keydowns with `isComposing === false` *during* a composition, and that
+		* context is what distinguishes them from synthetic 229 keydowns emitted
+		* outside any IME — layout-switcher utilities (e.g. KeyRay's layout swap)
+		* send a keydown carrying the whole converted word as a multi-character
+		* unicode string, Chromium reports it as keyCode 229 / isComposing=false, and
+		* swallowing it made the backspaces land while the replacement text never
+		* did: the word silently disappeared instead of being rewritten.
 		*/
-		/** The pure decision: is this keyboard event part of an IME composition?
-		*  `isComposing` is optional on the input: React's synthetic KeyboardEvent
-		*  type does not declare it (the DOM event always carries it), and the
-		*  keyCode 229 fallback covers exactly those callers. */
+		/** Live composition context, tracked by the guard's composition listeners. */
+		let guardComposing = false;
+		/** Grace window (ms) after compositionend that still counts as composition,
+		*  covering legacy engines' closing 229 keydown with isComposing === false. */
+		const GUARD_COMPOSITION_END_GRACE_MS = 50;
+		let guardComposingUntil = 0;
+		function imeCompositionLive() {
+			return guardComposing || Date.now() < guardComposingUntil;
+		}
+		/** The CAPTURE guard's decision: is this keyboard event part of an IME
+		*  composition? NOT a pure function of its argument — it consults the
+		*  guard's module-level composition state (above) to scope the legacy 229
+		*  signal. Never reuse it as a generic "is IME" helper: see the module doc
+		*  for why non-intercepting callers want `isLikelyImeKey` instead. */
 		function isImeComposition(event) {
+			if (event.isComposing === true) return true;
+			if (event.keyCode !== 229) return false;
+			return imeCompositionLive();
+		}
+		/** The CONSERVATIVE decision, for non-intercepting callers where misreading a
+		*  composition key costs more than ignoring an ordinary one: a bare 229 counts
+		*  even outside a composition window. Pure — reads no module state, so it
+		*  answers the same before, during and after a composition. */
+		function isLikelyImeKey(event) {
 			return event.isComposing === true || event.keyCode === 229;
 		}
 		/**
@@ -3945,11 +5144,24 @@ window.__ModuleLoader__.load({
 			const onKey = (event) => {
 				if (isImeComposition(event)) event.stopPropagation();
 			};
+			const onCompositionStart = () => {
+				guardComposing = true;
+			};
+			const onCompositionEnd = () => {
+				guardComposing = false;
+				guardComposingUntil = Date.now() + GUARD_COMPOSITION_END_GRACE_MS;
+			};
 			document.addEventListener("keydown", onKey, true);
 			document.addEventListener("keyup", onKey, true);
+			document.addEventListener("compositionstart", onCompositionStart, true);
+			document.addEventListener("compositionend", onCompositionEnd, true);
 			return () => {
 				document.removeEventListener("keydown", onKey, true);
 				document.removeEventListener("keyup", onKey, true);
+				document.removeEventListener("compositionstart", onCompositionStart, true);
+				document.removeEventListener("compositionend", onCompositionEnd, true);
+				guardComposing = false;
+				guardComposingUntil = 0;
 			};
 		}
 		//#endregion
@@ -4018,8 +5230,8 @@ window.__ModuleLoader__.load({
 			}, [menu]);
 		}
 		//#endregion
-		//#region \0dsh-css:H:\MaxNull\WorkStation\third-party-plugins\DSH-better-sidebar\src\client\ui\kit.module.css.mjs
-		const css$9 = ".NnXWEa_iconButton{box-sizing:border-box;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:3px;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex}.NnXWEa_iconButtonMd{width:28px;height:28px}.NnXWEa_iconButtonSm{border-radius:3px;width:24px;height:24px}.NnXWEa_iconButton:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.NnXWEa_iconButton:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}.NnXWEa_iconButton:disabled{opacity:.4;cursor:default}.NnXWEa_iconButtonActive{color:var(--dsw-alias-state-business-primary)}.NnXWEa_iconButtonDanger{color:var(--dsw-alias-state-error-primary)}.NnXWEa_chip{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);height:22px;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxxs-11);white-space:nowrap;cursor:pointer;background:0 0;border-radius:999px;align-items:center;gap:4px;padding:0 8px;display:inline-flex}.NnXWEa_chip:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.NnXWEa_chip:disabled{opacity:.4;cursor:default}.NnXWEa_chipActive,.NnXWEa_chipActive:hover{background:var(--dsw-alias-interactive-bg-hover-accent);border-color:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-label-primary)}.NnXWEa_chipLabel{text-overflow:ellipsis;min-width:0;overflow:hidden}.NnXWEa_chipCount{color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}.NnXWEa_chipActive .NnXWEa_chipCount{color:var(--dsw-alias-label-secondary)}.NnXWEa_sectionHeader{box-sizing:border-box;border-bottom:1px solid var(--dsw-alias-border-l1);width:100%;height:28px;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-secondary);align-items:center;gap:6px;padding:0 12px;display:flex}.NnXWEa_sectionLabel{text-overflow:ellipsis;white-space:nowrap;min-width:0;overflow:hidden}.NnXWEa_sectionCount{font:var(--dsw-font-xxxs-11);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary);flex:none}.NnXWEa_sectionAction{flex:none;align-items:center;margin-left:auto;display:inline-flex}.NnXWEa_notice{box-sizing:border-box;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);white-space:pre-wrap}.NnXWEa_noticeWell{padding:4px 12px 8px}.NnXWEa_noticePage{text-align:center;padding:16px}.NnXWEa_noticeInline{padding:0;font-size:10px;line-height:1.45}.NnXWEa_noticeError{color:var(--dsw-alias-state-error-primary)}.NnXWEa_noticeWarn{color:var(--dsw-alias-state-warn-primary)}.NnXWEa_noticeHint{color:var(--dsw-alias-label-tertiary)}.NnXWEa_confirmDesc{font:var(--dsw-font-s-14);color:var(--dsw-alias-label-primary);margin:0}.NnXWEa_confirmDesc[data-danger=true]{color:var(--dsw-alias-label-primary)}.NnXWEa_statusBadge{font:var(--dsw-font-xxxs-strong-11);font-family:var(--ds-font-family-code,monospace);color:var(--dsw-alias-label-secondary);border-radius:2px;flex:none;padding:0 4px}.NnXWEa_statusBadge[data-tone=modified]{color:var(--dsw-alias-state-warn-primary)}.NnXWEa_statusBadge[data-tone=added],.NnXWEa_statusBadge[data-tone=untracked]{color:var(--dsw-alias-state-success-primary)}.NnXWEa_statusBadge[data-tone=deleted]{color:var(--dsw-alias-state-error-primary)}.NnXWEa_statusBadge[data-tone=renamed]{color:var(--dsw-alias-state-business-primary)}.NnXWEa_statusBadge[data-tone=conflict]{color:var(--dsw-alias-state-error-primary)}.NnXWEa_statusBadge[data-tone=read]{color:var(--dsw-alias-state-success-primary)}.NnXWEa_statusBadge[data-tone=write]{color:var(--dsw-alias-state-business-primary)}.NnXWEa_statusBadge[data-tone=edit]{color:var(--dsw-alias-state-warn-primary)}.NnXWEa_statusBadge[data-tone=neutral]{color:var(--dsw-alias-label-tertiary)}";
+		//#region \0dsh-css:/home/runner/work/DSH-better-sidebar/DSH-better-sidebar/src/client/ui/kit.module.css.mjs
+		const css$9 = ".U62vHa_iconButton{box-sizing:border-box;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:3px;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex}.U62vHa_iconButtonMd{width:28px;height:28px}.U62vHa_iconButtonSm{border-radius:3px;width:24px;height:24px}.U62vHa_iconButton:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.U62vHa_iconButton:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}.U62vHa_iconButton:disabled{opacity:.4;cursor:default}.U62vHa_iconButtonActive{color:var(--dsw-alias-state-business-primary)}.U62vHa_iconButtonDanger{color:var(--dsw-alias-state-error-primary)}.U62vHa_chip{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);height:22px;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxxs-11);white-space:nowrap;cursor:pointer;background:0 0;border-radius:999px;align-items:center;gap:4px;padding:0 8px;display:inline-flex}.U62vHa_chip:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.U62vHa_chip:disabled{opacity:.4;cursor:default}.U62vHa_chipActive,.U62vHa_chipActive:hover{background:var(--dsw-alias-interactive-bg-hover-accent);border-color:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-label-primary)}.U62vHa_chipLabel{text-overflow:ellipsis;min-width:0;overflow:hidden}.U62vHa_chipCount{color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}.U62vHa_chipActive .U62vHa_chipCount{color:var(--dsw-alias-label-secondary)}.U62vHa_sectionHeader{box-sizing:border-box;border-bottom:1px solid var(--dsw-alias-border-l1);width:100%;height:28px;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-secondary);align-items:center;gap:6px;padding:0 12px;display:flex}.U62vHa_sectionLabel{text-overflow:ellipsis;white-space:nowrap;min-width:0;overflow:hidden}.U62vHa_sectionCount{font:var(--dsw-font-xxxs-11);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary);flex:none}.U62vHa_sectionAction{flex:none;align-items:center;margin-left:auto;display:inline-flex}.U62vHa_notice{box-sizing:border-box;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);white-space:pre-wrap}.U62vHa_noticeWell{padding:4px 12px 8px}.U62vHa_noticePage{text-align:center;padding:16px}.U62vHa_noticeInline{padding:0;font-size:10px;line-height:1.45}.U62vHa_noticeError{color:var(--dsw-alias-state-error-primary)}.U62vHa_noticeWarn{color:var(--dsw-alias-state-warn-primary)}.U62vHa_noticeHint{color:var(--dsw-alias-label-tertiary)}.U62vHa_confirmDesc{font:var(--dsw-font-s-14);color:var(--dsw-alias-label-primary);margin:0}.U62vHa_confirmDesc[data-danger=true]{color:var(--dsw-alias-label-primary)}.U62vHa_statusBadge{font:var(--dsw-font-xxxs-strong-11);font-family:var(--ds-font-family-code,monospace);color:var(--dsw-alias-label-secondary);border-radius:2px;flex:none;padding:0 4px}.U62vHa_statusBadge[data-tone=modified]{color:var(--dsw-alias-state-warn-primary)}.U62vHa_statusBadge[data-tone=added],.U62vHa_statusBadge[data-tone=untracked]{color:var(--dsw-alias-state-success-primary)}.U62vHa_statusBadge[data-tone=deleted]{color:var(--dsw-alias-state-error-primary)}.U62vHa_statusBadge[data-tone=renamed]{color:var(--dsw-alias-state-business-primary)}.U62vHa_statusBadge[data-tone=conflict]{color:var(--dsw-alias-state-error-primary)}.U62vHa_statusBadge[data-tone=read]{color:var(--dsw-alias-state-success-primary)}.U62vHa_statusBadge[data-tone=write]{color:var(--dsw-alias-state-business-primary)}.U62vHa_statusBadge[data-tone=edit]{color:var(--dsw-alias-state-warn-primary)}.U62vHa_statusBadge[data-tone=neutral]{color:var(--dsw-alias-label-tertiary)}";
 		const tagId$9 = "dsh-external/dsh-better-sidebar/kit.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$9) + "]") === null) {
 			const tag = document.createElement("style");
@@ -4029,28 +5241,28 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var kit_module_css_default = {
-			"iconButton": "NnXWEa_iconButton",
-			"iconButtonActive": "NnXWEa_iconButtonActive",
-			"noticePage": "NnXWEa_noticePage",
-			"confirmDesc": "NnXWEa_confirmDesc",
-			"noticeWarn": "NnXWEa_noticeWarn",
-			"chip": "NnXWEa_chip",
-			"chipLabel": "NnXWEa_chipLabel",
-			"noticeError": "NnXWEa_noticeError",
-			"noticeHint": "NnXWEa_noticeHint",
-			"iconButtonMd": "NnXWEa_iconButtonMd",
-			"sectionLabel": "NnXWEa_sectionLabel",
-			"iconButtonSm": "NnXWEa_iconButtonSm",
-			"sectionCount": "NnXWEa_sectionCount",
-			"sectionAction": "NnXWEa_sectionAction",
-			"iconButtonDanger": "NnXWEa_iconButtonDanger",
-			"sectionHeader": "NnXWEa_sectionHeader",
-			"noticeInline": "NnXWEa_noticeInline",
-			"noticeWell": "NnXWEa_noticeWell",
-			"chipActive": "NnXWEa_chipActive",
-			"chipCount": "NnXWEa_chipCount",
-			"notice": "NnXWEa_notice",
-			"statusBadge": "NnXWEa_statusBadge"
+			"sectionLabel": "U62vHa_sectionLabel",
+			"iconButtonActive": "U62vHa_iconButtonActive",
+			"iconButtonDanger": "U62vHa_iconButtonDanger",
+			"sectionAction": "U62vHa_sectionAction",
+			"noticeWarn": "U62vHa_noticeWarn",
+			"noticeHint": "U62vHa_noticeHint",
+			"chip": "U62vHa_chip",
+			"noticePage": "U62vHa_noticePage",
+			"chipActive": "U62vHa_chipActive",
+			"sectionCount": "U62vHa_sectionCount",
+			"notice": "U62vHa_notice",
+			"iconButton": "U62vHa_iconButton",
+			"iconButtonMd": "U62vHa_iconButtonMd",
+			"chipLabel": "U62vHa_chipLabel",
+			"noticeError": "U62vHa_noticeError",
+			"confirmDesc": "U62vHa_confirmDesc",
+			"statusBadge": "U62vHa_statusBadge",
+			"iconButtonSm": "U62vHa_iconButtonSm",
+			"noticeInline": "U62vHa_noticeInline",
+			"sectionHeader": "U62vHa_sectionHeader",
+			"noticeWell": "U62vHa_noticeWell",
+			"chipCount": "U62vHa_chipCount"
 		};
 		//#endregion
 		//#region src/client/ui/kit.tsx
@@ -4201,7 +5413,7 @@ window.__ModuleLoader__.load({
 		* (a 2 s poll inside `changes/GitLens.tsx`) while the file tree had no git
 		* data at all — so a VS Code-style "color the changed rows" feature would
 		* have added a SECOND poller of the same `git status --porcelain` call. The
-		* store keeps one snapshot per `sessionId + cwd + worktree`, one poller per
+		* store keeps one snapshot per `sessionId + cwd + repoRoot + worktree`, one poller per
 		* key while at least one VISIBLE consumer is subscribed, and one path index
 		* built lazily per snapshot, so the tree (coloring) and the changes page
 		* (list) read the same answer.
@@ -4215,6 +5427,28 @@ window.__ModuleLoader__.load({
 		* Coalescing: a `refresh()` that lands while a fetch is in flight is queued
 		* once and re-run when it settles — never dropped (the old `GitLens.refresh`
 		* returned early, so a click during the poll silently did nothing).
+		*
+		* Cadence: the fetch behind this store is `git status --untracked-files=all`
+		* plus two `--numstat` diffs, and on a repository holding a large UNIGNORED
+		* tree (a nested `node_modules`, a pnpm store) that is megabytes of output and
+		* a fifth of a second of CPU. It therefore runs on a SLOW baseline (30 s) and
+		* drops a tier whenever the last round trip came back slow — 2x, then 6x (the
+		* user's "60 s / 180 s"), and finally no automatic timer at all — so a
+		* pathological repository cannot keep a git process running forever. Every
+		* consumer keeps the event-driven refreshes (`refresh()`,
+		* `invalidateGitStatus`) at full speed, and any fast answer climbs back to the
+		* baseline, so the ladder is self-correcting rather than sticky.
+		*
+		* Two kinds of consumer exist, and the store separates them: one that WANTS
+		* the timer (`poll`, the default — the file tree's ink and the changes page)
+		* and one that only wants the answer (`poll: false` — the editor's gutter,
+		* which refreshes on mount and after a save). A non-polling consumer can never
+		* be the reason a timer runs, and it can never delay one either.
+		*
+		* Idle polls are silent: a fetch that returns the same status notifies nobody.
+		* Bumping the version on every tick re-rendered every consumer — the file
+		* tree's rows included — once per cadence for no reason, which is what the
+		* snapshot identity check above exists to prevent.
 		*/
 		/** The porcelain letter → tone rule (both sides share one vocabulary). */
 		function toneOfLetter(letter) {
@@ -4264,6 +5498,19 @@ window.__ModuleLoader__.load({
 			return `${root.replace(/[\\/]+$/, "")}/${rel.replace(/^[\\/]+/, "")}`;
 		}
 		/**
+		* Whether two entries carry the same line counts. A numstat-only change — an
+		* edit that adds lines without touching either porcelain letter, e.g. more
+		* lines appended to an already-modified file — must still publish a NEW
+		* snapshot: keeping the previous identity would freeze the row's numbers at
+		* their first reading for as long as the porcelain codes stay put.
+		*/
+		function sameCounts(left, right) {
+			if (left === right) return true;
+			if (left === void 0 || right === void 0) return false;
+			if ("additions" in left && "additions" in right) return left.additions === right.additions && left.deletions === right.deletions;
+			return "binary" in left && "binary" in right;
+		}
+		/**
 		* Whether two status snapshots carry the same information. Compared field by
 		* field (never by serializing the whole object): the entries are the payload
 		* and their order is stable, so a length + pairwise compare is enough.
@@ -4275,7 +5522,7 @@ window.__ModuleLoader__.load({
 			if (a.repositories !== void 0 && b.repositories !== void 0 && a.repositories.some((root, index) => root !== b.repositories[index])) return false;
 			return a.entries.every((entry, index) => {
 				const other = b.entries[index];
-				return entry.path === other.path && entry.xy === other.xy;
+				return entry.path === other.path && entry.xy === other.xy && sameCounts(entry.counts, other.counts);
 			});
 		}
 		/** Build the lookup index for one snapshot (once per snapshot, O(rows × depth)). */
@@ -4305,15 +5552,46 @@ window.__ModuleLoader__.load({
 				dirs
 			};
 		}
+		/**
+		* The baseline cadence of an automatic poll. Deliberately slow: one fetch is a
+		* full `git status --untracked-files=all` (plus two `--numstat` diffs), and the
+		* ink it drives is decoration — the file tree's own listing comes from
+		* `fs.trees` and never waits for git. Every user-visible git action
+		* (stage / commit / discard, a manual refresh, a save in the editor) refreshes
+		* through `invalidateGitStatus` / `refresh()` immediately, so the cadence only
+		* governs how fast an EXTERNAL change shows up.
+		*/
+		const POLL_BASE_MS = 3e4;
+		/** Round trips slower than these drop the slot one tier (measured client-side,
+		*  so it covers both git's work and the transport). */
+		const SLOW_TIERS_MS = [
+			750,
+			2e3,
+			5e3
+		];
+		/** The interval factor of each tier: 30 s, 60 s, 180 s, then no timer at all. */
+		const TIER_FACTORS = [
+			1,
+			2,
+			6,
+			null
+		];
 		const slots = /* @__PURE__ */ new Map();
-		function slotOf(sessionId, cwd, worktree) {
-			const key = `${sessionId}\u0000${cwd ?? ""}\u0000${worktree ?? ""}`;
+		/** The automatic cadence of one slot; `null` = no timer (tier 3). */
+		function intervalOf(slot) {
+			const factor = TIER_FACTORS[slot.tier] ?? null;
+			return factor === null ? null : slot.pollMs * factor;
+		}
+		function slotOf(scope, worktree) {
+			const { sessionId, cwd, repoRoot } = scope;
+			const key = `${sessionId}\u0000${cwd ?? ""}\u0000${repoRoot ?? ""}\u0000${worktree ?? ""}`;
 			const existing = slots.get(key);
 			if (existing !== void 0) return existing;
 			const slot = {
 				key,
 				sessionId,
 				cwd,
+				repoRoot,
 				worktree,
 				snapshot: null,
 				loading: false,
@@ -4323,7 +5601,9 @@ window.__ModuleLoader__.load({
 				running: false,
 				pending: false,
 				visible: 0,
-				pollMs: 2500,
+				pollers: 0,
+				pollMs: POLL_BASE_MS,
+				tier: 0,
 				timer: void 0,
 				listeners: /* @__PURE__ */ new Set(),
 				index: null,
@@ -4336,6 +5616,18 @@ window.__ModuleLoader__.load({
 			slot.version += 1;
 			for (const listener of slot.listeners) listener();
 		}
+		/**
+		* Move the slot to the tier the last round trip belongs in and re-arm the
+		* timer when that changed. The tier is a pure function of the most recent
+		* measurement, so a repository that recovers climbs straight back to the
+		* baseline — no streak counters, no stuck ladder.
+		*/
+		function noteFetchDuration(slot, durationMs) {
+			const tier = SLOW_TIERS_MS.filter((threshold) => durationMs >= threshold).length;
+			if (tier === slot.tier) return;
+			slot.tier = tier;
+			reschedule(slot);
+		}
 		/** Fetch one snapshot; a concurrent call just marks the slot dirty. */
 		function fetchSlot(slot) {
 			if (slot.running) {
@@ -4344,28 +5636,41 @@ window.__ModuleLoader__.load({
 			}
 			slot.running = true;
 			const generation = ++slot.generation;
+			const wasLoading = slot.loading;
 			slot.loading = slot.snapshot === null;
-			notify(slot);
+			if (slot.loading !== wasLoading) notify(slot);
+			let changed = false;
+			const startedAt = Date.now();
 			const scope = {
 				sessionId: slot.sessionId,
-				...slot.cwd !== void 0 ? { cwd: slot.cwd } : {}
+				cwd: slot.cwd,
+				repoRoot: slot.repoRoot
 			};
 			api.gitStatus(scope, slot.worktree).then((snapshot) => {
 				if (generation !== slot.generation) return;
 				if (slot.snapshot !== null && sameStatus(slot.snapshot, snapshot)) {
-					slot.error = false;
+					if (slot.error) {
+						slot.error = false;
+						changed = true;
+					}
 					return;
 				}
 				slot.snapshot = snapshot;
 				slot.error = false;
+				changed = true;
 			}).catch(() => {
 				if (generation !== slot.generation) return;
-				slot.error = true;
+				if (!slot.error) {
+					slot.error = true;
+					changed = true;
+				}
 			}).finally(() => {
 				if (generation !== slot.generation) return;
 				slot.running = false;
+				const stillLoading = slot.loading;
 				slot.loading = false;
-				notify(slot);
+				if (changed || stillLoading) notify(slot);
+				noteFetchDuration(slot, Date.now() - startedAt);
 				if (slot.pending) {
 					slot.pending = false;
 					fetchSlot(slot);
@@ -4374,26 +5679,42 @@ window.__ModuleLoader__.load({
 		}
 		function startTimer(slot) {
 			if (slot.timer !== void 0) return;
+			const interval = intervalOf(slot);
+			if (interval === null) return;
 			slot.timer = window.setInterval(() => {
 				fetchSlot(slot);
-			}, slot.pollMs);
+			}, interval);
 		}
 		function stopTimer(slot) {
 			if (slot.timer === void 0) return;
 			window.clearInterval(slot.timer);
 			slot.timer = void 0;
 		}
-		function retain(slot) {
-			slot.visible += 1;
-			if (slot.visible === 1) {
-				if (slot.snapshot === null) fetchSlot(slot);
-				startTimer(slot);
-			}
+		/**
+		* Re-arm the timer after the tier moved. A cadence change means a new handle
+		* (the interval is baked into the old one); a slot whose tier 3 stopped the
+		* timer stays stopped, and one with no polling consumer is left alone.
+		*/
+		function reschedule(slot) {
+			if (slot.pollers === 0) return;
+			stopTimer(slot);
+			startTimer(slot);
 		}
-		function release(slot) {
+		function retain(slot, poll) {
+			slot.visible += 1;
+			if (poll) slot.pollers += 1;
+			if (slot.visible === 1 && slot.snapshot === null) fetchSlot(slot);
+			if (poll && slot.pollers === 1) startTimer(slot);
+		}
+		function release(slot, poll) {
 			slot.visible = Math.max(0, slot.visible - 1);
+			if (poll) {
+				slot.pollers = Math.max(0, slot.pollers - 1);
+				if (slot.pollers === 0) stopTimer(slot);
+			}
 			if (slot.visible === 0) {
 				stopTimer(slot);
+				slot.pollers = 0;
 				slot.snapshot = null;
 				slot.index = null;
 				slot.indexSource = null;
@@ -4421,30 +5742,35 @@ window.__ModuleLoader__.load({
 			for (const slot of slots.values()) if (slot.sessionId === sessionId) fetchSlot(slot);
 		}
 		/**
-		* Subscribe to the shared git status of one session (optionally of one
-		* linked worktree). The poll runs while `visible` is true, at `pollMs`.
+		* Subscribe to the shared git status of one session (optionally of one linked
+		* worktree). While `visible` is true the consumer holds the answer; while
+		* `poll` is also true it holds the automatic timer (at `pollMs`, escalated by
+		* the slow tiers). `poll: false` is for a consumer that wants one reading and
+		* event-driven refreshes — the editor's gutter — so it can never keep a git
+		* process running in the background.
 		*/
 		function useGitStatus(scope, options = {}) {
-			const { worktree, visible = true, pollMs = 2500 } = options;
-			const slot = slotOf(scope.sessionId, scope.cwd, worktree);
+			const { worktree, visible = true, pollMs = POLL_BASE_MS, poll = true } = options;
+			const slot = slotOf(scope, worktree);
 			const subscribe = (0, react.useCallback)((listener) => {
 				slot.listeners.add(listener);
 				return () => {
 					slot.listeners.delete(listener);
 				};
 			}, [slot]);
-			(0, react.useSyncExternalStore)(subscribe, () => slot.version);
+			(0, react.useSyncExternalStore)(subscribe, () => slot.version, () => slot.version);
 			(0, react.useEffect)(() => {
-				slot.pollMs = pollMs;
+				if (poll) slot.pollMs = pollMs;
 				if (!visible) return void 0;
-				retain(slot);
+				retain(slot, poll);
 				return () => {
-					release(slot);
+					release(slot, poll);
 				};
 			}, [
 				slot,
 				visible,
-				pollMs
+				pollMs,
+				poll
 			]);
 			const refresh = (0, react.useCallback)(() => {
 				fetchSlot(slot);
@@ -4571,19 +5897,12 @@ window.__ModuleLoader__.load({
 				if (signal?.aborted) break;
 				onProgress?.(done, items.length, item.relativePath);
 				try {
-					if (item.file.size > 134217728) results.push({
+					const res = await api.uploadFile(scope, dir, item.relativePath, item.file, signal);
+					results.push({
 						relativePath: item.relativePath,
-						ok: false,
-						code: "too-large"
+						ok: true,
+						path: res.path
 					});
-					else {
-						const res = await api.uploadFile(scope, dir, item.relativePath, item.file, signal);
-						results.push({
-							relativePath: item.relativePath,
-							ok: true,
-							path: res.path
-						});
-					}
 				} catch (error) {
 					if (error instanceof DOMException && error.name === "AbortError") break;
 					results.push({
@@ -4606,51 +5925,6 @@ window.__ModuleLoader__.load({
 			return t("uploadDone", { count: okCount });
 		}
 		//#endregion
-		//#region src/client/desktop-env.ts
-		let cached;
-		/** Read the shell's desktop stamps (memoized per page; SSR-safe). */
-		function parseDesktopEnv() {
-			if (cached !== void 0) return cached;
-			const hasWindow = typeof window !== "undefined";
-			const hasPreloadMarker = hasWindow && typeof window.__DSH_DESKTOP_FILE_PATH__ !== "undefined";
-			const params = hasWindow ? new URLSearchParams(window.location.search.replace(/^\?/, "")) : new URLSearchParams();
-			const modeParam = params.get("dsh-desktop-mode");
-			const mode = modeParam === "compatibility" || modeParam === "advanced" ? modeParam : null;
-			const platformParam = params.get("dsh-desktop-platform");
-			const platform = platformParam !== null && platformParam !== "" ? platformParam.toLowerCase() : null;
-			cached = {
-				desktop: mode !== null || hasPreloadMarker,
-				mode,
-				platform,
-				titlebarInset: parseTitlebarInset(params.get("dsh-desktop-titlebar-inset"))
-			};
-			return cached;
-		}
-		/** Clamp the contract inset parameter into 0–120 (invalid/absent → 0). */
-		function parseTitlebarInset(raw) {
-			if (raw === null) return 0;
-			const parsed = Number(raw);
-			if (!Number.isFinite(parsed)) return 0;
-			return Math.min(120, Math.max(0, Math.round(parsed)));
-		}
-		/**
-		* Absolute base for the plugin's own WebSocket routes.
-		*
-		* A desktop shell may serve the GUI from a custom scheme: the official Electron
-		* shell uses `dsh-app://app/`, whose `location.host` is the literal string
-		* `app`. Resolving `/sidebar/ws/*` against that origin produces `ws://app/...`,
-		* which can never complete a DNS lookup — every socket the sidebar opens then
-		* fails with a connection error. The shell publishes the Host's real base
-		* through `__DSH_TRANSPORT__.streamBaseUrl`, the same source DSH's own downlink
-		* mux resolves through (`stream-client.ts` in `@deepseek-ai/dsh-api-gateway`),
-		* so prefer it and fall back to `document.baseURI` for ordinary http(s) pages.
-		* @returns A URL string usable as the base argument of `new URL`.
-		*/
-		function sidebarWebSocketBase() {
-			const base = globalThis.__DSH_TRANSPORT__?.streamBaseUrl;
-			return base !== void 0 && base !== "" ? base : document.baseURI;
-		}
-		//#endregion
 		//#region src/client/use-dir-watch.ts
 		/**
 		* Live refresh for the file tree.
@@ -4668,8 +5942,8 @@ window.__ModuleLoader__.load({
 		* un-watched, so a long session does not accumulate handles.
 		*/
 		/** How long to wait before re-opening a dropped socket; failures back off to the cap. */
-		const RETRY_BASE_MS = 1e3;
-		const RETRY_MAX_MS = 15e3;
+		const RETRY_BASE_MS$1 = 1e3;
+		const RETRY_MAX_MS$1 = 15e3;
 		/**
 		* Keep the file tree's expanded folders watched for the component's lifetime.
 		* @param options - session, root, expanded directories, and the staleness callback.
@@ -4719,8 +5993,7 @@ window.__ModuleLoader__.load({
 				reconcileRef.current = reconcile;
 				const connect = () => {
 					if (closed) return;
-					const url = new URL("/sidebar/ws/fs-watch", sidebarWebSocketBase());
-					url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+					const url = hostWebSocketUrl("sidebar/ws/fs-watch");
 					url.search = new URLSearchParams({ sessionId }).toString();
 					socket = new WebSocket(url.toString());
 					socket.onopen = () => {
@@ -4746,7 +6019,7 @@ window.__ModuleLoader__.load({
 					socket.onclose = () => {
 						if (closed) return;
 						failures += 1;
-						retry = window.setTimeout(connect, Math.min(RETRY_BASE_MS * 2 ** (failures - 1), RETRY_MAX_MS));
+						retry = window.setTimeout(connect, Math.min(RETRY_BASE_MS$1 * 2 ** (failures - 1), RETRY_MAX_MS$1));
 					};
 				};
 				connect();
@@ -4836,11 +6109,14 @@ window.__ModuleLoader__.load({
 		* directories sort first, hidden entries render dimmed. The expansion set
 		* lives in the per-session state (owned by the caller); the caller also owns
 		* the refresh affordance — a `refreshTick` bump wipes the level cache so the
-		* visible set reloads.
+		* visible set reloads. Chains of dirs holding exactly one real dir child each
+		* fold into one breadcrumb row (`a/b/c`, VSCode "compact folders"); clicking
+		* the row toggles the whole chain.
 		*
 		* Selection (VS Code semantics, no modifier = the old click semantics
 		* untouched): Ctrl/Cmd+click toggles a row and sets the anchor, Shift+click
-		* selects the visible range from the anchor, Escape / a blank click clears,
+		* selects the visible range from the anchor (in the tree's own row order —
+		* `sort` included), Escape / a blank click clears,
 		* right-clicking outside the selection collapses it onto the row. A non-empty
 		* selection shows the batch bar above the root row (copy paths / delete /
 		* clear); the batch delete confirms once and removes sequentially.
@@ -4855,8 +6131,9 @@ window.__ModuleLoader__.load({
 		* context menu: file rows offer the caller's open escapes (new tab / to the
 		* side, only when the callbacks exist), the host's "open in app" section and
 		* a download action (the host serves raw bytes, binary-safe); directory rows
-		* offer "upload here" and "new folder" (an inline editor at the top of that
-		* level); every row can copy the relative or absolute path (with a brief
+		* offer "upload here", "new folder" and "new file" (an inline editor at the
+		* top of that level; the two creators are mutually exclusive); every row can
+		* copy the relative or absolute path (with a brief
 		* "copied" label replacing the button after a successful write).
 		*
 		* Rows are memoized components (FileRow / DirRow) fed by stable callbacks and
@@ -4878,6 +6155,23 @@ window.__ModuleLoader__.load({
 		function parentOf(path) {
 			const at = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
 			return at <= 0 ? path : path.slice(0, at);
+		}
+		/** A direct child path of one tree level (row paths may use either separator;
+		*  node:fs accepts the mixed form on Windows, where this runs). */
+		function joinChild(dir, name) {
+			return `${dir.replace(/[\\/]+$/, "")}/${name}`;
+		}
+		/** Client-side collision guard for the inline new-file editor: the typed name
+		*  must not already be taken in the level being edited. The SERVER refuses a
+		*  taken destination too — this is the same rule answered from the rows the
+		*  user is looking at, so the refusal arrives before a round trip (and on a
+		*  level whose listing is stale the server still has the last word).
+		*  Case-insensitive: the primary platforms (Windows/macOS) resolve names
+		*  that way, and on case-sensitive ones a refusal is merely conservative. */
+		function nameTaken(entries, name) {
+			if (entries === void 0) return false;
+			const want = name.toLowerCase();
+			return entries.some((entry) => entry.name.toLowerCase() === want);
 		}
 		/** Only OS file drags belong to the upload surface; in-app drags (tab reorder,
 		*  split zones) must pass through untouched to the pane's tab-drop handling
@@ -4902,11 +6196,6 @@ window.__ModuleLoader__.load({
 		/** The badge tone for one git tone (the kit has no separate 'copied' ink). */
 		function badgeToneOf(tone) {
 			return tone === "copied" ? "added" : tone;
-		}
-		/** The archive progress line's percentage (`0/0` — an empty selection — is 0%). */
-		function archivePercent(progress) {
-			if (progress.total <= 0) return 0;
-			return Math.min(100, Math.round(progress.done / progress.total * 100));
 		}
 		/**
 		* The drop overlay's hero art: an arrow rising out of a notched tray
@@ -5079,8 +6368,9 @@ window.__ModuleLoader__.load({
 			});
 		});
 		const DirRow$1 = (0, react.memo)(function DirRow(props) {
-			const { entry, depth, expanded, iconsVersion, service, selected, revealed, dropTarget, gitChanged, copied, actions } = props;
-			const icon = service !== void 0 ? service.folderIcon(entry.path, expanded, 14) : builtinFolderIcon(expanded, 14);
+			const { entry, chain, depth, expanded, iconsVersion, service, selected, revealed, dropTarget, gitChanged, copied, actions } = props;
+			const target = chain[chain.length - 1];
+			const icon = service !== void 0 ? service.folderIcon(target.path, expanded, 14) : builtinFolderIcon(expanded, 14);
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				role: "button",
 				tabIndex: 0,
@@ -5089,29 +6379,30 @@ window.__ModuleLoader__.load({
 				"data-dsh-selected": selected ? "true" : void 0,
 				"aria-pressed": selected,
 				style: { paddingLeft: depth * 22 + 6 },
+				title: target.path,
 				onClick: (event) => {
-					actions.activate(event, entry.path, true);
+					actions.activate(event, entry.path, true, chain);
 				},
 				onKeyDown: (event) => {
 					if (event.key === "Enter" || event.key === " ") {
 						event.preventDefault();
-						actions.activate(event, entry.path, true);
+						actions.activate(event, entry.path, true, chain);
 					}
 				},
 				onDragOver: (event) => {
-					actions.dragOver(event, entry.path);
+					actions.dragOver(event, target.path);
 				},
 				onDrop: (event) => {
-					actions.drop(event, entry.path, true);
+					actions.drop(event, target.path, true);
 				},
 				onContextMenu: (event) => {
-					actions.contextMenu(event, entry.path, true);
+					actions.contextMenu(event, target.path, true);
 				},
 				children: [
 					icon,
 					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 						className: clsx(sidebar_module_css_default.explorerName, gitChanged && sidebar_module_css_default.explorerDirChanged),
-						children: entry.name
+						children: chain.length > 1 ? chain.map((link) => link.name).join("/") : entry.name
 					}),
 					entry.isSymlink && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconLinkOutlineRegular, {
 						size: 12,
@@ -5127,7 +6418,7 @@ window.__ModuleLoader__.load({
 						title: t("referenceFile"),
 						onClick: (event) => {
 							event.stopPropagation();
-							actions.reference(entry.path, true);
+							actions.reference(target.path, true);
 						},
 						children: t("referenceFile")
 					})
@@ -5140,6 +6431,7 @@ window.__ModuleLoader__.load({
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				className: clsx(sidebar_module_css_default.explorerRow, dropTarget && sidebar_module_css_default.explorerRowDropTarget),
 				style: { paddingLeft: 6 },
+				title: path,
 				onDragOver: (event) => {
 					actions.dragOver(event, path);
 				},
@@ -5172,8 +6464,37 @@ window.__ModuleLoader__.load({
 				]
 			});
 		});
+		/** The scope a set of props belongs to (undefined while `cwd` is unresolved). */
+		function scopeOf(live) {
+			return live.cwd === void 0 ? void 0 : {
+				sessionId: live.sessionId,
+				cwd: live.cwd
+			};
+		}
+		/**
+		* Whether a scope captured when an action was ARMED is still the one on
+		* screen.
+		*
+		* The workbench REUSES this component across a session swap, so anything the
+		* user aimed at in project A (a confirmation, a selection, a drop target) can
+		* still be in state while project B is on screen. Clearing that state is the
+		* swap effect's job — but an effect is PASSIVE, and a click landing between
+		* the swap's commit and that effect reads the stale state while
+		* `propsRef.current` already holds the new scope. The request would then carry
+		* project B's scope with project A's absolute path, and the host applies it
+		* verbatim (containment was removed on purpose): a cross-project delete.
+		* Every mutation therefore re-checks the scope it was armed under, AT THE CALL
+		* SITE, instead of trusting the effect to have run.
+		* @param armed - The scope captured when the action was armed.
+		* @param live - The scope the component is rendering for now.
+		* @returns True only when both are present and identical.
+		*/
+		function sameScope(armed, live) {
+			return armed !== void 0 && live !== void 0 && armed.sessionId === live.sessionId && armed.cwd === live.cwd;
+		}
 		function FileTree(props) {
-			const { sessionId, cwd, expanded, revealed, onOpenFileNewTab, onOpenFileSide, openInApp, openWithTargets, openWithPinned, openWithSsh, onOpenWith, onToggleOpenWithPin, openWithShowPluginTargets, onPathRenamed, onPathDeleted, refreshTick, onUploadRequest, busy, hidden, visible, service } = props;
+			const { sessionId, cwd, expanded, revealed, onOpenFileNewTab, onOpenFileSide, openInApp, openWithTargets, openWithPinned, openWithSsh, onOpenWith, onToggleOpenWithPin, openWithShowPluginTargets, exclude, onPathRenamed, onPathDeleted, refreshTick, onUploadRequest, busy, hidden, visible, service } = props;
+			const sort = props.sort ?? DEFAULT_FILE_TREE_SORT;
 			/** The live props for the stable callbacks below (identity churns per render). */
 			const propsRef = (0, react.useRef)(props);
 			propsRef.current = props;
@@ -5205,10 +6526,17 @@ window.__ModuleLoader__.load({
 			const [renaming, setRenaming] = (0, react.useState)(null);
 			/** The inline new-folder editor: the directory it inserts into plus the buffer. */
 			const [newFolder, setNewFolder] = (0, react.useState)(null);
-			/** The delete awaiting the confirmation modal's yes (single row). */
+			/** The inline new-file editor: the directory it inserts into plus the buffer. */
+			const [newFile, setNewFile] = (0, react.useState)(null);
+			/**
+			* The delete awaiting the confirmation modal's yes (single row), plus the
+			* scope it was ARMED under — see {@link sameScope}: the confirmation can
+			* outlive the project it was opened in, and the scope captured here is what
+			* keeps the request from landing in the next one.
+			*/
 			const [confirmDelete, setConfirmDelete] = (0, react.useState)(null);
-			/** The batch delete awaiting the confirmation modal's yes. */
-			const [confirmDeleteSelected, setConfirmDeleteSelected] = (0, react.useState)(false);
+			/** The batch delete awaiting the confirmation modal's yes (plus its armed scope). */
+			const [confirmDeleteSelected, setConfirmDeleteSelected] = (0, react.useState)(null);
 			/** True while the batch delete walks its paths (locks the dialog). */
 			const [deletingSelected, setDeletingSelected] = (0, react.useState)(false);
 			/** The last mutation failure (dismissable strip above the tree). */
@@ -5253,8 +6581,10 @@ window.__ModuleLoader__.load({
 			*/
 			const reportDrop = (0, react.useCallback)((dir, transfer) => {
 				if (propsRef.current.busy) return;
+				const armed = scopeOf(propsRef.current);
 				uploadItemsFromDrop(transfer).then((items) => {
-					if (items.length > 0) propsRef.current.onUploadRequest(dir, items);
+					if (items.length === 0 || !sameScope(armed, scopeOf(propsRef.current))) return;
+					propsRef.current.onUploadRequest(dir, items);
 				});
 			}, []);
 			const handleBodyDrop = (0, react.useCallback)((event) => {
@@ -5324,6 +6654,51 @@ window.__ModuleLoader__.load({
 				setData(dataRef.current);
 			}, []);
 			/**
+			* Which in-flight request owns each `{}` placeholder in the level cache.
+			*
+			* The placeholder is the tree's "Loading…" state for a level, and only the
+			* call that wrote it may settle it. Without this bookkeeping a DROPPED answer
+			* (the generation guard in `loadLevels`) left the placeholder behind forever:
+			* every later load treats a cached level as loaded — the empty `{}` marker
+			* included — so the level was never re-requested and that subtree sat on its
+			* loading row for the rest of the mount. Reproduced locally 2026-10-12 (the
+			* drop path fires on a refresh tick, an exclude change and unmount), and the
+			* shape matches the same day's CI failure: the listing answers arrived,
+			* `names=[]`, and no row rendered even 5s later.
+			*/
+			const pendingRef = (0, react.useRef)(/* @__PURE__ */ new Map());
+			/**
+			* Drop the `{}` placeholders `generation` still owns, so the levels they cover
+			* become retryable again. Levels that already carry a listing (or an error)
+			* are left alone — a dropped answer must not blank rows that are on screen.
+			* @returns the paths actually released (empty when nothing was left pending).
+			*/
+			const releasePlaceholders = (0, react.useCallback)((generation, paths) => {
+				const released = [];
+				let next = null;
+				for (const path of paths) {
+					if (pendingRef.current.get(path) !== generation) continue;
+					pendingRef.current.delete(path);
+					const level = dataRef.current[path];
+					if (level === void 0 || level.entries !== void 0 || level.error !== void 0) continue;
+					next = { ...next ?? dataRef.current };
+					delete next[path];
+					released.push(path);
+				}
+				if (next === null) return released;
+				dataRef.current = next;
+				setData(next);
+				return released;
+			}, []);
+			/**
+			* The exclude list by VALUE. The caller owns the array identity (the prefs
+			* store hands out one stable reference per document), but the level cache,
+			* the request payload and the reload effect all key on the CONTENT: a
+			* value-equal list that churned identity would otherwise re-list the whole
+			* tree on every render. Declared here because `loadLevels` below reads it.
+			*/
+			const excludeKey = (exclude ?? []).join("\0");
+			/**
 			* List a SET of directories into the cache with ONE `fs.trees` request.
 			*
 			* The visible set (the workspace root plus every expanded directory) is
@@ -5331,8 +6706,10 @@ window.__ModuleLoader__.load({
 			* a directory each cost exactly one POST — not one per level (the N+1 the
 			* file list was reported for). Levels already loaded (including the empty
 			* placeholder of an in-flight fetch) are left alone, so an expand only asks
-			* for what is genuinely missing; a stale response — the cache was wiped by a
-			* refresh tick — is dropped instead of overwriting fresher data.
+			* for what is genuinely missing — but only a LISTING settles a level: a
+			* cached failure is asked for again, so one bad read does not stick for the
+			* rest of the mount. A stale response — the cache was wiped by a refresh
+			* tick — is dropped instead of overwriting fresher data.
 			*
 			* A level the host failed to read comes back with its own `error` and is
 			* stored on that level alone (the other levels render normally). When the
@@ -5344,38 +6721,75 @@ window.__ModuleLoader__.load({
 			*/
 			const loadLevels = (0, react.useCallback)((paths, options) => {
 				const force = options?.force === true;
-				const wanted = force ? [...new Set(paths)] : paths.filter((path) => dataRef.current[path] === void 0);
+				const wanted = force ? [...new Set(paths)] : paths.filter((path) => {
+					const cached = dataRef.current[path];
+					return cached === void 0 || cached.error !== void 0;
+				});
 				if (wanted.length === 0) return;
 				const generation = generationRef.current;
-				if (!force) for (const path of wanted) storeLevel(path, {});
-				api.fsTrees({
-					sessionId,
-					cwd
-				}, wanted).then((result) => {
-					if (generation !== generationRef.current) return;
+				if (!force) for (const path of wanted) {
+					pendingRef.current.set(path, generation);
+					storeLevel(path, {});
+				}
+				const batches = [];
+				for (let index = 0; index < wanted.length; index += 64) batches.push(wanted.slice(index, index + 64));
+				let retried = false;
+				Promise.all(batches.map(async (batch) => {
+					try {
+						return {
+							batch,
+							ok: true,
+							levels: (await api.fsTrees({
+								sessionId,
+								cwd
+							}, batch, excludeKey === "" ? void 0 : excludeKey.split("\0"))).levels
+						};
+					} catch (error) {
+						return {
+							batch,
+							ok: false,
+							message: error instanceof Error ? error.message : String(error)
+						};
+					}
+				})).then((settled) => {
+					if (generation !== generationRef.current) {
+						const released = releasePlaceholders(generation, wanted);
+						if (released.length > 0 && !retried) {
+							retried = true;
+							loadLevels(released);
+						}
+						return;
+					}
+					for (const path of wanted) pendingRef.current.delete(path);
 					setLoadError(null);
-					for (const level of result.levels) storeLevel(level.path, {
-						entries: level.entries,
-						truncated: level.truncated,
-						...level.error !== void 0 ? { error: level.error } : {}
-					});
-				}).catch((error) => {
-					if (generation !== generationRef.current) return;
-					const message = error instanceof Error ? error.message : String(error);
+					let failure = "";
 					let keptListing = false;
-					for (const path of wanted) {
-						if (dataRef.current[path]?.entries !== void 0) {
-							keptListing = true;
+					for (const outcome of settled) {
+						if (outcome.ok) {
+							for (const level of outcome.levels) storeLevel(level.path, {
+								entries: level.entries,
+								truncated: level.truncated,
+								...level.error !== void 0 ? { error: level.error } : {}
+							});
 							continue;
 						}
-						storeLevel(path, { error: message });
+						if (failure === "") failure = outcome.message;
+						for (const path of outcome.batch) {
+							if (dataRef.current[path]?.entries !== void 0) {
+								keptListing = true;
+								continue;
+							}
+							storeLevel(path, { error: outcome.message });
+						}
 					}
-					setLoadError(keptListing ? message : null);
+					if (failure !== "") setLoadError(keptListing ? failure : null);
 				});
 			}, [
 				sessionId,
 				cwd,
-				storeLevel
+				excludeKey,
+				storeLevel,
+				releasePlaceholders
 			]);
 			/**
 			* Re-list one directory in place (a watch notice, or the parent of a landed
@@ -5436,6 +6850,14 @@ window.__ModuleLoader__.load({
 				generationRef.current += 1;
 				forceNextLoad.current = true;
 			}, [refreshTick]);
+			const lastExclude = (0, react.useRef)(excludeKey);
+			(0, react.useEffect)(() => {
+				if (lastExclude.current === excludeKey) return;
+				lastExclude.current = excludeKey;
+				generationRef.current += 1;
+				dataRef.current = {};
+				setData({});
+			}, [excludeKey]);
 			(0, react.useEffect)(() => {
 				const root = cwd;
 				if (root === void 0) return;
@@ -5446,6 +6868,14 @@ window.__ModuleLoader__.load({
 				cwd,
 				expanded,
 				refreshTick,
+				loadLevels
+			]);
+			(0, react.useEffect)(() => {
+				if (cwd === void 0) return;
+				loadLevels(compactLoadTargets(dataRef.current, [cwd, ...propsRef.current.expanded]));
+			}, [
+				cwd,
+				data,
 				loadLevels
 			]);
 			(0, react.useEffect)(() => () => {
@@ -5530,26 +6960,81 @@ window.__ModuleLoader__.load({
 				anchorRef.current = null;
 				setSelection(/* @__PURE__ */ new Set());
 			}, [setSelection]);
+			/**
+			* Bumped by the swap effect below, and the boundary it marks is shared: the
+			* two asynchronous paths this component starts — the batch-delete walk and
+			* the archive build — capture their OWN scope, so the requests they issue
+			* stay correct across a swap, while everything they SETTLE (pruneTree, the
+			* error strip, the selection, the busy flags, the archive job) is state of
+			* the project on screen, which may no longer be the one they started in.
+			* Work whose generation is stale goes quiet instead.
+			*/
+			const scopeGenRef = (0, react.useRef)(0);
+			/**
+			* A session/cwd swap REUSES this component: the workbench keeps one mounted
+			* instance per tab id, and tab ids restart per session. Every path-shaped
+			* piece of state here therefore outlives the project it was picked in — and
+			* the selection is the dangerous one, because "delete selected" sends THIS
+			* session's scope with the PREVIOUS session's absolute paths, which the host
+			* applies verbatim (containment was removed on purpose): it deleted another
+			* project's files. The rest is the same leak in harmless clothing — a menu,
+			* an inline editor, an armed confirmation aimed at a row that is no longer
+			* on screen.
+			*/
+			(0, react.useEffect)(() => {
+				clearSelection();
+				anchorRef.current = null;
+				kindRef.current.clear();
+				setRowMenu(null);
+				setApps(null);
+				setCopiedPath(null);
+				setRenaming(null);
+				setNewFolder(null);
+				newFolderRef.current = null;
+				setConfirmDelete(null);
+				setConfirmDeleteSelected(null);
+				setDeletingSelected(false);
+				scopeGenRef.current += 1;
+				setActionError(null);
+				setLoadError(null);
+				pendingUploadDir.current = void 0;
+				resetDrop();
+			}, [
+				sessionId,
+				cwd,
+				resetDrop,
+				clearSelection
+			]);
 			const copySelectedPaths = (0, react.useCallback)(() => {
 				(0, _deepseek_ai_dsh_client_ui_primitives.writeClipboard)([...selectedRef.current].join("\n"));
 			}, []);
-			/** Run the confirmed single-row delete: fs.remove + settle + close tabs. */
+			/**
+			* Run the confirmed single-row delete: fs.remove + settle + close tabs.
+			*
+			* The confirmation carries the scope it was armed under, and the request is
+			* refused when that is no longer the scope on screen. Relying on the swap
+			* effect alone is not enough: a click that lands before React flushes that
+			* passive effect sends the NEW session's scope with the OLD project's
+			* absolute path, which the host applies verbatim — it deleted another
+			* project's file.
+			* @param target - The row awaiting deletion, plus its armed scope.
+			*/
 			const performDelete = (target) => {
-				if (cwd === void 0) return;
-				api.fsRemove({
-					sessionId,
-					cwd
-				}, target.path).then(() => {
+				if (!sameScope(target.scope, scopeOf(propsRef.current))) return;
+				const generation = scopeGenRef.current;
+				api.fsRemove(target.scope, target.path).then(() => {
+					if (generation !== scopeGenRef.current) return;
 					setActionError(null);
 					pruneTree(target.path);
 					onPathDeleted?.(target.path, target.isDir);
 					anchorRef.current = null;
 					setSelection(/* @__PURE__ */ new Set());
 				}).catch((error) => {
+					if (generation !== scopeGenRef.current) return;
 					setActionError(error instanceof Error ? error.message : String(error));
 				});
 			};
-			const handleActivate = (0, react.useCallback)((event, path, isDir) => {
+			const handleActivate = (0, react.useCallback)((event, path, isDir, chain) => {
 				if (event.ctrlKey || event.metaKey) {
 					toggleSelect(path, isDir);
 					return;
@@ -5559,8 +7044,13 @@ window.__ModuleLoader__.load({
 					return;
 				}
 				clearSelection();
-				if (isDir) propsRef.current.onToggle(path);
-				else propsRef.current.onOpenFile(path);
+				if (!isDir) {
+					propsRef.current.onOpenFile(path);
+					return;
+				}
+				const links = chain !== void 0 && chain.length > 0 ? chain.map((link) => link.path) : [path];
+				const open = links.some((link) => expandedSetRef.current.has(link));
+				for (const link of links) if (expandedSetRef.current.has(link) === open) propsRef.current.onToggle(link);
 			}, [
 				clearSelection,
 				selectRange,
@@ -5603,6 +7093,7 @@ window.__ModuleLoader__.load({
 			const startNewFolder = (dir) => {
 				const live = propsRef.current;
 				if (live.cwd !== void 0 && dir !== live.cwd && !expandedSetRef.current.has(dir)) live.onToggle(dir);
+				setNewFile(null);
 				setNewFolder({
 					dir,
 					value: ""
@@ -5639,28 +7130,80 @@ window.__ModuleLoader__.load({
 				newFolderRef.current = null;
 				setNewFolder(null);
 			};
+			const newFileRef = (0, react.useRef)(newFile);
+			newFileRef.current = newFile;
+			/** Open the inline editor at the TOP of `dir`'s level (expanding it first). */
+			const startNewFile = (dir) => {
+				const live = propsRef.current;
+				if (live.cwd !== void 0 && dir !== live.cwd && !expandedSetRef.current.has(dir)) live.onToggle(dir);
+				setNewFolder(null);
+				setNewFile({
+					dir,
+					value: ""
+				});
+			};
+			/**
+			* Commit the inline new-file name: Enter, blur, or the editor's own cancel
+			* path. The ref guard makes the commit idempotent — a blur that lands after
+			* Enter must not fire a second create. Creates an EMPTY file through
+			* `fs.createFile` (the server refuses a taken destination without truncating
+			* it); a name the level already lists is refused here first, so the two
+			* obvious mistakes never cost a round trip.
+			*/
+			const commitNewFile = (dir, raw) => {
+				if (newFileRef.current === null) return;
+				newFileRef.current = null;
+				setNewFile(null);
+				const name = raw.trim();
+				const live = propsRef.current;
+				if (live.cwd === void 0) return;
+				if (!validName(name)) {
+					setActionError(t("newFileInvalid"));
+					return;
+				}
+				if (nameTaken(dataRef.current[dir]?.entries, name)) {
+					setActionError(t("newFileExists"));
+					return;
+				}
+				api.fsCreateFile({
+					sessionId: live.sessionId,
+					cwd: live.cwd
+				}, dir, name).then(() => {
+					setActionError(null);
+					if (dir !== live.cwd && !expandedSetRef.current.has(dir)) live.onToggle(dir);
+					retryDir(dir);
+				}).catch((error) => {
+					setActionError(error instanceof Error ? error.message : String(error));
+				});
+			};
+			const cancelNewFile = () => {
+				newFileRef.current = null;
+				setNewFile(null);
+			};
 			/**
 			* Delete every selected row, ONE AT A TIME (the host refuses nothing here,
 			* but a partial batch must be debuggable). The first failure stops the walk
 			* and lands in the error strip; already-removed rows settle as they go.
 			*/
-			const performBatchDelete = () => {
+			const performBatchDelete = (armed) => {
 				const live = propsRef.current;
 				if (live.cwd === void 0 || deletingSelected) return;
+				if (!sameScope(armed, scopeOf(live))) {
+					setConfirmDeleteSelected(null);
+					return;
+				}
 				const paths = [...selectedRef.current];
-				setConfirmDeleteSelected(false);
+				setConfirmDeleteSelected(null);
 				if (paths.length === 0) return;
-				const scope = {
-					sessionId: live.sessionId,
-					cwd: live.cwd
-				};
+				const generation = scopeGenRef.current;
 				setDeletingSelected(true);
 				(async () => {
 					const removed = [];
 					for (const path of paths) {
 						try {
-							await api.fsRemove(scope, path);
+							await api.fsRemove(armed, path);
 						} catch (error) {
+							if (generation !== scopeGenRef.current) return;
 							setActionError(error instanceof Error ? error.message : String(error));
 							const next = new Set(selectedRef.current);
 							for (const done of removed) next.delete(done);
@@ -5668,11 +7211,13 @@ window.__ModuleLoader__.load({
 							setDeletingSelected(false);
 							return;
 						}
+						if (generation !== scopeGenRef.current) return;
 						setActionError(null);
 						pruneTree(path);
 						live.onPathDeleted?.(path, kindRef.current.get(path) ?? false);
 						removed.push(path);
 					}
+					if (generation !== scopeGenRef.current) return;
 					setDeletingSelected(false);
 					clearSelection();
 				})();
@@ -5961,67 +7506,78 @@ window.__ModuleLoader__.load({
 			/**
 			* Zip the selection through the host's ASYNC archive route:
 			*
-			*   archiveBuild(scope, paths, name) → { id, entries }
+			*   archiveBuild(scope, paths, stem) → { id, name }
 			*   → poll archiveStatus(id) every 250ms (self-scheduling: one request in
-			*     flight) while the job builds, driving the `zipProgress` line
-			*   → state 'ready' → fetch(archiveDownloadUrl(scope, id)) → blob → hidden
-			*     `<a download>` (the bytes are fetched explicitly because a bare anchor
-			*     would save the route's JSON error envelope as a broken .zip)
-			*   → any failure (build / status / download) → `zipFailed` in the strip.
+			*     flight) while the system's zip/tar packs into a temp file; the strip
+			*     shows a plain "packing" line, because a child process reports no
+			*     per-entry progress
+			*   → state 'ready' → a plain `<a download>` on the route URL, which the
+			*     browser streams to disk (see saveArchive for why it is not a blob)
+			*   → any failure (tool missing / build / status) → `zipFailed` in the strip.
 			*
-			* `archiveBusyRef` keeps a repeated pick from starting a second job (the
-			* visible progress line is the feedback), and `archiveProgress` carries the
-			* live `done/total` for the line and its percentage.
+			* `archiveBusyRef` keeps a repeated pick from starting a second job — the
+			* visible packing line is the feedback.
 			*/
 			const [archiveBusy, setArchiveBusy] = (0, react.useState)(false);
-			const [archiveProgress, setArchiveProgress] = (0, react.useState)(null);
 			const archiveBusyRef = (0, react.useRef)(false);
 			/** The job being polled (state so the poller starts/stops with it). */
 			const [archiveJobId, setArchiveJobId] = (0, react.useState)(null);
 			const archiveJobRef = (0, react.useRef)(null);
+			/** Whether the CURRENT job's `ready` status was already handed to the
+			*  download. The download route CONSUMES the task, so a second hand-off
+			*  would either fetch a deleted id (404 → a bogus `zipFailed` strip next to
+			*  a file that did land) or click the anchor twice. */
+			const archiveHandedOffRef = (0, react.useRef)(false);
 			/** End the job: drop the progress line and release the guard. */
 			const settleArchive = (0, react.useCallback)(() => {
 				archiveBusyRef.current = false;
 				archiveJobRef.current = null;
+				archiveHandedOffRef.current = false;
 				setArchiveJobId(null);
 				setArchiveBusy(false);
-				setArchiveProgress(null);
 			}, []);
+			(0, react.useEffect)(() => {
+				settleArchive();
+			}, [
+				sessionId,
+				cwd,
+				settleArchive
+			]);
 			const failArchive = (0, react.useCallback)((message) => {
 				setActionError(t("zipFailed", { message }));
 				settleArchive();
 			}, [settleArchive]);
-			/** Save the finished archive as `name` through a hidden anchor. */
+			/**
+			* Save the finished archive through a plain anchor on the route URL.
+			*
+			* Deliberately NOT `fetch → blob → objectURL` any more, which is what the
+			* flow used to do: a Blob holds the whole archive in the TAB's memory, so a
+			* multi-gigabyte selection would kill the page — the very thing the host
+			* side was just changed to stop doing. A plain anchor hands the URL to the
+			* browser's download machinery, which streams it to disk.
+			*
+			* The cost, stated plainly: the route's JSON error envelope can no longer be
+			* inspected, so a failure at this point saves a JSON body under the archive's
+			* name. Everything that realistically fails — no tool installed, an
+			* unreadable selection, a tool that exited non-zero — is caught by the
+			* `archive.status` poll BEFORE this runs, so what is left is an
+			* already-consumed or expired task between the poll and the click.
+			*/
 			const saveArchive = (0, react.useCallback)((id, name) => {
-				fetch(archiveDownloadUrl({
+				setActionError(null);
+				const anchor = document.createElement("a");
+				anchor.href = archiveDownloadUrl({
 					sessionId,
 					cwd
-				}, id)).then(async (response) => {
-					if (!response.ok) {
-						const envelope = await response.json().catch(() => null);
-						throw new Error(envelope?.error?.message ?? `HTTP ${response.status}`);
-					}
-					return await response.blob();
-				}).then((blob) => {
-					setActionError(null);
-					const objectUrl = URL.createObjectURL(blob);
-					const anchor = document.createElement("a");
-					anchor.href = objectUrl;
-					anchor.download = name;
-					anchor.style.display = "none";
-					document.body.appendChild(anchor);
-					anchor.click();
-					anchor.remove();
-					window.setTimeout(() => {
-						URL.revokeObjectURL(objectUrl);
-					}, 0);
-					settleArchive();
-				}).catch((error) => {
-					failArchive(error instanceof Error ? error.message : String(error));
-				});
+				}, id);
+				anchor.download = name;
+				anchor.style.display = "none";
+				document.body.appendChild(anchor);
+				anchor.click();
+				anchor.remove();
+				settleArchive();
 			}, [
 				cwd,
-				failArchive,
 				sessionId,
 				settleArchive
 			]);
@@ -6039,46 +7595,54 @@ window.__ModuleLoader__.load({
 				const job = archiveJobRef.current;
 				if (job === null) return;
 				try {
-					const status = await archiveStatus(job.id);
+					const status = await archiveStatus({
+						sessionId,
+						cwd
+					}, job.id);
 					if (signal.aborted) return;
-					setArchiveProgress({
-						done: status.done,
-						total: status.total
-					});
 					if (status.state === "error") {
 						archiveHandlersRef.current.fail(status.error ?? `HTTP ${status.state}`);
 						return;
 					}
-					if (status.state === "ready") archiveHandlersRef.current.save(job.id, job.name);
+					if (status.state === "ready") {
+						if (archiveHandedOffRef.current) return;
+						archiveHandedOffRef.current = true;
+						setArchiveJobId(null);
+						archiveHandlersRef.current.save(job.id, job.name);
+					}
 				} catch (error) {
 					if (signal.aborted) return;
 					archiveHandlersRef.current.fail(error instanceof Error ? error.message : String(error));
 				}
-			}, []), {
+			}, [cwd, sessionId]), {
 				intervalMs: 250,
 				mode: "self-scheduling",
 				immediate: true
 			});
 			const downloadArchive = (paths) => {
 				if (archiveBusyRef.current) return;
-				const name = paths.length === 1 ? `${baseName(paths[0])}.zip` : "archive.zip";
+				const stem = paths.length === 1 ? baseName(paths[0]) : "archive";
+				const generation = scopeGenRef.current;
 				archiveBusyRef.current = true;
+				archiveHandedOffRef.current = false;
 				setArchiveBusy(true);
-				setArchiveProgress(null);
 				archiveBuild({
 					sessionId,
 					cwd
-				}, paths, name).then(({ id, entries }) => {
+				}, paths, stem).then(({ id, name }) => {
+					if (generation !== scopeGenRef.current) return;
+					setActionError(null);
 					archiveJobRef.current = {
 						id,
 						name
 					};
-					setArchiveProgress({
-						done: 0,
-						total: entries
-					});
 					setArchiveJobId(id);
 				}).catch((error) => {
+					if (generation !== scopeGenRef.current) return;
+					if (error instanceof SidebarApiError && error.code === "unavailable") {
+						failArchive(t("archiveToolMissing"));
+						return;
+					}
 					failArchive(error instanceof Error ? error.message : String(error));
 				});
 			};
@@ -6092,23 +7656,61 @@ window.__ModuleLoader__.load({
 				sessionId,
 				cwd
 			}, { visible: visible !== false });
+			/**
+			* Fold chains (VSCode "compact folders"): resolved ONCE per level-cache
+			* revision and REUSED while it stands. {@link DirRow} is memoized on prop
+			* identity, so handing it a freshly built array on every render would
+			* re-render every directory row for a selection, a hover or a copy flash —
+			* exactly what the row memoization exists to prevent.
+			*/
+			const chainFor = (0, react.useMemo)(() => {
+				const cache = /* @__PURE__ */ new Map();
+				return (entry) => {
+					const cached = cache.get(entry.path);
+					if (cached !== void 0) return cached;
+					const chain = entry.compact === true ? compactChain(entry, (path) => data[path]) : [entry];
+					cache.set(entry.path, chain);
+					return chain;
+				};
+			}, [data]);
+			/**
+			* One level's rows in the caller's chosen order, resolved ONCE per
+			* level-cache revision and reused by both walkers below: `renderLevel` draws
+			* them and {@link visibleRows} ranges over them, so re-sorting per render
+			* would both repeat the comparison and hand the memoized rows a fresh array.
+			* `sortEntries` copies (the level cache keeps the host's own order and is
+			* never reordered in place).
+			*/
+			const entriesFor = (0, react.useMemo)(() => {
+				const cache = /* @__PURE__ */ new Map();
+				return (dir) => {
+					const cached = cache.get(dir);
+					if (cached !== void 0) return cached;
+					const sorted = sortEntries(data[dir]?.entries ?? [], sort);
+					cache.set(dir, sorted);
+					return sorted;
+				};
+			}, [data, sort]);
 			visibleRowsRef.current = (0, react.useMemo)(() => {
 				const rows = [];
 				const walk = (dir) => {
-					const level = data[dir];
-					if (level?.entries === void 0) return;
-					for (const entry of level.entries) {
+					if (data[dir]?.entries === void 0) return;
+					for (const entry of entriesFor(dir)) {
 						rows.push({
 							path: entry.path,
 							isDir: entry.isDir
 						});
-						if (entry.isDir && expandedSet.has(entry.path)) walk(entry.path);
+						if (!entry.isDir) continue;
+						const chain = chainFor(entry);
+						if (chain.some((link) => expandedSet.has(link.path))) walk(chain[chain.length - 1].path);
 					}
 				};
 				if (root !== void 0) walk(root);
 				return rows;
 			}, [
+				chainFor,
 				data,
+				entriesFor,
 				expandedSet,
 				root
 			]);
@@ -6128,8 +7730,12 @@ window.__ModuleLoader__.load({
 			}, []);
 			/** The inline rename editor replacing one row (dirs and files alike):
 			*  same indent/icon/height for a seamless swap, Enter/blur commits,
-			*  Escape cancels, IME composition keys never reach the handlers (the
-			*  shared isImeComposition guard). */
+			*  Escape cancels. Composition keys must not commit the name; this handler
+			*  is a NON-intercepting early return (no stopPropagation), so it asks the
+			*  conservative isLikelyImeKey — the document capture guard only swallows
+			*  keys inside a live composition window by design (bare legacy 229
+			*  keydowns pass it, #833), which is right for the guard and not enough
+			*  here. */
 			const renderRenameRow = (entry, depth) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				className: clsx(sidebar_module_css_default.explorerRow, sidebar_module_css_default.explorerRenaming),
 				style: { paddingLeft: depth * 22 + 6 },
@@ -6146,23 +7752,23 @@ window.__ModuleLoader__.load({
 						});
 					},
 					onKeyDown: (event) => {
-						if (isImeComposition(event)) return;
+						if (isLikelyImeKey(event)) return;
 						if (event.key === "Enter") {
 							event.preventDefault();
-							commitRename(entry.path, renaming?.value ?? "");
+							commitRename(renaming?.path ?? entry.path, renaming?.value ?? "");
 						} else if (event.key === "Escape") {
 							event.preventDefault();
 							setRenaming(null);
 						}
 					},
 					onBlur: () => {
-						commitRename(entry.path, renaming?.value ?? "");
+						commitRename(renaming?.path ?? entry.path, renaming?.value ?? "");
 					}
 				})]
 			}, entry.path);
 			/** The inline new-folder editor at the top of one level: the same
 			*  interaction contract as the rename editor (Enter commits, Escape
-			*  cancels, blur commits, IME guarded). */
+			*  cancels, blur commits, conservatively IME-guarded). */
 			const renderNewFolderRow = (dir, depth) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				className: clsx(sidebar_module_css_default.explorerRow, sidebar_module_css_default.explorerRenaming),
 				style: { paddingLeft: depth * 22 + 6 },
@@ -6180,7 +7786,7 @@ window.__ModuleLoader__.load({
 						});
 					},
 					onKeyDown: (event) => {
-						if (isImeComposition(event)) return;
+						if (isLikelyImeKey(event)) return;
 						if (event.key === "Enter") {
 							event.preventDefault();
 							commitNewFolder(dir, newFolder?.value ?? "");
@@ -6194,10 +7800,52 @@ window.__ModuleLoader__.load({
 					}
 				})]
 			});
+			/**
+			* The inline new-file editor at the top of one level: the same interaction
+			* contract as the new-folder editor (Enter commits, Escape cancels, blur
+			* commits, conservatively IME-guarded). The glyph follows the typed name, so
+			* the extension's icon updates while typing (an empty buffer probes with a
+			* neutral carrier name).
+			*/
+			const renderNewFileRow = (dir, depth) => {
+				const typed = newFile?.value.trim() ?? "";
+				const probe = joinChild(dir, typed === "" ? "untitled" : typed);
+				return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+					className: clsx(sidebar_module_css_default.explorerRow, sidebar_module_css_default.explorerRenaming),
+					style: { paddingLeft: depth * 22 + 6 },
+					children: [service !== void 0 ? service.fileIcon(probe, 14) : builtinFileIcon(probe, 14), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+						ref: renameInputRef,
+						className: sidebar_module_css_default.explorerRenameInput,
+						value: newFile?.value ?? "",
+						placeholder: t("newFilePlaceholder"),
+						"aria-label": t("newFile"),
+						spellCheck: false,
+						onChange: (event) => {
+							setNewFile((prev) => prev === null ? prev : {
+								...prev,
+								value: event.target.value
+							});
+						},
+						onKeyDown: (event) => {
+							if (isLikelyImeKey(event)) return;
+							if (event.key === "Enter") {
+								event.preventDefault();
+								commitNewFile(dir, newFile?.value ?? "");
+							} else if (event.key === "Escape") {
+								event.preventDefault();
+								cancelNewFile();
+							}
+						},
+						onBlur: () => {
+							commitNewFile(dir, newFile?.value ?? "");
+						}
+					})]
+				});
+			};
 			const renderLevel = (dir, depth) => {
 				const level = data[dir];
-				const head = newFolder?.dir === dir ? renderNewFolderRow(dir, depth) : null;
-				if (level === void 0) return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [head, /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+				const head = newFolder?.dir === dir ? renderNewFolderRow(dir, depth) : newFile?.dir === dir ? renderNewFileRow(dir, depth) : null;
+				if (level === void 0 || level.entries === void 0 && level.error === void 0) return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [head, /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 					className: sidebar_module_css_default.explorerRow,
 					style: { paddingLeft: depth * 22 + 6 },
 					children: t("loading")
@@ -6207,26 +7855,29 @@ window.__ModuleLoader__.load({
 					style: { paddingLeft: depth * 22 + 6 },
 					children: level.error
 				})] });
-				const entries = level.entries ?? [];
+				const entries = entriesFor(dir);
 				return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
 					head,
 					entries.map((entry) => {
-						if (renaming?.path === entry.path) return renderRenameRow(entry, depth);
-						if (entry.isDir) {
-							const isOpen = expandedSet.has(entry.path);
+						const chain = entry.isDir ? chainFor(entry) : void 0;
+						if (renaming !== null && (renaming.path === entry.path || chain?.some((link) => link.path === renaming.path) === true)) return renderRenameRow(entry, depth);
+						if (chain !== void 0) {
+							const tail = chain[chain.length - 1];
+							const isOpen = chain.some((link) => expandedSet.has(link.path));
 							return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(DirRow$1, {
 								entry,
+								chain,
 								depth,
 								expanded: isOpen,
 								iconsVersion,
 								service,
 								selected: selected.has(entry.path),
-								revealed: revealedSet.has(entry.path),
-								dropTarget: dropTarget === entry.path,
+								revealed: chain.some((link) => revealedSet.has(link.path)),
+								dropTarget: dropTarget === tail.path,
 								gitChanged: gitStatus.dirHasChanges(entry.path),
 								copied: copiedPath === entry.path,
 								actions
-							}), isOpen && renderLevel(entry.path, depth + 1)] }, entry.path);
+							}), isOpen && renderLevel(tail.path, depth + 1)] }, entry.path);
 						}
 						const git = gitStatus.statusOf(entry.path);
 						return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(FileRow$1, {
@@ -6292,10 +7943,7 @@ window.__ModuleLoader__.load({
 							kind: "loading",
 							tone: "inline",
 							role: "status",
-							children: archiveProgress === null ? t("loading") : `${t("zipProgress", {
-								done: archiveProgress.done,
-								total: archiveProgress.total
-							})} · ${archivePercent(archiveProgress)}%`
+							children: t("loading")
 						}),
 						/* @__PURE__ */ (0, react_jsx_runtime.jsx)(RootRow, {
 							path: root,
@@ -6323,7 +7971,8 @@ window.__ModuleLoader__.load({
 									}),
 									/* @__PURE__ */ (0, react_jsx_runtime.jsx)(Chip, {
 										onClick: () => {
-											setConfirmDeleteSelected(true);
+											const armed = scopeOf(propsRef.current);
+											if (armed !== void 0) setConfirmDeleteSelected(armed);
 										},
 										children: t("deleteSelected")
 									}),
@@ -6409,6 +8058,11 @@ window.__ModuleLoader__.load({
 								label: t("newFolder"),
 								icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlusOutlineRegular, { size: 14 })
 							}] : [],
+							...rowMenu?.isDir === true ? [{
+								id: "new-file",
+								label: t("newFile"),
+								icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCodeOutlineRegular, { size: 14 })
+							}] : [],
 							...rowMenu === null ? [] : zipEntries(rowMenu),
 							{
 								id: "relative",
@@ -6459,7 +8113,12 @@ window.__ModuleLoader__.load({
 								return;
 							}
 							if (id.startsWith("open-with:")) {
-								onOpenWith?.(id.slice(10), target.path);
+								const pending = onOpenWith?.(id.slice(10), target.path);
+								Promise.resolve(pending).then((accepted) => {
+									if (accepted === false) reportOpenFailure(target.path);
+								}, () => {
+									reportOpenFailure(target.path);
+								});
 								return;
 							}
 							if (id === "reveal-in-file-manager") {
@@ -6483,6 +8142,10 @@ window.__ModuleLoader__.load({
 								startNewFolder(target.path);
 								return;
 							}
+							if (id === "new-file") {
+								startNewFile(target.path);
+								return;
+							}
 							if (id === "rename") {
 								setRenaming({
 									path: target.path,
@@ -6491,10 +8154,13 @@ window.__ModuleLoader__.load({
 								return;
 							}
 							if (id === "delete") {
+								const armed = scopeOf(propsRef.current);
+								if (armed === void 0) return;
 								setConfirmDelete({
 									path: target.path,
 									isDir: target.isDir,
-									name: baseName(target.path)
+									name: baseName(target.path),
+									scope: armed
 								});
 								return;
 							}
@@ -6524,16 +8190,20 @@ window.__ModuleLoader__.load({
 						}
 					}),
 					/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ConfirmDialog, {
-						open: confirmDeleteSelected,
+						open: confirmDeleteSelected !== null,
 						title: t("deleteSelectedTitle", { count: selected.size }),
 						description: t("deleteSelectedDesc"),
 						confirmLabel: t("deleteSelected"),
 						cancelLabel: t("cancel"),
 						danger: true,
 						busy: deletingSelected,
-						onConfirm: performBatchDelete,
+						onConfirm: () => {
+							const armed = confirmDeleteSelected;
+							if (armed === null) return;
+							performBatchDelete(armed);
+						},
 						onClose: () => {
-							setConfirmDeleteSelected(false);
+							setConfirmDeleteSelected(null);
 						}
 					})
 				]
@@ -6716,6 +8386,462 @@ window.__ModuleLoader__.load({
 			return row.name.trim() !== "" && row.urlTemplate.includes("{path}") && /^[a-z][a-z0-9+.-]*:\/\//i.test(row.urlTemplate.trim());
 		}
 		//#endregion
+		//#region src/client/changes/ops.ts
+		/** Tool names mapped to each op kind; unknown names are ignored. */
+		const READ_TOOLS = /* @__PURE__ */ new Set([
+			"read",
+			"view",
+			"see"
+		]);
+		const WRITE_TOOLS = /* @__PURE__ */ new Set(["write", "create"]);
+		const EDIT_TOOLS = /* @__PURE__ */ new Set([
+			"edit",
+			"str_replace",
+			"str-replace-editor",
+			"multi-edit"
+		]);
+		/** Classify one tool name; undefined when the tool touches no file. */
+		function kindOf(name) {
+			if (READ_TOOLS.has(name)) return "read";
+			if (WRITE_TOOLS.has(name)) return "write";
+			if (EDIT_TOOLS.has(name)) return "edit";
+		}
+		/**
+		* Parse one tool-call arguments JSON body defensively: the payload is
+		* model-emitted wire data, so every field is checked before use.
+		*/
+		function parseArgs(argsRaw) {
+			try {
+				const parsed = JSON.parse(argsRaw);
+				if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+				return parsed;
+			} catch {
+				return {};
+			}
+		}
+		/** Extract the path field common to every file tool's arguments. */
+		function pathOf(args) {
+			for (const key of [
+				"file_path",
+				"path",
+				"filePath"
+			]) {
+				const value = args[key];
+				if (typeof value === "string" && value.length > 0) return value;
+			}
+		}
+		/**
+		* The result blocks and error flag of one tool/result message, read under BOTH
+		* logged shapes: 0.1.6 wrapped the result in a single `type: 'tool-result'`
+		* content block on a user-role message (the text nested inside it, `isError`
+		* on the wrapper), 0.1.7's first-class tool-role message carries the blocks at
+		* the message's own top level with `isError` lifted onto the message.
+		* Historical logs keep the old shape forever, so both are read. Undefined when
+		* the message carries no block array.
+		*/
+		function resultOf(message) {
+			if (!Array.isArray(message.content)) return void 0;
+			for (const block of message.content) {
+				if (block === null || typeof block !== "object") continue;
+				const wrapper = block;
+				if (wrapper.type !== "tool-result") continue;
+				return {
+					blocks: Array.isArray(wrapper.content) ? wrapper.content : [],
+					isError: wrapper.isError === true
+				};
+			}
+			return {
+				blocks: message.content,
+				isError: message.isError === true
+			};
+		}
+		/** The finalized plain text of one tool result (its text blocks joined). */
+		function resultText(message) {
+			const blocks = resultOf(message)?.blocks;
+			if (blocks === void 0) return void 0;
+			const parts = [];
+			for (const item of blocks) {
+				if (item === null || typeof item !== "object") continue;
+				const textItem = item;
+				if (textItem.type === "text" && typeof textItem.text === "string") parts.push(textItem.text);
+			}
+			return parts.length > 0 ? parts.join("\n") : void 0;
+		}
+		/** Whether a tool result reported an error (0.1.7's message-level flag, else
+		*  the 0.1.6 wrapper block's flag). */
+		function resultIsError(message) {
+			return resultOf(message)?.isError === true;
+		}
+		/**
+		* Fold a session event log into the file operations it contains, newest
+		* first. A `tool/call` seeds a running op (payload from the model's
+		* arguments); its `tool/result` settles it (read content, error text).
+		* Calls dispatched through a host tool such as run_code appear as their own
+		* `tool/call` rows in the log, so nested file calls fold in naturally.
+		* @param events - the session's append-only event log (oldest → newest).
+		* @returns the ordered operation list.
+		*/
+		function extractFileOps(events) {
+			const byCall = /* @__PURE__ */ new Map();
+			for (const event of events) if (event.type === "tool/call") {
+				const data = event.data;
+				if (typeof data.name !== "string" || typeof data.callId !== "string") continue;
+				const kind = kindOf(data.name);
+				if (kind === void 0) continue;
+				const args = parseArgs(typeof data.arguments === "string" ? data.arguments : "");
+				const path = pathOf(args);
+				if (path === void 0) continue;
+				const base = {
+					callId: data.callId,
+					kind,
+					path,
+					time: event.time,
+					running: true,
+					isError: false
+				};
+				if (kind === "edit") {
+					const oldString = args.old_string;
+					const newString = args.new_string;
+					byCall.set(data.callId, typeof oldString === "string" && typeof newString === "string" ? {
+						...base,
+						edit: {
+							oldString,
+							newString
+						}
+					} : base);
+					continue;
+				}
+				if (kind === "write") {
+					const content = args.content;
+					byCall.set(data.callId, typeof content === "string" && content.length > 0 ? {
+						...base,
+						content
+					} : base);
+					continue;
+				}
+				byCall.set(data.callId, base);
+			} else if (event.type === "tool/result") {
+				const message = event.data.message;
+				if (message === void 0) continue;
+				const callId = message.source?.callId;
+				if (typeof callId !== "string") continue;
+				const op = byCall.get(callId);
+				if (op === void 0) continue;
+				const text = resultText(message);
+				const isError = resultIsError(message);
+				const patch = {
+					running: false,
+					isError
+				};
+				if (text !== void 0 && text.length > 0) {
+					if (isError) patch.errorText = text;
+					else if (op.kind === "read") patch.read = text;
+					else if (op.kind === "write" && op.content === void 0) patch.content = text;
+				}
+				byCall.set(callId, {
+					...op,
+					...patch
+				});
+			}
+			return [...byCall.values()].sort((a, b) => b.time - a.time);
+		}
+		/**
+		* Group operations by path, newest op first per file, files ordered by their
+		* most recent operation.
+		*/
+		function groupByFile(ops) {
+			const groups = /* @__PURE__ */ new Map();
+			for (const op of ops) {
+				const list = groups.get(op.path) ?? [];
+				list.push(op);
+				groups.set(op.path, list);
+			}
+			const ordered = [...groups.entries()].sort((a, b) => b[1][0].time - a[1][0].time);
+			return new Map(ordered);
+		}
+		/**
+		* The last content known for a path before the given operation, synthesized
+		* from earlier ops: a write's payload is authoritative, an edit implies its
+		* old side. Best effort — a write with no known prior content diffs against
+		* nothing (all-added).
+		*/
+		function knownContentBefore(ops, path, before) {
+			const ofFile = ops.filter((op) => op.path === path && op.time <= before.time && op !== before);
+			for (let i = ofFile.length - 1; i >= 0; i -= 1) {
+				const op = ofFile[i];
+				if (op.kind === "write" && op.content !== void 0) return op.content;
+				if (op.kind === "edit" && op.edit !== void 0 && i === ofFile.length - 1) return op.edit.oldString;
+			}
+		}
+		/**
+		* The read-tool response's `<content>` body split into lines with the
+		* "(Showing lines …)" note dropped — the shared envelope core both read
+		* parsers consume: {@link parseReadLines} recovers line numbers from the
+		* "<n>: " prefixes, {@link parseReadContent} keeps the raw text.
+		*/
+		function contentLines(raw) {
+			const contentMatch = raw.match(/<content>([\s\S]*?)<\/content>/);
+			return (contentMatch ? contentMatch[1] : raw).split("\n").filter((line) => !/^\s*\(Showing lines .*\)\s*$/.test(line));
+		}
+		/**
+		* Strip the DSH read-tool response envelope down to the file's raw content,
+		* PRESERVING blank lines (unlike {@link parseReadLines}, which drops them):
+		* drops the <content> wrapper, the "(Showing lines ...)" note, and the
+		* per-line "<n>: " prefixes. The markdown reading mode needs the blank lines
+		* because markdown block structure depends on them.
+		*/
+		function parseReadContent(raw) {
+			return contentLines(raw).map((line) => line.replace(/^\s*\d+:\s/, "")).join("\n").replace(/^[\n]+/, "").replace(/\n+$/, "");
+		}
+		/**
+		* Parse a DSH read result into file lines with their real line numbers:
+		* drops the <content> envelope and "(Showing lines ...)" note; recovers the
+		* "<n>: " prefix as the line number, falling back to sequential counting.
+		*/
+		function parseReadLines(raw) {
+			const result = [];
+			let fallback = 1;
+			for (const line of contentLines(raw)) {
+				if (line.length === 0) continue;
+				const match = line.match(/^\s*(\d+):\s?(.*)$/);
+				if (match !== null) {
+					result.push({
+						line: Number(match[1]),
+						text: match[2] ?? ""
+					});
+					fallback = Number(match[1]) + 1;
+				} else {
+					result.push({
+						line: fallback,
+						text: line
+					});
+					fallback += 1;
+				}
+			}
+			return result;
+		}
+		//#endregion
+		//#region src/client/ops-stream.ts
+		/**
+		* The session's live FILE-OPERATION stream — the signal the editor's
+		* auto-refresh rides (#855).
+		*
+		* The model's file tools leave their calls in the session event log, and the
+		* plugin's own `changes.ops` route ships that log's `tool/call` +
+		* `tool/result` rows as a `seq > afterSeq` delta (see `src/index.ts`). This
+		* module folds those deltas into "which file did the model just write or
+		* edit", which is the whole question an open preview has to answer.
+		*
+		* Design constraints it exists to honour:
+		*
+		* - **One poller per session, not one per tab.** The native right sidebar
+		*   keeps every visited tab body mounted (`keepMounted`), so an N-editor
+		*   session would otherwise run N identical `changes.ops` polls. Members
+		*   (editor tabs) elect ONE leader per session; that leader owns the single
+		*   `usePolling` loop and every member reads the same published state. Any
+		*   member leaving re-elects, and the loop stops when the last one goes.
+		* - **The plugin's own `changes.ops` delta stream, on ONE poller per session.**
+		*   No `fs.watch`, no `fsRead` fingerprint polling, and no per-tab interval —
+		*   a per-tab poll would multiply the same request by the number of mounted
+		*   editors. Requests ride `use-polling.ts` (the sidebar's one polling loop)
+		*   on the changes tab's own 2.5s cadence, and stop entirely while no editor
+		*   of the session is on screen. The plugin's OWN saves go through
+		*   `/sidebar/file` and leave no session event, so a reload can never
+		*   re-trigger itself.
+		* - **Settled successes only.** A `write`/`edit` call fires once its result
+		*   landed without an error, so a half-written file never reaches a preview
+		*   and a failed call never triggers a pointless reload.
+		* - **Nothing historical fires.** The first pull of a fresh stream is the
+		*   BASELINE: every op the session already settled is recorded as seen and
+		*   published to nobody. Only an op that settles while someone is watching
+		*   can refresh anything.
+		* - **Session-scoped.** Streams are keyed by session id; a touch published
+		*   for one session is invisible to every other session's editors.
+		*
+		* The stream record outlives its members (only the poller stops): a tab that
+		* becomes visible again re-joins, the leader resumes from the persisted `seq`
+		* cursor, and the missed delta is folded then — so a file the model rewrote
+		* while the tab was parked is still seen as touched.
+		*/
+		/** The delta cadence: the changes tab's session-lens poll of the same route. */
+		const FILE_OPS_INTERVAL_MS = 2500;
+		/**
+		* Events kept for cross-tick `tool/call` → `tool/result` pairing: a call may
+		* be delivered in one delta and settle in the next. Only the tail matters
+		* (a call that old has long since settled), and the bound is what keeps a
+		* long session's fold cheap.
+		*/
+		const EVENT_WINDOW = 400;
+		/**
+		* Events kept once the last member goes away. The cursor, the baseline and
+		* the published touches all survive, so a returning tab resumes the delta it
+		* missed — but a session's tool traffic (write payloads, read results) must
+		* not be pinned for the page's lifetime just because a tab was visited.
+		*/
+		const IDLE_EVENT_WINDOW = 32;
+		/** Touched paths remembered per session (oldest insertion evicted past this). */
+		const TOUCH_WINDOW = 256;
+		/** The state every session starts from (a stable identity: the store contract). */
+		const EMPTY_STATE = {
+			revision: 0,
+			touched: /* @__PURE__ */ new Map()
+		};
+		/**
+		* The comparison key of one path, so a model-spelled path and an editor tab's
+		* absolute path meet: relative paths are resolved against the session cwd
+		* ({@link resolveSidebarPath}), `.`/`..` segments are folded lexically, both
+		* separators unify to '/', and Windows-style paths (drive letters, UNC
+		* shares) fold case — the same file may be spelled either way there.
+		* @param cwd - the session working directory (undefined = nothing to join onto).
+		* @param path - an absolute or session-relative path.
+		* @returns the comparison key (never a path to hand back to the host).
+		*/
+		function fileOpKey(cwd, path) {
+			const unified = resolveSidebarPath(cwd, path).replace(/\\/g, "/");
+			const windows = /^[A-Za-z]:\//.test(unified) || unified.startsWith("//");
+			const segments = [];
+			for (const segment of unified.split("/")) {
+				if (segment === "" || segment === ".") continue;
+				if (segment === "..") {
+					segments.pop();
+					continue;
+				}
+				segments.push(segment);
+			}
+			const key = `${unified.startsWith("/") ? "/" : ""}${segments.join("/")}`;
+			return windows ? key.toLowerCase() : key;
+		}
+		/** Every session's stream, alive for the page (only its poller stops). */
+		const streams = /* @__PURE__ */ new Map();
+		/** The stream record of one session, created on first use. */
+		function streamOf(sessionId) {
+			let stream = streams.get(sessionId);
+			if (stream === void 0) {
+				stream = {
+					state: EMPTY_STATE,
+					listeners: /* @__PURE__ */ new Set(),
+					members: /* @__PURE__ */ new Set(),
+					leader: void 0,
+					seq: 0,
+					primed: false,
+					events: [],
+					published: /* @__PURE__ */ new Set(),
+					cwd: void 0
+				};
+				streams.set(sessionId, stream);
+			}
+			return stream;
+		}
+		/** Publish one delta's settled write/edit ops to every member of the stream. */
+		function publish(stream, ops) {
+			const revision = stream.state.revision + 1;
+			const touched = new Map(stream.state.touched);
+			for (const op of [...ops].reverse()) {
+				stream.published.add(op.callId);
+				touched.set(fileOpKey(stream.cwd, op.path), {
+					kind: op.kind,
+					revision,
+					time: op.time
+				});
+			}
+			for (const key of touched.keys()) {
+				if (touched.size <= TOUCH_WINDOW) break;
+				touched.delete(key);
+			}
+			stream.state = {
+				revision,
+				touched
+			};
+			for (const listener of stream.listeners) listener();
+		}
+		/**
+		* Fold one delta (plus the retained window) into the stream.
+		* @param baseline - true for a fresh stream's FIRST fold: everything already
+		* settled predates the editors that are joining, so it marks state without
+		* publishing anything.
+		*/
+		function fold(stream, events, baseline) {
+			const merged = [...stream.events, ...events];
+			stream.events = merged.length > EVENT_WINDOW ? merged.slice(merged.length - EVENT_WINDOW) : merged;
+			const ops = extractFileOps(stream.events);
+			if (baseline) for (const op of ops) stream.published.add(op.callId);
+			else {
+				const settled = ops.filter((op) => (op.kind === "write" || op.kind === "edit") && !op.running && !op.isError && !stream.published.has(op.callId));
+				if (settled.length > 0) publish(stream, settled);
+			}
+			const present = new Set(ops.map((op) => op.callId));
+			for (const callId of stream.published) if (!present.has(callId)) stream.published.delete(callId);
+		}
+		/** One leader's delta pull: advance the cursor, then fold (or baseline) it. */
+		async function pullStream(stream, scope, signal) {
+			const { events, lastSeq } = await api.changesOps(scope, stream.seq, signal);
+			if (signal.aborted === true) return;
+			if (scope.cwd !== void 0 && scope.cwd !== "") stream.cwd = scope.cwd;
+			if (lastSeq > stream.seq) stream.seq = lastSeq;
+			const baseline = !stream.primed;
+			stream.primed = true;
+			if (events.length > 0) fold(stream, events, baseline);
+		}
+		/**
+		* Join one session's file-operation stream while `enabled`, and read its
+		* published state. Every mounted editor of a session calls this; exactly one
+		* of them (the elected leader) runs the poll.
+		* @param scope - the session whose log is watched (sessionId + cwd).
+		* @param enabled - whether this tab is on screen and holds a real file (a
+		* parked tab must not keep polling, and a folder/path-less window has no file
+		* to watch).
+		* @returns the session's published touches, stable between deltas.
+		*/
+		function useFileOpStream(scope, enabled) {
+			const { sessionId } = scope;
+			const [leading, setLeading] = (0, react.useState)(false);
+			(0, react.useEffect)(() => {
+				if (!enabled || sessionId === "") {
+					setLeading(false);
+					return;
+				}
+				const stream = streamOf(sessionId);
+				const member = { lead: (value) => {
+					setLeading(value);
+				} };
+				stream.members.add(member);
+				if (stream.leader === void 0) {
+					stream.leader = member;
+					setLeading(true);
+				}
+				return () => {
+					stream.members.delete(member);
+					if (stream.members.size === 0 && stream.events.length > IDLE_EVENT_WINDOW) stream.events = stream.events.slice(stream.events.length - IDLE_EVENT_WINDOW);
+					if (stream.leader !== member) return;
+					stream.leader = void 0;
+					setLeading(false);
+					const next = stream.members.values().next().value;
+					if (next !== void 0) {
+						stream.leader = next;
+						next.lead(true);
+					}
+				};
+			}, [enabled, sessionId]);
+			const cwd = scope.cwd;
+			usePolling(leading, (0, react.useCallback)(async (signal) => {
+				await pullStream(streamOf(sessionId), {
+					sessionId,
+					cwd
+				}, signal);
+			}, [sessionId, cwd]), {
+				intervalMs: FILE_OPS_INTERVAL_MS,
+				mode: "self-scheduling",
+				immediate: true
+			});
+			return (0, react.useSyncExternalStore)((0, react.useCallback)((listener) => {
+				const stream = streamOf(sessionId);
+				stream.listeners.add(listener);
+				return () => {
+					stream.listeners.delete(listener);
+				};
+			}, [sessionId]), (0, react.useCallback)(() => streams.get(sessionId)?.state ?? EMPTY_STATE, [sessionId]));
+		}
+		//#endregion
 		//#region src/client/prefs.ts
 		/** Validate one raw resolved value into {@link SidebarPrefs}. Used for the
 		* settings.get payload AND the settings.update response (both carry the
@@ -6734,11 +8860,9 @@ window.__ModuleLoader__.load({
 				mobileDefaultTree: typeof record.mobileDefaultTree === "boolean" ? record.mobileDefaultTree : SIDEBAR_PREFS_DEFAULTS.mobileDefaultTree,
 				agentOpenTools: typeof record.agentOpenTools === "boolean" ? record.agentOpenTools : SIDEBAR_PREFS_DEFAULTS.agentOpenTools,
 				editorExplorer: typeof record.editorExplorer === "boolean" ? record.editorExplorer : SIDEBAR_PREFS_DEFAULTS.editorExplorer,
-				titleBarScheme: isTitleBarScheme(record.titleBarScheme) ? record.titleBarScheme : record.titleBarCompat === true || hasLegacyStripValue(record.titleBarStripPx) ? "custom" : "auto",
-				titleBarPresetId: typeof record.titleBarPresetId === "string" ? record.titleBarPresetId : SIDEBAR_PREFS_DEFAULTS.titleBarPresetId,
+				editorGitGutter: typeof record.editorGitGutter === "boolean" ? record.editorGitGutter : SIDEBAR_PREFS_DEFAULTS.editorGitGutter,
+				explorerExclude: stringArrayOf(record.explorerExclude),
 				customCss: typeof record.customCss === "string" ? record.customCss : SIDEBAR_PREFS_DEFAULTS.customCss,
-				titleBarCompat: typeof record.titleBarCompat === "boolean" ? record.titleBarCompat : SIDEBAR_PREFS_DEFAULTS.titleBarCompat,
-				titleBarStripPx: typeof record.titleBarStripPx === "number" && Number.isFinite(record.titleBarStripPx) ? clampTitleBarStrip(record.titleBarStripPx) : SIDEBAR_PREFS_DEFAULTS.titleBarStripPx,
 				htmlViewerNoSandbox: typeof record.htmlViewerNoSandbox === "boolean" ? record.htmlViewerNoSandbox : SIDEBAR_PREFS_DEFAULTS.htmlViewerNoSandbox,
 				htmlViewerDefaultUnsafe: typeof record.htmlViewerDefaultUnsafe === "boolean" ? record.htmlViewerDefaultUnsafe : SIDEBAR_PREFS_DEFAULTS.htmlViewerDefaultUnsafe,
 				tabsEnabled: booleanMapOf(record.tabsEnabled),
@@ -6759,6 +8883,22 @@ window.__ModuleLoader__.load({
 			return out;
 		}
 		/**
+		* Validate the exclude-pattern list: a JSON array whose string entries
+		* survive (trimmed; blanks dropped). Anything else falls back to the stock
+		* list — the schema defaults already guard the wire shape, this is the
+		* client's second line.
+		*/
+		function stringArrayOf(value) {
+			if (!Array.isArray(value)) return [...EXPLORER_EXCLUDE_DEFAULTS];
+			const out = [];
+			for (const item of value) {
+				if (typeof item !== "string") continue;
+				const trimmed = item.trim();
+				if (trimmed !== "") out.push(trimmed);
+			}
+			return out;
+		}
+		/**
 		* Validate one enable-switch map (per-tab / per-viewer). Only boolean values
 		* survive; a non-object or a non-boolean entry falls back to the empty map /
 		* drops the entry — an absent key means the feature stays enabled.
@@ -6768,19 +8908,6 @@ window.__ModuleLoader__.load({
 			const out = {};
 			for (const [key, item] of Object.entries(value)) if (typeof item === "boolean") out[key] = item;
 			return out;
-		}
-		/** Type guard for the title-bar scheme union (anything else falls back). */
-		function isTitleBarScheme(value) {
-			return typeof value === "string" && TITLE_BAR_SCHEMES.includes(value);
-		}
-		/**
-		* Whether the legacy document carries an explicit strip value (only
-		* reachable through the old gear popup): a stored number different from the
-		* default counts as "the user already configured something" and migrates to
-		* the `custom` scheme.
-		*/
-		function hasLegacyStripValue(value) {
-			return typeof value === "number" && Number.isFinite(value) && value !== 40;
 		}
 		async function loadBootDecision(settings) {
 			try {
@@ -7058,9 +9185,10 @@ window.__ModuleLoader__.load({
 		* search is free — the tree keeps its level cache and the live directory
 		* watcher (the old conditional render dropped both and refetched the whole
 		* visible set on every query change). Owns its refresh tick: the icon next to
-		* the search input clears the tree cache. EditorHost docks it as the tab's
-		* right panel (wrapped in a drag-resize handle) and provides the file
-		* context-menu open escapes.
+		* the search input clears the tree cache, and the sort menu beside it owns the
+		* tree's row order (passed down; the default is the host's own order).
+		* EditorHost docks it as the tab's right panel (wrapped in a drag-resize
+		* handle) and provides the file context-menu open escapes.
 		*
 		* Uploads (header pickers, the tree's drag-drop and "upload here" menu)
 		* all funnel through here: one session at a time, shown in a full-window
@@ -7071,11 +9199,18 @@ window.__ModuleLoader__.load({
 		* intake.
 		*/
 		function TreePanel(props) {
-			const { sessionId, cwd, expanded, revealed, onToggle, onOpenFile, onOpenFileNewTab, onOpenFileSide, openInApp, openWithTargets, openWithPinned, openWithSsh, onOpenWith, onToggleOpenWithPin, openWithShowPluginTargets, onReferenceFile, onPathRenamed, onPathDeleted, visible, full, service } = props;
+			const { sessionId, cwd, expanded, revealed, onToggle, onOpenFile, onOpenFileNewTab, onOpenFileSide, openInApp, openWithTargets, openWithPinned, openWithSsh, onOpenWith, onToggleOpenWithPin, openWithShowPluginTargets, exclude, onReferenceFile, onPathRenamed, onPathDeleted, visible, full, service } = props;
 			const [query, setQuery] = (0, react.useState)("");
 			const [results, setResults] = (0, react.useState)(null);
 			const [error, setError] = (0, react.useState)(null);
 			const [refreshTick, setRefreshTick] = (0, react.useState)(0);
+			/**
+			* The explorer's row order (the header's sort control). Starts at the
+			* default — name order, folders first — which is the order the host already
+			* returns, so the tree looks exactly as it did before the control existed.
+			*/
+			const [sort, setSort] = (0, react.useState)(DEFAULT_FILE_TREE_SORT);
+			const [sortOpen, setSortOpen] = (0, react.useState)(false);
 			(0, react.useEffect)(() => {
 				const bump = () => {
 					setRefreshTick((tick) => tick + 1);
@@ -7152,6 +9287,7 @@ window.__ModuleLoader__.load({
 			const folderInputProps = { webkitdirectory: "" };
 			const needle = query.trim();
 			const searching = needle !== "";
+			const excludeKey = (exclude ?? []).join("\0");
 			(0, react.useEffect)(() => {
 				if (needle === "") {
 					setResults(null);
@@ -7159,11 +9295,12 @@ window.__ModuleLoader__.load({
 					return;
 				}
 				const controller = new AbortController();
+				const patterns = excludeKey === "" ? void 0 : excludeKey.split("\0");
 				const timer = window.setTimeout(() => {
 					api.fsSearch({
 						sessionId,
 						cwd
-					}, needle, controller.signal).then((found) => {
+					}, needle, patterns, controller.signal).then((found) => {
 						setResults(found);
 						setError(null);
 					}).catch((failure) => {
@@ -7179,9 +9316,28 @@ window.__ModuleLoader__.load({
 			}, [
 				sessionId,
 				cwd,
-				needle
+				needle,
+				excludeKey
 			]);
 			const busy = upload !== null;
+			/** Directory hits (the host reports them separately): a click navigates the
+			*  tree for those rows instead of opening them as files. */
+			const dirHits = (0, react.useMemo)(() => new Set(results?.dirs), [results]);
+			/**
+			* Jump to a DIRECTORY hit in the tree. Results include directories (they
+			* show where matches live) and `fs.read` refuses one, so opening such a row
+			* as a file surfaced a bare `"…" is a directory` error. Expand the folder
+			* and its ancestors instead — `onToggle` FLIPS a row, so only collapsed
+			* paths are touched — and clear the query so the tree, not the parked
+			* results panel, is what the user sees next.
+			*/
+			const openSearchDir = (rel) => {
+				const target = resolveSidebarPath(cwd, rel);
+				if (cwd !== void 0 && isWithinWorkspace(cwd, target)) {
+					for (const path of [...ancestorDirs(cwd, [target]), target]) if (!expanded.includes(path)) onToggle(path);
+				}
+				setQuery("");
+			};
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				className: clsx(sidebar_module_css_default.editorTreePanel, full === true && sidebar_module_css_default.editorTreePanelFull),
 				children: [
@@ -7203,6 +9359,59 @@ window.__ModuleLoader__.load({
 								onClick: () => {
 									setRefreshTick((tick) => tick + 1);
 								}
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Menu, {
+								open: sortOpen,
+								onClose: () => {
+									setSortOpen(false);
+								},
+								onSelect: (id) => {
+									setSort((current) => {
+										if (id === "sort-name") return {
+											...current,
+											key: "name"
+										};
+										if (id === "sort-type") return {
+											...current,
+											key: "type"
+										};
+										return {
+											...current,
+											dirsFirst: !current.dirsFirst
+										};
+									});
+									setSortOpen(false);
+								},
+								items: [
+									{
+										id: "sort-name",
+										label: t("sortByName"),
+										icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronsUpDownOutlineRegular, { size: 14 })
+									},
+									{
+										id: "sort-type",
+										label: t("sortByType"),
+										icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronsUpDownOutlineRegular, { size: 14 })
+									},
+									{
+										type: "separator",
+										id: "sort-sep"
+									},
+									{
+										id: "sort-folders-first",
+										label: t("sortFoldersFirst")
+									}
+								],
+								selectedIds: [sort.key === "name" ? "sort-name" : "sort-type", ...sort.dirsFirst ? ["sort-folders-first"] : []],
+								align: "end",
+								compact: true,
+								anchor: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(IconButton, {
+									label: t("sort"),
+									icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronsUpDownOutlineRegular, { size: 14 }),
+									onClick: () => {
+										setSortOpen((open) => !open);
+									}
+								})
 							}),
 							/* @__PURE__ */ (0, react_jsx_runtime.jsx)(IconButton, {
 								label: t("uploadFiles"),
@@ -7264,15 +9473,23 @@ window.__ModuleLoader__.load({
 								className: sidebar_module_css_default.editorSearchHint,
 								children: t("editorSearchNoResults")
 							}),
-							error === null && results !== null && results.matches.map((rel) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-								type: "button",
-								className: sidebar_module_css_default.editorSearchResult,
-								title: rel,
-								onClick: () => {
-									onOpenFile(resolveSidebarPath(cwd, rel));
-								},
-								children: rel
-							}, rel)),
+							error === null && results !== null && results.matches.map((rel) => {
+								const isDirHit = dirHits.has(rel);
+								return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+									type: "button",
+									className: clsx(sidebar_module_css_default.editorSearchResult, isDirHit && sidebar_module_css_default.editorSearchResultDir),
+									title: rel,
+									"data-dsh-search-dir": isDirHit ? "true" : void 0,
+									onClick: () => {
+										if (isDirHit) openSearchDir(rel);
+										else onOpenFile(resolveSidebarPath(cwd, rel));
+									},
+									children: [isDirHit && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconFolderOpenRegular, { size: 14 }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+										className: sidebar_module_css_default.editorSearchResultLabel,
+										children: rel
+									})]
+								}, rel);
+							}),
 							error === null && results?.truncated === true && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 								className: sidebar_module_css_default.editorSearchHint,
 								children: t("editorSearchTruncated")
@@ -7295,6 +9512,7 @@ window.__ModuleLoader__.load({
 						onOpenWith,
 						onToggleOpenWithPin,
 						openWithShowPluginTargets,
+						exclude,
 						onReferenceFile,
 						onPathRenamed,
 						onPathDeleted,
@@ -7303,6 +9521,7 @@ window.__ModuleLoader__.load({
 						busy,
 						hidden: searching,
 						visible: visible !== false,
+						sort,
 						service
 					}),
 					upload !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(UploadOverlay, {
@@ -7318,32 +9537,139 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region src/client/tree-mutations.ts
-		/** Every open tab that carries a file path. */
-		function pathTabsOf(snapshot) {
-			const state = snapshot.state;
-			if (state === void 0) return [];
+		/**
+		* The rename-marker key for one tab: the session its editor runs in, plus the
+		* tab id.
+		*
+		* Native tab ids restart per session — `tab1` exists in every conversation —
+		* so the id alone is not an identity. Keyed by the id alone, two seats' editors
+		* shared one marker, and an editor whose own path did NOT move (its effect
+		* clears the marker it finds) wiped the other seat's pending move; that other
+		* editor then reloaded the renamed file and dropped the draft this whole
+		* mechanism exists to protect. The session half is the one the editor reads in
+		* its `scope.sessionId`, so the writers here and the reader in `EditorHost`
+		* build the same key.
+		*/
+		function pathTabKey(sessionId, tabId) {
+			return `${sessionId}\u0000${tabId}`;
+		}
+		/**
+		* Retargets a rename has announced — the editor's side of the move.
+		*
+		* A tab is re-pointed by patching its `path`, and the editor host reloads
+		* whenever that path changes. Reloading a renamed file would swap the loaded
+		* document for the very same bytes while dropping the draft that lives only in
+		* the editor instance, so the retarget announces itself here instead: the
+		* editor keeps its document and the next save simply lands on the new name.
+		*
+		* A list per key rather than one slot: two tabs can still share a key (two
+		* seats showing the same session's file under the same id), and each of them
+		* has to claim the move on its own.
+		*/
+		const retargetedPaths = /* @__PURE__ */ new Map();
+		/** Announce that `key`'s file moved from `from` to `to`. */
+		function markRetargetedPath(key, from, to) {
+			const pending = retargetedPaths.get(key);
+			if (pending === void 0) retargetedPaths.set(key, [{
+				from,
+				to
+			}]);
+			else pending.push({
+				from,
+				to
+			});
+		}
+		/** Whether this exact move is one `key` has not applied yet. Consumes it: a
+		*  tab that never sees the move must not swallow a later, unrelated one. */
+		function consumeRetargetedPath(key, from, to) {
+			const pending = retargetedPaths.get(key);
+			if (pending === void 0) return false;
+			const at = pending.findIndex((entry) => entry.from === from && entry.to === to);
+			if (at === -1) return false;
+			pending.splice(at, 1);
+			if (pending.length === 0) retargetedPaths.delete(key);
+			return true;
+		}
+		/** Forget a key's pending retargets. Called where the announcement can no
+		*  longer be claimed — the editor unmounted (a fresh mount loads the record's
+		*  current path anyway), loaded something else, or its tab is being closed —
+		*  so the map cannot grow for the life of the page. */
+		function clearRetargetedPath(key) {
+			retargetedPaths.delete(key);
+		}
+		/** Every open tab that carries a file path, from BOTH tab spaces. */
+		function pathTabsOf(snapshot, native) {
 			const tabs = [];
-			for (const leaf of allLeaves(state.bottomSplits)) tabs.push(...leaf.tabs);
-			return tabs.filter((tab) => tab.path !== void 0);
+			const state = snapshot.state;
+			if (state !== void 0) {
+				const session = snapshot.sessionId ?? "";
+				for (const leaf of allLeaves(state.bottomSplits)) for (const tab of leaf.tabs) if (tab.path !== void 0) tabs.push({
+					key: pathTabKey(session, tab.id),
+					id: tab.id,
+					path: tab.path,
+					absolute: tab.path,
+					scopeSessionId: snapshot.sessionId
+				});
+			}
+			for (const tab of native) tabs.push({
+				key: pathTabKey(tab.scopeSessionId, tab.id),
+				id: tab.id,
+				path: tab.path,
+				absolute: resolveSidebarPath(tab.cwd, tab.path),
+				scopeSessionId: tab.scopeSessionId,
+				sessionId: tab.sessionId
+			});
+			return tabs;
+		}
+		/**
+		* Where `path` moves to when `oldPath` (a file OR a directory) became
+		* `newPath`, or undefined when the tab is unaffected. A renamed directory
+		* takes its subtree along, so `dir/a.ts` follows `dir` → `renamed` — the same
+		* containment rule the delete path uses.
+		*/
+		function movedPath(path, oldPath, newPath) {
+			if (!isWithinWorkspace(oldPath, path)) return void 0;
+			const tail = relativeTo(oldPath, path);
+			return tail === "." ? newPath : `${newPath}/${tail}`;
 		}
 		/** Retarget tabs after `oldPath` became `newPath` (title follows the new
-		*  base name, matching how openFile titles editor tabs). */
+		*  base name, matching how openFile titles editor tabs).
+		*
+		*  Files and anything under a renamed DIRECTORY are retargeted — the same
+		*  subtree rule the delete path uses. The move is announced through
+		*  {@link markRetargetedPath} so the editor keeps its document (and an unsaved
+		*  draft) instead of reloading the new name. */
 		function retargetPathTabs(ctx, store, oldPath, newPath) {
 			const service = ctx.get("betterSidebar");
 			if (service === void 0) return;
-			for (const tab of pathTabsOf(store.getSnapshot())) if (tab.path === oldPath) service.updateTab(tab.id, {
-				path: newPath,
-				title: baseName(newPath)
-			});
+			const snapshot = store.getSnapshot();
+			for (const tab of pathTabsOf(snapshot, service.nativePathTabs())) {
+				const moved = movedPath(tab.absolute, oldPath, newPath);
+				if (moved === void 0) continue;
+				markRetargetedPath(tab.key, tab.path, moved);
+				service.updateTab(tab.id, {
+					path: moved,
+					title: baseName$1(moved)
+				}, tab.sessionId);
+			}
 		}
 		/** Close tabs at or under the removed `target` (a directory takes its whole
-		*  subtree of open files with it). */
-		function closePathTabs(ctx, store, target) {
+		*  subtree of open files with it). A tab holding an unsaved draft asks first
+		*  (the same guard + copy as the sidebar's tab close); declining keeps the
+		*  tab — which is the user's call for the bottom workbench, and stays a
+		*  conflict-gated save on the native side, never a silent re-create.
+		*
+		*  The question is asked in the tab's OWN session: the draft registry is keyed
+		*  by `sessionId::tabId`, so a bare id read would look up a same-numbered tab in
+		*  some other session (or nothing at all) and close a live draft unprompted. */
+		function closePathTabs(ctx, store, target, unsavedMessage) {
 			const service = ctx.get("betterSidebar");
 			if (service === void 0) return;
-			for (const tab of pathTabsOf(store.getSnapshot())) {
-				const path = tab.path;
-				if (path !== void 0 && (path === target || isWithinWorkspace(target, path))) service.closeTab(tab.id);
+			for (const tab of pathTabsOf(store.getSnapshot(), service.nativePathTabs())) {
+				if (!isWithinWorkspace(target, tab.absolute)) continue;
+				if (!confirmDiscardDraft(tab.id, unsavedMessage, tab.scopeSessionId)) continue;
+				clearRetargetedPath(tab.key);
+				service.closeTab(tab.id, tab.sessionId === void 0 ? void 0 : { sessionId: tab.sessionId });
 			}
 		}
 		//#endregion
@@ -7395,16 +9721,30 @@ window.__ModuleLoader__.load({
 			const width = metaOf(tab).treeWidth;
 			return typeof width === "number" && Number.isFinite(width) ? Math.min(TREE_WIDTH_MAX, Math.max(TREE_WIDTH_MIN, Math.round(width))) : TREE_WIDTH_DEFAULT;
 		}
-		/** Merge a patch into the tab's persisted meta (rides the layout). */
-		function patchMeta(ctx, tab, patch) {
+		/**
+		* Merge a patch into the tab's persisted meta (rides the layout).
+		*
+		* `sessionId` is the seat session: native ids restart per session and every
+		* visited tab's body stays mounted (0.1.7 `keepMounted`), so the tab this call
+		* means must be named, not inferred from whichever seat is on screen.
+		*/
+		function patchMeta(ctx, tab, sessionId, patch) {
 			ctx.get("betterSidebar")?.updateTab(tab.id, { meta: {
 				...metaOf(tab),
 				...patch
-			} });
+			} }, sessionId);
 		}
 		/** Clamp one dock width into the contract range. */
 		function clampTreeWidth(value) {
 			return Math.min(TREE_WIDTH_MAX, Math.max(TREE_WIDTH_MIN, Math.round(value)));
+		}
+		/** Whether one external-open call was accepted: a rejected launch is logged
+		*  for diagnosis and answered `false`, so the caller can surface it. */
+		function accepted(pending) {
+			return pending.then(() => true, (error) => {
+				console.error("open external failed", error);
+				return false;
+			});
 		}
 		function EditorHost(props) {
 			const { ctx, store, scope, tab, expanded, revealed, onToggleDir, onReferenceFile } = props;
@@ -7414,6 +9754,14 @@ window.__ModuleLoader__.load({
 			const isDir = metaOf(tab).dir === true;
 			const [load, setLoad] = (0, react.useState)({ status: "loading" });
 			const [reloadSeq, setReloadSeq] = (0, react.useState)(0);
+			const [spentLine, setSpentLine] = (0, react.useState)(null);
+			const lineKey = tab.line === void 0 ? null : `${path}#${tab.line}`;
+			const onLineConsumed = (0, react.useCallback)(() => {
+				if (lineKey !== null) setSpentLine(lineKey);
+			}, [lineKey]);
+			(0, react.useEffect)(() => {
+				setSpentLine(null);
+			}, [path]);
 			const refreshFile = () => {
 				if (toolbar?.dirty === true) {
 					if (!(typeof window.confirm === "function" ? window.confirm(t("refreshUnsavedConfirm")) : false)) return;
@@ -7421,6 +9769,7 @@ window.__ModuleLoader__.load({
 				setReloadSeq((sequence) => sequence + 1);
 			};
 			const inPlace = (0, react.useSyncExternalStore)((0, react.useCallback)((callback) => store.subscribe(callback), [store]), (0, react.useCallback)(() => store.getSnapshot().prefs.editorExplorer, [store]));
+			const exclude = (0, react.useSyncExternalStore)((0, react.useCallback)((callback) => store.subscribe(callback), [store]), (0, react.useCallback)(() => store.getSnapshot().prefs.explorerExclude, [store]));
 			const openInApp = (0, react.useMemo)(() => createOpenInApp(ctx), [ctx]);
 			const service = ctx.get("betterSidebar");
 			const editorBlob = (0, react.useSyncExternalStore)((0, react.useCallback)((callback) => store.subscribe(callback), [store]), (0, react.useCallback)(() => store.getSnapshot().prefs.pluginSettings["editor"] ?? EMPTY_PLUGIN_BLOB, [store]));
@@ -7434,13 +9783,20 @@ window.__ModuleLoader__.load({
 			* Open a file from THIS window (tree click / search row / path input):
 			* merged mode switches this tab in place (stable id, meta survives);
 			* split mode opens a per-path dedupe tab through openSidebarFile.
+			*
+			* A file another native tab type claims (a `.drawio` canvas, say) diverts
+			* to THAT type's tab in BOTH modes (#695) — an in-place switch would
+			* swallow it into this plugin's editor, and the claiming type could never
+			* render from the tree. Both helpers fall back verbatim for every other
+			* file, so the editor keeps exactly its previous behavior.
 			*/
 			const openFile = (absolute) => {
-				if (inPlace) ctx.get("betterSidebar")?.updateTab(tab.id, {
-					path: absolute,
-					title: baseName(absolute)
-				});
-				else openSidebarFile(ctx, scope.sessionId, absolute);
+				if (inPlace) {
+					if (!openClaimedNativeFile(ctx, scope.sessionId, scope.cwd, absolute)) ctx.get("betterSidebar")?.updateTab(tab.id, {
+						path: absolute,
+						title: baseName(absolute)
+					}, scope.sessionId);
+				} else openSidebarFile(ctx, scope.sessionId, absolute);
 			};
 			/** The context menu's explicit "new tab" escape (per-path dedupe). */
 			const openFileNewTab = (absolute) => {
@@ -7488,28 +9844,27 @@ window.__ModuleLoader__.load({
 			*  manager, or hand the target's URL to its opener — local `file` URLs go
 			*  to the host's external opener, while the SSH-remote form for
 			*  VSCode-family editors launches on the browser/client machine (see
-			*  api.openExternal). Failures are logged only — a missing handler is the
-			*  OS's/browser's dialog, not a sidebar error. */
+			*  api.openExternal).
+			*
+			*  Answers whether the hand-off was accepted. The host route now reports a
+			*  real failure when EVERY opener candidate fails (see
+			*  `src/open-external.ts`) instead of the old silent `{ started: true }`, so
+			*  a refusal is returned to the tree, which renders it — the log stays for
+			*  diagnosis. A missing handler on the other machine is still the OS's or
+			*  browser's own dialog. */
 			const openWith = (targetId, absolute) => {
 				const target = openWithTargets.find((item) => item.id === targetId);
-				if (target === void 0) return;
-				if (target.kind === "reveal") {
-					api.openExternal({
-						action: "reveal",
-						path: absolute
-					}).catch((error) => {
-						console.error("open external failed", error);
-					});
-					return;
-				}
+				if (target === void 0) return Promise.resolve(false);
+				if (target.kind === "reveal") return accepted(api.openExternal({
+					action: "reveal",
+					path: absolute
+				}));
 				const url = openWithUrl(target, absolute, openWithConfig);
-				if (url === void 0) return;
-				api.openExternal({
+				if (url === void 0) return Promise.resolve(false);
+				return accepted(api.openExternal({
 					action: "url",
 					url
-				}).catch((error) => {
-					console.error("open external failed", error);
-				});
+				}));
 			};
 			/** Toggle one target's pinned state. The write is serialized (see
 			*  plugin-settings.ts) and the menu re-renders when the store prefs land. */
@@ -7530,7 +9885,7 @@ window.__ModuleLoader__.load({
 				retargetPathTabs(ctx, store, oldPath, newPath);
 			};
 			const onPathDeleted = (path) => {
-				closePathTabs(ctx, store, path);
+				closePathTabs(ctx, store, path, t("closeUnsavedConfirm"));
 			};
 			const [toolbar, setToolbar] = (0, react.useState)(null);
 			const controlsRef = (0, react.useRef)(null);
@@ -7540,6 +9895,19 @@ window.__ModuleLoader__.load({
 			const onToolbarControls = (0, react.useCallback)((controls) => {
 				controlsRef.current = controls;
 			}, []);
+			(0, react.useEffect)(() => {
+				if (path === "" || isDir) return;
+				setEditorDirty(tab.id, toolbar?.dirty === true, scope.sessionId, path);
+				return () => {
+					clearEditorDirty(tab.id, scope.sessionId);
+				};
+			}, [
+				tab.id,
+				toolbar?.dirty,
+				scope.sessionId,
+				path,
+				isDir
+			]);
 			const [dragWidth, setDragWidth] = (0, react.useState)(null);
 			const dragRef = (0, react.useRef)(null);
 			const pendingWidthRef = (0, react.useRef)(0);
@@ -7567,9 +9935,23 @@ window.__ModuleLoader__.load({
 				dragRef.current = null;
 				setDragWidth(null);
 				const finalWidth = clampTreeWidth(drag.startWidth + (drag.startX - event.clientX));
-				if (finalWidth !== treeWidthOf(tab)) patchMeta(ctx, tab, { treeWidth: finalWidth });
+				if (finalWidth !== treeWidthOf(tab)) patchMeta(ctx, tab, scope.sessionId, { treeWidth: finalWidth });
 			};
+			/** The rename-marker key for this tab (see `pathTabKey`): the session this
+			*  editor reads and writes in, plus the tab id. */
+			const retargetKey = pathTabKey(scope.sessionId, tab.id);
+			/** The path this editor last loaded (or was mounted on) — the rename retarget
+			*  announces itself as a move away from it. */
+			const loadedPathRef = (0, react.useRef)(path);
+			(0, react.useEffect)(() => () => {
+				clearRetargetedPath(retargetKey);
+			}, [retargetKey]);
 			(0, react.useEffect)(() => {
+				const previousPath = loadedPathRef.current;
+				const pathChanged = previousPath !== path;
+				loadedPathRef.current = path;
+				if (pathChanged && consumeRetargetedPath(retargetKey, previousPath, path)) return;
+				if (!pathChanged) clearRetargetedPath(retargetKey);
 				setToolbar(null);
 				if (showEmpty || isDir) return;
 				let cancelled = false;
@@ -7587,7 +9969,8 @@ window.__ModuleLoader__.load({
 								status: "ready",
 								viewer: action.viewer,
 								content: action.content,
-								truncated: action.truncated,
+								size: action.size,
+								largeFile: action.largeFile,
 								mediaUrl: action.mediaUrl,
 								customData: action.customData
 							});
@@ -7611,13 +9994,13 @@ window.__ModuleLoader__.load({
 						case "fetchFsRead":
 							api.fsRead(scope, path).then((result) => {
 								if (cancelled) return;
-								const outcome = planFsReadOutcome(action.viewer, {
-									binary: result.kind === "binary",
-									content: result.kind === "text" ? result.content : "",
-									truncated: result.truncated,
-									head: result.kind === "binary" ? result.head : void 0
-								}, (head) => ctx.get("betterSidebar")?.matchFileViewer(path, head), mediaUrlOf);
-								apply(outcome);
+								const outcome = planFsReadOutcome(action.viewer, result, (head) => ctx.get("betterSidebar")?.matchFileViewer(path, head), mediaUrlOf);
+								if (outcome.kind === "render") setLoad({
+									...outcome,
+									status: "ready",
+									mtimeMs: result.mtimeMs
+								});
+								else apply(outcome);
 							}).catch((error) => {
 								if (cancelled) return;
 								setLoad({
@@ -7648,10 +10031,39 @@ window.__ModuleLoader__.load({
 				if (prevSaveState.current !== "saved" && current === "saved" && toolbar?.mode === "preview") setReloadSeq((sequence) => sequence + 1);
 				prevSaveState.current = current;
 			}, [toolbar?.saveState, toolbar?.mode]);
+			const ops = useFileOpStream(scope, visible && !showEmpty && !isDir);
+			/** The stream revision this tab's current path is known fresh at. */
+			const opBaseline = (0, react.useRef)(null);
+			(0, react.useEffect)(() => {
+				const key = `${scope.sessionId}\u0000${path}`;
+				const seen = opBaseline.current;
+				if (seen === null || seen.key !== key) {
+					opBaseline.current = {
+						key,
+						revision: ops.revision
+					};
+					return;
+				}
+				const touch = ops.touched.get(fileOpKey(scope.cwd, path));
+				if (touch === void 0 || touch.revision <= seen.revision) return;
+				opBaseline.current = {
+					key,
+					revision: ops.revision
+				};
+				if (toolbar?.dirty === true || toolbar?.mode === "edit") return;
+				setReloadSeq((sequence) => sequence + 1);
+			}, [
+				ops,
+				path,
+				scope.sessionId,
+				scope.cwd,
+				toolbar?.dirty,
+				toolbar?.mode
+			]);
 			const treeOpen = treeOpenOf(tab);
 			/** Persist the panel flag on the tab (survives reloads with the layout). */
 			const toggleTree = () => {
-				patchMeta(ctx, tab, { treeOpen: !treeOpen });
+				patchMeta(ctx, tab, scope.sessionId, { treeOpen: !treeOpen });
 			};
 			const saveLabel = toolbar === null ? "" : toolbar.saveState === "saving" ? t("loading") : toolbar.saveState === "saved" ? t("saved") : toolbar.saveState === "failed" ? t("saveFailed") : "";
 			if (treeOnly || folderRoot !== void 0) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
@@ -7677,6 +10089,7 @@ window.__ModuleLoader__.load({
 					onReferenceFile,
 					onPathRenamed,
 					onPathDeleted,
+					exclude,
 					service: ctx.get("betterSidebar")
 				})
 			});
@@ -7713,7 +10126,7 @@ window.__ModuleLoader__.load({
 							className: sidebar_module_css_default.dirtyDot,
 							title: t("unsaved")
 						}),
-						toolbar?.editable === true && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						toolbar?.editable === true && toolbar?.largeFile !== true && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 							type: "button",
 							className: sidebar_module_css_default.iconButton,
 							"aria-label": t("save"),
@@ -7773,13 +10186,19 @@ window.__ModuleLoader__.load({
 								path,
 								title,
 								viewerId: load.viewer.id,
+								line: lineKey !== null && lineKey !== spentLine ? tab.line : void 0,
+								onLineConsumed,
 								content: load.content,
-								truncated: load.truncated,
+								size: load.size,
+								largeFile: load.largeFile,
+								mtimeMs: load.mtimeMs,
 								mediaUrl: load.mediaUrl,
 								customData: load.customData,
 								toolbar: "host",
+								visible,
 								onToolbarState,
-								onToolbarControls
+								onToolbarControls,
+								onReload: refreshFile
 							})
 						]
 					}), treeOpen && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
@@ -7814,6 +10233,7 @@ window.__ModuleLoader__.load({
 							onReferenceFile,
 							onPathRenamed,
 							onPathDeleted,
+							exclude,
 							service: ctx.get("betterSidebar")
 						})]
 					})]
@@ -7862,8 +10282,8 @@ window.__ModuleLoader__.load({
 			});
 		}
 		//#endregion
-		//#region \0dsh-css:H:\MaxNull\WorkStation\third-party-plugins\DSH-better-sidebar\src\client\SideCardSection.module.css.mjs
-		const css$8 = ".nfk0fG_section{flex-direction:column;gap:16px;width:100%;max-width:760px;display:flex}.nfk0fG_intro{color:var(--dsw-alias-label-tertiary);margin:0;padding:0 2px;font-size:13px;line-height:20px}.nfk0fG_group{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:16px;flex-direction:column;flex:none;gap:8px;padding:20px;display:flex}.nfk0fG_groupHeading{color:var(--dsw-alias-label-primary);align-items:baseline;gap:7px;padding:0 2px 6px;font-size:13px;font-weight:600;line-height:20px;display:flex}.nfk0fG_count{background:var(--dsw-alias-accent-soft,var(--dsw-alias-bg-layer-2));color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;border-radius:999px;padding:1px 8px;font-size:11px;font-weight:500;line-height:16px}.nfk0fG_grid{grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;display:grid}.nfk0fG_card{border:1px solid var(--dsw-alias-border-l2);min-height:106px;font:inherit;color:inherit;cursor:pointer;background:0 0;border-radius:12px;flex-direction:column;transition:background .12s,border-color .12s;display:flex;position:relative;overflow:hidden}.nfk0fG_card:not(.nfk0fG_cardOn):hover{background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-label-dimmed)}.nfk0fG_cardOn{border-color:color-mix(in srgb, var(--dsw-alias-button-primary-fill) 45%, transparent);background:var(--dsw-alias-interactive-bg-active)}.nfk0fG_cardMain{border-radius:inherit;width:100%;font:inherit;color:inherit;text-align:left;cursor:pointer;background:0 0;border:0;flex-direction:column;flex:1;gap:6px;padding:12px;display:flex}.nfk0fG_cardMain:focus-visible,.nfk0fG_cardSettings:focus-visible,.nfk0fG_rowGear:focus-visible{outline:2px solid var(--dsw-alias-border-l4);outline-offset:2px}.nfk0fG_cardTop{align-items:center;gap:8px;min-width:0;min-height:28px;display:flex}.nfk0fG_cardIconChip{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);width:28px;height:28px;color:var(--dsw-alias-label-tertiary);border-radius:8px;flex:none;justify-content:center;align-items:center;display:inline-flex}.nfk0fG_cardOn .nfk0fG_cardIconChip{border-color:color-mix(in srgb, var(--dsw-alias-button-primary-fill) 35%, transparent);background:color-mix(in srgb, var(--dsw-alias-button-primary-fill) 12%, transparent);color:var(--dsw-alias-button-primary-fill)}.nfk0fG_cardTitle{min-width:0;color:var(--dsw-alias-label-secondary);white-space:nowrap;text-overflow:ellipsis;flex:1;font-size:13px;font-weight:600;line-height:20px;overflow:hidden}.nfk0fG_cardOn .nfk0fG_cardTitle{color:var(--dsw-alias-label-primary)}.nfk0fG_cardSwitch{flex:none;align-items:center;display:inline-flex}.nfk0fG_cardSwitchTrack{box-sizing:border-box;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;align-items:center;width:30px;height:16px;padding:2px;transition:background .15s,border-color .15s;display:inline-flex}.nfk0fG_cardSwitchThumb{background:var(--dsw-alias-label-tertiary);border-radius:50%;width:10px;height:10px;transition:transform .15s,background .15s;display:block}.nfk0fG_cardOn .nfk0fG_cardSwitchTrack{border-color:var(--dsw-alias-button-primary-fill);background:var(--dsw-alias-button-primary-fill)}.nfk0fG_cardOn .nfk0fG_cardSwitchThumb{background:var(--dsw-alias-bg-layer-3);transform:translate(14px)}.nfk0fG_cardDesc{color:var(--dsw-alias-label-tertiary);white-space:nowrap;text-overflow:ellipsis;font-size:11px;line-height:16px;overflow:hidden}.nfk0fG_addCard{border-style:dashed;border-color:var(--dsw-alias-border-l2);text-align:left;align-items:flex-start;padding:12px}.nfk0fG_addCard:hover{background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-primary)}.nfk0fG_addCard:hover .nfk0fG_cardTitle{color:var(--dsw-alias-label-primary)}.nfk0fG_addCard:hover .nfk0fG_cardIconChip{border-color:color-mix(in srgb, var(--dsw-alias-button-primary-fill) 35%, transparent);color:var(--dsw-alias-button-primary-fill)}.nfk0fG_addCard:focus-visible{outline:2px solid var(--dsw-alias-border-l4);outline-offset:2px}.nfk0fG_cardOn .nfk0fG_cardDesc{color:var(--dsw-alias-label-secondary)}.nfk0fG_cardSettings{border:0;border-top:1px solid var(--dsw-alias-border-l1);width:100%;color:var(--dsw-alias-label-secondary);font:inherit;text-align:left;cursor:pointer;background:0 0;align-items:center;gap:6px;padding:6px 12px;font-size:11px;font-weight:500;line-height:16px;transition:background .12s,color .12s;display:flex}.nfk0fG_cardOn .nfk0fG_cardSettings{border-top-color:color-mix(in srgb, var(--dsw-alias-button-primary-fill) 18%, transparent)}.nfk0fG_cardSettings:hover{background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-brand-primary)}.nfk0fG_rowGear{border:1px solid var(--dsw-alias-border-l2);width:22px;height:22px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border-radius:6px;flex:none;justify-content:center;align-items:center;padding:0;transition:background .12s,border-color .12s,color .12s;display:inline-flex}.nfk0fG_rowGear:hover{border-color:var(--dsw-alias-interactive-bg-hover-accent);background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-brand-primary)}.nfk0fG_row{border-bottom:1px solid var(--dsw-alias-border-l2);justify-content:space-between;align-items:center;gap:16px;padding:12px 2px;display:flex}.nfk0fG_row:last-child{border-bottom:none}.nfk0fG_rowText{flex-direction:column;gap:4px;min-width:0;display:flex}.nfk0fG_title{color:var(--dsw-alias-label-primary);font-size:14px;line-height:22px}.nfk0fG_desc{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}.nfk0fG_switch{cursor:pointer;flex:none;display:inline-flex;position:relative}.nfk0fG_switchInput{opacity:0;width:1px;height:1px;margin:0;position:absolute}.nfk0fG_switchTrack{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);border-radius:10px;align-items:center;width:36px;height:20px;padding:2px;transition:background .15s,border-color .15s;display:inline-flex}.nfk0fG_switchThumb{background:var(--dsw-alias-label-tertiary);border-radius:50%;width:14px;height:14px;transition:transform .15s,background .15s;display:block}.nfk0fG_switch:hover .nfk0fG_switchTrack{border-color:var(--dsw-alias-label-dimmed)}.nfk0fG_switchInput:checked+.nfk0fG_switchTrack{border-color:var(--dsw-alias-button-primary-fill);background:var(--dsw-alias-button-primary-fill)}.nfk0fG_switchInput:checked+.nfk0fG_switchTrack .nfk0fG_switchThumb{background:var(--dsw-alias-bg-layer-3);transform:translate(16px)}.nfk0fG_switchInput:focus-visible+.nfk0fG_switchTrack{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px}.nfk0fG_control{flex:none;align-items:center;gap:6px;display:flex}.nfk0fG_percentInput{width:76px}.nfk0fG_typedInput{width:200px}.nfk0fG_typedInputNumber{width:76px}.nfk0fG_selectAnchor{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);max-width:220px;color:var(--dsw-alias-label-primary);cursor:pointer;border-radius:8px;align-items:center;gap:6px;padding:4px 8px;font-size:13px;line-height:20px;display:flex}.nfk0fG_selectAnchor:hover{border-color:var(--dsw-alias-label-dimmed)}.nfk0fG_selectAnchorIcon{flex:none;display:inline-flex}.nfk0fG_selectAnchorText{text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.nfk0fG_selectOption{align-items:center;gap:10px;min-width:200px;display:flex}.nfk0fG_selectOptionIcon{color:var(--dsw-alias-label-secondary);flex:none;display:inline-flex}.nfk0fG_selectOptionText{flex-direction:column;min-width:0;display:flex}.nfk0fG_suffix{color:var(--dsw-alias-label-secondary);font-size:14px;line-height:22px}.nfk0fG_cssTextArea{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);width:100%;min-height:120px;color:var(--dsw-alias-label-primary);font-family:var(--ds-font-family-code,monospace);resize:vertical;border-radius:8px;padding:8px 10px;font-size:12px;line-height:1.6}.nfk0fG_cssTextArea:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px}.nfk0fG_popupDialog.nfk0fG_popupDialog{width:min(460px,100%)}.nfk0fG_popupRows{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:var(--dsw-alias-scrollbar-bg-l2,transparent) transparent;flex-direction:column;gap:8px;width:100%;max-height:min(52vh,440px);padding-right:4px;display:flex;overflow:hidden auto}.nfk0fG_popupRows::-webkit-scrollbar{width:6px}.nfk0fG_popupRows::-webkit-scrollbar-thumb{background:var(--dsw-alias-scrollbar-bg-l2,var(--dsw-alias-border-l2));border-radius:3px}.nfk0fG_popupRows::-webkit-scrollbar-thumb:hover{background:var(--dsw-alias-scrollbar-hover-l2,var(--dsw-alias-label-dimmed))}.nfk0fG_popupRow{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:12px;flex:none;justify-content:space-between;align-items:center;gap:16px;min-width:0;padding:12px 14px;transition:border-color .16s,background .16s;display:flex}.nfk0fG_popupRow:hover{border-color:var(--dsw-alias-label-dimmed)}.nfk0fG_done{appearance:none;font:inherit;cursor:pointer;background:var(--dsw-alias-label-primary);color:var(--dsw-alias-bg-layer-3);border:1px solid #0000;border-radius:8px;padding:5px 14px;font-size:13px;line-height:1.5}.nfk0fG_done:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}.nfk0fG_error{color:var(--dsw-alias-state-error-primary);padding:10px 0 2px;font-size:12px;line-height:17px}.nfk0fG_pluginModal.nfk0fG_pluginModal{width:min(560px,100%)}.nfk0fG_pluginList{flex-direction:column;gap:12px;width:100%;display:flex}.nfk0fG_pluginTopicBtn{appearance:none;border:1px solid var(--dsw-alias-border-l2);width:100%;font:inherit;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-1);cursor:pointer;border-radius:8px;padding:6px 12px;font-size:12px;line-height:18px}.nfk0fG_pluginTopicBtn:hover{background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-primary)}.nfk0fG_pluginTopicBtn:focus-visible{outline:2px solid var(--dsw-alias-border-l4);outline-offset:1px}.nfk0fG_pluginEmpty{color:var(--dsw-alias-label-tertiary);padding:20px 2px;font-size:12px;line-height:18px}.nfk0fG_pluginEntry{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);border-radius:12px;flex-direction:column;gap:4px;padding:12px;display:flex}.nfk0fG_pluginEntryHead{justify-content:space-between;align-items:center;gap:12px;display:flex}.nfk0fG_pluginEntryActions{flex:none;align-items:center;gap:6px;display:inline-flex}.nfk0fG_pluginJumpBtn{appearance:none;border:1px solid var(--dsw-alias-border-l2);font:inherit;cursor:pointer;color:var(--dsw-alias-label-secondary);background:0 0;border-radius:8px;flex:none;padding:3px 12px;font-size:12px;line-height:1.5}.nfk0fG_pluginJumpBtn:hover{background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-primary)}.nfk0fG_pluginJumpBtn:focus-visible{outline:2px solid var(--dsw-alias-border-l4);outline-offset:1px}.nfk0fG_pluginName{appearance:none;min-width:0;font:inherit;color:var(--dsw-alias-label-primary);text-align:left;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;background:0 0;border:0;padding:0;font-size:13px;font-weight:600;line-height:20px;text-decoration:none;overflow:hidden}.nfk0fG_pluginName:hover{color:var(--dsw-alias-button-primary-fill);text-decoration:underline}.nfk0fG_pluginDesc{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}.nfk0fG_pluginInstall{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l1);white-space:nowrap;border-radius:8px;padding:6px 10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:16px;display:block;overflow-x:auto}.nfk0fG_pluginCopyBtn{appearance:none;font:inherit;cursor:pointer;background:var(--dsw-alias-label-primary);color:var(--dsw-alias-bg-layer-3);border:1px solid #0000;border-radius:8px;flex:none;padding:3px 12px;font-size:12px;line-height:1.5}.nfk0fG_pluginCopyBtn:hover{background:var(--dsw-alias-button-primary-hover)}.nfk0fG_pluginCopyBtn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}@media (prefers-reduced-motion:reduce){.nfk0fG_card,.nfk0fG_cardSettings,.nfk0fG_cardSwitchTrack,.nfk0fG_cardSwitchThumb,.nfk0fG_rowGear,.nfk0fG_popupRow,.nfk0fG_switchTrack,.nfk0fG_switchThumb{transition:none}}.nfk0fG_versionBadge{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);border-radius:999px;align-self:flex-start;align-items:center;gap:8px;padding:4px 12px 4px 14px;font-size:12px;line-height:18px;display:inline-flex}.nfk0fG_versionBadgeName{color:var(--dsw-alias-label-primary);font-weight:600}.nfk0fG_versionBadgeTag{background:var(--dsw-alias-accent-soft,var(--dsw-alias-border-l2));color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;border-radius:999px;padding:1px 8px}.nfk0fG_pluginSearch{box-sizing:border-box;appearance:none;border:1px solid var(--dsw-alias-border-l2);width:100%;font:inherit;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-1);border-radius:8px;padding:6px 10px;font-size:12px;line-height:18px}.nfk0fG_pluginSearch::placeholder{color:var(--dsw-alias-label-tertiary)}.nfk0fG_pluginSearch:focus-visible{outline:2px solid var(--dsw-alias-border-l4);outline-offset:1px}.nfk0fG_pluginEntries{flex-direction:column;gap:10px;max-height:46vh;padding-right:2px;display:flex;overflow:hidden auto}.nfk0fG_pluginGroup{flex-direction:column;gap:8px;display:flex}.nfk0fG_pluginGroupHeading{color:var(--dsw-alias-label-secondary);padding:2px 2px 0;font-size:12px;font-weight:600;line-height:18px}.nfk0fG_openWithEditorRow{grid-template-columns:1fr 1.5fr auto auto;align-items:center;gap:8px;min-width:0;display:grid}.nfk0fG_openWithEditorInput,.nfk0fG_openWithEditorTemplate{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);width:100%;min-width:0;color:var(--dsw-alias-label-primary);font:inherit;border-radius:8px;padding:5px 8px;font-size:13px;line-height:20px}.nfk0fG_openWithEditorInput:focus-visible,.nfk0fG_openWithEditorTemplate:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px}.nfk0fG_openWithFamily{color:var(--dsw-alias-label-secondary);white-space:nowrap;cursor:pointer;align-items:center;gap:5px;font-size:12px;display:inline-flex}.nfk0fG_openWithRemove{color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:8px;justify-content:center;align-items:center;padding:4px;display:inline-flex}.nfk0fG_openWithRemove:hover{color:var(--dsw-alias-state-error-primary);background:var(--dsw-alias-bg-layer-2)}.nfk0fG_openWithHint{color:var(--dsw-alias-state-error-primary);padding:0 2px;font-size:12px;line-height:17px}";
+		//#region \0dsh-css:/home/runner/work/DSH-better-sidebar/DSH-better-sidebar/src/client/SideCardSection.module.css.mjs
+		const css$8 = "._2vuxea_section{flex-direction:column;gap:16px;width:100%;max-width:760px;display:flex}._2vuxea_intro{color:var(--dsw-alias-label-tertiary);margin:0;padding:0 2px;font-size:13px;line-height:20px}._2vuxea_group{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:16px;flex-direction:column;flex:none;gap:8px;padding:20px;display:flex}._2vuxea_groupHeading{color:var(--dsw-alias-label-primary);align-items:baseline;gap:7px;padding:0 2px 6px;font-size:13px;font-weight:600;line-height:20px;display:flex}._2vuxea_count{background:var(--dsw-alias-accent-soft,var(--dsw-alias-bg-layer-2));color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;border-radius:999px;padding:1px 8px;font-size:11px;font-weight:500;line-height:16px}._2vuxea_grid{grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;display:grid}._2vuxea_card{border:1px solid var(--dsw-alias-border-l2);min-height:106px;font:inherit;color:inherit;cursor:pointer;background:0 0;border-radius:12px;flex-direction:column;transition:background .12s,border-color .12s;display:flex;position:relative;overflow:hidden}._2vuxea_card:not(._2vuxea_cardOn):hover{background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-label-dimmed)}._2vuxea_cardOn{border-color:color-mix(in srgb, var(--dsw-alias-button-primary-fill) 45%, transparent);background:var(--dsw-alias-interactive-bg-active)}._2vuxea_cardMain{border-radius:inherit;width:100%;font:inherit;color:inherit;text-align:left;cursor:pointer;background:0 0;border:0;flex-direction:column;flex:1;gap:6px;padding:12px;display:flex}._2vuxea_cardMain:focus-visible,._2vuxea_cardSettings:focus-visible{outline:2px solid var(--dsw-alias-border-l4);outline-offset:2px}._2vuxea_cardTop{align-items:center;gap:8px;min-width:0;min-height:28px;display:flex}._2vuxea_cardIconChip{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);width:28px;height:28px;color:var(--dsw-alias-label-tertiary);border-radius:8px;flex:none;justify-content:center;align-items:center;display:inline-flex}._2vuxea_cardOn ._2vuxea_cardIconChip{border-color:color-mix(in srgb, var(--dsw-alias-button-primary-fill) 35%, transparent);background:color-mix(in srgb, var(--dsw-alias-button-primary-fill) 12%, transparent);color:var(--dsw-alias-button-primary-fill)}._2vuxea_cardTitle{min-width:0;color:var(--dsw-alias-label-secondary);white-space:nowrap;text-overflow:ellipsis;flex:1;font-size:13px;font-weight:600;line-height:20px;overflow:hidden}._2vuxea_cardOn ._2vuxea_cardTitle{color:var(--dsw-alias-label-primary)}._2vuxea_cardSwitch{flex:none;align-items:center;display:inline-flex}._2vuxea_cardSwitchTrack{box-sizing:border-box;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;align-items:center;width:30px;height:16px;padding:2px;transition:background .15s,border-color .15s;display:inline-flex}._2vuxea_cardSwitchThumb{background:var(--dsw-alias-label-tertiary);border-radius:50%;width:10px;height:10px;transition:transform .15s,background .15s;display:block}._2vuxea_cardOn ._2vuxea_cardSwitchTrack{border-color:var(--dsw-alias-button-primary-fill);background:var(--dsw-alias-button-primary-fill)}._2vuxea_cardOn ._2vuxea_cardSwitchThumb{background:var(--dsw-alias-bg-layer-3);transform:translate(14px)}._2vuxea_cardDesc{color:var(--dsw-alias-label-tertiary);white-space:nowrap;text-overflow:ellipsis;font-size:11px;line-height:16px;overflow:hidden}._2vuxea_addCard{border-style:dashed;border-color:var(--dsw-alias-border-l2);text-align:left;align-items:flex-start;padding:12px}._2vuxea_addCard:hover{background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-primary)}._2vuxea_addCard:hover ._2vuxea_cardTitle{color:var(--dsw-alias-label-primary)}._2vuxea_addCard:hover ._2vuxea_cardIconChip{border-color:color-mix(in srgb, var(--dsw-alias-button-primary-fill) 35%, transparent);color:var(--dsw-alias-button-primary-fill)}._2vuxea_addCard:focus-visible{outline:2px solid var(--dsw-alias-border-l4);outline-offset:2px}._2vuxea_cardOn ._2vuxea_cardDesc{color:var(--dsw-alias-label-secondary)}._2vuxea_cardSettings{border:0;border-top:1px solid var(--dsw-alias-border-l1);width:100%;color:var(--dsw-alias-label-secondary);font:inherit;text-align:left;cursor:pointer;background:0 0;align-items:center;gap:6px;padding:6px 12px;font-size:11px;font-weight:500;line-height:16px;transition:background .12s,color .12s;display:flex}._2vuxea_cardOn ._2vuxea_cardSettings{border-top-color:color-mix(in srgb, var(--dsw-alias-button-primary-fill) 18%, transparent)}._2vuxea_cardSettings:hover{background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-brand-primary)}._2vuxea_row{border-bottom:1px solid var(--dsw-alias-border-l2);justify-content:space-between;align-items:center;gap:16px;padding:12px 2px;display:flex}._2vuxea_row:last-child{border-bottom:none}._2vuxea_rowText{flex-direction:column;gap:4px;min-width:0;display:flex}._2vuxea_title{color:var(--dsw-alias-label-primary);font-size:14px;line-height:22px}._2vuxea_desc{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}._2vuxea_switch{cursor:pointer;flex:none;display:inline-flex;position:relative}._2vuxea_switchInput{opacity:0;width:1px;height:1px;margin:0;position:absolute}._2vuxea_switchTrack{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);border-radius:10px;align-items:center;width:36px;height:20px;padding:2px;transition:background .15s,border-color .15s;display:inline-flex}._2vuxea_switchThumb{background:var(--dsw-alias-label-tertiary);border-radius:50%;width:14px;height:14px;transition:transform .15s,background .15s;display:block}._2vuxea_switch:hover ._2vuxea_switchTrack{border-color:var(--dsw-alias-label-dimmed)}._2vuxea_switchInput:checked+._2vuxea_switchTrack{border-color:var(--dsw-alias-button-primary-fill);background:var(--dsw-alias-button-primary-fill)}._2vuxea_switchInput:checked+._2vuxea_switchTrack ._2vuxea_switchThumb{background:var(--dsw-alias-bg-layer-3);transform:translate(16px)}._2vuxea_switchInput:focus-visible+._2vuxea_switchTrack{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px}._2vuxea_control{flex:none;align-items:center;gap:6px;display:flex}._2vuxea_percentInput{width:76px}._2vuxea_typedInput{width:200px}._2vuxea_typedInputNumber{width:76px}._2vuxea_selectAnchor{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);max-width:220px;color:var(--dsw-alias-label-primary);cursor:pointer;border-radius:8px;align-items:center;gap:6px;padding:4px 8px;font-size:13px;line-height:20px;display:flex}._2vuxea_selectAnchor:hover{border-color:var(--dsw-alias-label-dimmed)}._2vuxea_selectAnchorIcon{flex:none;display:inline-flex}._2vuxea_selectAnchorText{text-overflow:ellipsis;white-space:nowrap;overflow:hidden}._2vuxea_selectOption{align-items:center;gap:10px;min-width:200px;display:flex}._2vuxea_selectOptionIcon{color:var(--dsw-alias-label-secondary);flex:none;display:inline-flex}._2vuxea_selectOptionText{flex-direction:column;min-width:0;display:flex}._2vuxea_suffix{color:var(--dsw-alias-label-secondary);font-size:14px;line-height:22px}._2vuxea_cssTextArea{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);width:100%;min-height:120px;color:var(--dsw-alias-label-primary);font-family:var(--ds-font-family-code,monospace);resize:vertical;border-radius:8px;padding:8px 10px;font-size:12px;line-height:1.6}._2vuxea_cssTextArea:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px}._2vuxea_popupDialog._2vuxea_popupDialog{width:min(460px,100%)}._2vuxea_popupRows{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:var(--dsw-alias-scrollbar-bg-l2,transparent) transparent;flex-direction:column;gap:8px;width:100%;max-height:min(52vh,440px);padding-right:4px;display:flex;overflow:hidden auto}._2vuxea_popupRows::-webkit-scrollbar{width:6px}._2vuxea_popupRows::-webkit-scrollbar-thumb{background:var(--dsw-alias-scrollbar-bg-l2,var(--dsw-alias-border-l2));border-radius:3px}._2vuxea_popupRows::-webkit-scrollbar-thumb:hover{background:var(--dsw-alias-scrollbar-hover-l2,var(--dsw-alias-label-dimmed))}._2vuxea_popupRow{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:12px;flex:none;justify-content:space-between;align-items:center;gap:16px;min-width:0;padding:12px 14px;transition:border-color .16s,background .16s;display:flex}._2vuxea_popupRow:hover{border-color:var(--dsw-alias-label-dimmed)}._2vuxea_done{appearance:none;font:inherit;cursor:pointer;background:var(--dsw-alias-label-primary);color:var(--dsw-alias-bg-layer-3);border:1px solid #0000;border-radius:8px;padding:5px 14px;font-size:13px;line-height:1.5}._2vuxea_done:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}._2vuxea_patternsRow{border:1px solid var(--dsw-alias-border-l2);border-radius:12px;flex-direction:column;gap:10px;min-width:0;padding:14px 16px;display:flex}._2vuxea_patternsChips{flex-wrap:wrap;gap:6px;display:flex}._2vuxea_patternsChip{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);border-radius:999px;align-items:center;gap:2px;padding:2px 4px 2px 9px;font-size:12px;line-height:18px;display:inline-flex}._2vuxea_patternsChipRemove{width:16px;height:16px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:999px;justify-content:center;align-items:center;font-size:13px;line-height:1;display:inline-flex}._2vuxea_patternsChipRemove:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}._2vuxea_patternsAdd{align-items:center;gap:8px;display:flex}._2vuxea_patternsInput{flex:auto;min-width:0}._2vuxea_error{color:var(--dsw-alias-state-error-primary);padding:10px 0 2px;font-size:12px;line-height:17px}._2vuxea_pluginModal._2vuxea_pluginModal{width:min(560px,100%)}._2vuxea_pluginList{flex-direction:column;gap:12px;width:100%;display:flex}._2vuxea_pluginTopicBtn{appearance:none;border:1px solid var(--dsw-alias-border-l2);width:100%;font:inherit;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-1);cursor:pointer;border-radius:8px;padding:6px 12px;font-size:12px;line-height:18px}._2vuxea_pluginTopicBtn:hover{background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-primary)}._2vuxea_pluginTopicBtn:focus-visible{outline:2px solid var(--dsw-alias-border-l4);outline-offset:1px}._2vuxea_pluginEmpty{color:var(--dsw-alias-label-tertiary);padding:20px 2px;font-size:12px;line-height:18px}._2vuxea_pluginEntry{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);border-radius:12px;flex-direction:column;gap:4px;padding:12px;display:flex}._2vuxea_pluginEntryHead{justify-content:space-between;align-items:center;gap:12px;display:flex}._2vuxea_pluginEntryActions{flex:none;align-items:center;gap:6px;display:inline-flex}._2vuxea_pluginJumpBtn{appearance:none;border:1px solid var(--dsw-alias-border-l2);font:inherit;cursor:pointer;color:var(--dsw-alias-label-secondary);background:0 0;border-radius:8px;flex:none;padding:3px 12px;font-size:12px;line-height:1.5}._2vuxea_pluginJumpBtn:hover{background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-primary)}._2vuxea_pluginJumpBtn:focus-visible{outline:2px solid var(--dsw-alias-border-l4);outline-offset:1px}._2vuxea_pluginName{appearance:none;min-width:0;font:inherit;color:var(--dsw-alias-label-primary);text-align:left;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;background:0 0;border:0;padding:0;font-size:13px;font-weight:600;line-height:20px;text-decoration:none;overflow:hidden}._2vuxea_pluginName:hover{color:var(--dsw-alias-button-primary-fill);text-decoration:underline}._2vuxea_pluginDesc{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}._2vuxea_pluginInstall{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l1);white-space:nowrap;border-radius:8px;padding:6px 10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:16px;display:block;overflow-x:auto}._2vuxea_pluginCopyBtn{appearance:none;font:inherit;cursor:pointer;background:var(--dsw-alias-label-primary);color:var(--dsw-alias-bg-layer-3);border:1px solid #0000;border-radius:8px;flex:none;padding:3px 12px;font-size:12px;line-height:1.5}._2vuxea_pluginCopyBtn:hover{background:var(--dsw-alias-button-primary-hover)}._2vuxea_pluginCopyBtn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}@media (prefers-reduced-motion:reduce){._2vuxea_card,._2vuxea_cardSettings,._2vuxea_cardSwitchTrack,._2vuxea_cardSwitchThumb,._2vuxea_popupRow,._2vuxea_switchTrack,._2vuxea_switchThumb{transition:none}}._2vuxea_versionBadge{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);border-radius:999px;align-self:flex-start;align-items:center;gap:8px;padding:4px 12px 4px 14px;font-size:12px;line-height:18px;display:inline-flex}._2vuxea_versionBadgeName{color:var(--dsw-alias-label-primary);font-weight:600}._2vuxea_versionBadgeTag{background:var(--dsw-alias-accent-soft,var(--dsw-alias-border-l2));color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;border-radius:999px;padding:1px 8px}._2vuxea_pluginSearch{box-sizing:border-box;appearance:none;border:1px solid var(--dsw-alias-border-l2);width:100%;font:inherit;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-1);border-radius:8px;padding:6px 10px;font-size:12px;line-height:18px}._2vuxea_pluginSearch::placeholder{color:var(--dsw-alias-label-tertiary)}._2vuxea_pluginSearch:focus-visible{outline:2px solid var(--dsw-alias-border-l4);outline-offset:1px}._2vuxea_pluginEntries{flex-direction:column;gap:10px;max-height:46vh;padding-right:2px;display:flex;overflow:hidden auto}._2vuxea_pluginGroup{flex-direction:column;gap:8px;display:flex}._2vuxea_pluginGroupHeading{color:var(--dsw-alias-label-secondary);padding:2px 2px 0;font-size:12px;font-weight:600;line-height:18px}._2vuxea_openWithEditorRow{grid-template-columns:1fr 1.5fr auto auto;align-items:center;gap:8px;min-width:0;display:grid}._2vuxea_openWithEditorInput,._2vuxea_openWithEditorTemplate{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);width:100%;min-width:0;color:var(--dsw-alias-label-primary);font:inherit;border-radius:8px;padding:5px 8px;font-size:13px;line-height:20px}._2vuxea_openWithEditorInput:focus-visible,._2vuxea_openWithEditorTemplate:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px}._2vuxea_openWithFamily{color:var(--dsw-alias-label-secondary);white-space:nowrap;cursor:pointer;align-items:center;gap:5px;font-size:12px;display:inline-flex}._2vuxea_openWithRemove{color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:8px;justify-content:center;align-items:center;padding:4px;display:inline-flex}._2vuxea_openWithRemove:hover{color:var(--dsw-alias-state-error-primary);background:var(--dsw-alias-bg-layer-2)}._2vuxea_openWithHint{color:var(--dsw-alias-state-error-primary);padding:0 2px;font-size:12px;line-height:17px}";
 		const tagId$8 = "dsh-external/dsh-better-sidebar/SideCardSection.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$8) + "]") === null) {
 			const tag = document.createElement("style");
@@ -7873,75 +10293,80 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var SideCardSection_module_css_default = {
-			"cardMain": "nfk0fG_cardMain",
-			"selectOptionIcon": "nfk0fG_selectOptionIcon",
-			"versionBadgeName": "nfk0fG_versionBadgeName",
-			"title": "nfk0fG_title",
-			"cardSwitch": "nfk0fG_cardSwitch",
-			"pluginEntryActions": "nfk0fG_pluginEntryActions",
-			"error": "nfk0fG_error",
-			"pluginTopicBtn": "nfk0fG_pluginTopicBtn",
-			"pluginGroupHeading": "nfk0fG_pluginGroupHeading",
-			"pluginList": "nfk0fG_pluginList",
-			"grid": "nfk0fG_grid",
-			"done": "nfk0fG_done",
-			"cardTop": "nfk0fG_cardTop",
-			"pluginJumpBtn": "nfk0fG_pluginJumpBtn",
-			"pluginInstall": "nfk0fG_pluginInstall",
-			"typedInputNumber": "nfk0fG_typedInputNumber",
-			"section": "nfk0fG_section",
-			"switch": "nfk0fG_switch",
-			"pluginCopyBtn": "nfk0fG_pluginCopyBtn",
-			"intro": "nfk0fG_intro",
-			"openWithHint": "nfk0fG_openWithHint",
-			"selectAnchorIcon": "nfk0fG_selectAnchorIcon",
-			"rowText": "nfk0fG_rowText",
-			"group": "nfk0fG_group",
-			"selectAnchorText": "nfk0fG_selectAnchorText",
-			"cardSettings": "nfk0fG_cardSettings",
-			"popupDialog": "nfk0fG_popupDialog",
-			"addCard": "nfk0fG_addCard",
-			"groupHeading": "nfk0fG_groupHeading",
-			"pluginEntryHead": "nfk0fG_pluginEntryHead",
-			"selectOptionText": "nfk0fG_selectOptionText",
-			"pluginSearch": "nfk0fG_pluginSearch",
-			"pluginModal": "nfk0fG_pluginModal",
-			"percentInput": "nfk0fG_percentInput",
-			"desc": "nfk0fG_desc",
-			"switchTrack": "nfk0fG_switchTrack",
-			"selectAnchor": "nfk0fG_selectAnchor",
-			"pluginEmpty": "nfk0fG_pluginEmpty",
-			"cssTextArea": "nfk0fG_cssTextArea",
-			"openWithRemove": "nfk0fG_openWithRemove",
-			"cardSwitchTrack": "nfk0fG_cardSwitchTrack",
-			"openWithEditorInput": "nfk0fG_openWithEditorInput",
-			"popupRows": "nfk0fG_popupRows",
-			"cardTitle": "nfk0fG_cardTitle",
-			"control": "nfk0fG_control",
-			"cardIconChip": "nfk0fG_cardIconChip",
-			"row": "nfk0fG_row",
-			"selectOption": "nfk0fG_selectOption",
-			"count": "nfk0fG_count",
-			"cardDesc": "nfk0fG_cardDesc",
-			"rowGear": "nfk0fG_rowGear",
-			"popupRow": "nfk0fG_popupRow",
-			"pluginGroup": "nfk0fG_pluginGroup",
-			"typedInput": "nfk0fG_typedInput",
-			"openWithEditorTemplate": "nfk0fG_openWithEditorTemplate",
-			"openWithEditorRow": "nfk0fG_openWithEditorRow",
-			"versionBadge": "nfk0fG_versionBadge",
-			"versionBadgeTag": "nfk0fG_versionBadgeTag",
-			"switchThumb": "nfk0fG_switchThumb",
-			"pluginName": "nfk0fG_pluginName",
-			"card": "nfk0fG_card",
-			"cardSwitchThumb": "nfk0fG_cardSwitchThumb",
-			"suffix": "nfk0fG_suffix",
-			"pluginDesc": "nfk0fG_pluginDesc",
-			"openWithFamily": "nfk0fG_openWithFamily",
-			"cardOn": "nfk0fG_cardOn",
-			"pluginEntry": "nfk0fG_pluginEntry",
-			"pluginEntries": "nfk0fG_pluginEntries",
-			"switchInput": "nfk0fG_switchInput"
+			"pluginName": "_2vuxea_pluginName",
+			"grid": "_2vuxea_grid",
+			"pluginList": "_2vuxea_pluginList",
+			"selectOptionIcon": "_2vuxea_selectOptionIcon",
+			"pluginInstall": "_2vuxea_pluginInstall",
+			"intro": "_2vuxea_intro",
+			"popupRows": "_2vuxea_popupRows",
+			"patternsChips": "_2vuxea_patternsChips",
+			"pluginSearch": "_2vuxea_pluginSearch",
+			"openWithEditorTemplate": "_2vuxea_openWithEditorTemplate",
+			"desc": "_2vuxea_desc",
+			"cssTextArea": "_2vuxea_cssTextArea",
+			"popupDialog": "_2vuxea_popupDialog",
+			"pluginDesc": "_2vuxea_pluginDesc",
+			"count": "_2vuxea_count",
+			"rowText": "_2vuxea_rowText",
+			"patternsChipRemove": "_2vuxea_patternsChipRemove",
+			"title": "_2vuxea_title",
+			"card": "_2vuxea_card",
+			"control": "_2vuxea_control",
+			"pluginCopyBtn": "_2vuxea_pluginCopyBtn",
+			"cardSwitch": "_2vuxea_cardSwitch",
+			"pluginEntryHead": "_2vuxea_pluginEntryHead",
+			"switch": "_2vuxea_switch",
+			"versionBadge": "_2vuxea_versionBadge",
+			"openWithHint": "_2vuxea_openWithHint",
+			"error": "_2vuxea_error",
+			"switchThumb": "_2vuxea_switchThumb",
+			"group": "_2vuxea_group",
+			"percentInput": "_2vuxea_percentInput",
+			"typedInputNumber": "_2vuxea_typedInputNumber",
+			"openWithFamily": "_2vuxea_openWithFamily",
+			"openWithEditorRow": "_2vuxea_openWithEditorRow",
+			"cardSwitchThumb": "_2vuxea_cardSwitchThumb",
+			"pluginModal": "_2vuxea_pluginModal",
+			"selectAnchorIcon": "_2vuxea_selectAnchorIcon",
+			"cardTop": "_2vuxea_cardTop",
+			"openWithEditorInput": "_2vuxea_openWithEditorInput",
+			"addCard": "_2vuxea_addCard",
+			"suffix": "_2vuxea_suffix",
+			"selectOptionText": "_2vuxea_selectOptionText",
+			"patternsAdd": "_2vuxea_patternsAdd",
+			"switchInput": "_2vuxea_switchInput",
+			"cardIconChip": "_2vuxea_cardIconChip",
+			"popupRow": "_2vuxea_popupRow",
+			"pluginTopicBtn": "_2vuxea_pluginTopicBtn",
+			"versionBadgeTag": "_2vuxea_versionBadgeTag",
+			"pluginGroupHeading": "_2vuxea_pluginGroupHeading",
+			"cardSwitchTrack": "_2vuxea_cardSwitchTrack",
+			"done": "_2vuxea_done",
+			"openWithRemove": "_2vuxea_openWithRemove",
+			"cardSettings": "_2vuxea_cardSettings",
+			"cardMain": "_2vuxea_cardMain",
+			"row": "_2vuxea_row",
+			"patternsChip": "_2vuxea_patternsChip",
+			"selectOption": "_2vuxea_selectOption",
+			"pluginEntry": "_2vuxea_pluginEntry",
+			"pluginEntries": "_2vuxea_pluginEntries",
+			"section": "_2vuxea_section",
+			"selectAnchor": "_2vuxea_selectAnchor",
+			"cardTitle": "_2vuxea_cardTitle",
+			"cardDesc": "_2vuxea_cardDesc",
+			"groupHeading": "_2vuxea_groupHeading",
+			"cardOn": "_2vuxea_cardOn",
+			"pluginEmpty": "_2vuxea_pluginEmpty",
+			"versionBadgeName": "_2vuxea_versionBadgeName",
+			"pluginGroup": "_2vuxea_pluginGroup",
+			"pluginEntryActions": "_2vuxea_pluginEntryActions",
+			"selectAnchorText": "_2vuxea_selectAnchorText",
+			"patternsRow": "_2vuxea_patternsRow",
+			"patternsInput": "_2vuxea_patternsInput",
+			"pluginJumpBtn": "_2vuxea_pluginJumpBtn",
+			"switchTrack": "_2vuxea_switchTrack",
+			"typedInput": "_2vuxea_typedInput"
 		};
 		//#endregion
 		//#region src/client/open-with-settings.tsx
@@ -8093,6 +10518,331 @@ window.__ModuleLoader__.load({
 			});
 		}
 		//#endregion
+		//#region \0dsh-css:/home/runner/work/DSH-better-sidebar/DSH-better-sidebar/src/client/changes/changes.module.css.mjs
+		const css$7 = ".bdiHEa_root{background:var(--dsw-alias-bg-base);height:100%;min-height:0;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);flex-direction:column;display:flex}.bdiHEa_head{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:8px;height:36px;padding:0 8px 0 12px;display:flex}.bdiHEa_headAction{margin-left:auto}.bdiHEa_git{flex-direction:column;flex:1;min-width:0;min-height:0;display:flex}.bdiHEa_gitScroll{flex:1;min-width:0;min-height:0;overflow:hidden auto}.bdiHEa_selectors{flex:none;align-items:center;gap:6px;padding:6px 12px 0;display:flex}.bdiHEa_select{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-base);min-width:0;height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:3px;flex:1;padding:0 6px}.bdiHEa_branchLabel{text-overflow:ellipsis;white-space:nowrap;min-width:0;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxxs-11);overflow:hidden}.bdiHEa_group{flex-direction:column;padding-bottom:2px;display:flex}.bdiHEa_group .bdiHEa_groupHeader{z-index:2;background:var(--dsw-alias-bg-base);position:sticky;top:0}.bdiHEa_countPill{background:var(--dsw-alias-interactive-bg-hover);min-width:16px;height:16px;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxxs-strong-11);text-align:center;font-variant-numeric:tabular-nums;border-radius:999px;flex:none;padding:0 5px;line-height:16px}.bdiHEa_group .bdiHEa_headerAction{opacity:0;transition:opacity .12s var(--ds-ease-in-out)}.bdiHEa_group .bdiHEa_groupHeader:hover .bdiHEa_headerAction,.bdiHEa_group .bdiHEa_groupHeader:focus-within .bdiHEa_headerAction{opacity:1}@media (hover:none){.bdiHEa_group .bdiHEa_headerAction{opacity:1}}.bdiHEa_tree{flex-direction:column;padding:0 6px;display:flex}.bdiHEa_treeChildren{border-left:1px solid var(--dsw-alias-border-l1);flex-direction:column;margin-left:11px;display:flex}.bdiHEa_dirRow{min-width:0;color:var(--dsw-alias-label-secondary);font:inherit;cursor:pointer;text-align:left;background:0 0;border:none;flex:1;align-items:center;gap:6px;padding:0;display:flex}.bdiHEa_dirRow:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}.bdiHEa_chevron{color:var(--dsw-alias-label-tertiary);transition:transform .14s var(--ds-ease-in-out);flex:none;display:inline-flex}.bdiHEa_chevron[data-open=true]{transform:rotate(90deg)}.bdiHEa_dirName{text-overflow:ellipsis;white-space:nowrap;min-width:0;font:var(--dsw-font-xxs-12);flex:1;overflow:hidden}.bdiHEa_row{min-height:28px;animation:bdiHEa_dsh-row-in .15s var(--ds-ease-in-out);border-radius:4px;align-items:center;gap:6px;padding:0 2px;display:flex;position:relative}.bdiHEa_row:hover{background:var(--dsw-alias-interactive-bg-hover)}.bdiHEa_row[data-selected=true],.bdiHEa_opRow[data-selected=true],.bdiHEa_logRow[data-selected=true]{background:var(--dsw-alias-interactive-bg-active)}.bdiHEa_row[data-selected=true]:before,.bdiHEa_opRow[data-selected=true]:before,.bdiHEa_logRow[data-selected=true]:before{content:\"\";background:var(--dsw-alias-state-business-primary);border-radius:1px;width:2px;position:absolute;top:4px;bottom:4px;left:0}.bdiHEa_rowMain{cursor:pointer;text-align:left;background:0 0;border:none;flex:1;align-items:center;gap:6px;min-width:0;padding:0;display:flex}.bdiHEa_rowMain:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}.bdiHEa_rowIcon{flex:none;align-items:center;display:inline-flex}.bdiHEa_rowName{text-overflow:ellipsis;white-space:nowrap;min-width:0;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-primary);flex:1;overflow:hidden}.bdiHEa_lineCounts{font:var(--dsw-font-xxxs-11);font-family:var(--ds-font-family-code,monospace);font-variant-numeric:tabular-nums;flex:none;gap:5px;display:inline-flex}.bdiHEa_lineNote{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary);white-space:nowrap;flex:none}.bdiHEa_row:not(:hover):not(:focus-within) .bdiHEa_rowAction{opacity:0}@media (hover:none){.bdiHEa_row:not(:hover):not(:focus-within) .bdiHEa_rowAction{opacity:1}}.bdiHEa_commitBar{border-top:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base);flex-direction:column;flex:none;gap:4px;padding:8px 12px;display:flex}.bdiHEa_commitRow{align-items:center;gap:6px;display:flex}.bdiHEa_commitInputWrap{flex:1;min-width:0;display:flex;position:relative}.bdiHEa_commitInput{box-sizing:border-box;border:.5px solid var(--dsw-alias-border-l4);background:var(--dsw-alias-bg-layer-1);min-width:0;min-height:30px;max-height:120px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-s-13);resize:none;border-radius:8px;flex:1;padding:6px 8px;line-height:18px;overflow-y:hidden}.bdiHEa_commitInput:focus{border-color:var(--dsw-alias-brand-primary);outline:none}.bdiHEa_commitInput::placeholder{color:var(--dsw-alias-label-dimmed)}.bdiHEa_commitInput:disabled{opacity:.5}.bdiHEa_commitBusyText{pointer-events:none;font:var(--dsw-font-xxs-12);background-image:linear-gradient(90deg, var(--dsw-alias-label-tertiary) 0%, var(--dsw-alias-label-primary) 50%, var(--dsw-alias-label-tertiary) 100%);color:#0000;background-size:200% 100%;-webkit-background-clip:text;background-clip:text;align-items:center;padding:6px 8px;animation:2.6s linear infinite bdiHEa_commitSweep;display:flex;position:absolute;inset:0}@keyframes bdiHEa_commitSweep{0%{background-position:200% 0}to{background-position:-200% 0}}@media (prefers-reduced-motion:reduce){.bdiHEa_commitBusyText{animation:none}}.bdiHEa_suggestButton{border:1px solid var(--dsw-alias-border-l1);width:26px;height:26px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border-radius:6px;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex}.bdiHEa_suggestButton:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.bdiHEa_suggestButton:disabled{opacity:.45;cursor:default}.bdiHEa_suggestBusy{color:var(--dsw-alias-interactive-bg-hover-accent);animation:1.2s ease-in-out infinite bdiHEa_commitSuggestPulse}@keyframes bdiHEa_commitSuggestPulse{50%{opacity:.45}}@media (prefers-reduced-motion:reduce){.bdiHEa_suggestBusy{animation:none}}.bdiHEa_commitModel{flex-direction:column;gap:4px;padding:8px 12px;display:flex}.bdiHEa_commitModelTitle{font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary)}.bdiHEa_commitModelDesc{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary)}.bdiHEa_commitModelRow{justify-content:space-between;align-items:center;gap:8px;display:flex}.bdiHEa_commitModelSwitch{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-primary);cursor:pointer;align-items:center;gap:6px;display:inline-flex}.bdiHEa_commitModelSwitch input{accent-color:var(--dsw-alias-interactive-bg-hover-accent)}.bdiHEa_commitModelMenuRoot{width:100%;display:block}.bdiHEa_commitModelBox{display:block}.bdiHEa_commitModelCurrent{font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary);overflow-wrap:anywhere;margin-bottom:4px}.bdiHEa_commitModelInput{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);width:100%;height:26px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:6px;padding:0 6px}.bdiHEa_commitModelInput:disabled{opacity:.45;cursor:default}.bdiHEa_commitModelOption{box-sizing:border-box;width:100%;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);text-align:left;cursor:pointer;background:0 0;border:none;border-radius:4px;align-items:center;gap:8px;padding:4px 6px;display:flex}.bdiHEa_commitModelOption:hover{background:var(--dsw-alias-interactive-bg-hover)}.bdiHEa_commitModelOptionText{text-overflow:ellipsis;white-space:nowrap;flex:auto;min-width:0;overflow:hidden}.bdiHEa_commitModelOptionNote{white-space:nowrap;min-width:max-content;color:var(--dsw-alias-label-tertiary);flex:none}.bdiHEa_commitModelHint{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary)}.bdiHEa_logRow{cursor:pointer;border-radius:4px;flex-direction:column;gap:3px;margin:0 6px;padding:6px 10px;display:flex;position:relative}.bdiHEa_logRow:hover{background:var(--dsw-alias-interactive-bg-hover)}.bdiHEa_logLine1{align-items:baseline;gap:8px;min-width:0;display:flex}.bdiHEa_logHash{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary);font:var(--dsw-font-markdown-code-block-small);border-radius:2px;flex:none;padding:1px 4px}.bdiHEa_logLine2{flex-wrap:wrap;align-items:center;gap:6px;min-width:0;display:flex}.bdiHEa_logRef{border:1px solid var(--dsw-alias-border-l2);font:var(--dsw-font-xxxs-strong-11);color:var(--dsw-alias-brand-primary);white-space:nowrap;border-radius:999px;flex:none;padding:0 6px}.bdiHEa_logSubject{text-overflow:ellipsis;white-space:nowrap;min-width:0;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary);flex:1;overflow:hidden}.bdiHEa_logMeta{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary);white-space:nowrap;margin-left:auto}.bdiHEa_logMore{border:1px solid var(--dsw-alias-border-l2);width:calc(100% - 24px);height:28px;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border-radius:3px;margin:4px 12px 8px;display:block}.bdiHEa_logMore:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.bdiHEa_logMore:disabled{opacity:.5;cursor:default}.bdiHEa_session{flex-direction:column;flex:1;min-height:0;display:flex}.bdiHEa_filterRow{flex-wrap:wrap;flex:none;gap:4px;padding:6px 12px;display:flex}.bdiHEa_sessionList{flex:1;min-height:0;padding:0 6px 10px;overflow-y:auto}.bdiHEa_fileGroup{margin-bottom:6px}.bdiHEa_filePath{color:var(--dsw-alias-label-tertiary);font-family:var(--ds-font-family-code,monospace);word-break:break-all;padding:6px 4px 2px;font-size:11px;display:block}.bdiHEa_fileGroup:first-child .bdiHEa_filePath{padding-top:2px}.bdiHEa_opRow{width:100%;min-height:24px;color:var(--dsw-alias-label-primary);font:inherit;cursor:pointer;text-align:left;background:0 0;border:0;border-radius:4px;align-items:center;gap:6px;padding:0 5px;font-size:11px;display:flex;position:relative}.bdiHEa_opRow:hover{background:var(--dsw-alias-interactive-bg-hover)}.bdiHEa_opRow[data-op-error=true]{box-shadow:inset 2px 0 0 var(--dsw-alias-state-error-primary)}.bdiHEa_opMeta{flex:none;align-items:baseline;gap:8px;min-width:0;margin-left:auto;display:inline-flex}.bdiHEa_opTime{color:var(--dsw-alias-label-tertiary);flex:none;font-size:10px}.bdiHEa_opFlag{color:var(--dsw-alias-state-business-primary);flex:none;font-size:10px}.bdiHEa_opFlagError{color:var(--dsw-alias-state-error-primary);flex:none;font-size:10px}.bdiHEa_opSize{color:var(--dsw-alias-label-tertiary);font-size:10px;font-family:var(--ds-font-family-code,monospace);flex:none}.bdiHEa_redactBanner{font:var(--dsw-font-xxxs-strong-11);color:var(--dsw-alias-state-warn-primary);background:var(--dsw-alias-interactive-bg-hover);white-space:nowrap;border-radius:2px;flex:none;padding:2px 8px}.bdiHEa_mdBody{font:var(--dsw-font-xs-regular-13);min-height:0;padding:12px 16px 20px;line-height:1.6;overflow-y:auto}.bdiHEa_htmlPane{flex:1;min-height:0;display:flex}.bdiHEa_htmlFrame{background:var(--dsw-alias-bg-base);border:none;flex:1;width:100%}.bdiHEa_diffPane{border-top:1px solid var(--dsw-alias-border-l1);flex-direction:column;flex:none;min-height:0;display:flex}.bdiHEa_dragHandle{cursor:ns-resize;background:var(--dsw-alias-bg-base);flex:none;height:8px;position:relative}.bdiHEa_dragHandle:after{content:\"\";background:var(--dsw-alias-border-l2);border-radius:1px;width:36px;height:2px;position:absolute;top:3px;left:calc(50% - 18px)}.bdiHEa_dragHandle:hover:after,.bdiHEa_dragHandle:focus-visible:after{background:var(--dsw-alias-state-business-primary)}.bdiHEa_diffHead{border-bottom:1px solid var(--dsw-alias-border-l1);align-items:center;gap:6px;padding:3px 8px 3px 10px;display:flex}.bdiHEa_diffPath{font-family:var(--ds-font-family-code,monospace);white-space:nowrap;text-overflow:ellipsis;color:var(--dsw-alias-label-primary);direction:rtl;flex:1;min-width:0;font-size:11px;overflow:hidden}.bdiHEa_diffStats{font-size:10px;font-family:var(--ds-font-family-code,monospace);flex:none;gap:5px;display:inline-flex}.bdiHEa_paneBody{flex:1;min-height:0;overflow-y:auto}.bdiHEa_readError{border-left:3px solid var(--dsw-alias-state-error-primary);word-break:break-word;margin:6px 8px;padding:6px 10px}.bdiHEa_paneGone{border-top:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:8px;padding:8px 12px;display:flex}@keyframes bdiHEa_dsh-row-in{0%{opacity:0}}.bdiHEa_logRow:focus-visible,.bdiHEa_logMore:focus-visible,.bdiHEa_select:focus-visible,.bdiHEa_dragHandle:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}@media (prefers-reduced-motion:reduce){.bdiHEa_row{animation:none}}";
+		const tagId$7 = "dsh-external/dsh-better-sidebar/changes.module.css";
+		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$7) + "]") === null) {
+			const tag = document.createElement("style");
+			tag.dataset.plugin = "dsh-external/dsh-better-sidebar";
+			tag.dataset.pluginCss = tagId$7;
+			tag.textContent = css$7;
+			document.head.appendChild(tag);
+		}
+		var changes_module_css_default = {
+			"commitBusyText": "bdiHEa_commitBusyText",
+			"head": "bdiHEa_head",
+			"treeChildren": "bdiHEa_treeChildren",
+			"commitInputWrap": "bdiHEa_commitInputWrap",
+			"commitModelDesc": "bdiHEa_commitModelDesc",
+			"suggestBusy": "bdiHEa_suggestBusy",
+			"lineCounts": "bdiHEa_lineCounts",
+			"rowAction": "bdiHEa_rowAction",
+			"sessionList": "bdiHEa_sessionList",
+			"filterRow": "bdiHEa_filterRow",
+			"commitModelInput": "bdiHEa_commitModelInput",
+			"branchLabel": "bdiHEa_branchLabel",
+			"gitScroll": "bdiHEa_gitScroll",
+			"opMeta": "bdiHEa_opMeta",
+			"rowIcon": "bdiHEa_rowIcon",
+			"commitModelOption": "bdiHEa_commitModelOption",
+			"logHash": "bdiHEa_logHash",
+			"htmlFrame": "bdiHEa_htmlFrame",
+			"paneBody": "bdiHEa_paneBody",
+			"row": "bdiHEa_row",
+			"countPill": "bdiHEa_countPill",
+			"dsh-row-in": "bdiHEa_dsh-row-in",
+			"headAction": "bdiHEa_headAction",
+			"session": "bdiHEa_session",
+			"fileGroup": "bdiHEa_fileGroup",
+			"select": "bdiHEa_select",
+			"filePath": "bdiHEa_filePath",
+			"logMore": "bdiHEa_logMore",
+			"logRow": "bdiHEa_logRow",
+			"chevron": "bdiHEa_chevron",
+			"commitModelOptionNote": "bdiHEa_commitModelOptionNote",
+			"diffStats": "bdiHEa_diffStats",
+			"root": "bdiHEa_root",
+			"readError": "bdiHEa_readError",
+			"group": "bdiHEa_group",
+			"dirName": "bdiHEa_dirName",
+			"commitModelMenuRoot": "bdiHEa_commitModelMenuRoot",
+			"commitModelRow": "bdiHEa_commitModelRow",
+			"opFlagError": "bdiHEa_opFlagError",
+			"rowName": "bdiHEa_rowName",
+			"suggestButton": "bdiHEa_suggestButton",
+			"diffHead": "bdiHEa_diffHead",
+			"commitModelCurrent": "bdiHEa_commitModelCurrent",
+			"lineNote": "bdiHEa_lineNote",
+			"groupHeader": "bdiHEa_groupHeader",
+			"diffPath": "bdiHEa_diffPath",
+			"commitModelSwitch": "bdiHEa_commitModelSwitch",
+			"mdBody": "bdiHEa_mdBody",
+			"git": "bdiHEa_git",
+			"commitSweep": "bdiHEa_commitSweep",
+			"rowMain": "bdiHEa_rowMain",
+			"commitInput": "bdiHEa_commitInput",
+			"dragHandle": "bdiHEa_dragHandle",
+			"commitModelTitle": "bdiHEa_commitModelTitle",
+			"logLine2": "bdiHEa_logLine2",
+			"opTime": "bdiHEa_opTime",
+			"selectors": "bdiHEa_selectors",
+			"opRow": "bdiHEa_opRow",
+			"commitSuggestPulse": "bdiHEa_commitSuggestPulse",
+			"dirRow": "bdiHEa_dirRow",
+			"redactBanner": "bdiHEa_redactBanner",
+			"paneGone": "bdiHEa_paneGone",
+			"logSubject": "bdiHEa_logSubject",
+			"commitModelHint": "bdiHEa_commitModelHint",
+			"tree": "bdiHEa_tree",
+			"headerAction": "bdiHEa_headerAction",
+			"commitBar": "bdiHEa_commitBar",
+			"logMeta": "bdiHEa_logMeta",
+			"commitModelOptionText": "bdiHEa_commitModelOptionText",
+			"commitModelBox": "bdiHEa_commitModelBox",
+			"opFlag": "bdiHEa_opFlag",
+			"opSize": "bdiHEa_opSize",
+			"diffPane": "bdiHEa_diffPane",
+			"commitModel": "bdiHEa_commitModel",
+			"htmlPane": "bdiHEa_htmlPane",
+			"logRef": "bdiHEa_logRef",
+			"logLine1": "bdiHEa_logLine1",
+			"commitRow": "bdiHEa_commitRow"
+		};
+		//#endregion
+		//#region src/client/changes/CommitModelSettings.tsx
+		/**
+		* The Git card's pinned-model setting: which provider/model drafts commit
+		* messages. It renders through the descriptor's `settings.render` seam because
+		* the option list is DISCOVERED at runtime (`git.models` asks the harness what
+		* it can serve) — a declarative toggle can only declare a static option set.
+		*
+		* Shape: a "follow the conversation" SWITCH plus a searchable `provider/model`
+		* box. Following is the default (an empty stored value), and it disables the
+		* box: while the panel tracks the conversation there is nothing to pin. The
+		* box is a filter over the discovered catalog AND accepts a hand-typed
+		* `provider/model` route, so a model the harness never advertises stays
+		* selectable.
+		*
+		* The value lives in the descriptor's own plugin-settings blob
+		* (`pluginSettings.git.commitModel`); empty/absent means "follow".
+		*/
+		/** The plugin-owned setting key (mirrored host-side in src/index.ts). */
+		const COMMIT_MODEL_SETTING_KEY = "commitModel";
+		/** Cap of the filtered candidate list (a huge catalog stays scrollable). */
+		const OPTION_LIMIT = 40;
+		/** The stored `provider/model` route of one option ('' = follow). */
+		function routeValue(provider, model) {
+			return `${provider}/${model}`;
+		}
+		/** Build the candidate list: harness default and used routes first, then the
+		*  adapter catalog. De-duplicated by route, newest/most-relevant first. */
+		function optionsOf(catalog) {
+			if (catalog === null) return [];
+			const options = [];
+			const seen = /* @__PURE__ */ new Set();
+			const push = (provider, model, note) => {
+				const value = routeValue(provider, model);
+				if (seen.has(value)) return;
+				seen.add(value);
+				options.push({
+					value,
+					note
+				});
+			};
+			if (catalog.default !== void 0) push(catalog.default.provider, catalog.default.model, t("commitModelDefaultNote"));
+			for (const route of catalog.recent) push(route.provider, route.model, t("commitModelRecentNote"));
+			for (const provider of catalog.providers) for (const model of provider.models) push(provider.provider, model.id, "");
+			return options;
+		}
+		function CommitModelSettings(props) {
+			const { store, pluginSettings, updatePluginSetting } = props;
+			const sessionId = store.getSnapshot().sessionId;
+			const stored = pluginSettings[COMMIT_MODEL_SETTING_KEY];
+			const value = typeof stored === "string" ? stored : "";
+			const [catalog, setCatalog] = (0, react.useState)(null);
+			const [error, setError] = (0, react.useState)(null);
+			const [follow, setFollow] = (0, react.useState)(value === "");
+			const [query, setQuery] = (0, react.useState)("");
+			const [invalid, setInvalid] = (0, react.useState)(false);
+			const [open, setOpen] = (0, react.useState)(false);
+			(0, react.useEffect)(() => {
+				if (sessionId === void 0) return;
+				let cancelled = false;
+				setError(null);
+				api.gitModels({ sessionId }).then((view) => {
+					if (!cancelled) setCatalog(view);
+				}).catch((reason) => {
+					if (cancelled) return;
+					setError(reason instanceof Error ? reason.message : String(reason));
+				});
+				return () => {
+					cancelled = true;
+				};
+			}, [sessionId]);
+			const inputRef = (0, react.useRef)(null);
+			const options = (0, react.useMemo)(() => optionsOf(catalog), [catalog]);
+			const needle = query.trim().toLowerCase();
+			const matches = (0, react.useMemo)(() => needle === "" ? options.slice(0, OPTION_LIMIT) : options.filter((option) => option.value.toLowerCase().includes(needle)).slice(0, OPTION_LIMIT), [options, needle]);
+			const listOpen = open && !follow && matches.length > 0;
+			/**
+			* The primitives Menu lays its portalled list out from the anchor rect but
+			* sizes it from CSS (`min-width: 218px`, `max-width: 360px`) — it has no
+			* "match the anchor width" mode, and its `className` only reaches the root
+			* wrapper. The list is a direct child of <body> (portal), so it is reachable
+			* here: while open, pin its width to the input's own width so the dropdown
+			* is never narrower than the box it drops out of.
+			*/
+			(0, react.useLayoutEffect)(() => {
+				if (!listOpen) return;
+				const sync = () => {
+					const input = inputRef.current;
+					if (input === null) return;
+					const width = Math.round(input.getBoundingClientRect().width);
+					if (width <= 0) return;
+					const children = Array.from(document.body.children);
+					for (let index = children.length - 1; index >= 0; index--) {
+						const element = children[index];
+						if (!(element instanceof HTMLElement) || element.getAttribute("role") !== "menu") continue;
+						element.style.minWidth = `${width}px`;
+						element.style.removeProperty("max-width");
+						return;
+					}
+				};
+				sync();
+				window.addEventListener("resize", sync);
+				return () => {
+					window.removeEventListener("resize", sync);
+				};
+			}, [listOpen, matches.length]);
+			/** Commit one typed/clicked route (both halves must be non-empty). */
+			const commitRoute = (raw) => {
+				const trimmed = raw.trim();
+				const slash = trimmed.indexOf("/");
+				const provider = slash <= 0 ? "" : trimmed.slice(0, slash).trim();
+				const model = slash < 0 ? "" : trimmed.slice(slash + 1).trim();
+				if (provider === "" || model === "") {
+					setInvalid(true);
+					return false;
+				}
+				setInvalid(false);
+				setQuery("");
+				updatePluginSetting(COMMIT_MODEL_SETTING_KEY, routeValue(provider, model));
+				return true;
+			};
+			const pick = (option) => {
+				setQuery("");
+				setInvalid(false);
+				setOpen(false);
+				updatePluginSetting(COMMIT_MODEL_SETTING_KEY, option.value);
+			};
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				className: changes_module_css_default.commitModel,
+				children: [
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						className: changes_module_css_default.commitModelRow,
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							className: changes_module_css_default.commitModelTitle,
+							children: t("commitModelTitle")
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
+							className: changes_module_css_default.commitModelSwitch,
+							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+								type: "checkbox",
+								checked: follow,
+								onChange: (event) => {
+									const next = event.currentTarget.checked;
+									setFollow(next);
+									if (next) {
+										setQuery("");
+										setInvalid(false);
+										updatePluginSetting(COMMIT_MODEL_SETTING_KEY, "");
+									}
+								}
+							}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t("commitModelFollow") })]
+						})]
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						className: changes_module_css_default.commitModelDesc,
+						children: t("commitModelDesc")
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						className: changes_module_css_default.commitModelBox,
+						children: [!follow && value !== "" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+							className: changes_module_css_default.commitModelCurrent,
+							children: t("commitModelCurrent", { route: value })
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Menu, {
+							open: open && !follow && matches.length > 0,
+							className: changes_module_css_default.commitModelMenuRoot,
+							anchor: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+								ref: inputRef,
+								className: changes_module_css_default.commitModelInput,
+								type: "text",
+								value: query,
+								disabled: follow,
+								placeholder: t("commitModelSearchPlaceholder"),
+								"aria-label": t("commitModelSearchPlaceholder"),
+								onChange: (event) => {
+									setQuery(event.currentTarget.value);
+									setInvalid(false);
+									setOpen(true);
+								},
+								onFocus: () => {
+									setOpen(true);
+								},
+								onKeyDown: (event) => {
+									if (event.key === "Enter") {
+										if (commitRoute(event.currentTarget.value)) setOpen(false);
+									}
+									if (event.key === "Escape") setOpen(false);
+								}
+							}),
+							items: matches.map((option) => ({
+								id: option.value,
+								label: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+									className: changes_module_css_default.commitModelOption,
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+										className: changes_module_css_default.commitModelOptionText,
+										children: option.value
+									}), option.note !== "" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+										className: changes_module_css_default.commitModelOptionNote,
+										children: option.note
+									})]
+								})
+							})),
+							selectedId: value === "" ? void 0 : value,
+							onSelect: (id) => {
+								const option = matches.find((candidate) => candidate.value === id);
+								if (option !== void 0) pick(option);
+							},
+							onClose: () => {
+								setOpen(false);
+							},
+							portal: true
+						})]
+					}),
+					invalid && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Notice, {
+						kind: "error",
+						tone: "inline",
+						children: t("commitModelInvalid")
+					}),
+					catalog !== null && !catalog.llm && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Notice, {
+						kind: "hint",
+						tone: "inline",
+						children: t("commitModelUnavailable")
+					}),
+					catalog !== null && catalog.llm && options.length === 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Notice, {
+						kind: "hint",
+						tone: "inline",
+						children: t("commitModelEmpty")
+					}),
+					error !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Notice, {
+						kind: "error",
+						tone: "inline",
+						children: error
+					})
+				]
+			});
+		}
+		//#endregion
 		//#region src/client/changes/change-tree.ts
 		/**
 		* Directories before files, then by name — case-insensitively.
@@ -8188,79 +10938,82 @@ window.__ModuleLoader__.load({
 					kind: "file",
 					name: segments[segments.length - 1],
 					path: entry.path,
-					status
+					status,
+					...entry.counts !== void 0 ? { counts: entry.counts } : {}
 				});
 			}
 			return finishChildren(root);
 		}
+		/**
+		* Sum one group tree's line counts (#131): the group header's total is exactly
+		* the sum of the numbers its own file rows print. Binary rows, rows without
+		* counts (untracked files) and rows whose two numbers are both zero (a pure
+		* rename, a mode-only change — their rows print nothing) contribute nothing,
+		* never a fabricated 0 — and folding a directory is a view state, so every
+		* member counts either way.
+		*/
+		function sumLineCounts(nodes) {
+			const totals = {
+				additions: 0,
+				deletions: 0,
+				files: 0
+			};
+			for (const node of nodes) {
+				if (node.kind === "dir") {
+					const inner = sumLineCounts(node.children);
+					totals.additions += inner.additions;
+					totals.deletions += inner.deletions;
+					totals.files += inner.files;
+					continue;
+				}
+				if (node.counts === void 0 || !("additions" in node.counts)) continue;
+				if (node.counts.additions === 0 && node.counts.deletions === 0) continue;
+				totals.additions += node.counts.additions;
+				totals.deletions += node.counts.deletions;
+				totals.files += 1;
+			}
+			return totals;
+		}
 		//#endregion
-		//#region \0dsh-css:H:\MaxNull\WorkStation\third-party-plugins\DSH-better-sidebar\src\client\changes\changes.module.css.mjs
-		const css$7 = ".DxD8ZG_root{background:var(--dsw-alias-bg-base);height:100%;min-height:0;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);flex-direction:column;display:flex}.DxD8ZG_head{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:8px;height:36px;padding:0 8px 0 12px;display:flex}.DxD8ZG_headAction{margin-left:auto}.DxD8ZG_git{flex-direction:column;flex:1;min-width:0;min-height:0;display:flex;overflow:hidden auto}.DxD8ZG_selectors{flex:none;align-items:center;gap:6px;padding:6px 12px 0;display:flex}.DxD8ZG_select{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-base);min-width:0;height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:3px;flex:1;padding:0 6px}.DxD8ZG_branchLabel{text-overflow:ellipsis;white-space:nowrap;min-width:0;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxxs-11);overflow:hidden}.DxD8ZG_group{flex-direction:column;padding-bottom:2px;display:flex}.DxD8ZG_group .DxD8ZG_groupHeader{z-index:2;background:var(--dsw-alias-bg-base);position:sticky;top:0}.DxD8ZG_countPill{background:var(--dsw-alias-interactive-bg-hover);min-width:16px;height:16px;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxxs-strong-11);text-align:center;font-variant-numeric:tabular-nums;border-radius:999px;flex:none;padding:0 5px;line-height:16px}.DxD8ZG_group .DxD8ZG_headerAction{opacity:0;transition:opacity .12s var(--ds-ease-in-out)}.DxD8ZG_group .DxD8ZG_groupHeader:hover .DxD8ZG_headerAction,.DxD8ZG_group .DxD8ZG_groupHeader:focus-within .DxD8ZG_headerAction{opacity:1}@media (hover:none){.DxD8ZG_group .DxD8ZG_headerAction{opacity:1}}.DxD8ZG_tree{flex-direction:column;padding:0 6px;display:flex}.DxD8ZG_treeChildren{border-left:1px solid var(--dsw-alias-border-l1);flex-direction:column;margin-left:11px;display:flex}.DxD8ZG_dirRow{min-width:0;color:var(--dsw-alias-label-secondary);font:inherit;cursor:pointer;text-align:left;background:0 0;border:none;flex:1;align-items:center;gap:6px;padding:0;display:flex}.DxD8ZG_dirRow:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}.DxD8ZG_chevron{color:var(--dsw-alias-label-tertiary);transition:transform .14s var(--ds-ease-in-out);flex:none;display:inline-flex}.DxD8ZG_chevron[data-open=true]{transform:rotate(90deg)}.DxD8ZG_dirName{text-overflow:ellipsis;white-space:nowrap;min-width:0;font:var(--dsw-font-xxs-12);flex:1;overflow:hidden}.DxD8ZG_row{min-height:28px;animation:DxD8ZG_dsh-row-in .15s var(--ds-ease-in-out);border-radius:4px;align-items:center;gap:6px;padding:0 2px;display:flex;position:relative}.DxD8ZG_row:hover{background:var(--dsw-alias-interactive-bg-hover)}.DxD8ZG_row[data-selected=true],.DxD8ZG_opRow[data-selected=true],.DxD8ZG_logRow[data-selected=true]{background:var(--dsw-alias-interactive-bg-active)}.DxD8ZG_row[data-selected=true]:before,.DxD8ZG_opRow[data-selected=true]:before,.DxD8ZG_logRow[data-selected=true]:before{content:\"\";background:var(--dsw-alias-state-business-primary);border-radius:1px;width:2px;position:absolute;top:4px;bottom:4px;left:0}.DxD8ZG_rowMain{cursor:pointer;text-align:left;background:0 0;border:none;flex:1;align-items:center;gap:6px;min-width:0;padding:0;display:flex}.DxD8ZG_rowMain:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}.DxD8ZG_rowIcon{flex:none;align-items:center;display:inline-flex}.DxD8ZG_rowName{text-overflow:ellipsis;white-space:nowrap;min-width:0;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-primary);flex:1;overflow:hidden}.DxD8ZG_row:not(:hover):not(:focus-within) .DxD8ZG_rowAction{opacity:0}@media (hover:none){.DxD8ZG_row:not(:hover):not(:focus-within) .DxD8ZG_rowAction{opacity:1}}.DxD8ZG_commitBar{z-index:3;border-top:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base);flex-direction:column;flex:none;gap:4px;padding:8px 12px;display:flex;position:sticky;bottom:0}.DxD8ZG_commitRow{align-items:center;gap:6px;display:flex}.DxD8ZG_commitInput{flex:1;min-width:0}.DxD8ZG_logRow{cursor:pointer;border-radius:4px;flex-direction:column;gap:3px;margin:0 6px;padding:6px 10px;display:flex;position:relative}.DxD8ZG_logRow:hover{background:var(--dsw-alias-interactive-bg-hover)}.DxD8ZG_logLine1{align-items:baseline;gap:8px;min-width:0;display:flex}.DxD8ZG_logHash{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary);font:var(--dsw-font-markdown-code-block-small);border-radius:2px;flex:none;padding:1px 4px}.DxD8ZG_logLine2{flex-wrap:wrap;align-items:center;gap:6px;min-width:0;display:flex}.DxD8ZG_logRef{border:1px solid var(--dsw-alias-border-l2);font:var(--dsw-font-xxxs-strong-11);color:var(--dsw-alias-brand-primary);white-space:nowrap;border-radius:999px;flex:none;padding:0 6px}.DxD8ZG_logSubject{text-overflow:ellipsis;white-space:nowrap;min-width:0;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary);flex:1;overflow:hidden}.DxD8ZG_logMeta{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary);white-space:nowrap;margin-left:auto}.DxD8ZG_logMore{border:1px solid var(--dsw-alias-border-l2);width:calc(100% - 24px);height:28px;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border-radius:3px;margin:4px 12px 8px;display:block}.DxD8ZG_logMore:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.DxD8ZG_logMore:disabled{opacity:.5;cursor:default}.DxD8ZG_session{flex-direction:column;flex:1;min-height:0;display:flex}.DxD8ZG_filterRow{flex-wrap:wrap;flex:none;gap:4px;padding:6px 12px;display:flex}.DxD8ZG_sessionList{flex:1;min-height:0;padding:0 6px 10px;overflow-y:auto}.DxD8ZG_fileGroup{margin-bottom:6px}.DxD8ZG_filePath{color:var(--dsw-alias-label-tertiary);font-family:var(--ds-font-family-code,monospace);word-break:break-all;padding:6px 4px 2px;font-size:11px;display:block}.DxD8ZG_fileGroup:first-child .DxD8ZG_filePath{padding-top:2px}.DxD8ZG_opRow{width:100%;min-height:24px;color:var(--dsw-alias-label-primary);font:inherit;cursor:pointer;text-align:left;background:0 0;border:0;border-radius:4px;align-items:center;gap:6px;padding:0 5px;font-size:11px;display:flex;position:relative}.DxD8ZG_opRow:hover{background:var(--dsw-alias-interactive-bg-hover)}.DxD8ZG_opRow[data-op-error=true]{box-shadow:inset 2px 0 0 var(--dsw-alias-state-error-primary)}.DxD8ZG_opMeta{flex:none;align-items:baseline;gap:8px;min-width:0;margin-left:auto;display:inline-flex}.DxD8ZG_opTime{color:var(--dsw-alias-label-tertiary);flex:none;font-size:10px}.DxD8ZG_opFlag{color:var(--dsw-alias-state-business-primary);flex:none;font-size:10px}.DxD8ZG_opFlagError{color:var(--dsw-alias-state-error-primary);flex:none;font-size:10px}.DxD8ZG_opSize{color:var(--dsw-alias-label-tertiary);font-size:10px;font-family:var(--ds-font-family-code,monospace);flex:none}.DxD8ZG_redactBanner{font:var(--dsw-font-xxxs-strong-11);color:var(--dsw-alias-state-warn-primary);background:var(--dsw-alias-interactive-bg-hover);white-space:nowrap;border-radius:2px;flex:none;padding:2px 8px}.DxD8ZG_mdBody{font:var(--dsw-font-xs-regular-13);min-height:0;padding:12px 16px 20px;line-height:1.6;overflow-y:auto}.DxD8ZG_htmlPane{flex:1;min-height:0;display:flex}.DxD8ZG_htmlFrame{background:var(--dsw-alias-bg-base);border:none;flex:1;width:100%}.DxD8ZG_diffPane{border-top:1px solid var(--dsw-alias-border-l1);flex-direction:column;flex:none;min-height:0;display:flex}.DxD8ZG_dragHandle{cursor:ns-resize;background:var(--dsw-alias-bg-base);flex:none;height:8px;position:relative}.DxD8ZG_dragHandle:after{content:\"\";background:var(--dsw-alias-border-l2);border-radius:1px;width:36px;height:2px;position:absolute;top:3px;left:calc(50% - 18px)}.DxD8ZG_dragHandle:hover:after,.DxD8ZG_dragHandle:focus-visible:after{background:var(--dsw-alias-state-business-primary)}.DxD8ZG_diffHead{border-bottom:1px solid var(--dsw-alias-border-l1);align-items:center;gap:6px;padding:3px 8px 3px 10px;display:flex}.DxD8ZG_diffPath{font-family:var(--ds-font-family-code,monospace);white-space:nowrap;text-overflow:ellipsis;color:var(--dsw-alias-label-primary);direction:rtl;flex:1;min-width:0;font-size:11px;overflow:hidden}.DxD8ZG_diffStats{font-size:10px;font-family:var(--ds-font-family-code,monospace);flex:none;gap:5px;display:inline-flex}.DxD8ZG_paneBody{flex:1;min-height:0;overflow-y:auto}.DxD8ZG_readError{border-left:3px solid var(--dsw-alias-state-error-primary);word-break:break-word;margin:6px 8px;padding:6px 10px}.DxD8ZG_paneGone{border-top:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:8px;padding:8px 12px;display:flex}@keyframes DxD8ZG_dsh-row-in{0%{opacity:0}}.DxD8ZG_logRow:focus-visible,.DxD8ZG_logMore:focus-visible,.DxD8ZG_select:focus-visible,.DxD8ZG_dragHandle:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}@media (prefers-reduced-motion:reduce){.DxD8ZG_row{animation:none}}";
-		const tagId$7 = "dsh-external/dsh-better-sidebar/changes.module.css";
-		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$7) + "]") === null) {
+		//#region \0dsh-css:/home/runner/work/DSH-better-sidebar/DSH-better-sidebar/src/client/diff/diff.module.css.mjs
+		const css$6 = ".sstWLa_rows{font-family:var(--ds-font-family-code,monospace);padding:4px 0 8px;font-size:11px}.sstWLa_row{cursor:default;align-items:flex-start;gap:5px;padding:0 10px;line-height:18px;display:flex}.sstWLa_row[data-folded=true]{cursor:pointer}.sstWLa_lineNo{width:2.5em;color:var(--dsw-alias-label-tertiary);text-align:right;user-select:none;flex:none;font-size:10px}.sstWLa_sign{text-align:center;user-select:none;flex:none;width:1em;font-weight:700}.sstWLa_row[data-kind=del] .sstWLa_sign,.sstWLa_row[data-kind=del] .sstWLa_text{color:var(--dsw-alias-state-error-primary)}.sstWLa_row[data-kind=add] .sstWLa_sign,.sstWLa_row[data-kind=add] .sstWLa_text{color:var(--dsw-alias-state-success-primary)}.sstWLa_row[data-kind=mod] .sstWLa_sign,.sstWLa_row[data-kind=mod] .sstWLa_text{color:var(--dsw-alias-state-business-primary)}.sstWLa_row[data-kind=context] .sstWLa_sign,.sstWLa_row[data-kind=context] .sstWLa_text{color:var(--dsw-alias-label-secondary)}.sstWLa_row[data-kind=read] .sstWLa_text{color:var(--dsw-alias-label-primary)}.sstWLa_row[data-kind=del]{background:color-mix(in srgb, var(--dsw-alias-state-error-primary) 8%, transparent)}.sstWLa_row[data-kind=add]{background:color-mix(in srgb, var(--dsw-alias-state-success-primary) 8%, transparent)}.sstWLa_row[data-kind=mod]{background:color-mix(in srgb, var(--dsw-alias-state-business-primary) 8%, transparent)}.sstWLa_row .sstWLa_text{white-space:pre-wrap;word-break:break-word;flex:1;min-width:0}.sstWLa_row[data-folded=true] .sstWLa_text{white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.sstWLa_row[data-kind=meta] .sstWLa_metaText{color:var(--dsw-alias-label-tertiary);font-style:italic}.sstWLa_inlineChange{background:color-mix(in srgb, var(--dsw-alias-state-business-primary) 26%, transparent);border-radius:3px;padding:0 1px}.sstWLa_tokComment{color:var(--dsw-alias-label-tertiary);font-style:italic}.sstWLa_tokKeyword{color:color-mix(in oklab, var(--dsw-alias-state-business-primary) 55%, var(--dsw-alias-state-error-primary))}.sstWLa_tokString{color:color-mix(in oklab, var(--dsw-alias-state-success-primary) 45%, var(--dsw-alias-state-business-primary))}.sstWLa_tokType{color:color-mix(in oklab, var(--dsw-alias-brand-primary) 60%, var(--dsw-alias-state-success-primary))}.sstWLa_tokNumber{color:var(--dsw-alias-state-warn-primary)}.sstWLa_tokFunction{color:color-mix(in oklab, var(--dsw-alias-state-warn-primary) 55%, var(--dsw-alias-state-error-primary))}.sstWLa_tokMacro{color:color-mix(in oklab, var(--dsw-alias-state-error-primary) 45%, var(--dsw-alias-state-business-primary))}.sstWLa_foldRow{padding:0 10px}.sstWLa_foldRow[data-expandable=true]{cursor:pointer}.sstWLa_foldRow[data-expandable=true]:hover{background:var(--dsw-alias-interactive-bg-hover)}.sstWLa_foldRow[data-expanded=true]{cursor:default;padding:0}.sstWLa_foldRow[data-expanded=true] .sstWLa_foldMarker{display:none}.sstWLa_foldMarker{color:var(--dsw-alias-label-tertiary);background:var(--dsw-alias-interactive-bg-hover);border-radius:4px;align-items:center;gap:5px;margin:2px 0;padding:2px 7px;display:inline-flex}.sstWLa_foldRow[data-expandable=true] .sstWLa_foldMarker{color:var(--dsw-alias-label-secondary)}.sstWLa_foldRow[data-expandable=true] .sstWLa_foldMarker:before{content:\"›\";color:var(--dsw-alias-label-tertiary);transition:transform var(--ds-transition-duration-slow) var(--ds-ease-in-out)}.sstWLa_expand{border:1px solid var(--dsw-alias-border-l1);width:calc(100% - 20px);color:var(--dsw-alias-label-secondary);font:inherit;cursor:pointer;background:0 0;border-radius:6px;margin:4px 10px;padding:4px;font-size:11px;display:block}.sstWLa_expand:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.sstWLa_files,.sstWLa_fileBlock{flex-direction:column;display:flex}.sstWLa_file{width:100%;font:inherit;text-align:left;cursor:pointer;background:0 0;border:0;align-items:center;gap:6px;padding:6px 10px;font-size:11px;display:flex}.sstWLa_file:disabled{cursor:default}.sstWLa_file:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.sstWLa_fileChevron{width:12px;color:var(--dsw-alias-label-tertiary);transition:transform var(--ds-transition-duration-slow) var(--ds-ease-in-out);flex:none}.sstWLa_fileChevronExpanded{transform:rotate(90deg)}.sstWLa_filePath{font-family:var(--ds-font-family-code,monospace);color:var(--dsw-alias-label-primary);word-break:break-all;min-width:0}.sstWLa_fileOld{text-overflow:ellipsis;white-space:nowrap;max-width:40%;color:var(--dsw-alias-label-tertiary);font-family:var(--ds-font-family-code,monospace);flex:none;overflow:hidden}.sstWLa_fileTag{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary);border-radius:4px;flex:none;padding:0 5px;font-size:10px;line-height:16px}.sstWLa_fileStats{font-size:10px;font-family:var(--ds-font-family-code,monospace);flex:none;gap:5px;margin-left:auto;display:inline-flex}.sstWLa_statAdd{color:var(--dsw-alias-state-success-primary)}.sstWLa_statDel{color:var(--dsw-alias-state-error-primary)}.sstWLa_row:focus-visible,.sstWLa_foldRow:focus-visible,.sstWLa_file:focus-visible,.sstWLa_expand:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}@media (prefers-reduced-motion:reduce){.sstWLa_fileChevron{transition:none}}";
+		const tagId$6 = "dsh-external/dsh-better-sidebar/diff.module.css";
+		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$6) + "]") === null) {
 			const tag = document.createElement("style");
 			tag.dataset.plugin = "dsh-external/dsh-better-sidebar";
-			tag.dataset.pluginCss = tagId$7;
-			tag.textContent = css$7;
+			tag.dataset.pluginCss = tagId$6;
+			tag.textContent = css$6;
 			document.head.appendChild(tag);
 		}
-		var changes_module_css_default = {
-			"headerAction": "DxD8ZG_headerAction",
-			"logRow": "DxD8ZG_logRow",
-			"logMore": "DxD8ZG_logMore",
-			"selectors": "DxD8ZG_selectors",
-			"opFlagError": "DxD8ZG_opFlagError",
-			"commitBar": "DxD8ZG_commitBar",
-			"opSize": "DxD8ZG_opSize",
-			"htmlPane": "DxD8ZG_htmlPane",
-			"diffPath": "DxD8ZG_diffPath",
-			"diffStats": "DxD8ZG_diffStats",
-			"paneBody": "DxD8ZG_paneBody",
-			"head": "DxD8ZG_head",
-			"rowMain": "DxD8ZG_rowMain",
-			"redactBanner": "DxD8ZG_redactBanner",
-			"diffHead": "DxD8ZG_diffHead",
-			"paneGone": "DxD8ZG_paneGone",
-			"commitRow": "DxD8ZG_commitRow",
-			"logHash": "DxD8ZG_logHash",
-			"session": "DxD8ZG_session",
-			"rowIcon": "DxD8ZG_rowIcon",
-			"opMeta": "DxD8ZG_opMeta",
-			"select": "DxD8ZG_select",
-			"opFlag": "DxD8ZG_opFlag",
-			"fileGroup": "DxD8ZG_fileGroup",
-			"dirName": "DxD8ZG_dirName",
-			"filePath": "DxD8ZG_filePath",
-			"opTime": "DxD8ZG_opTime",
-			"group": "DxD8ZG_group",
-			"diffPane": "DxD8ZG_diffPane",
-			"rowAction": "DxD8ZG_rowAction",
-			"chevron": "DxD8ZG_chevron",
-			"logMeta": "DxD8ZG_logMeta",
-			"mdBody": "DxD8ZG_mdBody",
-			"dragHandle": "DxD8ZG_dragHandle",
-			"groupHeader": "DxD8ZG_groupHeader",
-			"row": "DxD8ZG_row",
-			"filterRow": "DxD8ZG_filterRow",
-			"logSubject": "DxD8ZG_logSubject",
-			"readError": "DxD8ZG_readError",
-			"countPill": "DxD8ZG_countPill",
-			"git": "DxD8ZG_git",
-			"root": "DxD8ZG_root",
-			"headAction": "DxD8ZG_headAction",
-			"branchLabel": "DxD8ZG_branchLabel",
-			"opRow": "DxD8ZG_opRow",
-			"rowName": "DxD8ZG_rowName",
-			"sessionList": "DxD8ZG_sessionList",
-			"htmlFrame": "DxD8ZG_htmlFrame",
-			"commitInput": "DxD8ZG_commitInput",
-			"logLine1": "DxD8ZG_logLine1",
-			"tree": "DxD8ZG_tree",
-			"dsh-row-in": "DxD8ZG_dsh-row-in",
-			"logRef": "DxD8ZG_logRef",
-			"dirRow": "DxD8ZG_dirRow",
-			"logLine2": "DxD8ZG_logLine2",
-			"treeChildren": "DxD8ZG_treeChildren"
+		var diff_module_css_default = {
+			"fileChevronExpanded": "sstWLa_fileChevronExpanded",
+			"metaText": "sstWLa_metaText",
+			"files": "sstWLa_files",
+			"fileOld": "sstWLa_fileOld",
+			"tokKeyword": "sstWLa_tokKeyword",
+			"fileTag": "sstWLa_fileTag",
+			"expand": "sstWLa_expand",
+			"fileBlock": "sstWLa_fileBlock",
+			"row": "sstWLa_row",
+			"lineNo": "sstWLa_lineNo",
+			"inlineChange": "sstWLa_inlineChange",
+			"tokComment": "sstWLa_tokComment",
+			"tokString": "sstWLa_tokString",
+			"foldMarker": "sstWLa_foldMarker",
+			"fileStats": "sstWLa_fileStats",
+			"filePath": "sstWLa_filePath",
+			"statAdd": "sstWLa_statAdd",
+			"statDel": "sstWLa_statDel",
+			"text": "sstWLa_text",
+			"tokType": "sstWLa_tokType",
+			"tokFunction": "sstWLa_tokFunction",
+			"tokNumber": "sstWLa_tokNumber",
+			"rows": "sstWLa_rows",
+			"foldRow": "sstWLa_foldRow",
+			"sign": "sstWLa_sign",
+			"file": "sstWLa_file",
+			"tokMacro": "sstWLa_tokMacro",
+			"fileChevron": "sstWLa_fileChevron"
 		};
 		//#endregion
 		//#region src/client/changes/GitLens.tsx
@@ -8341,14 +11094,61 @@ window.__ModuleLoader__.load({
 		* A CONTENT key for one status answer. The shared store mints a brand-new
 		* entries array for every poll — idle polls with byte-identical content
 		* included — so array identity cannot decide whether the tree must be rebuilt.
-		* This string can: the same paths and porcelain codes always produce the same
-		* key, and a key change is exactly when the tree, its counts and the row
-		* objects need to be recomputed.
+		* This string can: the same paths, porcelain codes and line counts always
+		* produce the same key, and a key change is exactly when the tree, its totals
+		* and the row objects need to be recomputed. The counts belong in the key
+		* because an edit that only moves lines leaves `xy` alone (#131): without them
+		* the memoized rows would keep printing their first reading.
 		*/
 		function entriesKey(entries) {
 			let key = "";
-			for (const entry of entries) key += `${entry.xy}\u0000${entry.path}\n`;
+			for (const entry of entries) {
+				const counts = entry.counts;
+				const lines = counts === void 0 ? "" : "additions" in counts ? `${counts.additions}/${counts.deletions}` : "binary";
+				key += `${entry.xy}\u0000${entry.path}\u0000${lines}\n`;
+			}
 			return key;
+		}
+		/** The `+N` / `−M` pair, ink and sign included: shared by a file row and its
+		*  group header so the two can never drift apart. A zero side is omitted (the
+		*  diff pane's own convention), and both numbers stay on the element as
+		*  `data-` attributes for the row's tests. */
+		function PlusMinus(props) {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+				className: changes_module_css_default.lineCounts,
+				"data-lines": props.note ?? "count",
+				"data-added": props.additions,
+				"data-deleted": props.deletions,
+				children: [props.additions > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+					className: diff_module_css_default.statAdd,
+					children: ["+", props.additions]
+				}), props.deletions > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+					className: diff_module_css_default.statDel,
+					children: ["−", props.deletions]
+				})]
+			});
+		}
+		/** One row's line counts (#131): the numbers for a text change, the binary
+		*  mark when git has none for a blob, and "new file" for an untracked entry —
+		*  git never diffs those, so there is no numstat row and `+0 −0` would be an
+		*  invented number. An entry with no counts that is NOT untracked (a status
+		*  answer whose numstat read failed) shows nothing at all. */
+		function LineCounts(props) {
+			const { counts } = props;
+			if (counts === void 0) return props.untracked ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				className: changes_module_css_default.lineNote,
+				"data-lines": "new",
+				children: t("changesNewFile")
+			}) : null;
+			if (!("additions" in counts)) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				className: changes_module_css_default.lineNote,
+				"data-lines": "binary",
+				children: t("diffBinary")
+			});
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(PlusMinus, {
+				additions: counts.additions,
+				deletions: counts.deletions
+			});
 		}
 		/** The preview ref for one changed file (one ref per path+side). */
 		function worktreeRefOf(path, untracked, staged, worktree, repoRoot) {
@@ -8401,6 +11201,10 @@ window.__ModuleLoader__.load({
 						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 							className: changes_module_css_default.rowName,
 							children: node.name
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)(LineCounts, {
+							counts: node.counts,
+							untracked: node.status.tone === "untracked"
 						})
 					]
 				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(IconButton, {
@@ -8495,8 +11299,40 @@ window.__ModuleLoader__.load({
 			/** The history's own failure state: an empty list must not claim "no commits"
 			*  when the log call failed. */
 			const [logFailed, setLogFailed] = (0, react.useState)(false);
-			const [commitMsg, setCommitMsg] = (0, react.useState)("");
+			/** Commit drafts, one per scope: the Commit button asks only for a message
+			*  and a staged row, so a draft typed against another project would submit
+			*  verbatim under this one. Keyed rather than cleared on a scope swap, so a
+			*  kept-mounted tab shows a conversation its own message when it comes back
+			*  (#712). */
+			const [commitDrafts, setCommitDrafts] = (0, react.useState)({});
+			const draftKey = `${scope.sessionId}\u0000${scope.cwd ?? ""}`;
+			const commitMsg = commitDrafts[draftKey] ?? "";
+			const writeDraft = (text) => {
+				setCommitDrafts((prev) => ({
+					...prev,
+					[draftKey]: text
+				}));
+			};
 			const [busy, setBusy] = (0, react.useState)(false);
+			/** Whether a commit-message suggestion is being generated host-side (the
+			*  host streams the diff through the harness LLM — no agent is spawned). */
+			const [suggesting, setSuggesting] = (0, react.useState)(false);
+			/** The route the next suggestion would use, for the button's tooltip. */
+			const [commitModel, setCommitModel] = (0, react.useState)(void 0);
+			/** Whether a COMMIT is in flight (a subset of `busy`, which also covers
+			*  staging/checkout): the input reports it with its own busy label. */
+			const [committing, setCommitting] = (0, react.useState)(false);
+			/** The commit box grows with its text, up to the scroll cap below. */
+			const commitBoxRef = (0, react.useRef)(null);
+			(0, react.useLayoutEffect)(() => {
+				const box = commitBoxRef.current;
+				if (box === null || box.scrollHeight === 0) return;
+				const max = 120;
+				box.style.height = "auto";
+				const next = Math.min(box.scrollHeight, max);
+				box.style.height = `${next}px`;
+				box.style.overflowY = box.scrollHeight > max ? "auto" : "hidden";
+			}, [commitMsg]);
 			/** The commit bar's ONE status line (commit / stage / discard / revert). */
 			const [actionError, setActionError] = (0, react.useState)(null);
 			/** The lens-level error banner (refresh / branch switch / history paging). */
@@ -8549,11 +11385,37 @@ window.__ModuleLoader__.load({
 					repoRoot: repoRootRef.current
 				};
 			}, []);
+			/** Label the generate button with the model the next suggestion would use.
+			*  Re-read whenever the panel becomes visible: the pinned route lives in the
+			*  side card settings, so a change made there lands on the next visit. */
+			const scopeSessionId = scope.sessionId;
+			const scopeCwd = scope.cwd;
+			(0, react.useEffect)(() => {
+				if (!visible) return;
+				let cancelled = false;
+				api.gitCommitModel({
+					sessionId: scopeSessionId,
+					...scopeCwd === void 0 ? {} : { cwd: scopeCwd }
+				}).then((view) => {
+					if (cancelled) return;
+					setCommitModel(view.route === void 0 ? void 0 : `${view.route.provider}/${view.route.model}`);
+				}).catch(() => {
+					if (!cancelled) setCommitModel(void 0);
+				});
+				return () => {
+					cancelled = true;
+				};
+			}, [
+				visible,
+				scopeSessionId,
+				scopeCwd
+			]);
 			const primaryWorktree = worktrees.find((entry) => entry.current)?.path;
 			const statusWorktree = selectedWorktree !== void 0 && selectedWorktree !== primaryWorktree ? selectedWorktree : void 0;
 			const status = useGitStatus({
 				sessionId: scope.sessionId,
-				cwd: repoRoot ?? scope.cwd
+				cwd: scope.cwd,
+				repoRoot
 			}, {
 				worktree: statusWorktree,
 				visible
@@ -8671,6 +11533,9 @@ window.__ModuleLoader__.load({
 				setRepoChoices([]);
 				clearDerived();
 				setViewError(null);
+				setFileMenu(null);
+				setHistoryMenu(null);
+				setConfirm(null);
 				if (visible) refresh(false);
 			}, [scope.sessionId, scope.cwd]);
 			const wasVisible = (0, react.useRef)(visible);
@@ -8707,6 +11572,10 @@ window.__ModuleLoader__.load({
 				}
 			};
 			const stageError = (reason) => t("changesStageFailed", { message: errorMessage(reason) });
+			/** The remote actions prepend their own label: git's message for a missing
+			*  upstream or a diverged branch says nothing about which button ran. */
+			const pushError = (reason) => `${t("pushError")}: ${errorMessage(reason)}`;
+			const pullError = (reason) => `${t("pullError")}: ${errorMessage(reason)}`;
 			const stageEntry = (path, staged) => {
 				runAction(() => staged ? api.gitUnstage(gitScopeNow(), path, selectedWorktree) : api.gitStage(gitScopeNow(), path, selectedWorktree), stageError);
 			};
@@ -8715,10 +11584,43 @@ window.__ModuleLoader__.load({
 			};
 			const commit = () => {
 				const message = commitMsg.trim();
-				if (message === "" || busy) return;
+				if (message === "" || busy || suggesting) return;
+				setCommitting(true);
 				runAction(() => api.gitCommit(gitScopeNow(), message, selectedWorktree), errorMessage, () => {
-					setCommitMsg("");
+					writeDraft("");
+				}).finally(() => {
+					setCommitting(false);
 				});
+			};
+			/** The generate button's label/tooltip: names the model when one resolves,
+			*  so the user knows which provider the draft will run on. */
+			const generateLabel = commitModel === void 0 ? t("generateCommitMessage") : t("generateCommitMessageWith", { model: commitModel });
+			/** Ask the host to draft a commit message from the pending changes, then
+			*  fill the message box (still editable; regenerating is allowed). */
+			const suggestMessage = async () => {
+				if (busy || suggesting) return;
+				setSuggesting(true);
+				setActionError(null);
+				try {
+					const { message } = await api.gitSuggestMessage(gitScopeNow(), isZh() ? "zh" : "en", selectedWorktree);
+					writeDraft(message);
+				} catch (reason) {
+					if (reason instanceof SidebarApiError && reason.code === "git-suggest-empty") setActionError(t("suggestCommitEmpty"));
+					else setActionError(`${t("suggestCommitError")}: ${errorMessage(reason)}`);
+				} finally {
+					setSuggesting(false);
+				}
+			};
+			/** Push the selected checkout's branch. Local commits and the remote ride the
+			*  SAME status line as every other git action — the failures share one cause
+			*  (no upstream, auth, divergence), so a second error channel would only
+			*  split the user's attention. */
+			const push = () => {
+				runAction(() => api.gitPush(gitScopeNow(), selectedWorktree), pushError);
+			};
+			/** Pull into the selected checkout (fast-forward only host-side). */
+			const pull = () => {
+				runAction(() => api.gitPull(gitScopeNow(), selectedWorktree), pullError);
 			};
 			/** Switching the selected checkout changes which rows are legitimate to act
 			*  on: clear the derived surfaces before the asynchronous refresh resolves
@@ -8826,6 +11728,8 @@ window.__ModuleLoader__.load({
 					unstagedTree: buildChangeTree(unstaged)
 				};
 			}, [contentKey]);
+			const unstagedTotal = (0, react.useMemo)(() => sumLineCounts(unstagedTree), [unstagedTree]);
+			const stagedTotal = (0, react.useMemo)(() => sumLineCounts(stagedTree), [stagedTree]);
 			const isRepo = snapshot?.isRepo === true;
 			const branch = snapshot?.branch ?? "";
 			const branchOptions = branch === "" ? branchNames : [branch, ...branchNames.filter((name) => name !== branch)];
@@ -8910,9 +11814,11 @@ window.__ModuleLoader__.load({
 			});
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				className: changes_module_css_default.git,
+				"data-git-root": true,
 				children: [
 					(repoChoices.length > 1 || worktrees.length > 1 || branch !== "") && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 						className: changes_module_css_default.selectors,
+						"data-git-head": true,
 						children: [
 							repoChoices.length > 1 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("select", {
 								className: changes_module_css_default.select,
@@ -8966,103 +11872,229 @@ window.__ModuleLoader__.load({
 							}))
 						]
 					}),
-					viewError !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Notice, {
-						kind: "error",
-						role: "alert",
-						children: viewError
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						className: changes_module_css_default.gitScroll,
+						"data-git-scroll": true,
+						children: [
+							viewError !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Notice, {
+								kind: "error",
+								role: "alert",
+								children: viewError
+							}),
+							snapshot === null && status.loading && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Notice, {
+								kind: "loading",
+								tone: "page",
+								children: t("loading")
+							}),
+							snapshot === null && !status.loading && status.error && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Notice, {
+								kind: "error",
+								tone: "page",
+								children: t("error")
+							}),
+							snapshot !== null && !isRepo && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Notice, {
+								kind: "empty",
+								tone: "page",
+								children: t("notRepo")
+							}),
+							snapshot?.truncated === true && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Notice, {
+								kind: "warn",
+								children: t("statusTruncated")
+							}),
+							clean && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Notice, {
+								kind: "empty",
+								tone: "page",
+								children: t("changesClean")
+							}),
+							isRepo && !clean && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+								className: changes_module_css_default.group,
+								"data-group": "unstaged",
+								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)(SectionHeader, {
+									className: changes_module_css_default.groupHeader,
+									label: t("unstaged"),
+									action: unstagedEntries.length > 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)(IconButton, {
+										className: changes_module_css_default.headerAction,
+										size: "sm",
+										disabled: busy,
+										label: t("stageAll"),
+										icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlusOutlineRegular, { size: 14 }),
+										onClick: () => {
+											stageAll(false);
+										}
+									}) : void 0,
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+										className: changes_module_css_default.countPill,
+										"data-count": unstagedEntries.length,
+										children: unstagedEntries.length
+									}), unstagedTotal.files > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(PlusMinus, {
+										additions: unstagedTotal.additions,
+										deletions: unstagedTotal.deletions,
+										note: "group"
+									})]
+								}), renderTree(unstagedTree, false)]
+							}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+								className: changes_module_css_default.group,
+								"data-group": "staged",
+								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)(SectionHeader, {
+									className: changes_module_css_default.groupHeader,
+									label: t("staged"),
+									action: stagedEntries.length > 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)(IconButton, {
+										className: changes_module_css_default.headerAction,
+										size: "sm",
+										disabled: busy,
+										label: t("unstageAll"),
+										icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconTrashOutlineRegular, { size: 14 }),
+										onClick: () => {
+											stageAll(true);
+										}
+									}) : void 0,
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+										className: changes_module_css_default.countPill,
+										"data-count": stagedEntries.length,
+										children: stagedEntries.length
+									}), stagedTotal.files > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(PlusMinus, {
+										additions: stagedTotal.additions,
+										deletions: stagedTotal.deletions,
+										note: "group"
+									})]
+								}), renderTree(stagedTree, true)]
+							})] }),
+							isRepo && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)(SectionHeader, {
+									label: t("history"),
+									count: logEntries.length > 0 ? logEntries.length : void 0
+								}),
+								logEntries.length === 0 && logFailed && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Notice, {
+									kind: "error",
+									children: t("historyLoadError")
+								}),
+								logEntries.length === 0 && !logFailed && logEnded && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Notice, {
+									kind: "empty",
+									tone: "page",
+									children: t("changesNoHistory")
+								}),
+								logEntries.map((entry) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+									role: "button",
+									tabIndex: 0,
+									className: changes_module_css_default.logRow,
+									"data-selected": selectedRef?.kind === "commit" && selectedRef.hashFull === entry.hashFull ? "true" : void 0,
+									title: `${entry.author} · ${entry.date}\n${entry.hashFull}`,
+									onClick: () => {
+										onPreview(commitRefOf(entry));
+									},
+									onKeyDown: (event) => {
+										if (event.key === "Enter" || event.key === " ") {
+											event.preventDefault();
+											onPreview(commitRefOf(entry));
+										}
+									},
+									onContextMenu: (event) => {
+										openHistoryMenu(event, entry);
+									},
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+										className: changes_module_css_default.logLine1,
+										children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+											className: changes_module_css_default.logHash,
+											children: entry.hash
+										}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+											className: changes_module_css_default.logSubject,
+											children: entry.subject
+										})]
+									}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+										className: changes_module_css_default.logLine2,
+										children: [refNames(entry.refs).map((ref) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+											className: changes_module_css_default.logRef,
+											children: ref
+										}, ref)), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+											className: changes_module_css_default.logMeta,
+											children: [
+												entry.author,
+												" · ",
+												relativeTime(entry.date)
+											]
+										})]
+									})]
+								}, entry.hashFull)),
+								!logEnded && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: changes_module_css_default.logMore,
+									disabled: logLoadingMore || busy,
+									onClick: () => {
+										loadMoreLog();
+									},
+									children: logLoadingMore ? t("loading") : t("loadMore")
+								})
+							] })
+						]
 					}),
-					snapshot === null && status.loading && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Notice, {
-						kind: "loading",
-						tone: "page",
-						children: t("loading")
-					}),
-					snapshot === null && !status.loading && status.error && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Notice, {
-						kind: "error",
-						tone: "page",
-						children: t("error")
-					}),
-					snapshot !== null && !isRepo && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Notice, {
-						kind: "empty",
-						tone: "page",
-						children: t("notRepo")
-					}),
-					snapshot?.truncated === true && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Notice, {
-						kind: "warn",
-						children: t("statusTruncated")
-					}),
-					clean && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Notice, {
-						kind: "empty",
-						tone: "page",
-						children: t("changesClean")
-					}),
-					isRepo && !clean && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-						className: changes_module_css_default.group,
-						"data-group": "unstaged",
-						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(SectionHeader, {
-							className: changes_module_css_default.groupHeader,
-							label: t("unstaged"),
-							action: unstagedEntries.length > 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)(IconButton, {
-								className: changes_module_css_default.headerAction,
-								size: "sm",
-								disabled: busy,
-								label: t("stageAll"),
-								icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlusOutlineRegular, { size: 14 }),
-								onClick: () => {
-									stageAll(false);
-								}
-							}) : void 0,
-							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-								className: changes_module_css_default.countPill,
-								"data-count": unstagedEntries.length,
-								children: unstagedEntries.length
-							})
-						}), renderTree(unstagedTree, false)]
-					}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-						className: changes_module_css_default.group,
-						"data-group": "staged",
-						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(SectionHeader, {
-							className: changes_module_css_default.groupHeader,
-							label: t("staged"),
-							action: stagedEntries.length > 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)(IconButton, {
-								className: changes_module_css_default.headerAction,
-								size: "sm",
-								disabled: busy,
-								label: t("unstageAll"),
-								icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconTrashOutlineRegular, { size: 14 }),
-								onClick: () => {
-									stageAll(true);
-								}
-							}) : void 0,
-							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-								className: changes_module_css_default.countPill,
-								"data-count": stagedEntries.length,
-								children: stagedEntries.length
-							})
-						}), renderTree(stagedTree, true)]
-					})] }),
 					isRepo && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 						className: changes_module_css_default.commitBar,
+						"data-commit-bar": true,
 						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 							className: changes_module_css_default.commitRow,
-							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Input, {
-								className: changes_module_css_default.commitInput,
-								placeholder: t("commitPlaceholder"),
-								value: commitMsg,
-								disabled: busy,
-								onChange: (event) => {
-									setCommitMsg(event.target.value);
-									setActionError(null);
-								},
-								onKeyDown: (event) => {
-									if ((event.ctrlKey || event.metaKey) && event.key === "Enter") commit();
-								}
-							}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
-								variant: "primary",
-								size: "sm",
-								disabled: busy || commitMsg.trim() === "" || stagedEntries.length === 0,
-								onClick: commit,
-								children: t("commit")
-							})]
+							children: [
+								/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+									className: changes_module_css_default.commitInputWrap,
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("textarea", {
+										ref: commitBoxRef,
+										className: changes_module_css_default.commitInput,
+										placeholder: busy || suggesting ? "" : t("commitPlaceholder"),
+										value: commitMsg,
+										disabled: busy || suggesting,
+										"aria-busy": busy || suggesting,
+										"aria-label": t("commitPlaceholder"),
+										rows: 1,
+										onChange: (event) => {
+											writeDraft(event.currentTarget.value);
+											setActionError(null);
+										},
+										onKeyDown: (event) => {
+											if ((event.ctrlKey || event.metaKey) && event.key === "Enter") commit();
+											if ((event.ctrlKey || event.metaKey) && (event.key === "g" || event.key === "G")) {
+												event.preventDefault();
+												suggestMessage();
+											}
+										}
+									}), (suggesting || committing) && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+										className: changes_module_css_default.commitBusyText,
+										role: "status",
+										"aria-live": "polite",
+										children: suggesting ? t("generatingCommitMessage") : t("committingMessage")
+									})]
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: suggesting ? `${changes_module_css_default.suggestButton} ${changes_module_css_default.suggestBusy}` : changes_module_css_default.suggestButton,
+									"aria-label": generateLabel,
+									"aria-busy": suggesting,
+									title: generateLabel,
+									disabled: busy || suggesting || stagedEntries.length === 0 && unstagedEntries.length === 0,
+									onClick: () => {
+										suggestMessage();
+									},
+									children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconSparkleRegular, { size: 14 })
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+									variant: "primary",
+									size: "sm",
+									disabled: busy || suggesting || commitMsg.trim() === "" || stagedEntries.length === 0,
+									onClick: commit,
+									children: t("commit")
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+									variant: "ghost",
+									size: "sm",
+									disabled: busy || suggesting,
+									onClick: push,
+									children: t("push")
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+									variant: "ghost",
+									size: "sm",
+									disabled: busy || suggesting,
+									onClick: pull,
+									children: t("pull")
+								})
+							]
 						}), actionError !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Notice, {
 							kind: "error",
 							tone: "inline",
@@ -9070,72 +12102,6 @@ window.__ModuleLoader__.load({
 							children: actionError
 						})]
 					}),
-					isRepo && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
-						/* @__PURE__ */ (0, react_jsx_runtime.jsx)(SectionHeader, {
-							label: t("history"),
-							count: logEntries.length > 0 ? logEntries.length : void 0
-						}),
-						logEntries.length === 0 && logFailed && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Notice, {
-							kind: "error",
-							children: t("historyLoadError")
-						}),
-						logEntries.length === 0 && !logFailed && logEnded && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Notice, {
-							kind: "empty",
-							tone: "page",
-							children: t("changesNoHistory")
-						}),
-						logEntries.map((entry) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-							role: "button",
-							tabIndex: 0,
-							className: changes_module_css_default.logRow,
-							"data-selected": selectedRef?.kind === "commit" && selectedRef.hashFull === entry.hashFull ? "true" : void 0,
-							title: `${entry.author} · ${entry.date}\n${entry.hashFull}`,
-							onClick: () => {
-								onPreview(commitRefOf(entry));
-							},
-							onKeyDown: (event) => {
-								if (event.key === "Enter" || event.key === " ") {
-									event.preventDefault();
-									onPreview(commitRefOf(entry));
-								}
-							},
-							onContextMenu: (event) => {
-								openHistoryMenu(event, entry);
-							},
-							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
-								className: changes_module_css_default.logLine1,
-								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-									className: changes_module_css_default.logHash,
-									children: entry.hash
-								}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-									className: changes_module_css_default.logSubject,
-									children: entry.subject
-								})]
-							}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
-								className: changes_module_css_default.logLine2,
-								children: [refNames(entry.refs).map((ref) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-									className: changes_module_css_default.logRef,
-									children: ref
-								}, ref)), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
-									className: changes_module_css_default.logMeta,
-									children: [
-										entry.author,
-										" · ",
-										relativeTime(entry.date)
-									]
-								})]
-							})]
-						}, entry.hashFull)),
-						!logEnded && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: changes_module_css_default.logMore,
-							disabled: logLoadingMore || busy,
-							onClick: () => {
-								loadMoreLog();
-							},
-							children: logLoadingMore ? t("loading") : t("loadMore")
-						})
-					] }),
 					/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Menu, {
 						open: fileMenu !== null,
 						onClose: () => {
@@ -9309,243 +12275,6 @@ window.__ModuleLoader__.load({
 				]
 			});
 		}
-		//#endregion
-		//#region src/client/changes/ops.ts
-		/** Tool names mapped to each op kind; unknown names are ignored. */
-		const READ_TOOLS = /* @__PURE__ */ new Set([
-			"read",
-			"view",
-			"see"
-		]);
-		const WRITE_TOOLS = /* @__PURE__ */ new Set(["write", "create"]);
-		const EDIT_TOOLS = /* @__PURE__ */ new Set([
-			"edit",
-			"str_replace",
-			"str-replace-editor",
-			"multi-edit"
-		]);
-		/** Classify one tool name; undefined when the tool touches no file. */
-		function kindOf(name) {
-			if (READ_TOOLS.has(name)) return "read";
-			if (WRITE_TOOLS.has(name)) return "write";
-			if (EDIT_TOOLS.has(name)) return "edit";
-		}
-		/**
-		* Parse one tool-call arguments JSON body defensively: the payload is
-		* model-emitted wire data, so every field is checked before use.
-		*/
-		function parseArgs(argsRaw) {
-			try {
-				const parsed = JSON.parse(argsRaw);
-				if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-				return parsed;
-			} catch {
-				return {};
-			}
-		}
-		/** Extract the path field common to every file tool's arguments. */
-		function pathOf(args) {
-			for (const key of [
-				"file_path",
-				"path",
-				"filePath"
-			]) {
-				const value = args[key];
-				if (typeof value === "string" && value.length > 0) return value;
-			}
-		}
-		/**
-		* The result blocks and error flag of one tool/result message, read under BOTH
-		* logged shapes: 0.1.6 wrapped the result in a single `type: 'tool-result'`
-		* content block on a user-role message (the text nested inside it, `isError`
-		* on the wrapper), 0.1.7's first-class tool-role message carries the blocks at
-		* the message's own top level with `isError` lifted onto the message.
-		* Historical logs keep the old shape forever, so both are read. Undefined when
-		* the message carries no block array.
-		*/
-		function resultOf(message) {
-			if (!Array.isArray(message.content)) return void 0;
-			for (const block of message.content) {
-				if (block === null || typeof block !== "object") continue;
-				const wrapper = block;
-				if (wrapper.type !== "tool-result") continue;
-				return {
-					blocks: Array.isArray(wrapper.content) ? wrapper.content : [],
-					isError: wrapper.isError === true
-				};
-			}
-			return {
-				blocks: message.content,
-				isError: message.isError === true
-			};
-		}
-		/** The finalized plain text of one tool result (its text blocks joined). */
-		function resultText(message) {
-			const blocks = resultOf(message)?.blocks;
-			if (blocks === void 0) return void 0;
-			const parts = [];
-			for (const item of blocks) {
-				if (item === null || typeof item !== "object") continue;
-				const textItem = item;
-				if (textItem.type === "text" && typeof textItem.text === "string") parts.push(textItem.text);
-			}
-			return parts.length > 0 ? parts.join("\n") : void 0;
-		}
-		/** Whether a tool result reported an error (0.1.7's message-level flag, else
-		*  the 0.1.6 wrapper block's flag). */
-		function resultIsError(message) {
-			return resultOf(message)?.isError === true;
-		}
-		/**
-		* Fold a session event log into the file operations it contains, newest
-		* first. A `tool/call` seeds a running op (payload from the model's
-		* arguments); its `tool/result` settles it (read content, error text).
-		* Calls dispatched through a host tool such as run_code appear as their own
-		* `tool/call` rows in the log, so nested file calls fold in naturally.
-		* @param events - the session's append-only event log (oldest → newest).
-		* @returns the ordered operation list.
-		*/
-		function extractFileOps(events) {
-			const byCall = /* @__PURE__ */ new Map();
-			for (const event of events) if (event.type === "tool/call") {
-				const data = event.data;
-				if (typeof data.name !== "string" || typeof data.callId !== "string") continue;
-				const kind = kindOf(data.name);
-				if (kind === void 0) continue;
-				const args = parseArgs(typeof data.arguments === "string" ? data.arguments : "");
-				const path = pathOf(args);
-				if (path === void 0) continue;
-				const base = {
-					callId: data.callId,
-					kind,
-					path,
-					time: event.time,
-					running: true,
-					isError: false
-				};
-				if (kind === "edit") {
-					const oldString = args.old_string;
-					const newString = args.new_string;
-					byCall.set(data.callId, typeof oldString === "string" && typeof newString === "string" ? {
-						...base,
-						edit: {
-							oldString,
-							newString
-						}
-					} : base);
-					continue;
-				}
-				if (kind === "write") {
-					const content = args.content;
-					byCall.set(data.callId, typeof content === "string" && content.length > 0 ? {
-						...base,
-						content
-					} : base);
-					continue;
-				}
-				byCall.set(data.callId, base);
-			} else if (event.type === "tool/result") {
-				const message = event.data.message;
-				if (message === void 0) continue;
-				const callId = message.source?.callId;
-				if (typeof callId !== "string") continue;
-				const op = byCall.get(callId);
-				if (op === void 0) continue;
-				const text = resultText(message);
-				const isError = resultIsError(message);
-				const patch = {
-					running: false,
-					isError
-				};
-				if (text !== void 0 && text.length > 0) {
-					if (isError) patch.errorText = text;
-					else if (op.kind === "read") patch.read = text;
-					else if (op.kind === "write" && op.content === void 0) patch.content = text;
-				}
-				byCall.set(callId, {
-					...op,
-					...patch
-				});
-			}
-			return [...byCall.values()].sort((a, b) => b.time - a.time);
-		}
-		/**
-		* Group operations by path, newest op first per file, files ordered by their
-		* most recent operation.
-		*/
-		function groupByFile(ops) {
-			const groups = /* @__PURE__ */ new Map();
-			for (const op of ops) {
-				const list = groups.get(op.path) ?? [];
-				list.push(op);
-				groups.set(op.path, list);
-			}
-			const ordered = [...groups.entries()].sort((a, b) => b[1][0].time - a[1][0].time);
-			return new Map(ordered);
-		}
-		/**
-		* The last content known for a path before the given operation, synthesized
-		* from earlier ops: a write's payload is authoritative, an edit implies its
-		* old side. Best effort — a write with no known prior content diffs against
-		* nothing (all-added).
-		*/
-		function knownContentBefore(ops, path, before) {
-			const ofFile = ops.filter((op) => op.path === path && op.time <= before.time && op !== before);
-			for (let i = ofFile.length - 1; i >= 0; i -= 1) {
-				const op = ofFile[i];
-				if (op.kind === "write" && op.content !== void 0) return op.content;
-				if (op.kind === "edit" && op.edit !== void 0 && i === ofFile.length - 1) return op.edit.oldString;
-			}
-		}
-		/**
-		* The read-tool response's `<content>` body split into lines with the
-		* "(Showing lines …)" note dropped — the shared envelope core both read
-		* parsers consume: {@link parseReadLines} recovers line numbers from the
-		* "<n>: " prefixes, {@link parseReadContent} keeps the raw text.
-		*/
-		function contentLines(raw) {
-			const contentMatch = raw.match(/<content>([\s\S]*?)<\/content>/);
-			return (contentMatch ? contentMatch[1] : raw).split("\n").filter((line) => !/^\s*\(Showing lines .*\)\s*$/.test(line));
-		}
-		/**
-		* Strip the DSH read-tool response envelope down to the file's raw content,
-		* PRESERVING blank lines (unlike {@link parseReadLines}, which drops them):
-		* drops the <content> wrapper, the "(Showing lines ...)" note, and the
-		* per-line "<n>: " prefixes. The markdown reading mode needs the blank lines
-		* because markdown block structure depends on them.
-		*/
-		function parseReadContent(raw) {
-			return contentLines(raw).map((line) => line.replace(/^\s*\d+:\s/, "")).join("\n").replace(/^[\n]+/, "").replace(/\n+$/, "");
-		}
-		/**
-		* Parse a DSH read result into file lines with their real line numbers:
-		* drops the <content> envelope and "(Showing lines ...)" note; recovers the
-		* "<n>: " prefix as the line number, falling back to sequential counting.
-		*/
-		function parseReadLines(raw) {
-			const result = [];
-			let fallback = 1;
-			for (const line of contentLines(raw)) {
-				if (line.length === 0) continue;
-				const match = line.match(/^\s*(\d+):\s?(.*)$/);
-				if (match !== null) {
-					result.push({
-						line: Number(match[1]),
-						text: match[2] ?? ""
-					});
-					fallback = Number(match[1]) + 1;
-				} else {
-					result.push({
-						line: fallback,
-						text: line
-					});
-					fallback += 1;
-				}
-			}
-			return result;
-		}
-		//#endregion
-		//#region src/client/diff/rows.ts
 		/**
 		* Longest-common-subsequence table over line equality.
 		* @param oldLines - old side lines.
@@ -9593,6 +12322,13 @@ window.__ModuleLoader__.load({
 		/**
 		* Line diff by LCS walk with rewrite pairing: the raw walk emits context/del/
 		* add rows; `pairMods` marks rewritten pairs as 'mod'.
+		*
+		* Inputs whose line-count product exceeds {@link MAX_LCS_CELLS} skip the dense
+		* table entirely (it would allocate hundreds of MB on the main thread) and
+		* degrade to every old line as 'del' (old order, `oldLine` 1..n) followed by
+		* every new line as 'add' (new order, `newLine` 1..m). The degenerate output
+		* carries no 'context' and no 'mod' rows: pairing is skipped too, since with no
+		* alignment found every del/add pair would be marked rewritten.
 		* @param oldText - the previous content; empty string diffs against nothing.
 		* @param newText - the next content.
 		* @returns ordered diff rows, old-side deletions before new-side additions.
@@ -9600,6 +12336,20 @@ window.__ModuleLoader__.load({
 		function diffLines(oldText, newText) {
 			const oldLines = oldText.length === 0 ? [] : oldText.split("\n");
 			const newLines = newText.length === 0 ? [] : newText.split("\n");
+			if (oldLines.length * newLines.length > 4e6) {
+				const rows = [];
+				for (let i = 0; i < oldLines.length; i += 1) rows.push({
+					kind: "del",
+					oldLine: i + 1,
+					text: oldLines[i]
+				});
+				for (let j = 0; j < newLines.length; j += 1) rows.push({
+					kind: "add",
+					newLine: j + 1,
+					text: newLines[j]
+				});
+				return rows;
+			}
 			const table = lcsTable(oldLines, newLines);
 			const raw = [];
 			let i = 0;
@@ -9790,13 +12540,123 @@ window.__ModuleLoader__.load({
 				header: match[5] ?? ""
 			};
 		}
+		/** A git C-quoted path literal (`"a/x y.md"`, escapes included). */
+		const QUOTED_PATH = "\"(?:[^\"\\\\]|\\\\.)*\"";
+		/** git's single-character C escapes, mapped to their byte. */
+		const C_ESCAPES = {
+			a: 7,
+			b: 8,
+			t: 9,
+			n: 10,
+			v: 11,
+			f: 12,
+			r: 13,
+			"\"": 34,
+			"\\": 92
+		};
+		const pathEncoder = new TextEncoder();
+		const pathDecoder = new TextDecoder();
+		/**
+		* Undo git's C-quoting of a path (`"a/\346\226\207.md"` → `a/中文.md`).
+		* git quotes a path holding a byte outside ASCII, a control character, a
+		* quote or a backslash; `-c core.quotePath=false` (see `runGit`) already
+		* removes the non-ASCII half for our own commands, so this is the remaining
+		* defensive half — and what keeps replayed/pasted diff text readable.
+		* Unquoted input comes back unchanged.
+		* @param raw - the path as it appears in the diff text.
+		* @returns the literal path.
+		*/
+		function decodeGitPath(raw) {
+			if (raw.length < 2 || !raw.startsWith("\"") || !raw.endsWith("\"")) return raw;
+			const body = raw.slice(1, -1);
+			const bytes = [];
+			for (let i = 0; i < body.length; i += 1) {
+				const char = body[i];
+				if (char !== "\\") {
+					for (const byte of pathEncoder.encode(char)) bytes.push(byte);
+					continue;
+				}
+				const escaped = body[i + 1];
+				const simple = escaped === void 0 ? void 0 : C_ESCAPES[escaped];
+				if (simple !== void 0) {
+					bytes.push(simple);
+					i += 1;
+					continue;
+				}
+				const octal = /^[0-7]{1,3}/.exec(body.slice(i + 1));
+				if (octal !== null) {
+					bytes.push(Number.parseInt(octal[0], 8));
+					i += octal[0].length;
+					continue;
+				}
+				for (const byte of pathEncoder.encode(char)) bytes.push(byte);
+			}
+			return pathDecoder.decode(new Uint8Array(bytes));
+		}
+		/** A `---`/`+++` header value: git appends a TAB when the path has a space. */
+		function headerPath(raw) {
+			return decodeGitPath(raw.endsWith("	") ? raw.slice(0, -1) : raw);
+		}
+		/**
+		* Both sides of a `diff --git` header, or null when it cannot be split.
+		* Needed for the sections that never reach `---`/`+++` — a mode-only change
+		* (its path is the same on both sides, which is what the split looks for).
+		*/
+		function pathsFromGitHeader(rest) {
+			const quoted = new RegExp(`^(${QUOTED_PATH}) (${QUOTED_PATH})$`).exec(rest);
+			if (quoted !== null) return {
+				oldPath: decodeGitPath(quoted[1]),
+				newPath: decodeGitPath(quoted[2])
+			};
+			for (let at = rest.indexOf(" b/"); at !== -1; at = rest.indexOf(" b/", at + 1)) {
+				const oldPath = rest.slice(0, at);
+				const newPath = rest.slice(at + 1);
+				if (oldPath.startsWith("a/") && newPath.startsWith("b/") && oldPath.slice(2) === newPath.slice(2)) return {
+					oldPath,
+					newPath
+				};
+			}
+			return null;
+		}
+		/** Both sides of a `Binary files A and B differ` line (A or B may be /dev/null). */
+		function pathsFromBinaryLine(raw) {
+			const body = raw.slice(13).replace(/ differ$/, "");
+			const quoted = new RegExp(`^(${QUOTED_PATH}) and (${QUOTED_PATH})$`).exec(body);
+			if (quoted !== null) return {
+				oldPath: decodeGitPath(quoted[1]),
+				newPath: decodeGitPath(quoted[2])
+			};
+			for (let at = body.indexOf(" and "); at !== -1; at = body.indexOf(" and ", at + 1)) {
+				const oldPath = decodeGitPath(body.slice(0, at));
+				const newPath = decodeGitPath(body.slice(at + 5));
+				const oldSide = oldPath === "/dev/null" || oldPath.startsWith("a/");
+				const newSide = newPath === "/dev/null" || newPath.startsWith("b/");
+				if (oldSide && newSide) return {
+					oldPath,
+					newPath
+				};
+			}
+			return null;
+		}
 		/**
 		* Parse `git diff --no-color` output into file sections and hunks. Rows
 		* outside a file section (leading noise) and metadata rows between the
 		* `diff --git`/`---`/`+++` headers and the first hunk (index lines, mode
-		* changes, rename/similarity lines) are skipped; a section that never
-		* reaches a hunk (a mode/rename-only change) stays hunkless so the caller
-		* can still draw its path.
+		* changes, rename/similarity lines) are skipped.
+		*
+		* Paths come from whichever header names them: `---`/`+++` win when present,
+		* otherwise the section's own `rename from|to`, `Binary files … differ` or
+		* `diff --git` line supplies them. git emits no `---`/`+++` at all for a
+		* binary file, a pure rename and a mode-only change, so without those
+		* fallbacks the section renders as an anonymous header (the badge with no
+		* file name the reader cannot place).
+		*
+		* Both of those header branches are gated on `!inHunk`, because a hunk line can
+		* wear the same prefix: a deleted line is `-` plus its text, so deleting `-- x`
+		* emits `--- x` — a hunk line that starts exactly like the separator, and one
+		* that used to be read as a NEW file's header (truncating the hunk here, then
+		* stamping the deleted text onto the path). The hunk is the tiebreaker: git
+		* never writes `---`/`+++` inside one.
 		*/
 		function parseUnifiedDiff(text) {
 			const files = [];
@@ -9819,22 +12679,42 @@ window.__ModuleLoader__.load({
 						binary: false,
 						hunks: []
 					};
+					const headPaths = pathsFromGitHeader(raw.slice(11));
+					if (headPaths !== null) {
+						current.oldPath = headPaths.oldPath;
+						current.newPath = headPaths.newPath;
+					}
 					files.push(current);
 					continue;
 				}
 				if (current === null) continue;
+				if (raw.startsWith("rename from ")) {
+					current.oldPath = decodeGitPath(raw.slice(12));
+					continue;
+				}
+				if (raw.startsWith("rename to ")) {
+					current.newPath = decodeGitPath(raw.slice(10));
+					continue;
+				}
 				if (raw.startsWith("Binary files ") || raw === "GIT binary patch") {
 					flushHunk();
 					current.binary = true;
+					if (raw.startsWith("Binary files ")) {
+						const binPaths = pathsFromBinaryLine(raw);
+						if (binPaths !== null) {
+							current.oldPath = binPaths.oldPath;
+							current.newPath = binPaths.newPath;
+						}
+					}
 					continue;
 				}
-				if (raw.startsWith("--- ")) {
+				if (!inHunk && raw.startsWith("--- ")) {
 					flushHunk();
-					current.oldPath = raw.slice(4);
+					current.oldPath = headerPath(raw.slice(4));
 					continue;
 				}
-				if (raw.startsWith("+++ ")) {
-					current.newPath = raw.slice(4);
+				if (!inHunk && raw.startsWith("+++ ")) {
+					current.newPath = headerPath(raw.slice(4));
 					continue;
 				}
 				const header = parseHunkHeader(raw);
@@ -10029,15 +12909,24 @@ window.__ModuleLoader__.load({
 			if (path.startsWith("a/") || path.startsWith("b/")) return path.slice(2);
 			return path;
 		}
-		/** The diff's add/del/mod row counts (the "+n −m" header chips). */
+		/**
+		* The diff's insert/delete counts (the "+n −m" header chips), in git's
+		* accounting: one rewritten line is one insertion plus one deletion. It
+		* renders as a pair of `mod` rows (one per side), so count SIDES rather than
+		* rows — counting each `mod` row as both an add and a delete reported a
+		* single-line rewrite as +2 −2, which matched neither `git diff --numstat`
+		* nor the `-old` / `+new` pair drawn on screen.
+		*/
 		function diffStats(segments) {
 			let added = 0;
 			let deleted = 0;
 			for (const segment of segments) {
 				if (segment.kind !== "hunk") continue;
 				for (const row of segment.rows) {
-					if (row.kind === "add" || row.kind === "mod") added += 1;
-					if (row.kind === "del" || row.kind === "mod") deleted += 1;
+					const onNewSide = row.kind === "add" || row.kind === "mod" && row.newLine !== void 0;
+					const onOldSide = row.kind === "del" || row.kind === "mod" && row.oldLine !== void 0;
+					if (onNewSide) added += 1;
+					if (onOldSide) deleted += 1;
 				}
 			}
 			return {
@@ -10421,6 +13310,8 @@ window.__ModuleLoader__.load({
 			cts: C_FAMILY(TS_WORDS),
 			jsonc: CONFIG_LANG,
 			json5: CONFIG_LANG,
+			jsonl: CONFIG_LANG,
+			ndjson: CONFIG_LANG,
 			html: MARKUP_LANG,
 			htm: MARKUP_LANG,
 			xml: MARKUP_LANG,
@@ -10580,47 +13471,6 @@ window.__ModuleLoader__.load({
 		function isColored(token) {
 			return COLORED.has(token.type);
 		}
-		//#endregion
-		//#region \0dsh-css:H:\MaxNull\WorkStation\third-party-plugins\DSH-better-sidebar\src\client\diff\diff.module.css.mjs
-		const css$6 = ".j-kVMq_rows{font-family:var(--ds-font-family-code,monospace);padding:4px 0 8px;font-size:11px}.j-kVMq_row{cursor:default;align-items:flex-start;gap:5px;padding:0 10px;line-height:18px;display:flex}.j-kVMq_row[data-folded=true]{cursor:pointer}.j-kVMq_lineNo{width:2.5em;color:var(--dsw-alias-label-tertiary);text-align:right;user-select:none;flex:none;font-size:10px}.j-kVMq_sign{text-align:center;user-select:none;flex:none;width:1em;font-weight:700}.j-kVMq_row[data-kind=del] .j-kVMq_sign,.j-kVMq_row[data-kind=del] .j-kVMq_text{color:var(--dsw-alias-state-error-primary)}.j-kVMq_row[data-kind=add] .j-kVMq_sign,.j-kVMq_row[data-kind=add] .j-kVMq_text{color:var(--dsw-alias-state-success-primary)}.j-kVMq_row[data-kind=mod] .j-kVMq_sign,.j-kVMq_row[data-kind=mod] .j-kVMq_text{color:var(--dsw-alias-state-business-primary)}.j-kVMq_row[data-kind=context] .j-kVMq_sign,.j-kVMq_row[data-kind=context] .j-kVMq_text{color:var(--dsw-alias-label-secondary)}.j-kVMq_row[data-kind=read] .j-kVMq_text{color:var(--dsw-alias-label-primary)}.j-kVMq_row[data-kind=del]{background:color-mix(in srgb, var(--dsw-alias-state-error-primary) 8%, transparent)}.j-kVMq_row[data-kind=add]{background:color-mix(in srgb, var(--dsw-alias-state-success-primary) 8%, transparent)}.j-kVMq_row[data-kind=mod]{background:color-mix(in srgb, var(--dsw-alias-state-business-primary) 8%, transparent)}.j-kVMq_row .j-kVMq_text{white-space:pre-wrap;word-break:break-word;flex:1;min-width:0}.j-kVMq_row[data-folded=true] .j-kVMq_text{white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.j-kVMq_row[data-kind=meta] .j-kVMq_metaText{color:var(--dsw-alias-label-tertiary);font-style:italic}.j-kVMq_inlineChange{background:color-mix(in srgb, var(--dsw-alias-state-business-primary) 26%, transparent);border-radius:3px;padding:0 1px}.j-kVMq_tokComment{color:var(--dsw-alias-label-tertiary);font-style:italic}.j-kVMq_tokKeyword{color:color-mix(in oklab, var(--dsw-alias-state-business-primary) 55%, var(--dsw-alias-state-error-primary))}.j-kVMq_tokString{color:color-mix(in oklab, var(--dsw-alias-state-success-primary) 45%, var(--dsw-alias-state-business-primary))}.j-kVMq_tokType{color:color-mix(in oklab, var(--dsw-alias-brand-primary) 60%, var(--dsw-alias-state-success-primary))}.j-kVMq_tokNumber{color:var(--dsw-alias-state-warn-primary)}.j-kVMq_tokFunction{color:color-mix(in oklab, var(--dsw-alias-state-warn-primary) 55%, var(--dsw-alias-state-error-primary))}.j-kVMq_tokMacro{color:color-mix(in oklab, var(--dsw-alias-state-error-primary) 45%, var(--dsw-alias-state-business-primary))}.j-kVMq_foldRow{padding:0 10px}.j-kVMq_foldRow[data-expandable=true]{cursor:pointer}.j-kVMq_foldRow[data-expandable=true]:hover{background:var(--dsw-alias-interactive-bg-hover)}.j-kVMq_foldRow[data-expanded=true]{cursor:default;padding:0}.j-kVMq_foldRow[data-expanded=true] .j-kVMq_foldMarker{display:none}.j-kVMq_foldMarker{color:var(--dsw-alias-label-tertiary);background:var(--dsw-alias-interactive-bg-hover);border-radius:4px;align-items:center;gap:5px;margin:2px 0;padding:2px 7px;display:inline-flex}.j-kVMq_foldRow[data-expandable=true] .j-kVMq_foldMarker{color:var(--dsw-alias-label-secondary)}.j-kVMq_foldRow[data-expandable=true] .j-kVMq_foldMarker:before{content:\"›\";color:var(--dsw-alias-label-tertiary);transition:transform var(--ds-transition-duration-slow) var(--ds-ease-in-out)}.j-kVMq_expand{border:1px solid var(--dsw-alias-border-l1);width:calc(100% - 20px);color:var(--dsw-alias-label-secondary);font:inherit;cursor:pointer;background:0 0;border-radius:6px;margin:4px 10px;padding:4px;font-size:11px;display:block}.j-kVMq_expand:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.j-kVMq_files,.j-kVMq_fileBlock{flex-direction:column;display:flex}.j-kVMq_file{width:100%;font:inherit;text-align:left;cursor:pointer;background:0 0;border:0;align-items:center;gap:6px;padding:6px 10px;font-size:11px;display:flex}.j-kVMq_file:disabled{cursor:default}.j-kVMq_file:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.j-kVMq_fileChevron{width:12px;color:var(--dsw-alias-label-tertiary);transition:transform var(--ds-transition-duration-slow) var(--ds-ease-in-out);flex:none}.j-kVMq_fileChevronExpanded{transform:rotate(90deg)}.j-kVMq_filePath{font-family:var(--ds-font-family-code,monospace);color:var(--dsw-alias-label-primary);word-break:break-all;min-width:0}.j-kVMq_fileOld{text-overflow:ellipsis;white-space:nowrap;max-width:40%;color:var(--dsw-alias-label-tertiary);font-family:var(--ds-font-family-code,monospace);flex:none;overflow:hidden}.j-kVMq_fileTag{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary);border-radius:4px;flex:none;padding:0 5px;font-size:10px;line-height:16px}.j-kVMq_fileStats{font-size:10px;font-family:var(--ds-font-family-code,monospace);flex:none;gap:5px;margin-left:auto;display:inline-flex}.j-kVMq_statAdd{color:var(--dsw-alias-state-success-primary)}.j-kVMq_statDel{color:var(--dsw-alias-state-error-primary)}.j-kVMq_row:focus-visible,.j-kVMq_foldRow:focus-visible,.j-kVMq_file:focus-visible,.j-kVMq_expand:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}@media (prefers-reduced-motion:reduce){.j-kVMq_fileChevron{transition:none}}";
-		const tagId$6 = "dsh-external/dsh-better-sidebar/diff.module.css";
-		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$6) + "]") === null) {
-			const tag = document.createElement("style");
-			tag.dataset.plugin = "dsh-external/dsh-better-sidebar";
-			tag.dataset.pluginCss = tagId$6;
-			tag.textContent = css$6;
-			document.head.appendChild(tag);
-		}
-		var diff_module_css_default = {
-			"foldRow": "j-kVMq_foldRow",
-			"lineNo": "j-kVMq_lineNo",
-			"metaText": "j-kVMq_metaText",
-			"tokType": "j-kVMq_tokType",
-			"expand": "j-kVMq_expand",
-			"row": "j-kVMq_row",
-			"tokKeyword": "j-kVMq_tokKeyword",
-			"fileChevron": "j-kVMq_fileChevron",
-			"fileOld": "j-kVMq_fileOld",
-			"tokMacro": "j-kVMq_tokMacro",
-			"tokNumber": "j-kVMq_tokNumber",
-			"statAdd": "j-kVMq_statAdd",
-			"sign": "j-kVMq_sign",
-			"files": "j-kVMq_files",
-			"file": "j-kVMq_file",
-			"filePath": "j-kVMq_filePath",
-			"inlineChange": "j-kVMq_inlineChange",
-			"fileBlock": "j-kVMq_fileBlock",
-			"statDel": "j-kVMq_statDel",
-			"rows": "j-kVMq_rows",
-			"fileTag": "j-kVMq_fileTag",
-			"tokFunction": "j-kVMq_tokFunction",
-			"fileStats": "j-kVMq_fileStats",
-			"tokString": "j-kVMq_tokString",
-			"foldMarker": "j-kVMq_foldMarker",
-			"fileChevronExpanded": "j-kVMq_fileChevronExpanded",
-			"tokComment": "j-kVMq_tokComment",
-			"text": "j-kVMq_text"
-		};
 		//#endregion
 		//#region src/client/diff/DiffRows.tsx
 		/**
@@ -11457,6 +14307,123 @@ window.__ModuleLoader__.load({
 			};
 		}
 		//#endregion
+		//#region src/client/markdown-code.ts
+		/**
+		* The ONE code-region mask the two markdown source rewriters share
+		* (`markdown-images.ts` for image destinations, `markdown-navigation.ts` for
+		* link destinations).
+		*
+		* Both rewrites are regex passes over raw markdown, so anything that LOOKS like
+		* a link or an image inside a code region must be left verbatim: a README that
+		* documents `[x](./a.md#标题)` or `![i](./p.png)` means to show that syntax, not
+		* to have it rewritten. Masking preserves the region byte for byte — the
+		* sentinel is a NUL, which cannot appear in markdown source, and the original
+		* text goes back in after the pass.
+		*
+		* What counts as a code region is CommonMark's own rule: an INLINE code span
+		* (a backtick run closed by a run of the same length), and a FENCED block — an
+		* opening fence of three or more backticks OR three or more tildes, closed by a
+		* fence of the same character at least as long as the opener. The fence line
+		* itself is masked too (its leading run is what a backtick-span scan would
+		* otherwise mistake for a code span), and an unclosed fence runs to the end of
+		* the text, exactly as a renderer treats it.
+		*
+		* Both fence characters matter: `~~~` is a legal fence in CommonMark and in
+		* every renderer this plugin draws through, so an image or a link demonstrated
+		* inside one is as much an example as one inside ``` ``` ```.
+		*/
+		/** A backtick or tilde fence: three or more, at up to three spaces of indent. */
+		const FENCE_RE = /^ {0,3}(`{3,}|~{3,})([^\n]*)$/gm;
+		/** An inline code span: a backtick run, then the next run of the SAME length. */
+		const CODE_SPAN_RE = /(`+)[\s\S]*?\1/g;
+		/** A masked region's placeholder: NUL + index + NUL. */
+		const MASK_RE = /\u0000(\d+)\u0000/g;
+		/**
+		* The length of the fence run at the start of `line` — its leading `\`` or `~`
+		* characters. Zero when the line is not a fence (or not one of ours).
+		*/
+		function fenceRun(line) {
+			const marker = line.charAt(0);
+			if (marker !== "`" && marker !== "~") return null;
+			let length = 0;
+			while (line.charAt(length) === marker) length += 1;
+			return length >= 3 ? {
+				marker,
+				length
+			} : null;
+		}
+		/** Whether a line closes a fence opened by `marker` × `length` (CommonMark).
+		*  The tail may carry a CRLF terminator: `\r` is the line's ending, not
+		*  content, and reading it as content left every fence in a CRLF document
+		*  unclosed — the masked region then ran to the end of the file and the link /
+		*  image passes skipped everything after the first fence. */
+		function closesFence(line, marker, length) {
+			if (line.charAt(0) !== marker) return false;
+			let run = 0;
+			while (line.charAt(run) === marker) run += 1;
+			return run >= length && /^[ \t\r]*$/.test(line.slice(run));
+		}
+		/**
+		* Every fenced block in `text`, as half-open ranges that INCLUDE the fence
+		* lines.
+		*
+		* The scan is a single forward walk that cannot be fooled by a fence-looking
+		* line inside a block or before the opener: a closing fence has to be the same
+		* character at least as long as its opener, and a fence nested inside a longer
+		* one is content, not a delimiter. An unclosed fence runs to the end of the
+		* text — the extent a renderer gives it.
+		*/
+		function fenceRegions(text) {
+			const regions = [];
+			let searchFrom = 0;
+			for (;;) {
+				FENCE_RE.lastIndex = searchFrom;
+				const opener = FENCE_RE.exec(text);
+				if (opener === null) break;
+				const start = opener.index;
+				const run = fenceRun(opener.at(1) ?? "");
+				const bodyStart = start + opener[0].length;
+				let end = text.length;
+				if (run !== null) {
+					let at = bodyStart;
+					while (at < text.length) {
+						if (text.charAt(at) === "\n") {
+							at += 1;
+							continue;
+						}
+						const lineEnd = text.indexOf("\n", at);
+						const stop = lineEnd === -1 ? text.length : lineEnd;
+						if (closesFence(text.slice(at, stop), run.marker, run.length)) {
+							end = stop;
+							break;
+						}
+						at = stop + 1;
+					}
+				}
+				regions.push([start, end]);
+				searchFrom = end;
+			}
+			return regions;
+		}
+		/**
+		* Mask the fenced blocks and inline code spans of one markdown text.
+		* @param text - the markdown source.
+		* @returns the masked text and its restore function.
+		*/
+		function maskCodeRegions(text) {
+			const masks = [];
+			const mask = (region) => {
+				masks.push(region);
+				return `\u0000${masks.length - 1}\u0000`;
+			};
+			let fenced = text;
+			for (const [start, end] of fenceRegions(text).reverse()) fenced = fenced.slice(0, start) + mask(text.slice(start, end)) + fenced.slice(end);
+			return {
+				masked: fenced.replace(CODE_SPAN_RE, (span) => mask(span)),
+				restore: (value) => value.replace(MASK_RE, (_m, index) => masks[Number(index)] ?? "")
+			};
+		}
+		//#endregion
 		//#region src/client/markdown-images.ts
 		/**
 		* True for a destination that is a remote URL — an absolute `scheme:` URL
@@ -11471,6 +14438,8 @@ window.__ModuleLoader__.load({
 		* (POSIX `/`), its Windows drive (`C:\`), or its UNC `\\server\share`
 		* prefix. The host's `requireAbsolute` (`path.resolve`) normalizes anyway,
 		* but producing a canonical path here keeps the `/sidebar/file` URL clean.
+		* Shared with the markdown navigation resolver (`markdown-navigation.ts`),
+		* which canonicalizes a claimed link target the same way.
 		*/
 		function normalizeLocalPath(path) {
 			const drive = /^([A-Za-z]:)[\\/]/.exec(path)?.[1];
@@ -11495,7 +14464,8 @@ window.__ModuleLoader__.load({
 		* destinations are left untouched for `MarkdownText`. Reference-style images
 		* (`![x][id]` + `[id]: url`) are covered by rewriting their definition lines.
 		*
-		* Code spans (`` `...` ``) and fenced code blocks (``` ```...``` ```) are
+		* Code regions — inline spans AND fenced blocks, the latter opened by ``` ``` ```
+		* OR `~~~` (see `markdown-code.ts`, the mask both source rewriters share) — are
 		* masked before rewriting so documentation that demonstrates `![alt](./img.png)`
 		* is not mutated into a `/sidebar/file` URL. Reference definitions are only
 		* rewritten when their label is actually referenced by an image (collapsed
@@ -11505,20 +14475,20 @@ window.__ModuleLoader__.load({
 		* @param text - The raw markdown source (inline + reference images).
 		* @param scope - The session scope (sessionId + cwd) for the media route.
 		* @param filePath - The absolute path of the opened `.md` file.
-		* @param origin - The GUI's own origin (`window.location.origin`); injected
-		* so the core rewrite stays pure and unit-testable.
+		* @param baseUrl - The injected transport base (`hostTransportBase()` in the
+		* renderers); injected so the core rewrite stays pure and unit-testable.
 		* @returns The markdown with local image destinations rewritten in place.
 		*/
 		/**
 		* Resolve one media destination against the session's media route: local
-		* (relative or absolute) paths become absolute `/sidebar/file` URLs (prefixed
-		* with the GUI's own origin so the shared MarkdownText http(s) allowlist
-		* accepts them), while remote URLs, `#`-anchors and empty destinations are
-		* returned untouched. Shared by the markdown image rewriter below and by the
+		* (relative or absolute) paths become absolute `/sidebar/file` URLs, resolved
+		* through `baseUrl` so the shared MarkdownText http(s) allowlist accepts them
+		* AND a reverse-proxy prefix is preserved, while remote URLs, `#`-anchors and
+		* empty destinations are returned untouched. Shared by the markdown image rewriter below and by the
 		* preview's raw-HTML sanitizer (`markdown-html.tsx`, which meets the same
 		* allowlist when rendering `<img src="./x.png">` inside HTML blocks).
 		*/
-		function resolveLocalMediaDest(dest, scope, filePath, origin) {
+		function resolveLocalMediaDest(dest, scope, filePath, baseUrl) {
 			const trimmed = dest.trim();
 			if (trimmed === "" || trimmed.startsWith("#")) return dest;
 			if (isRemoteUrl(trimmed)) return dest;
@@ -11530,18 +14500,12 @@ window.__ModuleLoader__.load({
 				path: normalizeLocalPath(candidate)
 			});
 			if (scope.cwd !== void 0 && scope.cwd !== "") params.set("cwd", scope.cwd);
-			return `${origin}/sidebar/file?${params.toString()}`;
+			return hostRouteUrl(`sidebar/file?${params.toString()}`, baseUrl).href;
 		}
-		function rewriteLocalImageUrls(text, scope, filePath, origin) {
-			const resolve = (dest) => resolveLocalMediaDest(dest, scope, filePath, origin);
-			const masks = [];
-			const inline = text.replace(/```[\s\S]*?```/g, (block) => {
-				masks.push(block);
-				return `\u0000${masks.length - 1}\u0000`;
-			}).replace(/`[^`\n]*`/g, (span) => {
-				masks.push(span);
-				return `\u0000${masks.length - 1}\u0000`;
-			}).replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, (_match, alt, dest) => {
+		function rewriteLocalImageUrls(text, scope, filePath, baseUrl) {
+			const resolve = (dest) => resolveLocalMediaDest(dest, scope, filePath, baseUrl);
+			const { masked, restore } = maskCodeRegions(text);
+			const inline = masked.replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, (_match, alt, dest) => {
 				return `![${alt}](${resolve(dest)})`;
 			});
 			const imageLabels = /* @__PURE__ */ new Set();
@@ -11552,10 +14516,10 @@ window.__ModuleLoader__.load({
 				const ref = labelMatch[2];
 				imageLabels.add(ref !== void 0 && ref !== "" ? ref.toLowerCase() : alt.toLowerCase());
 			}
-			return inline.replace(/^(\s*\[([^\]]+)\]:\s*)(<[^>]+>|[^\s]+)/gm, (match, head, label, dest) => {
+			return restore(inline.replace(/^(\s*\[([^\]]+)\]:\s*)(<[^>]+>|[^\s]+)/gm, (match, head, label, dest) => {
 				if (!imageLabels.has(label.toLowerCase())) return match;
 				return `${head}${resolve(dest.replace(/^<|>$/g, ""))}`;
-			}).replace(/\u0000(\d+)\u0000/g, (_m, index) => masks[Number(index)] ?? "");
+			}));
 		}
 		//#endregion
 		//#region src/client/markdown-labels.tsx
@@ -11578,11 +14542,541 @@ window.__ModuleLoader__.load({
 			};
 		}
 		//#endregion
+		//#region src/client/markdown-navigation.ts
+		/**
+		* Cross-file / anchor navigation for the markdown the PLUGIN draws (the editor
+		* preview, the side-chat transcript, the changes reading pane, a task note).
+		*
+		* THE HOST CONTRACT this module works against (DSH 0.2.0-rc.1,
+		* `@deepseek-ai/dsh-client-ui-primitives`): `MarkdownText` renders a local
+		* destination as a clickable file link ONLY when a surrounding
+		* `MarkdownDelegateProvider` supplies `openFile` — otherwise the link is plain
+		* text, and there is no `a[href]` for a click listener to intercept. Worse for
+		* us, its `parseFileLink` accepts a fragment ONLY in the line grammar
+		* (`#L24` / `#L24-L30`); a heading fragment (`./other.md#标题`) makes the whole
+		* destination invalid, so the link would render as inert prose. That is why
+		* this module owns a SOURCE rewrite as well as a DOM pass — the same shape
+		* `markdown-images.ts` already has (images are rewritten into absolute
+		* `/sidebar/file` URLs because the renderer refuses relative ones):
+		*
+		* - {@link rewriteLocalMarkdownLinks} (source, before rendering): a claimed
+		*   link's non-line fragment is carried past the host parser as `%23` (an
+		*   encoded `#`, decoded back by the host into the path it hands `openFile`);
+		*   a local destination the plugin does NOT claim gets a `?` appended, which
+		*   `parseFileLink` refuses — the link keeps rendering as plain text instead of
+		*   becoming a file-mention button that would do nothing.
+		* - {@link markdownAnchorTarget} (pure judge): turns either shape back into
+		*   "same document fragment" / "file to open" / "not ours".
+		* - {@link assignHeadingIds} + {@link hideEmptyAnchors} (DOM, after rendering):
+		*   GitHub-style heading slugs (the renderer ships bare `h1..h6`), and the
+		*   explicit `<a id="x"></a>` anchors collapsed without losing their id.
+		*
+		* Relative targets resolve against the RENDERED DOCUMENT's own directory (a
+		* link in `/ws/docs/README.md` is relative to `/ws/docs`), falling back to the
+		* session cwd for prose surfaces that render no file at all.
+		*
+		* Cross-file fragments travel through {@link rememberMarkdownAnchor}: the click
+		* happens on the SOURCE document's surface while the jump belongs to the TARGET
+		* document, which does not exist yet — so the fragment is parked by session +
+		* absolute path and taken by the target's own surface once it mounts. The
+		* host's routing is untouched.
+		*
+		* KNOWN NARROW EDGES (deliberate, recorded rather than fixed — neither one
+		* corrupts anything):
+		* - A destination containing an ESCAPED parenthesis (`[x](./a\(1\).md)`) or a
+		*   single-quoted title (`[x](./a.md 'title')`) does not match the link grammar
+		*   below, so {@link rewriteLocalMarkdownLinks} never claims it. It keeps
+		*   rendering as plain text — exactly what it did before this feature existed,
+		*   i.e. no regression, but also no jump.
+		* - A `#L24` line destination belongs to the host's own grammar: the renderer
+		*   leaves the destination alone and hands the number over as `options.line`,
+		*   so the surface forwards it as the open's landing line (see
+		*   {@link lineOfHostFragment}) — it is NOT a heading anchor and never parks.
+		*/
+		/** Vertical breathing room above a jumped-to heading (px). */
+		const SCROLL_TOP_PADDING = 8;
+		/** How long a parked cross-file fragment stays eligible (ms). A click whose
+		*  open never lands must not make an unrelated later open of the same file
+		*  jump; the newest click for a key always replaces the previous one. */
+		const PENDING_TTL_MS = 15e3;
+		/** The fragment separator this module writes into a source destination
+		*  (`%23` = an encoded `#`) so a heading fragment survives the host's parser. */
+		const ENCODED_HASH = "%23";
+		/** A URL scheme (`https:`, `mailto:`, `data:`). */
+		const SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
+		/** A Windows drive prefix: `C:\x.md` matches {@link SCHEME_RE} but is a path. */
+		const DRIVE_RE = /^[A-Za-z]:[\\/]/;
+		/** The extensions a markdown link may claim (this batch claims markdown only —
+		*  a `.txt`/`.png`/`.ts` link keeps the browser's own behavior). */
+		const MARKDOWN_EXT_RE = /\.(?:md|markdown)$/i;
+		/** The host's own fragment grammar for a line destination (`#L24`, `#L24-L30`). */
+		const HOST_LINE_FRAGMENT_RE = /^L[1-9]\d*(?:-L[1-9]\d*)?$/;
+		/** Whether a fragment is the host's line destination rather than an anchor. */
+		function isHostLineFragment(fragment) {
+			return HOST_LINE_FRAGMENT_RE.test(fragment);
+		}
+		/**
+		* The FIRST line a host line fragment names (`L24` → 24, `L24-L30` → 24), or
+		* undefined when the fragment is a heading anchor.
+		*
+		* The host hands the same number over as `MarkdownDelegate.openFile`'s
+		* `options.line`, so this is the fallback for a caller that only has the
+		* destination (and the single place that knows the grammar — the editor has
+		* one caret, so a range contributes its start).
+		*/
+		function lineOfHostFragment(fragment) {
+			if (!isHostLineFragment(fragment)) return void 0;
+			const line = Number.parseInt(fragment.slice(1).split("-", 1)[0] ?? "", 10);
+			return Number.isSafeInteger(line) && line > 0 ? line : void 0;
+		}
+		/** Percent-decode one URL piece, tolerating a malformed escape (a literal `%`). */
+		function decodePercent(value) {
+			try {
+				return decodeURIComponent(value);
+			} catch {
+				return value;
+			}
+		}
+		/** The directory part of a path, trailing separator included (`''` when none). */
+		function directoryOf(path) {
+			const at = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+			return at === -1 ? "" : path.slice(0, at + 1);
+		}
+		/** Join a directory and a relative path with `/` (normalized by the caller). */
+		function joinPath(directory, relative) {
+			if (directory === "") return relative;
+			return `${directory.replace(/[\\/]+$/, "")}/${relative}`;
+		}
+		/**
+		* Find a destination's fragment separator — a literal `#` (as authored, or as
+		* the host hands a decoded destination back to `openFile`) or the encoded
+		* `%23` this module writes into the source. Returns null when there is none.
+		*/
+		function separatorOf(destination) {
+			const literal = destination.indexOf("#");
+			const encoded = destination.indexOf(ENCODED_HASH);
+			if (literal === -1 && encoded === -1) return null;
+			if (literal === -1) return {
+				at: encoded,
+				length: 3
+			};
+			if (encoded === -1 || literal < encoded) return {
+				at: literal,
+				length: 1
+			};
+			return {
+				at: encoded,
+				length: 3
+			};
+		}
+		/**
+		* The characters GitHub's heading slug DROPS beyond punctuation and symbols:
+		* pictographs (every emoji), the variation selectors that follow a good many of
+		* them (`🖼️` is U+1F5BC + U+FE0F — GitHub's own pipeline renders an emoji as an
+		* `<img>`, so neither character reaches the slug text), regional-indicator pairs
+		* (flag emoji, which are `\p{So}` but outside `Extended_Pictographic`), and the
+		* control/format/unassigned characters. Combining marks are deliberately NOT
+		* here — `\p{M}` survives, as it does on GitHub.
+		*/
+		const DROPPED_EXTRA_RE = /[\p{Extended_Pictographic}\u{1F000}-\u{1FAFF}\u{FE00}-\u{FE0F}\u{1F1E6}-\u{1F1FF}\p{C}]/gu;
+		/**
+		* The GitHub heading slug of one heading's text — the id GitHub itself would
+		* give that heading, so the anchors a README's table of contents carries
+		* resolve. GitHub's slugger (`github-slugger`) lower-cases ASCII, drops
+		* punctuation and symbols, and turns EACH space into its own `-`; it does not
+		* trim and does not collapse runs, which is why `## 🛠️ Development & Build`
+		* has the id `-development--build` (the leading dash is the space the emoji
+		* left behind, the double dash is the removed `&`). Letters, digits and
+		* combining marks of ANY script survive, so a Chinese heading keeps its own
+		* text as its id.
+		*
+		* The one deliberate difference from `github-slugger` is where the emoji are
+		* removed: GitHub strips them while rendering the heading (to `<img>`), before
+		* the slugger ever sees the text, so a slugger run on plain text would keep
+		* `🚀` and produce `🚀-安装` instead of GitHub's real `-安装`. This function
+		* drops them here, in the same pass, which yields GitHub's actual ids.
+		* @param text - the heading's rendered text.
+		* @returns the slug (`''` for a heading with no letters or digits at all).
+		*/
+		function githubHeadingSlug(text) {
+			return text.toLowerCase().replace(DROPPED_EXTRA_RE, "").replace(/[^\p{L}\p{N}\p{M} _-]/gu, "").replace(/ /g, "-");
+		}
+		/**
+		* Give every heading under `root` a slug `id`, in document order, `-1`/`-2`
+		* suffixed on repeats. Authored ids are kept AND reserved first, so a generated
+		* slug can never collide with an explicit anchor later in the document; a
+		* heading whose text carries no letters or digits is left alone (an empty id
+		* resolves nothing). Idempotent: a second pass over the same tree — the
+		* mutation re-runs the surface installer depends on — changes nothing.
+		* @param root - the surface container (React owns the tree; ids live outside
+		*   React's props, so React never removes them).
+		*/
+		function assignHeadingIds(root) {
+			const headings = [...root.querySelectorAll("h1, h2, h3, h4, h5, h6")];
+			const taken = /* @__PURE__ */ new Set();
+			for (const heading of headings) if (heading.id !== "") taken.add(heading.id);
+			for (const heading of headings) {
+				if (heading.id !== "") continue;
+				const base = githubHeadingSlug(heading.textContent ?? "");
+				if (base === "") continue;
+				let id = base;
+				for (let suffix = 1; taken.has(id); suffix += 1) id = `${base}-${suffix}`;
+				heading.id = id;
+				taken.add(id);
+			}
+		}
+		/**
+		* Collapse the explicit anchors GitHub-style READMEs carry (`<a id="x"></a>`):
+		* an `<a>` with an id, no child elements and no text is marked `hidden` — out
+		* of the way visually, still in the DOM, so `#x` deep links (and the jump
+		* helper below) still resolve. Anchors with any content are untouched.
+		* @param root - the surface container.
+		*/
+		function hideEmptyAnchors(root) {
+			for (const anchor of root.querySelectorAll("a[id]")) {
+				if (anchor.children.length > 0) continue;
+				if ((anchor.textContent ?? "").trim() !== "") continue;
+				anchor.hidden = true;
+			}
+		}
+		/** One post-render pass: heading ids plus empty-anchor collapsing. */
+		function prepareMarkdownAnchors(root) {
+			assignHeadingIds(root);
+			hideEmptyAnchors(root);
+		}
+		/**
+		* The pure link judge: what a destination inside a plugin markdown surface
+		* means, or null to leave it entirely alone.
+		*
+		* Fed either shape the pipeline produces — a destination as authored (the
+		* source rewriter's input) or the decoded destination the host hands
+		* `openFile` (where this module's `%23` has already become a `#`).
+		* @param destination - the link destination (a raw `href`-style string).
+		* @param docPath - the absolute path of the markdown document being rendered;
+		*   relative targets resolve against its directory. Absent for prose surfaces.
+		* @param cwd - the session workspace root, the base for prose surfaces.
+		* @returns the resolved target, or null for every link the plugin does not own.
+		*/
+		function markdownAnchorTarget(destination, docPath, cwd) {
+			const raw = destination.trim();
+			if (raw === "") return null;
+			const separator = separatorOf(raw);
+			const pathPart = separator === null ? raw : raw.slice(0, separator.at);
+			const fragment = separator === null ? "" : decodePercent(raw.slice(separator.at + separator.length));
+			if (pathPart === "") return {
+				kind: "same-page",
+				fragment
+			};
+			if (SCHEME_RE.test(pathPart) && !DRIVE_RE.test(pathPart)) return null;
+			if (pathPart.startsWith("//")) return null;
+			const path = decodePercent(pathPart);
+			if (!MARKDOWN_EXT_RE.test(path)) return null;
+			return {
+				kind: "file",
+				path: resolveTargetPath(path, docPath, cwd),
+				fragment
+			};
+		}
+		/**
+		* Resolve a claimed markdown destination against the document that authored it.
+		* Absolute paths (POSIX, drive, UNC) are normalized in place; a relative path
+		* joins the document's own directory (or the session cwd); with neither base
+		* known the relative spelling is handed on untouched for the opener to resolve
+		* against the session cwd.
+		*/
+		function resolveTargetPath(path, docPath, cwd) {
+			if (isAbsolutePath$1(path)) return normalizeLocalPath(path);
+			const directory = docPath !== void 0 && docPath !== "" ? directoryOf(docPath) : cwd ?? "";
+			if (directory === "") return path.replace(/^(?:\.\/)+/, "").replace(/\\/g, "/");
+			return normalizeLocalPath(joinPath(directory, path));
+		}
+		/**
+		* Whether a destination's path part is a LOCAL path the host would otherwise
+		* turn into a clickable file link (once a surface provides `openFile`). Remote
+		* URLs, scheme-relative URLs and anything already carrying a query (which
+		* `parseFileLink` refuses on its own) are excluded.
+		*/
+		function isLocalDestination(pathPart) {
+			if (pathPart === "" || pathPart.includes("?")) return false;
+			if (pathPart.startsWith("//")) return false;
+			if (SCHEME_RE.test(pathPart) && !DRIVE_RE.test(pathPart)) return false;
+			return true;
+		}
+		/**
+		* Rewrite ONE destination for the host renderer (see the module comment).
+		* Idempotent: an already-rewritten `%23` destination, a line destination and a
+		* fragment-less link all come back untouched.
+		*/
+		function rewriteDestination(destination, docPath, cwd) {
+			const separator = separatorOf(destination);
+			const pathPart = separator === null ? destination : destination.slice(0, separator.at);
+			const fragment = separator === null ? "" : destination.slice(separator.at + separator.length);
+			if (markdownAnchorTarget(destination, docPath, cwd) === null) {
+				if (!isLocalDestination(pathPart)) return destination;
+				return `${pathPart}?${separator === null ? "" : destination.slice(separator.at)}`;
+			}
+			if (separator === null || separator.length === 3) return destination;
+			if (isHostLineFragment(fragment)) return destination;
+			return `${pathPart}${ENCODED_HASH}${fragment.replace(/\?/g, "%3F")}`;
+		}
+		/**
+		* Make the host renderer able to SERVE the local links of one markdown text:
+		* a claimed `.md`/`.markdown` destination gets its heading fragment carried as
+		* `%23`, and every other local destination gets the `?` that keeps it inert.
+		*
+		* Code regions are masked first (see `maskCodeRegions` — fenced blocks opened
+		* by ``` ``` ``` OR `~~~`, and inline code spans), so documentation that
+		* demonstrates `[x](./a.md#标题)` is not mutated. Image destinations are left
+		* to `rewriteLocalImageUrls` (which must run FIRST: it rewrites the definitions
+		* an image uses into absolute media URLs, which this pass then ignores).
+		* @param text - the markdown source about to be rendered.
+		* @param docPath - the rendered document's absolute path (relative-link base).
+		* @param cwd - the session workspace root, the base for prose surfaces.
+		* @returns the markdown with local link destinations rewritten in place.
+		*/
+		function rewriteLocalMarkdownLinks(text, docPath, cwd) {
+			const { masked, restore } = maskCodeRegions(text);
+			return restore(masked.replace(/(?<!!)\[((?:[^[\]]|\[[^\]]*\])*)\]\(([^)\s]+)((?:\s+"[^"]*")?)\)/g, (_match, label, destination, title) => `[${label}](${rewriteDestination(destination, docPath, cwd)}${title})`).replace(/^(\s*\[([^\]]+)\]:\s*)(<[^>]+>|[^\s]+)/gm, (_match, head, _label, destination) => {
+				const bracketed = destination.startsWith("<") && destination.endsWith(">");
+				const rewritten = rewriteDestination(bracketed ? destination.slice(1, -1) : destination, docPath, cwd);
+				return `${head}${bracketed ? `<${rewritten}>` : rewritten}`;
+			}));
+		}
+		/**
+		* The element a fragment names, or null. Both the fragment as written and its
+		* slug form are tried, so `#Some Heading` and `#some-heading` both land. The
+		* scan is a linear walk over `[id]` rather than a selector: ids come from
+		* arbitrary markdown text and need no CSS escaping this way.
+		* @param root - the surface container.
+		* @param fragment - the percent-decoded fragment.
+		*/
+		function findAnchorTarget(root, fragment) {
+			const wanted = /* @__PURE__ */ new Set([fragment, githubHeadingSlug(fragment)]);
+			wanted.delete("");
+			if (wanted.size === 0) return null;
+			for (const element of root.querySelectorAll("[id]")) if (wanted.has(element.id)) return element;
+			return null;
+		}
+		/** Whether an element can scroll its own content right now. */
+		function isScrollable(element) {
+			const overflowY = window.getComputedStyle(element).overflowY;
+			return (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") && element.scrollHeight > element.clientHeight;
+		}
+		/**
+		* The scroller a jump writes to: the nearest scrollable ancestor of the surface
+		* container — the preview's own scroll box — falling back to the container
+		* itself. Never `window.scrollTo` (nor `scrollIntoView`, which walks every
+		* scrollable ancestor and would drag the whole sidebar).
+		*/
+		function scrollHostFor(container) {
+			for (let node = container; node !== null; node = node.parentElement) if (isScrollable(node)) return node;
+			return container;
+		}
+		/**
+		* A `hidden` element has no layout box, so measuring it would report the
+		* viewport origin: resolve a hidden explicit anchor through its nearest visible
+		* ancestor, which is exactly where the id sits in the flow.
+		*/
+		function visibleAncestorOf(target) {
+			let node = target;
+			while (node.hidden && node.parentElement !== null) node = node.parentElement;
+			return node;
+		}
+		/**
+		* Scroll one element to the top of the surface's own scroller (the measured box
+		* of `container`, so nothing outside it moves).
+		* @param container - the surface container.
+		* @param target - the element to reveal.
+		*/
+		function scrollAnchorIntoView(container, target) {
+			const scroller = scrollHostFor(container);
+			const offset = visibleAncestorOf(target).getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+			scroller.scrollTop = Math.max(0, offset - SCROLL_TOP_PADDING);
+		}
+		/**
+		* Land `fragment` inside `container`: open a collapsed `<details>` ancestor
+		* (the same courtesy the preview's own outline pays) and scroll the surface's
+		* own scroller. A missing target is a silent no-op — a stale link must neither
+		* throw nor move the reader.
+		* @returns whether the document actually carries the fragment.
+		*/
+		function jumpToFragment(container, fragment) {
+			if (fragment === "") {
+				scrollHostFor(container).scrollTop = 0;
+				return true;
+			}
+			const target = findAnchorTarget(container, fragment);
+			if (target === null) return false;
+			target.closest("details:not([open])")?.setAttribute("open", "");
+			scrollAnchorIntoView(container, target);
+			return true;
+		}
+		/** The pending cross-file fragments, keyed by session + absolute target path. */
+		const pendingAnchors = /* @__PURE__ */ new Map();
+		/** The lookup key of one document: session + its path, separator- and
+		*  traversal-normalized so the two spellings a surface and the editor hold
+		*  (`/p/a.md` vs `\p\a.md`, cwd-relative vs absolute) meet. */
+		function anchorKey(sessionId, cwd, path) {
+			return `${sessionId}::${normalizeLocalPath(isAbsolutePath$1(path) ? path : joinPath(cwd ?? "", path)).replace(/\\/g, "/")}`;
+		}
+		/**
+		* Park the fragment a cross-file link wants to land on, for the target
+		* document's own surface to take once it mounts.
+		* @param sessionId - the session both documents live in.
+		* @param cwd - that session's workspace root (path resolution).
+		* @param path - the target file (absolute, or cwd-relative).
+		* @param fragment - the decoded fragment (`''` parks nothing).
+		*/
+		function rememberMarkdownAnchor(sessionId, cwd, path, fragment) {
+			if (fragment === "") return;
+			pendingAnchors.set(anchorKey(sessionId, cwd, path), {
+				fragment,
+				at: Date.now()
+			});
+		}
+		/**
+		* Take (and clear) the fragment parked for one document. The entry is always
+		* consumed — a surface that takes it and finds no such heading does not leave
+		* it behind for a later, unrelated open.
+		* @returns the fragment, or null when nothing (fresh) is parked.
+		*/
+		function takeMarkdownAnchor(sessionId, cwd, path) {
+			const key = anchorKey(sessionId, cwd, path);
+			const entry = pendingAnchors.get(key);
+			if (entry === void 0) return null;
+			pendingAnchors.delete(key);
+			return Date.now() - entry.at > PENDING_TTL_MS ? null : entry.fragment;
+		}
+		//#endregion
+		//#region src/client/use-markdown-surface.ts
+		/**
+		* React glue for ONE plugin-drawn markdown surface (the container that holds
+		* the rendered markdown). It returns three things the caller wires up:
+		*
+		* - `surfaceRef`: a CALLBACK REF for that container. The installer behind it
+		*   runs the DOM pass from `markdown-navigation.ts` (heading slugs + collapsed
+		*   explicit anchors) on mount and after every content mutation — the pattern
+		*   the raw-HTML preview pass already uses, which keeps late content (the lazy
+		*   mermaid chunk, shiki highlighting) covered and makes the pass self-healing
+		*   when React re-renders a subtree it owns — and then applies the cross-file
+		*   fragment parked for this document. A callback ref (not a `RefObject`)
+		*   because the container mounts and unmounts with its host — the preview
+		*   container disappears on every preview→edit flip — and only a ref callback
+		*   fires on both edges (React 18 hands it `null` on unmount, which is where
+		*   the observer is torn down). Its identity is keyed on (session, path) alone,
+		*   so an ordinary re-render never detaches anything.
+		* - `openFile`: the host delegate's file handler. The host renderer only makes
+		*   a local markdown link clickable when a `MarkdownDelegateProvider` supplies
+		*   this, which is why every caller wraps its markdown in that provider with
+		*   `openFile={surface.openFile}`: the provider's scope IS the claim boundary,
+		*   and a link rendered outside it (the host's chat prose, any other panel) is
+		*   never seen by this plugin.
+		* - `rewrite`: the source-side pass (`rewriteLocalMarkdownLinks`) that runs
+		*   BEFORE rendering, so a heading fragment survives the host's parser and a
+		*   link the plugin does not claim stays inert prose.
+		*/
+		/** The DOM marker the installer puts on the container it owns (the claim
+		*  boundary is the provider scope; this makes the surface inspectable in a
+		*  browser and pointable from a spec). */
+		const MARKDOWN_SURFACE_ATTR = "data-dsh-md-surface";
+		/**
+		* Wire one plugin markdown surface.
+		* @param opts - the surface's context, session and rendered document path.
+		* @returns the container ref, the delegate handler and the source rewrite.
+		*/
+		function useMarkdownSurface(opts) {
+			const { ctx, sessionId, cwd, path } = opts;
+			const containerRef = (0, react.useRef)(null);
+			const detachRef = (0, react.useRef)(null);
+			/** The session workspace root: the caller's scope when it has one, else the
+			*  session summary (a stripped-down host or a bare spec context may have no
+			*  session list at all — the opener then resolves against its own cwd). */
+			const resolveCwd = (0, react.useCallback)(() => cwd ?? ctx.sessions?.list?.getSnapshot?.()?.byId?.[sessionId]?.cwd, [
+				ctx,
+				sessionId,
+				cwd
+			]);
+			return {
+				surfaceRef: (0, react.useCallback)((element) => {
+					detachRef.current?.();
+					detachRef.current = null;
+					containerRef.current = element;
+					if (element === null) return;
+					detachRef.current = attachMarkdownSurface(element, sessionId, path, resolveCwd);
+				}, [
+					sessionId,
+					path,
+					resolveCwd
+				]),
+				openFile: (0, react.useCallback)((destination, options) => {
+					const target = markdownAnchorTarget(destination, path, resolveCwd());
+					if (target === null) return;
+					if (target.kind === "same-page") {
+						const container = containerRef.current;
+						if (container !== null) jumpToFragment(container, target.fragment);
+						return;
+					}
+					const line = options?.line ?? lineOfHostFragment(target.fragment);
+					if (line === void 0 && target.fragment !== "") rememberMarkdownAnchor(sessionId, resolveCwd(), target.path, target.fragment);
+					try {
+						openSidebarFile(ctx, sessionId, target.path, line);
+					} catch (error) {
+						console.error("[dsh-better-sidebar] markdown file link open failed", error);
+					}
+				}, [
+					ctx,
+					sessionId,
+					path,
+					resolveCwd
+				]),
+				rewrite: (0, react.useCallback)((text) => rewriteLocalMarkdownLinks(text, path, resolveCwd()), [path, resolveCwd])
+			};
+		}
+		/**
+		* Install the post-render half on one container: the DOM pass, its mutation
+		* re-runs, and the pending cross-file fragment.
+		* @returns the disposer (observer + marker).
+		*/
+		function attachMarkdownSurface(container, sessionId, path, resolveCwd) {
+			container.setAttribute(MARKDOWN_SURFACE_ATTR, "");
+			prepareMarkdownAnchors(container);
+			/** The fragment this surface still owes the reader (taken once, then carried
+			*  here until the heading actually renders — the content may arrive a beat
+			*  after the container does). */
+			let pending = path === void 0 || path === "" ? null : takeMarkdownAnchor(sessionId, resolveCwd(), path);
+			const applyPending = () => {
+				if (pending !== null && jumpToFragment(container, pending)) pending = null;
+			};
+			if (pending !== null) queueMicrotask(applyPending);
+			let scheduled = false;
+			const observer = new MutationObserver(() => {
+				if (scheduled) return;
+				scheduled = true;
+				queueMicrotask(() => {
+					scheduled = false;
+					prepareMarkdownAnchors(container);
+					applyPending();
+				});
+			});
+			observer.observe(container, {
+				childList: true,
+				subtree: true
+			});
+			return () => {
+				observer.disconnect();
+				container.removeAttribute(MARKDOWN_SURFACE_ATTR);
+			};
+		}
+		//#endregion
 		//#region src/client/mermaid-blocks.ts
 		/** CommonMark opening fence: 0-3 spaces indent + a run of 3+ backticks or tildes. */
 		const OPEN_FENCE_RE = /^ {0,3}(`{3,}|~{3,})/;
-		/** A closing-fence line: 0-3 spaces indent + 3+ backticks/tildes + trailing spaces only. */
-		const CLOSE_FENCE_RE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
+		/** A closing-fence line: 0-3 spaces indent + 3+ backticks/tildes + trailing
+		*  spaces only. The optional `\r` is a CRLF line's terminator, not content: a
+		*  CRLF document reaches this regex with its line endings intact, and without
+		*  the `\r` no fence would ever close (the block would swallow the rest of the
+		*  file). */
+		const CLOSE_FENCE_RE = /^ {0,3}(`{3,}|~{3,})[ \t]*\r?$/;
 		/** Parse the info string from the line tail after the fence run; null when invalid. */
 		function fenceInfo(rest, fence) {
 			const info = rest.trimStart().split(/\s+/)[0] ?? "";
@@ -11814,7 +15308,11 @@ window.__ModuleLoader__.load({
 		*  the caller). Mermaid fences render through the same chunk-resident
 		*  renderer the editor preview uses (one MarkdownText pass with the fences
 		*  lifted out); the plain path stays byte-for-byte for documents without
-		*  any. */
+		*  any.
+		*
+		*  The body is also a markdown SURFACE: heading slugs, anchor jumps and `.md`
+		*  link claiming, with relative targets resolved against the previewed file's
+		*  own directory (see use-markdown-surface). */
 		function MdReadingView(props) {
 			const codeLabels = {
 				copyLabel: t("copy"),
@@ -11823,15 +15321,26 @@ window.__ModuleLoader__.load({
 				wrapLabel: t("codeBlockWrap"),
 				unwrapLabel: t("codeBlockUnwrap")
 			};
-			const hasMermaid = splitMermaidBlocks(props.text).some((block) => block.kind === "mermaid");
+			const surface = useMarkdownSurface({
+				ctx: props.ctx,
+				sessionId: props.scope.sessionId,
+				cwd: props.scope.cwd,
+				path: props.path
+			});
+			const text = surface.rewrite(props.text);
+			const hasMermaid = splitMermaidBlocks(text).some((block) => block.kind === "mermaid");
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 				className: changes_module_css_default.paneBody,
+				ref: surface.surfaceRef,
 				children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 					className: changes_module_css_default.mdBody,
-					children: hasMermaid ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)(LazyMermaidMarkdown, {
-						text: props.text,
-						codeLabels
-					}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { ...markdownTextProps(props.text, codeLabels) })
+					children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownDelegateProvider, {
+						openFile: surface.openFile,
+						children: hasMermaid ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)(LazyMermaidMarkdown, {
+							text,
+							codeLabels
+						}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { ...markdownTextProps(text, codeLabels) })
+					})
 				})
 			});
 		}
@@ -11850,7 +15359,7 @@ window.__ModuleLoader__.load({
 				diff: ref
 			};
 		}
-		function DiffPane({ target, scope, height, onHeightCommit, onClose, onExpand }) {
+		function DiffPane({ target, ctx, scope, height, onHeightCommit, onClose, onExpand }) {
 			const { loading, error, diffText, untracked, refresh, resolveFold } = useGitDiffTarget(target.kind === "git" ? target.ref : null, scope);
 			const opRaw = target.kind === "op" ? target.op : null;
 			const priorRaw = target.kind === "op" ? target.prior : void 0;
@@ -11940,7 +15449,7 @@ window.__ModuleLoader__.load({
 				op,
 				prior
 			]);
-			const readingText = (0, react.useMemo)(() => mdOp && reading && readingSrc !== "" && target.kind === "op" ? rewriteLocalImageUrls(readingSrc, scope, target.path, window.location.origin) : "", [
+			const readingText = (0, react.useMemo)(() => mdOp && reading && readingSrc !== "" && target.kind === "op" ? rewriteLocalImageUrls(readingSrc, scope, target.path, hostTransportBase()) : "", [
 				mdOp,
 				reading,
 				readingSrc,
@@ -12129,7 +15638,12 @@ window.__ModuleLoader__.load({
 							path: pdfRenderPath,
 							title: target.path
 						})
-					}) : target.kind === "op" && mdOp && reading && readingText !== "" ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)(MdReadingView, { text: readingText }) : target.kind === "op" && op !== null && op.isError ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+					}) : target.kind === "op" && mdOp && reading && readingText !== "" ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)(MdReadingView, {
+						text: readingText,
+						ctx,
+						scope,
+						path: target.path
+					}) : target.kind === "op" && op !== null && op.isError ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						className: changes_module_css_default.paneBody,
 						children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Notice, {
 							kind: "error",
@@ -12295,7 +15809,7 @@ window.__ModuleLoader__.load({
 				ctx.get("betterSidebar")?.updateTab(tab.id, { meta: {
 					...tab.meta ?? {},
 					...patch
-				} });
+				} }, scope.sessionId);
 			};
 			const chooseLens = (next) => {
 				if (next === lens) return;
@@ -12372,6 +15886,7 @@ window.__ModuleLoader__.load({
 					}),
 					previewTarget !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(DiffPane, {
 						target: previewTarget,
+						ctx,
 						scope,
 						height: paneHeight,
 						onHeightCommit: (height) => {
@@ -12464,6 +15979,11 @@ window.__ModuleLoader__.load({
 				]
 			});
 		}
+		/** The pinned label of a freshly created thread that no prompt has reached
+		*  yet (Codex-style immediate create: the tab opens an EMPTY thread, the
+		*  first composer message carries the boundary and earns the real label).
+		*  The client renders it localized; the prefix keeps the row filter honest. */
+		const SIDE_NEW_THREAD_TITLE = "Side: New thread";
 		/** The boundary message's opening line — the transcript mapping drops user
 		*  rows starting with it (same first line as dsh-sidechain's boundary, so
 		*  the two plugins' threads render consistently in either UI). */
@@ -12710,6 +16230,99 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			return live[childSessionId];
 		}
 		//#endregion
+		//#region src/client/session-metrics.ts
+		/** The billed input tokens: every bucket that is not output. */
+		function inputTokens(usage) {
+			return usage.uncachedInputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
+		}
+		/** The session's total tokens (input buckets + output). */
+		function totalTokens(usage) {
+			return inputTokens(usage) + usage.outputTokens;
+		}
+		/**
+		* The node's elapsed working time in ms, or undefined when the host published
+		* no timing for it.
+		*
+		* @param timing - the session's `subagentTiming`.
+		* @param now - the clock the caller's render is pinned to.
+		*/
+		function elapsedMs(timing, now) {
+			if (timing === void 0) return void 0;
+			const active = timing.active === void 0 ? 0 : Math.max(0, now - timing.active.since);
+			const total = timing.settledMs + active;
+			return total > 0 ? total : void 0;
+		}
+		/**
+		* Fold the projection snapshot into one metrics row per session.
+		*
+		* Sessions the snapshot does not carry are simply absent (the page's own poll
+		* fills them in), and a session carrying neither key is omitted so the caller's
+		* map stays small.
+		*
+		* @param projections - `SessionListState.projectionsBySession`.
+		*/
+		function sessionMetrics(projections) {
+			const out = {};
+			for (const [sessionId, snapshot] of Object.entries(projections ?? {})) {
+				const usage = snapshot.values.tokenUsage;
+				const timing = snapshot.values.subagentTiming;
+				if (usage === void 0 && timing === void 0) continue;
+				out[sessionId] = {
+					...usage === void 0 ? {} : { usage },
+					...timing === void 0 ? {} : { timing }
+				};
+			}
+			return out;
+		}
+		//#endregion
+		//#region src/client/subagent-chat.ts
+		/** The host's tab kind for an embedded child conversation. */
+		const SUBAGENT_CHAT_KIND = "subagentchat";
+		/** The host's `dsh-resource://` prefix for that tab type. */
+		const SUBAGENT_CHAT_ADDRESS = "dsh-resource://subagentchat/session/";
+		/**
+		* The host's own subagent-chat resource address for one child session.
+		* @param address - the child's lineage (parent, child, mode).
+		*/
+		function subagentChatAddress(address) {
+			const query = new URLSearchParams({
+				parent: address.parentSessionId,
+				mode: address.mode
+			});
+			return `${SUBAGENT_CHAT_ADDRESS}${encodeURIComponent(address.childSessionId)}?${query}`;
+		}
+		/** Whether the host can host a child transcript in its right column. */
+		function hasTranscriptAside(ctx) {
+			try {
+				if (ctx.get("sidebarRightTabs")?.get?.("subagentchat") === void 0) return false;
+				return typeof ctx.get("sidebarRight")?.openResource === "function";
+			} catch {
+				return false;
+			}
+		}
+		/**
+		* Open one child's transcript in the native right sidebar.
+		*
+		* @param ctx - the client context.
+		* @param address - the child to open.
+		* @returns whether the sidebar took it; `false` means the caller must fall back
+		*   to the main-view jump (no such tab type, no right column, or the host threw
+		*   because no session seat is mounted).
+		*/
+		function openTranscriptAside(ctx, address) {
+			if (!hasTranscriptAside(ctx)) return false;
+			try {
+				ctx.get("sidebarRight").openResource?.(subagentChatAddress(address), {
+					kind: SUBAGENT_CHAT_KIND,
+					preferNewPane: true
+				});
+				return true;
+			} catch (error) {
+				console.error("[dsh-better-sidebar] open the child transcript in the sidebar failed:", error);
+				return false;
+			}
+		}
+		//#endregion
 		//#region src/client/team-projection.ts
 		/**
 		* The team board led by `rootId`, or undefined when that session leads none.
@@ -12758,7 +16371,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		function memberStatus(member, live, byId) {
 			if (member.phase === "failed") return "failed";
 			if (member.phase === "provisioning") return "provisioning";
-			return (live[member.id]?.running ?? byId[member.id]?.running) === true ? "running" : "idle";
+			return (byId[member.id]?.running ?? live[member.id]?.running) === true ? "running" : "idle";
 		}
 		//#endregion
 		//#region src/client/subagent-jobs.ts
@@ -13039,6 +16652,18 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			return counts;
 		}
 		/**
+		* The id of one fold GROUP (the aggregate card a set of folded members
+		* collapses into). Derived from the parent and the group kind only, so the id
+		* is stable while membership changes underneath it — the page keys the
+		* reader's per-group expansions by exactly this string.
+		*
+		* @param foldKind - which group (`done` = finished/failed, `idle` = waiting).
+		* @param parentId - the parent whose children were folded.
+		*/
+		function foldGroupId(foldKind, parentId) {
+			return foldKind === "idle" ? `fold:${parentId}:idle` : `fold:${parentId}`;
+		}
+		/**
 		* Build one aggregate row for the given group of children.
 		*
 		* `foldKind` decides which members the row owns: the `done` group takes the
@@ -13050,14 +16675,13 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		* @param parentId - the row's parent (its tree position).
 		* @param depth - the row's tree depth.
 		* @param members - the children this group swallowed, in page order.
-		* @param idSuffix - disambiguates the two rows of one parent (`''` / `':idle'`).
 		*/
-		function foldNode(foldKind, parentId, depth, members, idSuffix) {
+		function foldNode(foldKind, parentId, depth, members) {
 			const counts = tally(members);
 			return {
 				kind: "fold",
 				foldKind,
-				id: `fold:${parentId}${idSuffix}`,
+				id: foldGroupId(foldKind, parentId),
 				parentId,
 				depth,
 				count: members.length,
@@ -13098,6 +16722,8 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		*/
 		function buildTasksModel(input) {
 			const { byId, catalogs, rootId, currentSessionId, live, runs, teamMembers, folded, foldedIds } = input;
+			const expandedGroups = input.expandedGroups;
+			const metrics = input.metrics;
 			const teamTasks = input.teamTasks ?? [];
 			const teamById = new Map(teamMembers.map((member) => [member.id, member]));
 			/** Owner display name → node id (the board assigns by member name). */
@@ -13160,7 +16786,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					if (entry.label?.startsWith("Side: ") ?? false) continue;
 					const team = teamOf(entry.id);
 					const view = childLive(live, entry.id);
-					const activity = view?.running === true ? "running" : "inactive";
+					const activity = summary?.running ?? view?.running === true ? "running" : "inactive";
 					const state = activity === "running" ? "running" : team !== void 0 ? teamState(team.status) : "done";
 					agentChildren.push({
 						kind: "agent",
@@ -13174,6 +16800,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 						activity,
 						current: entry.id === currentSessionId,
 						...view !== void 0 ? { live: view } : {},
+						...metrics?.[entry.id] !== void 0 ? { metrics: metrics[entry.id] } : {},
 						...team !== void 0 ? { team } : {},
 						...tasksByNode.get(entry.id) !== void 0 ? { tasks: tasksByNode.get(entry.id) } : {},
 						hasChildren: !isKnownLeaf(catalogs, entry.id),
@@ -13222,6 +16849,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 								activity: member.outcome === void 0 ? "running" : "inactive",
 								current: member.childId !== "" && member.childId === currentSessionId,
 								synthesized: true,
+								...childKnown && metrics?.[member.childId] !== void 0 ? { metrics: metrics[member.childId] } : {},
 								...childKnown && tasksByNode.get(member.childId) !== void 0 ? { tasks: tasksByNode.get(member.childId) } : {},
 								...childKnown ? { childAddress: {
 									parentSessionId: parentId,
@@ -13242,16 +16870,19 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					const foldable = nodeFoldable(child, currentSessionId);
 					const auto = folded && foldable && isAutoFoldable(child, runsByOrigin, foldIdleMembers);
 					const manual = foldedIds?.has(child.id) === true && foldable;
-					if (!auto && !manual) kept.push(child);
-					else if (child.state === "idle") idleFold.push(child);
-					else doneFold.push(child);
+					const group = child.state === "idle" ? "idle" : "done";
+					const expanded = expandedGroups?.has(foldGroupId(group, parentId)) === true;
+					if (manual || auto && !expanded) {
+						if (group === "idle") idleFold.push(child);
+						else doneFold.push(child);
+					} else kept.push(child);
 				}
 				for (const child of kept) {
 					out.push(child);
 					appendChildren(child.id, child.depth);
 				}
-				if (doneFold.length > 0) out.push(foldNode("done", parentId, depth + 1, doneFold, ""));
-				if (idleFold.length > 0) out.push(foldNode("idle", parentId, depth + 1, idleFold, ":idle"));
+				if (doneFold.length > 0) out.push(foldNode("done", parentId, depth + 1, doneFold));
+				if (idleFold.length > 0) out.push(foldNode("idle", parentId, depth + 1, idleFold));
 				for (let index = 0; index < runNodes.length; index += 1) {
 					const runNode = runNodes[index];
 					if (runNode === void 0) continue;
@@ -13260,16 +16891,25 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					const keptMembers = [];
 					const runDone = [];
 					const runIdle = [];
-					for (const member of members) if (!((folded || foldedIds?.has(member.id) === true) && nodeFoldable(member, currentSessionId))) keptMembers.push(member);
-					else if (member.state === "idle") runIdle.push(member);
-					else runDone.push(member);
+					for (const member of members) {
+						const foldable = nodeFoldable(member, currentSessionId);
+						const auto = folded && foldable && isAutoFoldable(member, runsByOrigin, true);
+						const manual = foldedIds?.has(member.id) === true && foldable;
+						const group = member.state === "idle" ? "idle" : "done";
+						const expanded = expandedGroups?.has(foldGroupId(group, runNode.id)) === true;
+						if (manual || auto && !expanded) {
+							if (group === "idle") runIdle.push(member);
+							else runDone.push(member);
+						} else keptMembers.push(member);
+					}
 					out.push(...keptMembers);
-					if (runDone.length > 0) out.push(foldNode("done", runNode.id, runNode.depth + 1, runDone, ""));
-					if (runIdle.length > 0) out.push(foldNode("idle", runNode.id, runNode.depth + 1, runIdle, ":idle"));
+					if (runDone.length > 0) out.push(foldNode("done", runNode.id, runNode.depth + 1, runDone));
+					if (runIdle.length > 0) out.push(foldNode("idle", runNode.id, runNode.depth + 1, runIdle));
 				}
 			};
 			const rootSummary = byId[rootId];
 			const rootTeam = teamOf(rootId);
+			const rootLive = childLive(live, rootId);
 			out.push({
 				kind: "agent",
 				id: rootId,
@@ -13278,6 +16918,8 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				state: rootSummary?.running === true ? "running" : "done",
 				activity: rootSummary?.running === true ? "running" : "inactive",
 				current: rootId === currentSessionId,
+				...rootLive !== void 0 ? { live: rootLive } : {},
+				...metrics?.[rootId] !== void 0 ? { metrics: metrics[rootId] } : {},
 				...rootTeam !== void 0 ? { team: rootTeam } : {},
 				...tasksByNode.get(rootId) !== void 0 ? { tasks: tasksByNode.get(rootId) } : {}
 			});
@@ -13305,6 +16947,10 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			}
 			return edges;
 		}
+		/** One line of the card's text tail — `.cardText`'s 10px/1.3 box. */
+		const NODE_TEXT_LINE_H = 13;
+		/** The text tail's lead above the first line (`margin-top` in `.cardText`). */
+		const NODE_TEXT_LEAD_H = 2;
 		/**
 		* The readability floor the fit honours: the canvas may shrink to this scale
 		* before the layout starts wrapping (TasksGraph's fit and {@link bandColsFor}'s
@@ -13312,13 +16958,55 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		*/
 		const GRAPH_FIT_MIN_SCALE = .78;
 		/**
-		* The display height of one node: the base card plus the shared-task row a
-		* team member renders. Nothing else varies — the merged activity lives in the
-		* state bar that every card renders, whatever its state.
+		* The row pitch one model actually needs: the tallest card it draws plus the
+		* gutter. Card heights differ by kind and by content (a run keeps its meta line;
+		* an agent may add a task row and up to {@link NODE_TEXT_MAX_LINES} lines of text
+		* tail), so the pitch is measured from the model instead of hard-picked — a card
+		* taller than the pitch would overlap the row below it and its phase frame.
+		*
+		* @param nodes - the model's node list.
+		*/
+		function rowStrideFor(nodes) {
+			let tallest = 87;
+			for (const node of nodes) tallest = Math.max(tallest, nodeHeight(node));
+			return tallest + 53;
+		}
+		/**
+		* The display height of one node: the base card, plus the text-tail lines a
+		* running/settled child renders under its name, plus the shared-task row a team
+		* member renders. The merged activity lives in the state bar every card draws,
+		* so it costs no height.
+		*
+		* The tail's reservation is computed from the TEXT, not fixed at the maximum:
+		* a card that reserved three lines to show one would wear a 26px hole above its
+		* bar (the reader's own "空荡荡" report, in a different place), so the estimate
+		* is deliberately conservative — it floors the wrapped line count, which means
+		* a long tail is clamped one line short rather than overflowing the box.
 		*/
 		function nodeHeight(node) {
 			if (node.kind !== "agent") return 103;
-			return (node.tasks?.length ?? 0) > 0 ? 121 : 103;
+			const base = 87;
+			const lines = textTailLines(node.live?.text);
+			return base + (lines * NODE_TEXT_LINE_H + (lines === 0 ? 0 : NODE_TEXT_LEAD_H)) + ((node.tasks?.length ?? 0) > 0 ? 18 : 0);
+		}
+		/**
+		* How many lines a card's text tail takes, 0 when the node has none.
+		*
+		* An ESTIMATE by character width, because the layout runs before the browser
+		* wraps anything: CJK reads at the font's full size and latin at a bit over
+		* half of it, over the card's inner width. Floored on purpose (see
+		* {@link nodeHeight}), and capped at {@link NODE_TEXT_MAX_LINES}.
+		*
+		* @param text - the child's newest assistant text (flattened by the caller).
+		* @param cardWidth - the card's outer width (defaults to the graph's).
+		*/
+		function textTailLines(text, cardWidth = 190) {
+			if (text === void 0 || text === "") return 0;
+			const usable = Math.max(40, cardWidth - 18);
+			let units = 0;
+			for (const char of text) units += /[\u3000-\u9fff\uff00-\uffef]/.test(char) ? 10 : 5.5;
+			const lines = Math.ceil(units * .9 / usable);
+			return Math.max(1, Math.min(3, lines));
 		}
 		/**
 		* Chunk one sibling band into rows of at most `cols` children. Counting (not
@@ -13339,6 +17027,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		*/
 		function layoutTasksGraph(nodes, options = {}) {
 			const cols = Math.max(1, options.maxBandCols ?? 4);
+			const stride = rowStrideFor(nodes);
 			const ids = new Set(nodes.map((node) => node.id));
 			const roots = nodes.filter((node) => node.parentId === void 0 || !ids.has(node.parentId));
 			const childrenOf = /* @__PURE__ */ new Map();
@@ -13371,7 +17060,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				boxes.set(node.id, {
 					id: node.id,
 					x: Math.round(centerX - 95),
-					y: 16 + row * 156,
+					y: 16 + row * stride,
 					w: 190,
 					h: nodeHeight(node)
 				});
@@ -13402,7 +17091,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			return {
 				boxes,
 				width: Math.max(222, ...allBoxes.map((box) => box.x + box.w + 16)),
-				height: Math.max(135, ...allBoxes.map((box) => box.y + box.h + 16))
+				height: Math.max(119, ...allBoxes.map((box) => box.y + box.h + 16))
 			};
 		}
 		/**
@@ -13439,6 +17128,158 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				if (layout.width <= tolerant) return layout;
 			}
 			return layoutTasksGraph(nodes, { maxBandCols: 1 });
+		}
+		/** The tween's easing: fast out of the gate, gently into place (ease-out cubic). */
+		function easeOut(progress) {
+			return 1 - (1 - Math.min(1, Math.max(0, progress))) ** 3;
+		}
+		/** Geometry of one box, or undefined when the tween has no previous slot for it. */
+		function geometryOf(box) {
+			return box === void 0 ? void 0 : {
+				x: box.x,
+				y: box.y,
+				w: box.w,
+				h: box.h
+			};
+		}
+		/**
+		* Interpolate one box between two geometries. A box with no `from` (it just
+		* entered) stays at its target — the entrance animation owns that moment, and
+		* sliding it in from a slot it never had would be a lie.
+		*
+		* @param from - the previously displayed geometry (undefined = just entered).
+		* @param to - the target box.
+		* @param progress - 0…1, already eased by the caller.
+		*/
+		function tweenBox(from, to, progress) {
+			if (from === void 0) return to;
+			const mix = (a, b) => a + (b - a) * progress;
+			return {
+				id: to.id,
+				x: mix(from.x, to.x),
+				y: mix(from.y, to.y),
+				w: mix(from.w, to.w),
+				h: mix(from.h, to.h)
+			};
+		}
+		/**
+		* The layout as it should be DRAWN right now: the target for a first render and
+		* for a reader who asked for less motion, a tweened copy after that.
+		*
+		* @param layout - the freshly computed layout (the tween's target).
+		* @returns boxes to render, plus the target canvas extent (the canvas never
+		*   resizes mid-flight: the tween only moves the cards inside it).
+		*/
+		function useTweenedLayout(layout) {
+			/** The geometry the current animation starts from (the last drawn state). */
+			const fromRef = (0, react.useRef)(void 0);
+			const [drawnBoxes, setDrawnBoxes] = (0, react.useState)(layout.boxes);
+			(0, react.useEffect)(() => {
+				const from = fromRef.current;
+				if (from === void 0 || prefersReducedMotion$1()) {
+					fromRef.current = layout.boxes;
+					setDrawnBoxes(layout.boxes);
+					return;
+				}
+				if (sameGeometry(from, layout.boxes)) {
+					fromRef.current = layout.boxes;
+					return;
+				}
+				let frame = 0;
+				const started = performance.now();
+				const step = () => {
+					const progress = easeOut((performance.now() - started) / 220);
+					const next = interpolate(from, layout.boxes, progress);
+					fromRef.current = progress < 1 ? next : layout.boxes;
+					setDrawnBoxes(next);
+					if (progress < 1) frame = requestAnimationFrame(step);
+				};
+				frame = requestAnimationFrame(step);
+				return () => {
+					cancelAnimationFrame(frame);
+				};
+			}, [layout]);
+			(0, react.useEffect)(() => () => {
+				fromRef.current = void 0;
+			}, []);
+			/**
+			* What to draw. The tween's boxes are completed with the TARGET geometry for
+			* any node they do not carry yet: a node that just entered has no previous
+			* slot to travel from, and the render that introduces it must already have a
+			* box for it (its CSS entrance is that moment — leaving it out for the one
+			* render before the effect runs would blink the whole node away).
+			*/
+			const boxes = (0, react.useMemo)(() => {
+				for (const id of layout.boxes.keys()) if (!drawnBoxes.has(id)) {
+					const merged = new Map(drawnBoxes);
+					for (const [targetId, box] of layout.boxes) if (!merged.has(targetId)) merged.set(targetId, box);
+					return merged;
+				}
+				return drawnBoxes;
+			}, [drawnBoxes, layout]);
+			return (0, react.useMemo)(() => ({
+				boxes,
+				width: layout.width,
+				height: layout.height
+			}), [
+				boxes,
+				layout.width,
+				layout.height
+			]);
+		}
+		/** Whether the reader asked the platform for less motion. */
+		function prefersReducedMotion$1() {
+			return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+		}
+		/** Whether two box maps already agree on every geometry. */
+		function sameGeometry(a, b) {
+			if (a.size !== b.size) return false;
+			for (const [id, box] of b) {
+				const previous = a.get(id);
+				if (previous === void 0) return false;
+				if (previous.x !== box.x || previous.y !== box.y || previous.w !== box.w || previous.h !== box.h) return false;
+			}
+			return true;
+		}
+		/** One tweened copy of `to`, using `from` for the boxes that were on screen. */
+		function interpolate(from, to, progress) {
+			const out = /* @__PURE__ */ new Map();
+			for (const [id, box] of to) out.set(id, tweenBox(geometryOf(from.get(id)), box, progress));
+			return out;
+		}
+		//#endregion
+		//#region src/client/tasks-view-glide.ts
+		/**
+		* The transform that fits and centres the content, or undefined when the
+		* container has no size yet (the sidebar mounts hidden at zero size, so a fit
+		* before its first measure must do nothing rather than divide by zero).
+		*/
+		function fitTransform(input) {
+			const { containerW, containerH } = input;
+			if (containerW === 0 || containerH === 0) return void 0;
+			const contentW = Math.max(input.minContentW, input.layoutW - input.pad * 2);
+			const contentH = Math.max(input.minContentH, input.layoutH - input.pad * 2);
+			const k = Math.max(input.minScale, Math.min((containerW - input.margin * 2) / contentW, (containerH - input.margin * 2) / contentH, input.maxScale));
+			return {
+				x: (containerW - contentW * k) / 2 - input.pad * k,
+				y: Math.max(input.margin / 2, (containerH - contentH * k) / 2) - input.pad * k,
+				k
+			};
+		}
+		/**
+		* One frame of a glide between two transforms.
+		*
+		* @param from - where the frame is.
+		* @param to - where it is going.
+		* @param progress - 0…1, already eased by the caller.
+		*/
+		function lerpTransform(from, to, progress) {
+			const mix = (a, b) => a + (b - a) * progress;
+			return {
+				x: mix(from.x, to.x),
+				y: mix(from.y, to.y),
+				k: mix(from.k, to.k)
+			};
 		}
 		//#endregion
 		//#region src/client/process-labels.ts
@@ -13499,37 +17340,37 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			return joined;
 		}
 		//#endregion
-		//#region src/client/tool-icons.tsx
-		/** The explicit tool-family map (longest-prefix wins at lookup). */
-		const TOOL_GLYPHS = [
-			["read", (size) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCodeOutlineRegular, { size })],
-			["write", (size) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEditOutlineRegular, { size })],
-			["edit", (size) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEditOutlineRegular, { size })],
-			["glob", (size) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconSearchOutlineRegular, { size })],
-			["grep", (size) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconSearchOutlineRegular, { size })],
-			["search", (size) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconSearchOutlineRegular, { size })],
-			["bash", (size) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlayOutlineRegular, { size })],
-			["shell", (size) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlayOutlineRegular, { size })],
-			["web", (size) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconGlobeOutlineRegular, { size })],
-			["fetch", (size) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconGlobeOutlineRegular, { size })],
-			["think", (size) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconThinkOutlineRegular, { size })]
-		];
-		/** The fallback glyph for unmapped tools. */
-		const FALLBACK_GLYPH = (size) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEllipsisOutlineRegular, { size });
+		//#region src/client/activity-icons.tsx
+		/** The explicit category map, one family per kind of work. */
+		const ACTIVITY_GLYPHS = {
+			read: (size) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCodeOutlineRegular, { size }),
+			readImage: (size) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCodeOutlineRegular, { size }),
+			search: (size) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconSearchOutlineRegular, { size }),
+			write: (size) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEditOutlineRegular, { size }),
+			edit: (size) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEditOutlineRegular, { size }),
+			commands: (size) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlayOutlineRegular, { size }),
+			code: (size) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlayOutlineRegular, { size }),
+			webSearch: (size) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconGlobeOutlineRegular, { size }),
+			webFetch: (size) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconGlobeOutlineRegular, { size }),
+			subagents: (size) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconUsersOutlineRegular, { size }),
+			plan: (size) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlanOutlineRegular, { size }),
+			questions: (size) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconQuestionOutlineRegular, { size }),
+			tools: (size) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEllipsisOutlineRegular, { size })
+		};
 		/**
-		* The glyph of one tool name: exact match first, then a prefix match so
-		* `mcp__fs__read_file`-style names still land on their family glyph. The
-		* lookup is case-insensitive.
+		* The glyph of one activity line.
+		*
+		* @param kind - the newest range's running category, or undefined while
+		*   nothing is dispatched (the host's "thinking" wording, which is what the
+		*   live line prints in that case).
 		*/
-		function toolGlyph(toolName) {
-			const name = toolName.toLowerCase();
-			for (const [key, glyph] of TOOL_GLYPHS) if (name === key) return glyph;
-			for (const [key, glyph] of TOOL_GLYPHS) if (name.includes(key)) return glyph;
-			return FALLBACK_GLYPH;
+		function activityGlyph(kind) {
+			if (kind === void 0) return (size) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconThinkOutlineRegular, { size });
+			return ACTIVITY_GLYPHS[kind];
 		}
 		//#endregion
-		//#region \0dsh-css:H:\MaxNull\WorkStation\third-party-plugins\DSH-better-sidebar\src\client\tasks-graph.module.css.mjs
-		const css$5 = ".COqNoa_graphView{flex-direction:column;flex:1;min-height:0;display:flex;position:relative;overflow:hidden}.COqNoa_canvas{cursor:grab;touch-action:none;user-select:none;background-image:radial-gradient(circle, var(--dsw-alias-border-l1) .6px, transparent .6px);background-position:0 0;background-size:16px 16px;position:absolute;inset:0}.COqNoa_canvasDragging{cursor:grabbing}.COqNoa_canvasInner{transform-origin:0 0;position:absolute;top:0;left:0}.COqNoa_edges{pointer-events:none;position:absolute;top:0;left:0;overflow:visible}.COqNoa_edge{fill:none;stroke:var(--dsw-alias-label-tertiary);stroke-width:1.5px;stroke-linecap:round}.COqNoa_edgeTeam{stroke:var(--dsw-alias-state-business-primary);stroke-dasharray:3 3;opacity:.9}.COqNoa_edgeWorkflow{stroke:var(--dsw-alias-state-business-primary);opacity:.9}.COqNoa_edgeFold{stroke-dasharray:1 4;opacity:.5}.COqNoa_phaseFrame{border:1px dashed var(--dsw-alias-border-l2);pointer-events:none;border-radius:4px;position:absolute}.COqNoa_phaseFrame.COqNoa_phase0{border-color:color-mix(in srgb, var(--dsw-alias-label-primary) 42%, transparent)}.COqNoa_phaseFrame.COqNoa_phase1{border-color:color-mix(in srgb, var(--dsw-alias-label-primary) 34%, transparent)}.COqNoa_phaseFrame.COqNoa_phase2{border-color:color-mix(in srgb, var(--dsw-alias-label-primary) 27%, transparent)}.COqNoa_phaseFrame.COqNoa_phase3{border-color:color-mix(in srgb, var(--dsw-alias-label-primary) 21%, transparent)}.COqNoa_phaseLabel{background:var(--dsw-alias-bg-layer-1);font-family:var(--ds-font-family-code,monospace);letter-spacing:.12em;text-transform:uppercase;color:var(--dsw-alias-label-secondary);padding:0 5px;font-size:10px;position:absolute;top:-7px;left:8px}.COqNoa_node{box-sizing:border-box;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);cursor:pointer;border-radius:8px;flex-direction:column;padding:0;display:flex;position:absolute;overflow:hidden}.COqNoa_node:hover{background:var(--dsw-alias-interactive-bg-hover)}.COqNoa_nodeCurrent{border-color:var(--dsw-alias-state-business-primary);border-width:2px}.COqNoa_nodeTeam{border-color:var(--dsw-alias-state-business-primary)}.COqNoa_nodeWorkflow{border-color:var(--dsw-alias-state-business-primary);background:color-mix(in srgb, var(--dsw-alias-state-business-primary) 6%, var(--dsw-alias-bg-layer-1))}.COqNoa_nodeSettled{opacity:.62}.COqNoa_nodeError{border-color:var(--dsw-alias-state-error-primary)}.COqNoa_depth0{--card-tint:9%}.COqNoa_depth1{--card-tint:7%}.COqNoa_depth2{--card-tint:5%}.COqNoa_depth3{--card-tint:3.5%}.COqNoa_cardTop{background:color-mix(in srgb, var(--dsw-alias-state-business-primary) var(--card-tint,6%), var(--dsw-alias-bg-layer-1));flex-direction:column;flex:1;gap:2px;min-width:0;padding:6px 8px 5px;display:flex;position:relative}.COqNoa_cardBadges{align-items:center;gap:4px;min-width:0;display:flex}.COqNoa_kindBadge{border:1px solid var(--dsw-alias-border-l2);font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-secondary);border-radius:2px;flex:none;padding:0 4px}.COqNoa_phaseBadge{max-width:62%;font:var(--dsw-font-xxxs-11);white-space:nowrap;text-overflow:ellipsis;border:1px solid;border-radius:2px;flex:none;padding:0 4px;overflow:hidden}.COqNoa_phase0{color:var(--dsw-alias-label-primary);border-color:color-mix(in srgb, var(--dsw-alias-label-primary) 45%, transparent)}.COqNoa_phase1{color:color-mix(in srgb, var(--dsw-alias-label-primary) 78%, transparent);border-color:color-mix(in srgb, var(--dsw-alias-label-primary) 38%, transparent)}.COqNoa_phase2{color:color-mix(in srgb, var(--dsw-alias-label-primary) 58%, transparent);border-color:color-mix(in srgb, var(--dsw-alias-label-primary) 30%, transparent)}.COqNoa_phase3{color:color-mix(in srgb, var(--dsw-alias-label-primary) 42%, transparent);border-color:color-mix(in srgb, var(--dsw-alias-label-primary) 24%, transparent)}.COqNoa_cardName{-webkit-line-clamp:2;overflow-wrap:anywhere;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary);-webkit-box-orient:vertical;display:-webkit-box;overflow:hidden}.COqNoa_cardNamePlain{-webkit-line-clamp:1;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-secondary)}.COqNoa_cardMeta{font:var(--dsw-font-xxxs-11);font-family:var(--ds-font-family-code,monospace);color:var(--dsw-alias-label-secondary);white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.COqNoa_cardBar{border-top:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-base);height:22px;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-secondary);flex:none;align-items:center;gap:5px;padding:0 6px 0 8px;display:flex;position:relative;overflow:hidden}.COqNoa_cardBar[data-running=true]:after{content:\"\";background-image:linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--dsw-alias-state-business-primary) 18%, transparent) 50%, transparent 100%);pointer-events:none;width:100%;animation:1.5s cubic-bezier(.33,0,.67,1) infinite COqNoa_dsh-tasks-bar-sweep;position:absolute;top:0;bottom:0;left:0;transform:translate(-100%)}@keyframes COqNoa_dsh-tasks-bar-sweep{0%{transform:translate(-100%)}66.6667%,to{transform:translate(100%)}}@media (prefers-reduced-motion:reduce){.COqNoa_cardBar[data-running=true]:after{opacity:0;animation:none}}.COqNoa_barDot{flex:none}.COqNoa_barState{color:var(--dsw-alias-label-secondary);flex:none}.COqNoa_barActivity{min-width:0;color:var(--dsw-alias-state-business-primary);white-space:nowrap;text-overflow:ellipsis;flex:1;overflow:hidden}.COqNoa_barFold{width:16px;height:16px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:2px;flex:none;justify-content:center;align-items:center;margin-left:auto;padding:0;display:inline-flex}.COqNoa_barFold:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.COqNoa_nodeFold{border:1px dashed var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-base)}.COqNoa_nodeFold:hover{border-color:var(--dsw-alias-label-primary)}.COqNoa_nodeHeader{align-items:center;gap:5px;min-width:0;display:flex}.COqNoa_nodeDot{flex:none}.COqNoa_nodeGlyph{color:var(--dsw-alias-label-tertiary);flex:none;display:inline-flex}.COqNoa_treeGlyph{color:var(--dsw-alias-label-tertiary);flex:none;margin-top:3px;display:inline-flex}.COqNoa_treeDot{flex:none;margin-top:6px}.COqNoa_nodeMeta{font:var(--dsw-font-xxxs-11);font-family:var(--ds-font-family-code,monospace);color:var(--dsw-alias-label-secondary);white-space:nowrap;text-overflow:ellipsis;margin-top:2px;overflow:hidden}.COqNoa_nodeFold .COqNoa_nodeMeta{color:var(--dsw-alias-label-tertiary)}.COqNoa_taskLine{cursor:pointer;min-width:0;color:var(--dsw-alias-label-secondary);white-space:nowrap;align-items:center;gap:4px;margin-top:3px;font-size:10px;line-height:1.3;display:flex;overflow:hidden}.COqNoa_taskGlyph{color:var(--dsw-alias-state-business-primary);flex:none;display:inline-flex}.COqNoa_taskLine:hover .COqNoa_taskSubject{color:var(--dsw-alias-label-primary)}.COqNoa_taskLine:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px;border-radius:2px}.COqNoa_taskSubject{text-overflow:ellipsis;flex:1;min-width:0;overflow:hidden}.COqNoa_taskState{font-family:var(--ds-font-family-code,monospace);color:var(--dsw-alias-label-tertiary);flex:none;font-size:10px}.COqNoa_taskMore{border:1px solid var(--dsw-alias-border-l2);font-family:var(--ds-font-family-code,monospace);color:var(--dsw-alias-label-tertiary);border-radius:2px;flex:none;padding:0 3px;font-size:10px}.COqNoa_live{min-width:0;font-family:var(--ds-font-family-code,monospace);color:var(--dsw-alias-state-business-primary);white-space:nowrap;align-items:center;gap:4px;margin-top:3px;font-size:10px;line-height:1.3;display:flex;overflow:hidden}.COqNoa_liveGlyph{border:1px solid;border-radius:2px;flex:none;justify-content:center;align-items:center;width:11px;height:11px;display:inline-flex}.COqNoa_liveTool{flex:none}.COqNoa_liveArgs{color:var(--dsw-alias-label-secondary);text-overflow:ellipsis;overflow:hidden}.COqNoa_liveText{color:var(--dsw-alias-label-secondary);white-space:nowrap;text-overflow:ellipsis;margin-top:2px;font-size:10px;overflow:hidden}.COqNoa_controls{z-index:6;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);border-radius:3px;flex-direction:row;align-items:center;display:flex;position:absolute;bottom:10px;right:10px}.COqNoa_controlBtn{box-sizing:border-box;min-width:28px;height:28px;color:var(--dsw-alias-label-secondary);font-family:var(--ds-font-family-code,monospace);cursor:pointer;background:0 0;border:none;justify-content:center;align-items:center;padding:0 4px;font-size:12px;line-height:1;display:inline-flex}.COqNoa_controlBtn+.COqNoa_controlBtn,.COqNoa_controlZoomLevel+.COqNoa_controlBtn,.COqNoa_controlBtn+.COqNoa_controlZoomLevel{border-left:1px solid var(--dsw-alias-border-l2)}.COqNoa_controlBtn:hover{color:var(--dsw-alias-label-primary)}.COqNoa_controlBtnActive{color:var(--dsw-alias-state-business-primary)}.COqNoa_controlZoomLevel{box-sizing:border-box;min-width:36px;height:28px;font-family:var(--ds-font-family-code,monospace);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary);justify-content:center;align-items:center;padding:0 5px;font-size:10px;display:inline-flex}.COqNoa_treeView{scrollbar-width:thin;user-select:none;flex:1;min-height:0;padding:8px 10px 44px;overflow-y:auto}.COqNoa_treeRow{cursor:pointer;border-radius:4px;align-items:flex-start;gap:7px;padding:0 8px;display:flex;position:relative}.COqNoa_treeRow:hover{background:var(--dsw-alias-interactive-bg-hover)}.COqNoa_treeRow:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}.COqNoa_treeRowActive{background:var(--dsw-alias-interactive-bg-hover)}.COqNoa_treeRowActive:before{content:\"\";background:var(--dsw-alias-state-business-primary);border-radius:1px;width:2px;position:absolute;top:4px;bottom:4px;left:0}.COqNoa_treeRowSettled{opacity:.62}.COqNoa_treeKids{border-left:1px solid var(--dsw-alias-border-l1);margin-left:15px;padding-left:10px}.COqNoa_treeContent{flex-direction:column;flex:1;justify-content:center;min-width:0;min-height:32px;display:flex}.COqNoa_treeTitle{font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary);white-space:nowrap;text-overflow:ellipsis;align-items:center;gap:6px;display:flex;overflow:hidden}.COqNoa_treeMeta{font:var(--dsw-font-xxxs-11);font-family:var(--ds-font-family-code,monospace);color:var(--dsw-alias-label-secondary);white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.COqNoa_treeFoldRow{border:1px dashed var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);border-radius:4px;margin:2px 0}.COqNoa_popCard{background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);max-width:100%;box-shadow:var(--dsw-shadow-lv3);font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-primary);box-sizing:border-box;border-radius:4px;flex-direction:column;gap:4px;padding:10px 12px;display:flex}.COqNoa_popHead{min-height:28px;font-family:var(--ds-font-family-code,monospace);letter-spacing:.12em;text-transform:uppercase;color:var(--dsw-alias-label-tertiary);justify-content:space-between;align-items:center;gap:8px;margin-bottom:4px;font-size:10px;display:flex}.COqNoa_popFoot{border-top:1px solid var(--dsw-alias-border-l1);gap:8px;margin-top:8px;padding-top:8px;display:flex}.COqNoa_popFoot>*{flex:1}.COqNoa_jobPopTitle{align-items:center;gap:6px;min-width:0;display:flex}.COqNoa_taskBody{flex-direction:column;min-height:0;display:flex}.COqNoa_taskHeadRow{align-items:center;gap:6px;min-width:0;margin-bottom:8px;display:flex}.COqNoa_taskHeadRow .COqNoa_popTitle{font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-primary);flex:1}.COqNoa_jobPopMeta{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-secondary);flex-wrap:wrap;align-items:center;gap:6px;display:flex}.COqNoa_jobPopValue{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-secondary);line-height:1.45}.COqNoa_jobPopActions{justify-content:space-between;align-items:center;gap:8px;display:flex}.COqNoa_jobPopFollow{min-width:0;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-secondary);align-items:center;gap:6px;display:inline-flex}.COqNoa_jobPopFollowLabel{text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.COqNoa_jobPopKillArmed,.COqNoa_jobPopKillArmed:hover{border:1px solid var(--dsw-alias-state-error-primary);background:color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, transparent);color:var(--dsw-alias-state-error-primary)}.COqNoa_popTitleRow{align-items:center;gap:6px;min-width:0;display:flex}.COqNoa_popGlyph{color:var(--dsw-alias-label-tertiary);flex:none;display:inline-flex}.COqNoa_popTitle{text-overflow:ellipsis;white-space:nowrap;text-transform:none;letter-spacing:0;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary);overflow:hidden}.COqNoa_popRows{grid-template-columns:auto 1fr;align-items:baseline;gap:3px 10px;margin:0;line-height:1.45;display:grid}.COqNoa_popKey{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary);line-height:1.45}.COqNoa_popValue{text-align:right;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-secondary);text-overflow:ellipsis;white-space:nowrap;margin:0;line-height:1.45;overflow:hidden}.COqNoa_popValueMono{font-family:var(--ds-font-family-code,monospace);font-size:11px}.COqNoa_popSection{border-top:1px solid var(--dsw-alias-border-l1);margin-top:4px;padding-top:8px}.COqNoa_popList{scrollbar-width:thin;flex-direction:column;gap:1px;max-height:160px;display:flex;overflow-y:auto}.COqNoa_popGroup{font-family:var(--ds-font-family-code,monospace);letter-spacing:.12em;text-transform:uppercase;color:var(--dsw-alias-label-tertiary);padding:4px 2px 2px;font-size:10px}.COqNoa_popList .COqNoa_popListRow{box-sizing:border-box;cursor:pointer;border-radius:4px;align-items:center;gap:6px;min-height:28px;padding:0 4px;display:flex}.COqNoa_popList .COqNoa_popListRow:hover{background:var(--dsw-alias-interactive-bg-hover)}.COqNoa_popListLabel{min-width:0;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-primary);text-overflow:ellipsis;white-space:nowrap;flex:1;overflow:hidden}.COqNoa_popHint.COqNoa_popHint{color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:1.45}.COqNoa_popError{color:var(--dsw-alias-state-error-primary);font-size:10px}.COqNoa_taskMarkdown{min-height:0;font:var(--dsw-font-xxs-12);scrollbar-width:thin;--dsw-font-markdown-base:var(--dsw-font-xxs-12);--dsw-font-markdown-base-strong:var(--dsw-font-xxs-strong-12);--dsw-font-markdown-h1:600 13px/18px var(--dsw-font-family);--dsw-font-markdown-h2:600 13px/18px var(--dsw-font-family);--dsw-font-markdown-h3:var(--dsw-font-xxs-strong-12);--dsw-font-markdown-h4:var(--dsw-font-xxs-strong-12);--dsw-font-markdown-code:var(--dsw-font-xxxs-11);--dsw-font-markdown-code-block:var(--dsw-font-markdown-code-block-small);--dsw-font-markdown-table:var(--dsw-font-xxxs-11);--dsw-font-markdown-table-head:var(--dsw-font-xxxs-strong-11);flex:1;padding:2px 0;line-height:1.5;overflow-y:auto}.COqNoa_taskMarkdown.COqNoa_taskMarkdown>*{color:var(--dsw-alias-label-secondary)}.COqNoa_taskMarkdown.COqNoa_taskMarkdown :is(h1,h2,h3){margin:8px 0 4px}.COqNoa_taskMarkdown.COqNoa_taskMarkdown :is(h4,h5,h6){margin:6px 0 2px}.COqNoa_taskMarkdown.COqNoa_taskMarkdown :is(p,blockquote,pre){margin:6px 0}.COqNoa_taskMarkdown.COqNoa_taskMarkdown :is(ul,ol){margin:6px 0;padding-left:16px}.COqNoa_taskMarkdown.COqNoa_taskMarkdown li:not(:first-child){margin-top:2px}.COqNoa_taskMarkdown.COqNoa_taskMarkdown li>p{margin:4px 0}.COqNoa_taskMarkdown.COqNoa_taskMarkdown li::marker{line-height:18px}.COqNoa_taskMarkdown.COqNoa_taskMarkdown blockquote{border-left:1px solid var(--dsw-alias-border-l2);padding-left:10px}.COqNoa_taskMarkdown.COqNoa_taskMarkdown hr{margin:8px 0}.COqNoa_taskMarkdown.COqNoa_taskMarkdown :not(pre)>code{border-radius:3px;font-size:11px!important}.COqNoa_taskMarkdown.COqNoa_taskMarkdown :is(th,td){border-bottom:1px solid var(--dsw-alias-border-l1);padding:4px 8px}.COqNoa_taskMarkdown.COqNoa_taskMarkdown th{border-bottom-color:var(--dsw-alias-border-l2)}.COqNoa_taskTextarea{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-base);width:100%;min-height:120px;color:var(--dsw-alias-label-primary);font-family:var(--ds-font-family-code,monospace);resize:vertical;box-sizing:border-box;border-radius:8px;flex:1;padding:6px 8px;font-size:12px;line-height:1.5}.COqNoa_taskTextarea:focus{border-color:var(--dsw-alias-state-business-primary);outline:none}.COqNoa_taskForm{flex-direction:column;flex:1;gap:8px;min-height:0;display:flex}.COqNoa_taskForm>label:last-child{flex:1;min-height:0}.COqNoa_taskField{flex-direction:column;gap:4px;display:flex}.COqNoa_taskMarkdown+.COqNoa_taskField{margin-top:4px}.COqNoa_taskBody>.COqNoa_taskField,.COqNoa_taskBody>.COqNoa_jobPopMeta,.COqNoa_taskBody>.COqNoa_taskHeadRow,.COqNoa_taskBody>.COqNoa_teamNote{flex:none}.COqNoa_taskLabel{font-family:var(--ds-font-family-code,monospace);letter-spacing:.12em;text-transform:uppercase;color:var(--dsw-alias-label-tertiary);font-size:10px}.COqNoa_taskForm .COqNoa_taskInput input{font:var(--dsw-font-xxs-12)}.COqNoa_taskForm .COqNoa_taskInput:not(:focus-within){border-color:var(--dsw-alias-border-l2)}.COqNoa_taskForm .COqNoa_taskInput:has(input[aria-invalid=true]):not(:focus-within){border-color:var(--dsw-alias-state-error-primary)}.COqNoa_taskOwnerRow{flex-wrap:wrap;gap:4px;display:flex}.COqNoa_taskOwnerRow .COqNoa_taskOwnerPill{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);background:0 0}.COqNoa_taskOwnerRow .COqNoa_taskOwnerPill:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.COqNoa_taskOwnerRow .COqNoa_taskOwnerPillActive{box-sizing:border-box;border:1px solid var(--dsw-alias-button-ghost-active-border);background:var(--dsw-alias-button-ghost-active-fill);color:var(--dsw-alias-label-primary)}.COqNoa_taskOwnerRow .COqNoa_taskOwnerPillActive:hover{background:var(--dsw-alias-button-ghost-active-hover)}.COqNoa_jobPopActions .COqNoa_taskDanger{color:var(--dsw-alias-state-error-primary);border-color:color-mix(in srgb, var(--dsw-alias-state-error-primary) 40%, transparent)}.COqNoa_jobPopActions .COqNoa_taskDanger:hover{background:var(--dsw-alias-interactive-bg-hover-danger);border-color:var(--dsw-alias-state-error-primary)}.COqNoa_jobPopActions .COqNoa_taskDanger.COqNoa_taskDangerArmed,.COqNoa_jobPopActions .COqNoa_taskDanger.COqNoa_taskDangerArmed:hover{background:color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, transparent);border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}.COqNoa_teamBoard{border-bottom:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);flex:none}.COqNoa_teamBoardBar{box-sizing:border-box;border:none;border-bottom:1px solid var(--dsw-alias-border-l1);width:100%;height:28px;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-secondary);cursor:pointer;text-align:left;background:0 0;align-items:center;gap:8px;padding:0 12px;display:flex}.COqNoa_teamBoardBar:hover{color:var(--dsw-alias-label-primary)}.COqNoa_teamBoardCount{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary)}.COqNoa_teamBoardChev{color:var(--dsw-alias-label-tertiary);margin-left:auto}.COqNoa_teamBoardIcon{color:var(--dsw-alias-label-tertiary);display:inline-flex}.COqNoa_teamNote{color:var(--dsw-alias-state-warn-primary);padding:0 12px 6px;font-size:10px;line-height:1.4}.COqNoa_teamActions{flex:none;align-items:center;gap:6px;padding:6px 12px 8px;display:flex}.COqNoa_teamMembers{flex-wrap:wrap;gap:4px;padding:6px 12px;display:flex}.COqNoa_teamMemberName{text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.COqNoa_teamTasks{border-bottom:1px solid var(--dsw-alias-border-l1);scrollbar-width:thin;flex-direction:column;gap:1px;max-height:160px;padding:0 6px 6px;display:flex;overflow-y:auto}.COqNoa_teamTaskRow{align-items:center;gap:2px;display:flex}.COqNoa_teamTask{text-align:left;border-radius:4px;flex:1;align-items:center;gap:6px;width:100%;min-width:0;min-height:24px;padding:2px 6px;display:flex}.COqNoa_teamTask>*{min-width:0}.COqNoa_teamTask:hover{background:var(--dsw-alias-interactive-bg-hover)}.COqNoa_teamTaskSubject{min-width:0;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-primary);text-overflow:ellipsis;white-space:nowrap;flex:1;overflow:hidden}.COqNoa_teamTaskOwner{max-width:72px;font:var(--dsw-font-xxxs-11);font-family:var(--ds-font-family-code,monospace);color:var(--dsw-alias-label-tertiary);text-overflow:ellipsis;white-space:nowrap;flex:none;overflow:hidden}.COqNoa_teamEmpty{min-height:28px;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary);align-items:center;padding:0 6px;display:flex}.COqNoa_jobsDrawer{border-top:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);z-index:5;flex:none}.COqNoa_jobsDrawerBar{box-sizing:border-box;border:none;border-bottom:1px solid var(--dsw-alias-border-l1);width:100%;height:28px;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-secondary);cursor:pointer;text-align:left;background:0 0;align-items:center;gap:8px;padding:0 12px;display:flex}.COqNoa_jobsDrawerBar:hover{color:var(--dsw-alias-label-primary)}.COqNoa_jobsDrawerBar:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}.COqNoa_jobsBigNum{font-family:var(--ds-font-family-code,monospace);font-variant-numeric:tabular-nums;color:var(--dsw-alias-state-business-primary);font-size:12px;font-weight:600}.COqNoa_jobsDrawerCount{min-width:0;font:var(--dsw-font-xxs-12);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary);text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.COqNoa_jobsDrawerChev{color:var(--dsw-alias-label-tertiary);flex:none;margin-left:auto;transition:transform .18s;display:inline-flex}.COqNoa_jobsDrawerChev[data-open=true]{transform:rotate(180deg)}.COqNoa_jobsAutoNote{color:var(--dsw-alias-label-tertiary);padding:6px 12px;font-size:10px;line-height:1.4}.COqNoa_jobsDrawerBody{scrollbar-width:thin;flex-direction:column;gap:2px;max-height:156px;padding:4px 8px 8px;display:flex;overflow:hidden auto}.COqNoa_jobsRow{border-radius:3px;align-items:center;gap:7px;min-height:28px;padding:4px 6px;display:flex}.COqNoa_jobsRow[data-settled=true]{opacity:.62}.COqNoa_jobsRowMain{min-width:0;color:inherit;cursor:pointer;text-align:left;background:0 0;border:none;flex:1;align-items:center;gap:7px;padding:0;display:flex;overflow:hidden}.COqNoa_jobsRow:hover{background:var(--dsw-alias-interactive-bg-hover)}.COqNoa_jobsRow[data-open=true],.COqNoa_jobsRow[data-open=true]:hover{background:var(--dsw-alias-interactive-bg-active)}.COqNoa_jobsRowMain:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}.COqNoa_jobsLabel{min-width:33%;font:var(--dsw-font-xxs-strong-12);font-family:var(--ds-font-family-code,monospace);color:var(--dsw-alias-label-primary);text-overflow:ellipsis;white-space:nowrap;flex:auto;overflow:hidden}.COqNoa_jobsMeta{min-width:0;font:var(--dsw-font-xxxs-11);font-family:var(--ds-font-family-code,monospace);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-secondary);text-overflow:ellipsis;white-space:nowrap;flex:0 auto;overflow:hidden}.COqNoa_jobsKillSlot{flex:none;width:28px;height:28px;position:relative}.COqNoa_jobsKill{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);min-width:28px;height:28px;color:var(--dsw-alias-label-tertiary);font-family:var(--ds-font-family-code,monospace);cursor:pointer;opacity:0;background:0 0;border-radius:3px;padding:0 5px;transition:opacity .12s;position:absolute;top:0;right:0}.COqNoa_jobsRow:hover .COqNoa_jobsKill,.COqNoa_jobsRow:focus-within .COqNoa_jobsKill,.COqNoa_jobsKill:focus-visible{opacity:1}.COqNoa_jobsKill:hover{border-color:var(--dsw-alias-label-primary);color:var(--dsw-alias-label-primary)}.COqNoa_jobsKill.COqNoa_jobsKill[data-armed=true],.COqNoa_jobsKill.COqNoa_jobsKill[data-armed=true]:hover{border-color:var(--dsw-alias-state-error-primary);background:var(--dsw-alias-bg-layer-1);width:auto;color:var(--dsw-alias-state-error-primary);opacity:1;white-space:nowrap;padding:0 7px}.COqNoa_jobsRow:has(.COqNoa_jobsKill[data-armed=true]) .COqNoa_jobsKillSlot{align-items:center;width:auto;display:flex}.COqNoa_jobsRow:has(.COqNoa_jobsKill[data-armed=true]) .COqNoa_jobsKill{position:static}.COqNoa_jobsRow:has(.COqNoa_jobsKill[data-armed=true]) .COqNoa_jobsMeta{display:none}.COqNoa_jobsKillError{pointer-events:none;background:var(--dsw-alias-bg-layer-1);height:28px;font-family:var(--ds-font-family-code,monospace);color:var(--dsw-alias-state-error-primary);white-space:nowrap;border-radius:3px;align-items:center;padding:0 6px;font-size:10px;display:inline-flex;position:absolute;top:0;right:0}.COqNoa_viewEmptyHint{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);text-align:center;padding:0 24px}";
+		//#region \0dsh-css:/home/runner/work/DSH-better-sidebar/DSH-better-sidebar/src/client/tasks-graph.module.css.mjs
+		const css$5 = ".d2hvtW_graphView{flex-direction:column;flex:1;min-height:0;display:flex;position:relative;overflow:hidden}.d2hvtW_canvas{cursor:grab;touch-action:none;user-select:none;background-image:radial-gradient(circle, var(--dsw-alias-border-l1) .6px, transparent .6px);background-position:0 0;background-size:16px 16px;position:absolute;inset:0}.d2hvtW_canvasDragging{cursor:grabbing}.d2hvtW_canvasInner{transform-origin:0 0;position:absolute;top:0;left:0}.d2hvtW_edges{pointer-events:none;position:absolute;top:0;left:0;overflow:visible}.d2hvtW_edge{fill:none;stroke:var(--dsw-alias-label-tertiary);stroke-width:1.5px;stroke-linecap:round}.d2hvtW_edgeTeam{stroke:var(--dsw-alias-state-business-primary);stroke-dasharray:3 3;opacity:.9}.d2hvtW_edgeWorkflow{stroke:var(--dsw-alias-state-business-primary);opacity:.9}.d2hvtW_edgeFold{stroke-dasharray:1 4;opacity:.5}.d2hvtW_phaseFrame{border:1px dashed var(--dsw-alias-border-l2);pointer-events:none;border-radius:4px;position:absolute}.d2hvtW_phaseFrame.d2hvtW_phase0{border-color:color-mix(in srgb, var(--dsw-alias-label-primary) 42%, transparent)}.d2hvtW_phaseFrame.d2hvtW_phase1{border-color:color-mix(in srgb, var(--dsw-alias-label-primary) 34%, transparent)}.d2hvtW_phaseFrame.d2hvtW_phase2{border-color:color-mix(in srgb, var(--dsw-alias-label-primary) 27%, transparent)}.d2hvtW_phaseFrame.d2hvtW_phase3{border-color:color-mix(in srgb, var(--dsw-alias-label-primary) 21%, transparent)}.d2hvtW_phaseLabel{background:var(--dsw-alias-bg-layer-1);font-family:var(--ds-font-family-code,monospace);letter-spacing:.12em;text-transform:uppercase;color:var(--dsw-alias-label-secondary);padding:0 5px;font-size:10px;position:absolute;top:-7px;left:8px}.d2hvtW_node{box-sizing:border-box;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);cursor:pointer;border-radius:8px;flex-direction:column;padding:0;animation:.3s cubic-bezier(.2,.9,.25,1.06) backwards d2hvtW_dsh-card-in;display:flex;position:absolute;overflow:hidden}.d2hvtW_node:hover{background:var(--dsw-alias-interactive-bg-hover)}.d2hvtW_nodeCurrent{border-color:var(--dsw-alias-state-business-primary);border-width:2px}.d2hvtW_nodeTeam{border-color:var(--dsw-alias-state-business-primary)}.d2hvtW_nodeWorkflow{border-color:var(--dsw-alias-state-business-primary);background:color-mix(in srgb, var(--dsw-alias-state-business-primary) 6%, var(--dsw-alias-bg-layer-1))}.d2hvtW_nodeSettled{opacity:.62}.d2hvtW_nodeError{border-color:var(--dsw-alias-state-error-primary)}.d2hvtW_depth0{--card-tint:9%}.d2hvtW_depth1{--card-tint:7%}.d2hvtW_depth2{--card-tint:5%}.d2hvtW_depth3{--card-tint:3.5%}.d2hvtW_cardTop{background:color-mix(in srgb, var(--dsw-alias-state-business-primary) var(--card-tint,6%), var(--dsw-alias-bg-layer-1));flex-direction:column;flex:1;gap:2px;min-width:0;padding:6px 8px 5px;display:flex;position:relative}.d2hvtW_cardBadges{align-items:center;gap:4px;min-width:0;display:flex}.d2hvtW_kindBadge{border:1px solid var(--dsw-alias-border-l2);font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-secondary);border-radius:2px;flex:none;padding:0 4px}.d2hvtW_kindChip{max-width:46%;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-secondary);white-space:nowrap;text-overflow:ellipsis;flex:none;overflow:hidden}.d2hvtW_phaseBadge{max-width:62%;font:var(--dsw-font-xxxs-11);white-space:nowrap;text-overflow:ellipsis;border:1px solid;border-radius:2px;flex:none;padding:0 4px;overflow:hidden}.d2hvtW_phase0{color:var(--dsw-alias-label-primary);border-color:color-mix(in srgb, var(--dsw-alias-label-primary) 45%, transparent)}.d2hvtW_phase1{color:color-mix(in srgb, var(--dsw-alias-label-primary) 78%, transparent);border-color:color-mix(in srgb, var(--dsw-alias-label-primary) 38%, transparent)}.d2hvtW_phase2{color:color-mix(in srgb, var(--dsw-alias-label-primary) 58%, transparent);border-color:color-mix(in srgb, var(--dsw-alias-label-primary) 30%, transparent)}.d2hvtW_phase3{color:color-mix(in srgb, var(--dsw-alias-label-primary) 42%, transparent);border-color:color-mix(in srgb, var(--dsw-alias-label-primary) 24%, transparent)}.d2hvtW_cardName{-webkit-line-clamp:2;overflow-wrap:anywhere;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary);-webkit-box-orient:vertical;display:-webkit-box;overflow:hidden}.d2hvtW_cardNamePlain{-webkit-line-clamp:1;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-secondary)}.d2hvtW_cardText{overflow-wrap:anywhere;color:var(--dsw-alias-label-secondary);-webkit-box-orient:vertical;margin-top:2px;font-size:10px;line-height:1.3;display:-webkit-box;overflow:hidden}.d2hvtW_cardMeta{font:var(--dsw-font-xxxs-11);font-family:var(--ds-font-family-code,monospace);color:var(--dsw-alias-label-secondary);white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.d2hvtW_cardBar{border-top:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-base);height:22px;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-secondary);flex:none;align-items:center;gap:5px;padding:0 6px 0 8px;display:flex;position:relative;overflow:hidden}.d2hvtW_cardBar[data-running=true]:after{content:\"\";background-image:linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--dsw-alias-state-business-primary) 18%, transparent) 50%, transparent 100%);pointer-events:none;width:100%;animation:1.5s cubic-bezier(.33,0,.67,1) infinite d2hvtW_dsh-tasks-bar-sweep;position:absolute;top:0;bottom:0;left:0;transform:translate(-100%)}@keyframes d2hvtW_dsh-tasks-bar-sweep{0%{transform:translate(-100%)}66.6667%,to{transform:translate(100%)}}@media (prefers-reduced-motion:reduce){.d2hvtW_cardBar[data-running=true]:after{opacity:0;animation:none}}.d2hvtW_barDot{flex:none}.d2hvtW_barState{color:var(--dsw-alias-label-secondary);flex:none}.d2hvtW_barActivity{min-width:0;color:var(--dsw-alias-state-business-primary);white-space:nowrap;text-overflow:ellipsis;flex:1;overflow:hidden}.d2hvtW_barFoldGlyph{color:var(--dsw-alias-label-tertiary);flex:none;align-items:center;display:inline-flex}.d2hvtW_barAction{min-width:0;color:var(--dsw-alias-state-business-primary);white-space:nowrap;text-overflow:ellipsis;flex:1;overflow:hidden}.d2hvtW_barError{color:var(--dsw-alias-state-error-primary);flex:none}.d2hvtW_barFold{width:16px;height:16px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:2px;flex:none;justify-content:center;align-items:center;margin-left:auto;padding:0;display:inline-flex}.d2hvtW_barFold:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.d2hvtW_nodeFold{border:1px dashed var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-base)}.d2hvtW_nodeFold:hover{border-color:var(--dsw-alias-label-primary)}.d2hvtW_nodeHeader{align-items:center;gap:5px;min-width:0;display:flex}.d2hvtW_nodeDot{flex:none}.d2hvtW_nodeGlyph{color:var(--dsw-alias-label-tertiary);flex:none;display:inline-flex}.d2hvtW_treeGlyph{color:var(--dsw-alias-label-tertiary);flex:none;margin-top:3px;display:inline-flex}.d2hvtW_treeDot{flex:none;margin-top:6px}.d2hvtW_nodeMeta{font:var(--dsw-font-xxxs-11);font-family:var(--ds-font-family-code,monospace);color:var(--dsw-alias-label-secondary);white-space:nowrap;text-overflow:ellipsis;margin-top:2px;overflow:hidden}.d2hvtW_nodeFold .d2hvtW_nodeMeta{color:var(--dsw-alias-label-tertiary)}.d2hvtW_taskLine{cursor:pointer;min-width:0;color:var(--dsw-alias-label-secondary);white-space:nowrap;align-items:center;gap:4px;margin-top:3px;font-size:10px;line-height:1.3;display:flex;overflow:hidden}.d2hvtW_taskGlyph{color:var(--dsw-alias-state-business-primary);flex:none;display:inline-flex}.d2hvtW_taskLine:hover .d2hvtW_taskSubject{color:var(--dsw-alias-label-primary)}.d2hvtW_taskLine:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px;border-radius:2px}.d2hvtW_taskSubject{text-overflow:ellipsis;flex:1;min-width:0;overflow:hidden}.d2hvtW_taskState{font-family:var(--ds-font-family-code,monospace);color:var(--dsw-alias-label-tertiary);flex:none;font-size:10px}.d2hvtW_taskMore{border:1px solid var(--dsw-alias-border-l2);font-family:var(--ds-font-family-code,monospace);color:var(--dsw-alias-label-tertiary);border-radius:2px;flex:none;padding:0 3px;font-size:10px}.d2hvtW_live{min-width:0;font-family:var(--ds-font-family-code,monospace);color:var(--dsw-alias-state-business-primary);white-space:nowrap;align-items:center;gap:4px;margin-top:3px;font-size:10px;line-height:1.3;display:flex;overflow:hidden}.d2hvtW_liveGlyph{border:1px solid;border-radius:2px;flex:none;justify-content:center;align-items:center;width:11px;height:11px;display:inline-flex}.d2hvtW_liveTool{flex:none}.d2hvtW_liveArgs{color:var(--dsw-alias-label-secondary);text-overflow:ellipsis;overflow:hidden}.d2hvtW_liveText{color:var(--dsw-alias-label-secondary);white-space:nowrap;text-overflow:ellipsis;margin-top:2px;font-size:10px;overflow:hidden}.d2hvtW_controls{z-index:6;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);border-radius:3px;flex-direction:row;align-items:center;display:flex;position:absolute;bottom:10px;right:10px}.d2hvtW_controlBtn{box-sizing:border-box;min-width:28px;height:28px;color:var(--dsw-alias-label-secondary);font-family:var(--ds-font-family-code,monospace);cursor:pointer;background:0 0;border:none;justify-content:center;align-items:center;padding:0 4px;font-size:12px;line-height:1;display:inline-flex}.d2hvtW_controlBtn+.d2hvtW_controlBtn,.d2hvtW_controlZoomLevel+.d2hvtW_controlBtn,.d2hvtW_controlBtn+.d2hvtW_controlZoomLevel{border-left:1px solid var(--dsw-alias-border-l2)}.d2hvtW_controlBtn:hover{color:var(--dsw-alias-label-primary)}.d2hvtW_controlBtnActive{color:var(--dsw-alias-state-business-primary)}.d2hvtW_controlText{box-sizing:border-box;height:28px;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxxs-11);white-space:nowrap;cursor:pointer;background:0 0;border:none;justify-content:center;align-items:center;padding:0 8px;display:inline-flex}.d2hvtW_controlText:hover{color:var(--dsw-alias-label-primary)}.d2hvtW_controlZoomLevel{box-sizing:border-box;min-width:36px;height:28px;font-family:var(--ds-font-family-code,monospace);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary);justify-content:center;align-items:center;padding:0 5px;font-size:10px;display:inline-flex}.d2hvtW_treeView{scrollbar-width:thin;user-select:none;flex:1;min-height:0;padding:8px 10px 44px;overflow-y:auto}.d2hvtW_treeRow{cursor:pointer;border-radius:4px;align-items:flex-start;gap:7px;padding:0 8px;display:flex;position:relative}.d2hvtW_treeRow:hover{background:var(--dsw-alias-interactive-bg-hover)}.d2hvtW_treeRow:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}.d2hvtW_treeRowActive{background:var(--dsw-alias-interactive-bg-hover)}.d2hvtW_treeRowActive:before{content:\"\";background:var(--dsw-alias-state-business-primary);border-radius:1px;width:2px;position:absolute;top:4px;bottom:4px;left:0}.d2hvtW_treeRowSettled{opacity:.62}.d2hvtW_treeKids{margin-left:11px;padding-left:14px}.d2hvtW_treeDisclosure{width:16px;height:16px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:2px;flex:none;justify-content:center;align-self:flex-start;align-items:center;margin:8px 0 0 auto;padding:0;display:inline-flex}.d2hvtW_treeDisclosure:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.d2hvtW_treeChild{position:relative}.d2hvtW_treeChild:before{content:\"\";background:var(--dsw-alias-border-l1);width:1px;position:absolute;top:0;bottom:0;left:-14px}.d2hvtW_treeChildLast:before{height:16px;bottom:auto}.d2hvtW_treeChip{max-width:46%;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-secondary);white-space:nowrap;text-overflow:ellipsis;flex:none;overflow:hidden}.d2hvtW_treeContent{flex-direction:column;flex:1;justify-content:center;min-width:0;min-height:32px;display:flex}.d2hvtW_treeTitle{font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary);white-space:nowrap;text-overflow:ellipsis;align-items:center;gap:6px;display:flex;overflow:hidden}.d2hvtW_treeMeta{font:var(--dsw-font-xxxs-11);font-family:var(--ds-font-family-code,monospace);color:var(--dsw-alias-label-secondary);white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.d2hvtW_treeFoldRow{border:1px dashed var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);border-radius:4px;margin:2px 0}.d2hvtW_popCard{background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);max-width:100%;box-shadow:var(--dsw-shadow-lv3);font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-primary);box-sizing:border-box;border-radius:4px;flex-direction:column;gap:4px;padding:10px 12px;animation:.14s cubic-bezier(.2,.8,.3,1) d2hvtW_dsh-pop-in;display:flex}@keyframes d2hvtW_dsh-card-in{0%{opacity:0;transform:translateY(10px)scale(.88)}60%{opacity:1}to{opacity:1;transform:none}}@keyframes d2hvtW_dsh-pop-in{0%{opacity:0;transform:translateY(4px)scale(.985)}to{opacity:1;transform:none}}@media (prefers-reduced-motion:reduce){.d2hvtW_popCard,.d2hvtW_node{animation:none}}.d2hvtW_popHead{min-height:28px;font-family:var(--ds-font-family-code,monospace);letter-spacing:.12em;text-transform:uppercase;color:var(--dsw-alias-label-tertiary);justify-content:space-between;align-items:center;gap:8px;margin-bottom:4px;font-size:10px;display:flex}.d2hvtW_popFoot{border-top:1px solid var(--dsw-alias-border-l1);gap:8px;margin-top:8px;padding-top:8px;display:flex}.d2hvtW_popFoot>*{flex:1}.d2hvtW_jobPopTitle{align-items:center;gap:6px;min-width:0;display:flex}.d2hvtW_taskBody{flex-direction:column;min-height:0;display:flex}.d2hvtW_taskHeadRow{align-items:center;gap:6px;min-width:0;margin-bottom:8px;display:flex}.d2hvtW_taskHeadRow .d2hvtW_popTitle{font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-primary);flex:1}.d2hvtW_jobPopMeta{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-secondary);flex-wrap:wrap;align-items:center;gap:6px;display:flex}.d2hvtW_jobPopValue{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-secondary);line-height:1.45}.d2hvtW_jobPopActions{justify-content:space-between;align-items:center;gap:8px;display:flex}.d2hvtW_jobPopFollow{min-width:0;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-secondary);align-items:center;gap:6px;display:inline-flex}.d2hvtW_jobPopFollowLabel{text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.d2hvtW_jobPopKillArmed,.d2hvtW_jobPopKillArmed:hover{border:1px solid var(--dsw-alias-state-error-primary);background:color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, transparent);color:var(--dsw-alias-state-error-primary)}.d2hvtW_popTitleRow{align-items:center;gap:6px;min-width:0;display:flex}.d2hvtW_popGlyph{color:var(--dsw-alias-label-tertiary);flex:none;display:inline-flex}.d2hvtW_popTitle{text-overflow:ellipsis;white-space:nowrap;text-transform:none;letter-spacing:0;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary);overflow:hidden}.d2hvtW_popRows{grid-template-columns:auto 1fr;align-items:baseline;gap:3px 10px;margin:0;line-height:1.45;display:grid}.d2hvtW_popKey{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary);line-height:1.45}.d2hvtW_popValue{text-align:right;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-secondary);text-overflow:ellipsis;white-space:nowrap;margin:0;line-height:1.45;overflow:hidden}.d2hvtW_popValueMono{font-family:var(--ds-font-family-code,monospace);font-size:11px}.d2hvtW_popSection{border-top:1px solid var(--dsw-alias-border-l1);margin-top:4px;padding-top:8px}.d2hvtW_popList{scrollbar-width:thin;flex-direction:column;gap:1px;max-height:160px;display:flex;overflow-y:auto}.d2hvtW_popGroup{font-family:var(--ds-font-family-code,monospace);letter-spacing:.12em;text-transform:uppercase;color:var(--dsw-alias-label-tertiary);padding:4px 2px 2px;font-size:10px}.d2hvtW_popList .d2hvtW_popListRow{box-sizing:border-box;cursor:pointer;border-radius:4px;align-items:center;gap:6px;min-height:28px;padding:0 4px;display:flex}.d2hvtW_popList .d2hvtW_popListRow:hover{background:var(--dsw-alias-interactive-bg-hover)}.d2hvtW_popListLabel{min-width:0;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-primary);text-overflow:ellipsis;white-space:nowrap;flex:1;overflow:hidden}.d2hvtW_popActivityBlock{flex-direction:column;gap:1px;min-width:0;display:flex}.d2hvtW_popActivity{color:var(--dsw-alias-state-business-primary);white-space:nowrap;text-overflow:ellipsis;font-size:10px;line-height:1.45;overflow:hidden}.d2hvtW_popFoot>.d2hvtW_jumpMore{flex:none;width:28px;display:inline-flex;position:relative}.d2hvtW_jumpMoreButton{width:100%;padding:0}.d2hvtW_jumpMenu{z-index:4;min-width:152px;padding:4px;position:absolute;bottom:calc(100% + 6px);right:0}.d2hvtW_jumpMenuItem{justify-content:flex-start;width:100%}.d2hvtW_popActivityBlock .d2hvtW_popHint{-webkit-line-clamp:3;overflow-wrap:anywhere;-webkit-box-orient:vertical;display:-webkit-box;overflow:hidden}.d2hvtW_popHint.d2hvtW_popHint{color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:1.45}.d2hvtW_popError{color:var(--dsw-alias-state-error-primary);font-size:10px}.d2hvtW_taskMarkdown{min-height:0;font:var(--dsw-font-xxs-12);scrollbar-width:thin;--dsw-font-markdown-base:var(--dsw-font-xxs-12);--dsw-font-markdown-base-strong:var(--dsw-font-xxs-strong-12);--dsw-font-markdown-h1:600 13px/18px var(--dsw-font-family);--dsw-font-markdown-h2:600 13px/18px var(--dsw-font-family);--dsw-font-markdown-h3:var(--dsw-font-xxs-strong-12);--dsw-font-markdown-h4:var(--dsw-font-xxs-strong-12);--dsw-font-markdown-code:var(--dsw-font-xxxs-11);--dsw-font-markdown-code-block:var(--dsw-font-markdown-code-block-small);--dsw-font-markdown-table:var(--dsw-font-xxxs-11);--dsw-font-markdown-table-head:var(--dsw-font-xxxs-strong-11);flex:1;padding:2px 0;line-height:1.5;overflow-y:auto}.d2hvtW_taskMarkdown.d2hvtW_taskMarkdown>*{color:var(--dsw-alias-label-secondary)}.d2hvtW_taskMarkdown.d2hvtW_taskMarkdown :is(h1,h2,h3){margin:8px 0 4px}.d2hvtW_taskMarkdown.d2hvtW_taskMarkdown :is(h4,h5,h6){margin:6px 0 2px}.d2hvtW_taskMarkdown.d2hvtW_taskMarkdown :is(p,blockquote,pre){margin:6px 0}.d2hvtW_taskMarkdown.d2hvtW_taskMarkdown :is(ul,ol){margin:6px 0;padding-left:16px}.d2hvtW_taskMarkdown.d2hvtW_taskMarkdown li:not(:first-child){margin-top:2px}.d2hvtW_taskMarkdown.d2hvtW_taskMarkdown li>p{margin:4px 0}.d2hvtW_taskMarkdown.d2hvtW_taskMarkdown li::marker{line-height:18px}.d2hvtW_taskMarkdown.d2hvtW_taskMarkdown blockquote{border-left:1px solid var(--dsw-alias-border-l2);padding-left:10px}.d2hvtW_taskMarkdown.d2hvtW_taskMarkdown hr{margin:8px 0}.d2hvtW_taskMarkdown.d2hvtW_taskMarkdown :not(pre)>code{border-radius:3px;font-size:11px!important}.d2hvtW_taskMarkdown.d2hvtW_taskMarkdown :is(th,td){border-bottom:1px solid var(--dsw-alias-border-l1);padding:4px 8px}.d2hvtW_taskMarkdown.d2hvtW_taskMarkdown th{border-bottom-color:var(--dsw-alias-border-l2)}.d2hvtW_taskTextarea{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-base);width:100%;min-height:120px;color:var(--dsw-alias-label-primary);font-family:var(--ds-font-family-code,monospace);resize:vertical;box-sizing:border-box;border-radius:8px;flex:1;padding:6px 8px;font-size:12px;line-height:1.5}.d2hvtW_taskTextarea:focus{border-color:var(--dsw-alias-state-business-primary);outline:none}.d2hvtW_taskForm{flex-direction:column;flex:1;gap:8px;min-height:0;display:flex}.d2hvtW_taskForm>label:last-child{flex:1;min-height:0}.d2hvtW_taskField{flex-direction:column;gap:4px;display:flex}.d2hvtW_taskMarkdown+.d2hvtW_taskField{margin-top:4px}.d2hvtW_taskBody>.d2hvtW_taskField,.d2hvtW_taskBody>.d2hvtW_jobPopMeta,.d2hvtW_taskBody>.d2hvtW_taskHeadRow,.d2hvtW_taskBody>.d2hvtW_teamNote{flex:none}.d2hvtW_taskLabel{font-family:var(--ds-font-family-code,monospace);letter-spacing:.12em;text-transform:uppercase;color:var(--dsw-alias-label-tertiary);font-size:10px}.d2hvtW_taskForm .d2hvtW_taskInput input{font:var(--dsw-font-xxs-12)}.d2hvtW_taskForm .d2hvtW_taskInput:not(:focus-within){border-color:var(--dsw-alias-border-l2)}.d2hvtW_taskForm .d2hvtW_taskInput:has(input[aria-invalid=true]):not(:focus-within){border-color:var(--dsw-alias-state-error-primary)}.d2hvtW_taskOwnerRow{flex-wrap:wrap;gap:4px;display:flex}.d2hvtW_taskOwnerRow .d2hvtW_taskOwnerPill{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);background:0 0}.d2hvtW_taskOwnerRow .d2hvtW_taskOwnerPill:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.d2hvtW_taskOwnerRow .d2hvtW_taskOwnerPillActive{box-sizing:border-box;border:1px solid var(--dsw-alias-button-ghost-active-border);background:var(--dsw-alias-button-ghost-active-fill);color:var(--dsw-alias-label-primary)}.d2hvtW_taskOwnerRow .d2hvtW_taskOwnerPillActive:hover{background:var(--dsw-alias-button-ghost-active-hover)}.d2hvtW_jobPopActions .d2hvtW_taskDanger{color:var(--dsw-alias-state-error-primary);border-color:color-mix(in srgb, var(--dsw-alias-state-error-primary) 40%, transparent)}.d2hvtW_jobPopActions .d2hvtW_taskDanger:hover{background:var(--dsw-alias-interactive-bg-hover-danger);border-color:var(--dsw-alias-state-error-primary)}.d2hvtW_jobPopActions .d2hvtW_taskDanger.d2hvtW_taskDangerArmed,.d2hvtW_jobPopActions .d2hvtW_taskDanger.d2hvtW_taskDangerArmed:hover{background:color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, transparent);border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}.d2hvtW_teamBoard{border-bottom:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);flex:none}.d2hvtW_teamBoardBar{box-sizing:border-box;border:none;border-bottom:1px solid var(--dsw-alias-border-l1);width:100%;height:28px;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-secondary);cursor:pointer;text-align:left;background:0 0;align-items:center;gap:8px;padding:0 12px;display:flex}.d2hvtW_teamBoardBar:hover{color:var(--dsw-alias-label-primary)}.d2hvtW_teamBoardCount{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary)}.d2hvtW_teamBoardChev{color:var(--dsw-alias-label-tertiary);margin-left:auto}.d2hvtW_teamBoardIcon{color:var(--dsw-alias-label-tertiary);display:inline-flex}.d2hvtW_teamNote{color:var(--dsw-alias-state-warn-primary);padding:0 12px 6px;font-size:10px;line-height:1.4}.d2hvtW_teamActions{flex:none;align-items:center;gap:6px;padding:6px 12px 8px;display:flex}.d2hvtW_teamMembers{flex-wrap:wrap;gap:4px;padding:6px 12px;display:flex}.d2hvtW_teamMemberName{text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.d2hvtW_teamTasks{border-bottom:1px solid var(--dsw-alias-border-l1);scrollbar-width:thin;flex-direction:column;gap:1px;max-height:160px;padding:0 6px 6px;display:flex;overflow-y:auto}.d2hvtW_teamTaskRow{align-items:center;gap:2px;display:flex}.d2hvtW_teamTask{text-align:left;border-radius:4px;flex:1;align-items:center;gap:6px;width:100%;min-width:0;min-height:24px;padding:2px 6px;display:flex}.d2hvtW_teamTask>*{min-width:0}.d2hvtW_teamTask:hover{background:var(--dsw-alias-interactive-bg-hover)}.d2hvtW_teamTaskSubject{min-width:0;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-primary);text-overflow:ellipsis;white-space:nowrap;flex:1;overflow:hidden}.d2hvtW_teamTaskOwner{max-width:72px;font:var(--dsw-font-xxxs-11);font-family:var(--ds-font-family-code,monospace);color:var(--dsw-alias-label-tertiary);text-overflow:ellipsis;white-space:nowrap;flex:none;overflow:hidden}.d2hvtW_teamEmpty{min-height:28px;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary);align-items:center;padding:0 6px;display:flex}.d2hvtW_jobsDrawer{border-top:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);z-index:5;flex:none}.d2hvtW_jobsDrawerBar{box-sizing:border-box;border:none;border-bottom:1px solid var(--dsw-alias-border-l1);width:100%;height:28px;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-secondary);cursor:pointer;text-align:left;background:0 0;align-items:center;gap:8px;padding:0 12px;display:flex}.d2hvtW_jobsDrawerBar:hover{color:var(--dsw-alias-label-primary)}.d2hvtW_jobsDrawerBar:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}.d2hvtW_jobsBigNum{font-family:var(--ds-font-family-code,monospace);font-variant-numeric:tabular-nums;color:var(--dsw-alias-state-business-primary);font-size:12px;font-weight:600}.d2hvtW_jobsDrawerCount{min-width:0;font:var(--dsw-font-xxs-12);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary);text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.d2hvtW_jobsDrawerChev{color:var(--dsw-alias-label-tertiary);flex:none;margin-left:auto;transition:transform .18s;display:inline-flex}.d2hvtW_jobsDrawerChev[data-open=true]{transform:rotate(180deg)}.d2hvtW_jobsAutoNote{color:var(--dsw-alias-label-tertiary);padding:6px 12px;font-size:10px;line-height:1.4}.d2hvtW_jobsDrawerBody{scrollbar-width:thin;flex-direction:column;gap:2px;max-height:156px;padding:4px 8px 8px;display:flex;overflow:hidden auto}.d2hvtW_jobsRow{border-radius:3px;align-items:center;gap:7px;min-height:28px;padding:4px 6px;display:flex}.d2hvtW_jobsRow[data-settled=true]{opacity:.62}.d2hvtW_jobsRowMain{min-width:0;color:inherit;cursor:pointer;text-align:left;background:0 0;border:none;flex:1;align-items:center;gap:7px;padding:0;display:flex;overflow:hidden}.d2hvtW_jobsRow:hover{background:var(--dsw-alias-interactive-bg-hover)}.d2hvtW_jobsRow[data-open=true],.d2hvtW_jobsRow[data-open=true]:hover{background:var(--dsw-alias-interactive-bg-active)}.d2hvtW_jobsRowMain:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}.d2hvtW_jobsLabel{min-width:33%;font:var(--dsw-font-xxs-strong-12);font-family:var(--ds-font-family-code,monospace);color:var(--dsw-alias-label-primary);text-overflow:ellipsis;white-space:nowrap;flex:auto;overflow:hidden}.d2hvtW_jobsMeta{min-width:0;font:var(--dsw-font-xxxs-11);font-family:var(--ds-font-family-code,monospace);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-secondary);text-overflow:ellipsis;white-space:nowrap;flex:0 auto;overflow:hidden}.d2hvtW_jobsKillSlot{flex:none;width:28px;height:28px;position:relative}.d2hvtW_jobsKill{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);min-width:28px;height:28px;color:var(--dsw-alias-label-tertiary);font-family:var(--ds-font-family-code,monospace);cursor:pointer;opacity:0;background:0 0;border-radius:3px;padding:0 5px;transition:opacity .12s;position:absolute;top:0;right:0}.d2hvtW_jobsRow:hover .d2hvtW_jobsKill,.d2hvtW_jobsRow:focus-within .d2hvtW_jobsKill,.d2hvtW_jobsKill:focus-visible{opacity:1}.d2hvtW_jobsKill:hover{border-color:var(--dsw-alias-label-primary);color:var(--dsw-alias-label-primary)}.d2hvtW_jobsKill.d2hvtW_jobsKill[data-armed=true],.d2hvtW_jobsKill.d2hvtW_jobsKill[data-armed=true]:hover{border-color:var(--dsw-alias-state-error-primary);background:var(--dsw-alias-bg-layer-1);width:auto;color:var(--dsw-alias-state-error-primary);opacity:1;white-space:nowrap;padding:0 7px}.d2hvtW_jobsRow:has(.d2hvtW_jobsKill[data-armed=true]) .d2hvtW_jobsKillSlot{align-items:center;width:auto;display:flex}.d2hvtW_jobsRow:has(.d2hvtW_jobsKill[data-armed=true]) .d2hvtW_jobsKill{position:static}.d2hvtW_jobsRow:has(.d2hvtW_jobsKill[data-armed=true]) .d2hvtW_jobsMeta{display:none}.d2hvtW_jobsKillError{pointer-events:none;background:var(--dsw-alias-bg-layer-1);height:28px;font-family:var(--ds-font-family-code,monospace);color:var(--dsw-alias-state-error-primary);white-space:nowrap;border-radius:3px;align-items:center;padding:0 6px;font-size:10px;display:inline-flex;position:absolute;top:0;right:0}.d2hvtW_viewEmptyHint{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);text-align:center;padding:0 24px}";
 		const tagId$5 = "dsh-external/dsh-better-sidebar/tasks-graph.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$5) + "]") === null) {
 			const tag = document.createElement("style");
@@ -13539,141 +17380,159 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			document.head.appendChild(tag);
 		}
 		var tasks_graph_module_css_default = {
-			"teamBoardBar": "COqNoa_teamBoardBar",
-			"phase2": "COqNoa_phase2",
-			"jobsMeta": "COqNoa_jobsMeta",
-			"edge": "COqNoa_edge",
-			"cardMeta": "COqNoa_cardMeta",
-			"controlZoomLevel": "COqNoa_controlZoomLevel",
-			"treeRowActive": "COqNoa_treeRowActive",
-			"jobPopTitle": "COqNoa_jobPopTitle",
-			"popSection": "COqNoa_popSection",
-			"popHint": "COqNoa_popHint",
-			"taskDangerArmed": "COqNoa_taskDangerArmed",
-			"edgeWorkflow": "COqNoa_edgeWorkflow",
-			"teamTaskRow": "COqNoa_teamTaskRow",
-			"taskInput": "COqNoa_taskInput",
-			"phaseFrame": "COqNoa_phaseFrame",
-			"nodeTeam": "COqNoa_nodeTeam",
-			"taskOwnerRow": "COqNoa_taskOwnerRow",
-			"jobsDrawerChev": "COqNoa_jobsDrawerChev",
-			"nodeHeader": "COqNoa_nodeHeader",
-			"phaseLabel": "COqNoa_phaseLabel",
-			"taskMore": "COqNoa_taskMore",
-			"teamActions": "COqNoa_teamActions",
-			"popValueMono": "COqNoa_popValueMono",
-			"taskState": "COqNoa_taskState",
-			"teamBoardCount": "COqNoa_teamBoardCount",
-			"nodeSettled": "COqNoa_nodeSettled",
-			"phase0": "COqNoa_phase0",
-			"jobsLabel": "COqNoa_jobsLabel",
-			"jobsDrawerCount": "COqNoa_jobsDrawerCount",
-			"nodeGlyph": "COqNoa_nodeGlyph",
-			"jobsAutoNote": "COqNoa_jobsAutoNote",
-			"depth2": "COqNoa_depth2",
-			"teamMemberName": "COqNoa_teamMemberName",
-			"teamBoardIcon": "COqNoa_teamBoardIcon",
-			"popGlyph": "COqNoa_popGlyph",
-			"edgeTeam": "COqNoa_edgeTeam",
-			"teamTasks": "COqNoa_teamTasks",
-			"jobsDrawerBar": "COqNoa_jobsDrawerBar",
-			"jobsKill": "COqNoa_jobsKill",
-			"nodeWorkflow": "COqNoa_nodeWorkflow",
-			"teamBoardChev": "COqNoa_teamBoardChev",
-			"depth0": "COqNoa_depth0",
-			"cardBar": "COqNoa_cardBar",
-			"node": "COqNoa_node",
-			"taskMarkdown": "COqNoa_taskMarkdown",
-			"treeRow": "COqNoa_treeRow",
-			"depth1": "COqNoa_depth1",
-			"teamEmpty": "COqNoa_teamEmpty",
-			"treeView": "COqNoa_treeView",
-			"dsh-tasks-bar-sweep": "COqNoa_dsh-tasks-bar-sweep",
-			"edgeFold": "COqNoa_edgeFold",
-			"liveGlyph": "COqNoa_liveGlyph",
-			"taskLabel": "COqNoa_taskLabel",
-			"teamTaskSubject": "COqNoa_teamTaskSubject",
-			"phase3": "COqNoa_phase3",
-			"phaseBadge": "COqNoa_phaseBadge",
-			"cardBadges": "COqNoa_cardBadges",
-			"taskOwnerPill": "COqNoa_taskOwnerPill",
-			"popListLabel": "COqNoa_popListLabel",
-			"kindBadge": "COqNoa_kindBadge",
-			"jobsDrawerBody": "COqNoa_jobsDrawerBody",
-			"liveText": "COqNoa_liveText",
-			"popRows": "COqNoa_popRows",
-			"jobsDrawer": "COqNoa_jobsDrawer",
-			"taskForm": "COqNoa_taskForm",
-			"treeFoldRow": "COqNoa_treeFoldRow",
-			"jobPopKillArmed": "COqNoa_jobPopKillArmed",
-			"cardName": "COqNoa_cardName",
-			"nodeFold": "COqNoa_nodeFold",
-			"canvas": "COqNoa_canvas",
-			"nodeCurrent": "COqNoa_nodeCurrent",
-			"teamTask": "COqNoa_teamTask",
-			"teamBoard": "COqNoa_teamBoard",
-			"barDot": "COqNoa_barDot",
-			"jobsRowMain": "COqNoa_jobsRowMain",
-			"viewEmptyHint": "COqNoa_viewEmptyHint",
-			"jobPopValue": "COqNoa_jobPopValue",
-			"barState": "COqNoa_barState",
-			"controls": "COqNoa_controls",
-			"treeMeta": "COqNoa_treeMeta",
-			"popListRow": "COqNoa_popListRow",
-			"taskOwnerPillActive": "COqNoa_taskOwnerPillActive",
-			"treeRowSettled": "COqNoa_treeRowSettled",
-			"treeDot": "COqNoa_treeDot",
-			"popValue": "COqNoa_popValue",
-			"jobsBigNum": "COqNoa_jobsBigNum",
-			"nodeMeta": "COqNoa_nodeMeta",
-			"popHead": "COqNoa_popHead",
-			"cardTop": "COqNoa_cardTop",
-			"taskGlyph": "COqNoa_taskGlyph",
-			"teamNote": "COqNoa_teamNote",
-			"popFoot": "COqNoa_popFoot",
-			"controlBtn": "COqNoa_controlBtn",
-			"cardNamePlain": "COqNoa_cardNamePlain",
-			"edges": "COqNoa_edges",
-			"liveTool": "COqNoa_liveTool",
-			"liveArgs": "COqNoa_liveArgs",
-			"jobPopFollow": "COqNoa_jobPopFollow",
-			"popError": "COqNoa_popError",
-			"jobsRow": "COqNoa_jobsRow",
-			"teamTaskOwner": "COqNoa_teamTaskOwner",
-			"nodeError": "COqNoa_nodeError",
-			"taskHeadRow": "COqNoa_taskHeadRow",
-			"phase1": "COqNoa_phase1",
-			"nodeDot": "COqNoa_nodeDot",
-			"controlBtnActive": "COqNoa_controlBtnActive",
-			"barActivity": "COqNoa_barActivity",
-			"jobsKillSlot": "COqNoa_jobsKillSlot",
-			"popTitleRow": "COqNoa_popTitleRow",
-			"canvasInner": "COqNoa_canvasInner",
-			"treeTitle": "COqNoa_treeTitle",
-			"barFold": "COqNoa_barFold",
-			"jobPopMeta": "COqNoa_jobPopMeta",
-			"popTitle": "COqNoa_popTitle",
-			"taskLine": "COqNoa_taskLine",
-			"teamMembers": "COqNoa_teamMembers",
-			"taskSubject": "COqNoa_taskSubject",
-			"treeKids": "COqNoa_treeKids",
-			"jobsKillError": "COqNoa_jobsKillError",
-			"jobPopFollowLabel": "COqNoa_jobPopFollowLabel",
-			"popCard": "COqNoa_popCard",
-			"taskBody": "COqNoa_taskBody",
-			"popGroup": "COqNoa_popGroup",
-			"popList": "COqNoa_popList",
-			"taskDanger": "COqNoa_taskDanger",
-			"taskField": "COqNoa_taskField",
-			"treeGlyph": "COqNoa_treeGlyph",
-			"depth3": "COqNoa_depth3",
-			"canvasDragging": "COqNoa_canvasDragging",
-			"graphView": "COqNoa_graphView",
-			"taskTextarea": "COqNoa_taskTextarea",
-			"popKey": "COqNoa_popKey",
-			"live": "COqNoa_live",
-			"treeContent": "COqNoa_treeContent",
-			"jobPopActions": "COqNoa_jobPopActions"
+			"liveTool": "d2hvtW_liveTool",
+			"treeChild": "d2hvtW_treeChild",
+			"controlText": "d2hvtW_controlText",
+			"treeRow": "d2hvtW_treeRow",
+			"jobPopValue": "d2hvtW_jobPopValue",
+			"treeRowActive": "d2hvtW_treeRowActive",
+			"teamMemberName": "d2hvtW_teamMemberName",
+			"popCard": "d2hvtW_popCard",
+			"treeMeta": "d2hvtW_treeMeta",
+			"node": "d2hvtW_node",
+			"teamMembers": "d2hvtW_teamMembers",
+			"graphView": "d2hvtW_graphView",
+			"controls": "d2hvtW_controls",
+			"barState": "d2hvtW_barState",
+			"jobPopTitle": "d2hvtW_jobPopTitle",
+			"jumpMenuItem": "d2hvtW_jumpMenuItem",
+			"teamNote": "d2hvtW_teamNote",
+			"jobsKillError": "d2hvtW_jobsKillError",
+			"taskMore": "d2hvtW_taskMore",
+			"teamBoardCount": "d2hvtW_teamBoardCount",
+			"canvasInner": "d2hvtW_canvasInner",
+			"cardTop": "d2hvtW_cardTop",
+			"barDot": "d2hvtW_barDot",
+			"jobPopKillArmed": "d2hvtW_jobPopKillArmed",
+			"popTitleRow": "d2hvtW_popTitleRow",
+			"kindBadge": "d2hvtW_kindBadge",
+			"phaseBadge": "d2hvtW_phaseBadge",
+			"taskHeadRow": "d2hvtW_taskHeadRow",
+			"edgeTeam": "d2hvtW_edgeTeam",
+			"phase3": "d2hvtW_phase3",
+			"taskState": "d2hvtW_taskState",
+			"phase2": "d2hvtW_phase2",
+			"treeTitle": "d2hvtW_treeTitle",
+			"popHead": "d2hvtW_popHead",
+			"popActivity": "d2hvtW_popActivity",
+			"popError": "d2hvtW_popError",
+			"teamTasks": "d2hvtW_teamTasks",
+			"jobsDrawerBar": "d2hvtW_jobsDrawerBar",
+			"jobsBigNum": "d2hvtW_jobsBigNum",
+			"jobsRow": "d2hvtW_jobsRow",
+			"popGroup": "d2hvtW_popGroup",
+			"cardBadges": "d2hvtW_cardBadges",
+			"nodeDot": "d2hvtW_nodeDot",
+			"phase0": "d2hvtW_phase0",
+			"taskOwnerPillActive": "d2hvtW_taskOwnerPillActive",
+			"liveArgs": "d2hvtW_liveArgs",
+			"popTitle": "d2hvtW_popTitle",
+			"taskSubject": "d2hvtW_taskSubject",
+			"nodeCurrent": "d2hvtW_nodeCurrent",
+			"popSection": "d2hvtW_popSection",
+			"nodeWorkflow": "d2hvtW_nodeWorkflow",
+			"jumpMenu": "d2hvtW_jumpMenu",
+			"jobsLabel": "d2hvtW_jobsLabel",
+			"cardMeta": "d2hvtW_cardMeta",
+			"treeView": "d2hvtW_treeView",
+			"dsh-pop-in": "d2hvtW_dsh-pop-in",
+			"taskMarkdown": "d2hvtW_taskMarkdown",
+			"popGlyph": "d2hvtW_popGlyph",
+			"nodeSettled": "d2hvtW_nodeSettled",
+			"barActivity": "d2hvtW_barActivity",
+			"controlBtnActive": "d2hvtW_controlBtnActive",
+			"taskForm": "d2hvtW_taskForm",
+			"nodeFold": "d2hvtW_nodeFold",
+			"depth1": "d2hvtW_depth1",
+			"phase1": "d2hvtW_phase1",
+			"taskLine": "d2hvtW_taskLine",
+			"controlBtn": "d2hvtW_controlBtn",
+			"treeChip": "d2hvtW_treeChip",
+			"teamActions": "d2hvtW_teamActions",
+			"treeChildLast": "d2hvtW_treeChildLast",
+			"jobsRowMain": "d2hvtW_jobsRowMain",
+			"phaseLabel": "d2hvtW_phaseLabel",
+			"treeKids": "d2hvtW_treeKids",
+			"barError": "d2hvtW_barError",
+			"taskGlyph": "d2hvtW_taskGlyph",
+			"controlZoomLevel": "d2hvtW_controlZoomLevel",
+			"popValue": "d2hvtW_popValue",
+			"cardName": "d2hvtW_cardName",
+			"treeFoldRow": "d2hvtW_treeFoldRow",
+			"taskDanger": "d2hvtW_taskDanger",
+			"teamBoard": "d2hvtW_teamBoard",
+			"canvasDragging": "d2hvtW_canvasDragging",
+			"jobsDrawer": "d2hvtW_jobsDrawer",
+			"jobPopFollow": "d2hvtW_jobPopFollow",
+			"nodeHeader": "d2hvtW_nodeHeader",
+			"teamTaskOwner": "d2hvtW_teamTaskOwner",
+			"edges": "d2hvtW_edges",
+			"popKey": "d2hvtW_popKey",
+			"liveGlyph": "d2hvtW_liveGlyph",
+			"jobsDrawerChev": "d2hvtW_jobsDrawerChev",
+			"treeDot": "d2hvtW_treeDot",
+			"nodeError": "d2hvtW_nodeError",
+			"barFold": "d2hvtW_barFold",
+			"barFoldGlyph": "d2hvtW_barFoldGlyph",
+			"treeGlyph": "d2hvtW_treeGlyph",
+			"popList": "d2hvtW_popList",
+			"teamTaskRow": "d2hvtW_teamTaskRow",
+			"live": "d2hvtW_live",
+			"taskInput": "d2hvtW_taskInput",
+			"phaseFrame": "d2hvtW_phaseFrame",
+			"jobsMeta": "d2hvtW_jobsMeta",
+			"jobsKillSlot": "d2hvtW_jobsKillSlot",
+			"dsh-tasks-bar-sweep": "d2hvtW_dsh-tasks-bar-sweep",
+			"jobPopFollowLabel": "d2hvtW_jobPopFollowLabel",
+			"viewEmptyHint": "d2hvtW_viewEmptyHint",
+			"depth2": "d2hvtW_depth2",
+			"taskBody": "d2hvtW_taskBody",
+			"popHint": "d2hvtW_popHint",
+			"jobsDrawerCount": "d2hvtW_jobsDrawerCount",
+			"popListLabel": "d2hvtW_popListLabel",
+			"taskLabel": "d2hvtW_taskLabel",
+			"nodeMeta": "d2hvtW_nodeMeta",
+			"liveText": "d2hvtW_liveText",
+			"treeContent": "d2hvtW_treeContent",
+			"dsh-card-in": "d2hvtW_dsh-card-in",
+			"jobsAutoNote": "d2hvtW_jobsAutoNote",
+			"depth3": "d2hvtW_depth3",
+			"popActivityBlock": "d2hvtW_popActivityBlock",
+			"taskDangerArmed": "d2hvtW_taskDangerArmed",
+			"taskOwnerRow": "d2hvtW_taskOwnerRow",
+			"teamTask": "d2hvtW_teamTask",
+			"jumpMore": "d2hvtW_jumpMore",
+			"jobsDrawerBody": "d2hvtW_jobsDrawerBody",
+			"taskField": "d2hvtW_taskField",
+			"edge": "d2hvtW_edge",
+			"popFoot": "d2hvtW_popFoot",
+			"jobPopMeta": "d2hvtW_jobPopMeta",
+			"barAction": "d2hvtW_barAction",
+			"jobPopActions": "d2hvtW_jobPopActions",
+			"teamBoardChev": "d2hvtW_teamBoardChev",
+			"popRows": "d2hvtW_popRows",
+			"nodeGlyph": "d2hvtW_nodeGlyph",
+			"teamTaskSubject": "d2hvtW_teamTaskSubject",
+			"jumpMoreButton": "d2hvtW_jumpMoreButton",
+			"depth0": "d2hvtW_depth0",
+			"cardNamePlain": "d2hvtW_cardNamePlain",
+			"canvas": "d2hvtW_canvas",
+			"treeRowSettled": "d2hvtW_treeRowSettled",
+			"teamEmpty": "d2hvtW_teamEmpty",
+			"treeDisclosure": "d2hvtW_treeDisclosure",
+			"edgeWorkflow": "d2hvtW_edgeWorkflow",
+			"teamBoardBar": "d2hvtW_teamBoardBar",
+			"cardBar": "d2hvtW_cardBar",
+			"edgeFold": "d2hvtW_edgeFold",
+			"nodeTeam": "d2hvtW_nodeTeam",
+			"kindChip": "d2hvtW_kindChip",
+			"popValueMono": "d2hvtW_popValueMono",
+			"taskTextarea": "d2hvtW_taskTextarea",
+			"cardText": "d2hvtW_cardText",
+			"taskOwnerPill": "d2hvtW_taskOwnerPill",
+			"popListRow": "d2hvtW_popListRow",
+			"teamBoardIcon": "d2hvtW_teamBoardIcon",
+			"jobsKill": "d2hvtW_jobsKill"
 		};
 		//#endregion
 		//#region src/client/tasks-shared.tsx
@@ -13693,6 +17552,26 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		/** The short state word of a node (the meta line's second token). */
 		function stateLabel(state) {
 			return t(state === "running" ? "tasksStateRunning" : state === "idle" ? "subagentInactive" : state === "error" ? "tasksStateError" : "tasksStateDone");
+		}
+		/**
+		* The merged activity line of one agent node — the ONE rule both surfaces
+		* read (the card's bottom bar and the node detail popover).
+		*
+		* - a RUNNING node shows the host's own live wording for its newest range
+		*   ("正在读取文件 · main.ts"), which is what the main conversation shows for
+		*   the same work;
+		* - a settled one shows the same summary in its completed form (the host's
+		*   `done.*` phrasing) — running wording on a finished node would claim it is
+		*   analysing something it already answered;
+		* - a node the live channel carries NO summary for answers undefined, and the
+		*   callers fall back to the state word. That case must stay distinguishable:
+		*   the host's `thinking` wording is what a range with nothing dispatched
+		*   reads as, not what "we know nothing about this node" reads as.
+		*/
+		function activityLine(node) {
+			const summary = node.live?.summary;
+			if (summary === void 0) return void 0;
+			return node.state === "running" ? liveActivityLabel(summary) : doneActivityTitle(summary);
 		}
 		/** The task status label key. */
 		function taskStatusKey(status) {
@@ -13783,19 +17662,28 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			return fallback === void 0 ? state : `${fallback} · ${state}`;
 		}
 		/**
-		* The CARD's mono meta line: WHO the node is, never its state.
+		* The identity CHIP of an agent card: the word that rides BESIDE the kind badge
+		* (一次性 / 可持续), or the one team state the badge cannot express (准备中 /
+		* 出错).
 		*
-		* The state belongs to the card's bottom bar (the state word sits next to the
-		* state dot there), so repeating it here would print "已完成" twice inside one
-		* 190px card — the densest complaint the readability pass had to fix. The
-		* accessible name keeps {@link agentMeta} (state included), because a screen
-		* reader never sees the bar's dot.
+		* It is a chip and not a line of its own because the mode is the same word on
+		* every card of its kind: as a mono meta line it cost a 16px row to repeat
+		* itself, and the reader's report was exactly "模型一次性的子代理一直显示一次性".
+		* A plain teammate answers undefined — the badge already reads 成员 — and the
+		* root answers undefined too (its badge reads 主代理).
+		*
+		* The state stays out of it: the card's bottom bar carries it (its dot, and its
+		* word whenever no activity line takes that place), and the accessible name
+		* keeps {@link agentMeta} with the state included, because a screen reader
+		* never sees the bar's dot.
 		*/
-		function agentIdentity(node) {
-			if (node.parentId === void 0) return "";
+		function agentChip(node) {
+			if (node.parentId === void 0) return void 0;
 			const mode = modeLabel(node.mode);
 			if (mode !== void 0) return mode;
-			return node.team === void 0 ? "" : teamRoleLabel(node.team) ?? "";
+			if (node.team === void 0) return void 0;
+			if (node.team.phase === "provisioning") return t("tasksStateProvisioning");
+			if (node.team.phase === "failed") return t("tasksStateError");
 		}
 		/** The roster row's own identity word (the fallback for a modelless teammate). */
 		function teamRoleLabel(team) {
@@ -13881,6 +17769,10 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		* main conversation would show for the child's newest range (category wording
 		* + the running call's detail), plus the flattened last text line underneath.
 		* A running node with neither reads as thinking.
+		*
+		* The glyph follows the summary's own CATEGORY (the host's `ProcessActivity`),
+		* so "正在读取文件" is prefixed by the read family and "正在运行命令" by the
+		* command one — one fixed glyph made every row claim to be a shell command.
 		*/
 		function LiveLine(props) {
 			const { live } = props;
@@ -13894,7 +17786,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 					className: tasks_graph_module_css_default.liveGlyph,
 					"aria-hidden": "true",
-					children: toolGlyph("bash")(9)
+					children: activityGlyph(live?.summary?.running)(9)
 				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 					className: tasks_graph_module_css_default.liveTool,
 					title: activity,
@@ -13912,8 +17804,8 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		* A roster aggregate can swallow dozens of members, and the card has one line
 		* for them. Naming two and saying how many are left over is what keeps that
 		* line honest at any size — the exact `+N` the team task line already uses,
-		* not a second convention. The group's total is also on the badge and the bar,
-		* so `+N` is a tail, never the only count.
+		* not a second convention. The group's total is also on the badge, so `+N` is
+		* a tail, never the only count.
 		*
 		* @param previews - member labels, in page order (see {@link TasksFoldNode.previews}).
 		* @param count - how many members the group holds in total.
@@ -13923,19 +17815,35 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			return `${previews.join(" / ")}${tail}`;
 		}
 		/**
-		* The fold aggregate's bar text.
+		* The fold aggregate's failures, as its own line: `出错 N`, or undefined when
+		* the group has none. The `done` row's bottom bar prints exactly this and
+		* nothing else, because the badge above it already carries the count
+		* (`✓ N 已完成`) — the same number twice on a 190px card was one of them
+		* saying it again.
+		*/
+		function foldErrorTally(node) {
+			return node.errorCount > 0 ? `${t("tasksStateError")} ${node.errorCount}` : void 0;
+		}
+		/**
+		* The fold aggregate's full tally (its accessible name and tooltip).
 		*
 		* The two groups read differently on purpose. The `done` row counts its
 		* finished members and calls out failures beside them (`✓ 4 已完成 · 出错 1`
 		* — a row of nothing but failures is `出错 N`), because "✓ N 已完成" alone
 		* would quietly include them. The `idle` row says what the members are doing
 		* now: nothing (`N 待命`), which is why they were swept away.
+		*
+		* The VISIBLE surfaces split this differently: the graph card's badge carries
+		* the count and its bar carries {@link foldErrorTally}, so the tally's count
+		* half is printed once. This full string stays the accessible name — a screen
+		* reader never sees the badge.
 		*/
 		function foldTally(node) {
 			if (node.foldKind === "idle") return t("tasksFoldIdle", { count: node.count });
 			const parts = [];
 			if (node.doneCount > 0) parts.push(t("tasksFoldCompleted", { count: node.doneCount }));
-			if (node.errorCount > 0) parts.push(`${t("tasksStateError")} ${node.errorCount}`);
+			const errors = foldErrorTally(node);
+			if (errors !== void 0) parts.push(errors);
 			return parts.join(" · ");
 		}
 		//#endregion
@@ -13945,9 +17853,13 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		* header already calls the root "主代理"), so no sixth word is invented for it.
 		*
 		* The two aggregates say different things, because they hold different work:
-		* `done` keeps "✓ N 已完成" (finished and failed rows alike) while `idle` says
-		* "N 个待命". One mixed row could only have hedged ("✓ 2 已完成 · 3 待命"),
-		* which is exactly what splitting them removed.
+		* `done` keeps "✓ N 已完成" (finished and failed rows alike) while `idle`
+		* counts its waiting members. One mixed row could only have hedged
+		* ("✓ 2 已完成 · 3 待命"), which is exactly what splitting them removed.
+		*
+		* The badge is where an aggregate's COUNT lives, so it interpolates the real
+		* number: the idle branch used to print the literal copy 'N 个待命', which
+		* read as an unfilled placeholder on every idle aggregate.
 		* @param kind - card kind.
 		* @param count - folded member count (the fold aggregate's badge only).
 		* @param foldKind - which aggregate (`done` unless stated).
@@ -13958,7 +17870,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				case "subagent": return t("tasksKindSubagent");
 				case "teammate": return t("tasksKindTeammate");
 				case "workflow": return t("tasksKindWorkflow");
-				case "fold": return foldKind === "idle" ? t("tasksFoldIdleGroup") : t("tasksFoldCompleted", { count });
+				case "fold": return foldKind === "idle" ? t("tasksFoldIdleGroup", { count }) : t("tasksFoldCompleted", { count });
 			}
 		}
 		/**
@@ -13981,21 +17893,28 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		}
 		/** The top segment: the node's identity. */
 		function CardTop(props) {
-			const { kind, count, foldKind, depth, phase } = props;
+			const { kind, count, foldKind, depth, phase, chip, text } = props;
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
 				className: clsx(tasks_graph_module_css_default.cardTop, depthClass(depth)),
 				children: [
 					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
 						className: tasks_graph_module_css_default.cardBadges,
-						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-							className: tasks_graph_module_css_default.kindBadge,
-							"data-card-kind": kind,
-							children: cardKindLabel(kind, count ?? 0, foldKind ?? "done")
-						}), phase !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-							className: clsx(tasks_graph_module_css_default.phaseBadge, phaseClass(phase.index)),
-							title: phase.title ?? t("workflowPhaseUnnamed"),
-							children: phase.title ?? t("workflowPhaseUnnamed")
-						})]
+						children: [
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+								className: tasks_graph_module_css_default.kindBadge,
+								"data-card-kind": kind,
+								children: cardKindLabel(kind, count ?? 0, foldKind ?? "done")
+							}),
+							phase !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+								className: clsx(tasks_graph_module_css_default.phaseBadge, phaseClass(phase.index)),
+								title: phase.title ?? t("workflowPhaseUnnamed"),
+								children: phase.title ?? t("workflowPhaseUnnamed")
+							}),
+							chip !== void 0 && chip !== "" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+								className: tasks_graph_module_css_default.kindChip,
+								children: chip
+							})
+						]
 					}),
 					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 						className: clsx(tasks_graph_module_css_default.cardName, props.extraClass),
@@ -14007,13 +17926,29 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 						title: props.meta,
 						children: props.meta
 					}),
+					text !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+						className: tasks_graph_module_css_default.cardText,
+						style: { WebkitLineClamp: text.lines },
+						title: text.value,
+						children: text.value
+					}),
 					props.children
 				]
 			});
 		}
-		/** The bottom bar: the node's state, its merged activity, and its fold chevron. */
+		/** The bottom bar: the node's activity (or its state word), dot and chevron. */
 		function CardBar(props) {
 			const { state, activity, running } = props;
+			const line = activity === void 0 || activity === "" ? void 0 : activity;
+			/**
+			* Which states still print their word. The activity line REPLACES it for
+			* work that the line already describes — a running node's own native status
+			* and a settled node's completed summary. `idle` and `error` keep the word:
+			* a teammate between turns and a failed node both read as "finished
+			* something" from their summary alone, which is exactly the misreading the
+			* two states must not allow.
+			*/
+			const showStateWord = props.stateWord !== false && (line === void 0 || state === "idle" || state === "error");
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 				className: tasks_graph_module_css_default.cardBar,
 				"data-card-bar": state,
@@ -14024,14 +17959,14 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 						size: 6,
 						className: tasks_graph_module_css_default.barDot
 					}),
-					props.stateWord !== false && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+					showStateWord && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 						className: tasks_graph_module_css_default.barState,
 						children: stateLabel(state)
 					}),
-					activity !== void 0 && activity !== "" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+					line !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 						className: tasks_graph_module_css_default.barActivity,
-						title: activity,
-						children: activity
+						title: line,
+						children: line
 					}),
 					props.onFold !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 						type: "button",
@@ -14048,8 +17983,8 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			});
 		}
 		//#endregion
-		//#region \0dsh-css:H:\MaxNull\WorkStation\third-party-plugins\DSH-better-sidebar\src\client\tasks-canvas.module.css.mjs
-		const css$4 = ".nxlHuq_nodeTitle{-webkit-line-clamp:2;overflow-wrap:anywhere;min-width:0;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary);-webkit-box-orient:vertical;flex:1;display:-webkit-box;overflow:hidden}.nxlHuq_nodeTitlePlain{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-secondary)}.nxlHuq_loading{z-index:1;pointer-events:none;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);justify-content:center;align-items:center;gap:6px;display:flex;position:absolute;inset:0}.nxlHuq_loadingGlyph{flex:none;display:inline-flex}";
+		//#region \0dsh-css:/home/runner/work/DSH-better-sidebar/DSH-better-sidebar/src/client/tasks-canvas.module.css.mjs
+		const css$4 = ".ck4neW_nodeTitle{-webkit-line-clamp:2;overflow-wrap:anywhere;min-width:0;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary);-webkit-box-orient:vertical;flex:1;display:-webkit-box;overflow:hidden}.ck4neW_nodeTitlePlain{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-secondary)}.ck4neW_loading{z-index:1;pointer-events:none;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);justify-content:center;align-items:center;gap:6px;display:flex;position:absolute;inset:0}.ck4neW_loadingGlyph{flex:none;display:inline-flex}";
 		const tagId$4 = "dsh-external/dsh-better-sidebar/tasks-canvas.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$4) + "]") === null) {
 			const tag = document.createElement("style");
@@ -14059,10 +17994,10 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			document.head.appendChild(tag);
 		}
 		var tasks_canvas_module_css_default = {
-			"loading": "nxlHuq_loading",
-			"loadingGlyph": "nxlHuq_loadingGlyph",
-			"nodeTitle": "nxlHuq_nodeTitle",
-			"nodeTitlePlain": "nxlHuq_nodeTitlePlain"
+			"loadingGlyph": "ck4neW_loadingGlyph",
+			"loading": "ck4neW_loading",
+			"nodeTitle": "ck4neW_nodeTitle",
+			"nodeTitlePlain": "ck4neW_nodeTitlePlain"
 		};
 		//#endregion
 		//#region src/client/TasksGraph.tsx
@@ -14087,6 +18022,10 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		* full name in the `title` attribute. While the root catalog hydrates, an
 		* empty canvas shows the same hint as the tree (`loading`).
 		*/
+		/** Whether the reader asked the platform for less motion. */
+		function prefersReducedMotion() {
+			return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+		}
 		/** The zoom bounds of the canvas. The upper bound is deliberately above 1: on
 		*  a narrow panel the reader zooms IN to read a card, and the fit's own cap
 		*  (FIT_MAX_SCALE) is what keeps a two-node tree from ballooning. */
@@ -14109,17 +18048,6 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		function agentCardKind(node) {
 			if (node.team?.role === "teammate") return "teammate";
 			return node.parentId === void 0 ? "main" : "subagent";
-		}
-		/**
-		* The bar's activity line. A running node shows the LIVE merged activity; a
-		* settled one shows the same merged wording in its completed form (the host's
-		* own `done.*` phrasing) — a settled card whose bar read only "已完成" would
-		* throw away the one thing the fold is for.
-		*/
-		function barActivity(node) {
-			const summary = node.live?.summary;
-			if (node.state === "running") return liveActivityLabel(summary);
-			return summary === void 0 ? void 0 : doneActivityTitle(summary);
 		}
 		/** Members of one run that already reported an outcome. */
 		function doneMembers(node) {
@@ -14174,7 +18102,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			});
 		}
 		function TasksGraph(props) {
-			const { nodes, folded, rootId, onNodeInfo, onWorkflowInfo, onOpenTask, onToggleFold, onExpandFold, onFoldNode, mode, onModeChange, loading } = props;
+			const { nodes, folded, rootId, onNodeInfo, onWorkflowInfo, onOpenTask, onToggleFold, onExpandGroup, onFoldNode, mode, onModeChange, loading } = props;
 			const containerRef = (0, react.useRef)(null);
 			const [tf, setTf] = (0, react.useState)({
 				x: 0,
@@ -14191,29 +18119,76 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			/** Container width drives the sibling-band wrap (see bandColsFor). */
 			const [width, setWidth] = (0, react.useState)(0);
 			const layout = (0, react.useMemo)(() => layoutTasksGraphForWidth(nodes, width, GRAPH_FIT_MIN_SCALE), [nodes, width]);
+			/**
+			* What is actually drawn: the layout tweened towards, frame by frame, in the
+			* canvas's OWN coordinates (see tasks-layout-tween.ts — a screen-space FLIP
+			* library cannot work under the fit's scale). Cards, connectors and phase
+			* frames all read it, so the lines travel WITH the cards instead of snapping
+			* to the new geometry.
+			*/
+			const drawn = useTweenedLayout(layout);
 			const edges = (0, react.useMemo)(() => tasksEdges(nodes), [nodes]);
 			const nodeById = (0, react.useMemo)(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
+			/** A running view glide (see fit): cancelled by any reader gesture. */
+			const glideRef = (0, react.useRef)(0);
+			/** Stop a glide where it is (the reader took the wheel). */
+			const stopGlide = (0, react.useCallback)(() => {
+				if (glideRef.current !== 0) {
+					cancelAnimationFrame(glideRef.current);
+					glideRef.current = 0;
+				}
+			}, []);
 			/**
-			* Center the canvas and scale it to fill. The fit measures the CONTENT box
-			* (the layout's padding is breathing room, not content): centering the padded
-			* box leaves the graph visibly off-center in a narrow panel, which is exactly
-			* how "the graph looks small and sits in a corner" happens.
+			* The frame the auto-fit wants right now, or undefined before the container
+			* has been measured (the sidebar mounts hidden at zero size). The arithmetic
+			* lives in tasks-view-glide.ts, where a test can reach it.
 			*/
-			const fit = (0, react.useCallback)(() => {
+			const fitTarget = (0, react.useCallback)(() => {
 				const container = containerRef.current;
-				if (container === null) return;
-				const cw = container.clientWidth;
-				const ch = container.clientHeight;
-				if (cw === 0 || ch === 0) return;
-				const contentW = Math.max(190, layout.width - 32);
-				const contentH = Math.max(103, layout.height - 32);
-				const k = Math.max(GRAPH_FIT_MIN_SCALE, Math.min((cw - 48) / contentW, (ch - 48) / contentH, FIT_MAX_SCALE));
-				setTf({
-					x: (cw - contentW * k) / 2 - 16 * k,
-					y: Math.max(FIT_MARGIN / 2, (ch - contentH * k) / 2) - 16 * k,
-					k
+				if (container === null) return void 0;
+				return fitTransform({
+					containerW: container.clientWidth,
+					containerH: container.clientHeight,
+					layoutW: layout.width,
+					layoutH: layout.height,
+					pad: 16,
+					minContentW: 190,
+					minContentH: 103,
+					margin: FIT_MARGIN,
+					minScale: GRAPH_FIT_MIN_SCALE,
+					maxScale: FIT_MAX_SCALE
 				});
 			}, [layout.width, layout.height]);
+			/**
+			* Put the frame where the fit wants it, either at once (a resize while the
+			* reader drags the panel edge, a fresh session) or as a GLIDE — the layout
+			* tween moves the cards, and the frame has to travel with them instead of
+			* jumping to the new framing a frame later. That glide is what makes "stay
+			* auto-fitted" and "never yank the view" the same behavior.
+			*
+			* @param animate - glide instead of snapping.
+			*/
+			const applyFit = (0, react.useCallback)((animate) => {
+				const target = fitTarget();
+				if (target === void 0) return;
+				stopGlide();
+				if (!animate || prefersReducedMotion()) {
+					setTf(target);
+					return;
+				}
+				const from = tfRef.current;
+				const started = performance.now();
+				const step = () => {
+					const progress = easeOut((performance.now() - started) / 220);
+					setTf(lerpTransform(from, target, progress));
+					glideRef.current = progress < 1 ? requestAnimationFrame(step) : 0;
+				};
+				glideRef.current = requestAnimationFrame(step);
+			}, [fitTarget, stopGlide]);
+			/** The reader's own re-fit (the ⌂ button and a background double-click). */
+			const fit = (0, react.useCallback)(() => {
+				applyFit(true);
+			}, [applyFit]);
 			/**
 			* Keep the canvas reachable: a pan or a zoom-out may never push the whole
 			* graph off screen (the classic "I dragged it away and cannot find it").
@@ -14241,9 +18216,16 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				touchedRef.current = false;
 				fit();
 			}, [fit]);
+			/** The newest `applyFit`, so the effects below can depend on WHAT changed. */
+			const fitRef = (0, react.useRef)(applyFit);
+			fitRef.current = applyFit;
 			(0, react.useEffect)(() => {
-				if (!touchedRef.current) fit();
-			}, [fit, rootId]);
+				touchedRef.current = false;
+				fitRef.current(false);
+			}, [rootId]);
+			(0, react.useEffect)(() => {
+				if (!touchedRef.current) fitRef.current(true);
+			}, [layout.width, layout.height]);
 			(0, react.useEffect)(() => {
 				const container = containerRef.current;
 				if (container === null || typeof ResizeObserver === "undefined") return;
@@ -14270,6 +18252,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, k * Math.exp(-event.deltaY * unit * .0014)));
 					if (next === k) return;
 					touchedRef.current = true;
+					stopGlide();
 					setTf(clampTf({
 						x: mx - (mx - x) * (next / k),
 						y: my - (my - y) * (next / k),
@@ -14280,13 +18263,14 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				return () => {
 					container.removeEventListener("wheel", onWheel);
 				};
-			}, [clampTf]);
+			}, [clampTf, stopGlide]);
 			const zoomBy = (0, react.useCallback)((factor) => {
 				const container = containerRef.current;
 				const { x, y, k } = tfRef.current;
 				const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, k * factor));
 				if (next === k || container === null) return;
 				touchedRef.current = true;
+				stopGlide();
 				const mx = container.clientWidth / 2;
 				const my = container.clientHeight / 2;
 				setTf(clampTf({
@@ -14294,7 +18278,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					y: my - (my - y) * (next / k),
 					k: next
 				}));
-			}, [clampTf]);
+			}, [clampTf, stopGlide]);
 			/**
 			* Drag-pan. The gesture only ever starts on the BACKGROUND: a pointerdown
 			* on a node (or the control cluster) is left alone, so the node's own click
@@ -14315,6 +18299,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			}, [refit]);
 			const onPointerDown = (0, react.useCallback)((event) => {
 				if (event.button !== 0) return;
+				stopGlide();
 				const target = event.target;
 				if (target.closest("[data-graph-node]") !== null) return;
 				if (target.closest("[data-graph-controls]") !== null) return;
@@ -14344,7 +18329,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				window.addEventListener("pointermove", onMove);
 				window.addEventListener("pointerup", onUp);
 				window.addEventListener("pointercancel", onUp);
-			}, [clampTf]);
+			}, [clampTf, stopGlide]);
 			/** Suppress node clicks that ended a drag gesture. */
 			const clickAllowed = (0, react.useCallback)(() => travelRef.current <= CLICK_TOLERANCE_PX, []);
 			const phaseFrames = (0, react.useMemo)(() => {
@@ -14356,7 +18341,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 						const boxes = [];
 						for (const member of phase.members) {
 							const id = member.childId !== "" ? member.childId : `wfmember:${runNode.run.runId}:${member.seq}`;
-							const box = layout.boxes.get(id);
+							const box = drawn.boxes.get(id);
 							if (box !== void 0) boxes.push(box);
 						}
 						if (boxes.length === 0) return;
@@ -14376,7 +18361,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					});
 				}
 				return frames;
-			}, [nodes, layout]);
+			}, [nodes, drawn]);
 			/**
 			* The connector between two boxes: a straight PERPENDICULAR stub out of the
 			* parent's bottom and into the child's top, joined by one bezier. The stubs
@@ -14426,8 +18411,8 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 									height: layout.height,
 									"aria-hidden": "true",
 									children: edges.map((edge) => {
-										const from = layout.boxes.get(edge.from);
-										const to = layout.boxes.get(edge.to);
+										const from = drawn.boxes.get(edge.from);
+										const to = drawn.boxes.get(edge.to);
 										if (from === void 0 || to === void 0) return null;
 										const target = nodeById.get(edge.to);
 										return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("path", {
@@ -14449,16 +18434,17 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 										children: frame.title ?? t("workflowPhaseUnnamed")
 									})
 								}, frame.key)),
-								nodes.map((node) => {
-									const box = layout.boxes.get(node.id);
+								nodes.map((node, index) => {
+									const box = drawn.boxes.get(node.id);
 									if (box === void 0) return null;
 									const style = {
 										left: box.x,
 										top: box.y,
 										width: 190,
-										minHeight: box.h
+										minHeight: box.h,
+										animationDelay: `${Math.min(index, 9) * 26}ms`
 									};
-									if (node.kind === "fold") return renderFoldNode(node, style, onExpandFold, clickAllowed);
+									if (node.kind === "fold") return renderFoldNode(node, style, onExpandGroup, clickAllowed);
 									if (node.kind === "workflow") return renderWorkflowNode(node, style, onWorkflowInfo, clickAllowed);
 									return renderAgentNode(node, style, onNodeInfo, onOpenTask, clickAllowed, onFoldNode);
 								})
@@ -14527,8 +18513,25 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			* (independent of the page-level rule and of the idle head count). The
 			* `settled` flag stays a separate idea — that one controls how the card
 			* RECEDES, and an idle teammate is not finished work.
+			*
+			* The ROOT never offers it: the model pushes the root card unconditionally
+			* (it is the page's anchor and its tree's parent), so a chevron there is a
+			* control that cannot fire — exactly the dead-button shape the manual-fold
+			* design set out to avoid (issue #784). `parentId` is absent on the root row
+			* and only there.
 			*/
-			const foldable = settled || node.state === "idle";
+			const foldable = (settled || node.state === "idle") && node.parentId !== void 0;
+			/** The merged process line the bar shows in place of the state word. */
+			const activity = activityLine(node);
+			/** The identity word beside the kind badge (one badge row, no meta line). */
+			const chip = agentChip(node);
+			/**
+			* The newest assistant text, under the name: what the node is SAYING (a
+			* running child) or said last (a settled one). The bar keeps the merged
+			* activity — the two answer different questions — and the line count comes
+			* from the layout so the card never renders taller than its box.
+			*/
+			const tail = node.live?.text === void 0 ? void 0 : flatten(node.live.text);
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				"data-graph-node": node.id,
 				"data-depth": node.depth,
@@ -14546,8 +18549,12 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					kind: agentCardKind(node),
 					depth: node.depth,
 					...node.phase === void 0 ? {} : { phase: node.phase },
+					...chip === void 0 ? {} : { chip },
+					...tail === void 0 ? {} : { text: {
+						value: tail,
+						lines: textTailLines(tail)
+					} },
 					name: node.label,
-					meta: agentIdentity(node),
 					children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(TaskLine, {
 						tasks: node.tasks,
 						onOpenTask
@@ -14555,7 +18562,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(CardBar, {
 					state: node.state,
 					running: node.state === "running",
-					...barActivity(node) === void 0 ? {} : { activity: barActivity(node) },
+					...activity === void 0 ? {} : { activity },
 					...foldable && !node.current && onFold !== void 0 ? { onFold: () => {
 						onFold(node);
 					} } : {}
@@ -14594,10 +18601,20 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			}, node.id);
 		}
 		/**
-		* One fold aggregate node: the completed leaves of one parent, collapsed. Its
-		* bar is the action row (expand), so the whole card stays one click target.
+		* One fold aggregate node: the finished or the waiting members of one parent,
+		* collapsed. Its bar is the action row — the group's own glyph, the word that
+		* names what a click does, and the expand chevron — so the whole card stays one
+		* click target.
+		*
+		* The count is printed ONCE: the badge above names it, so the bar carries the
+		* ACTION instead (a bare chevron in an otherwise empty strip read as a broken
+		* card), plus the one fact the badge cannot say — a stray failure ("出错 N"
+		* would otherwise hide inside the ✓). The full tally stays the card's
+		* accessible name and tooltip, which a screen reader reads instead of the
+		* badge's inner text.
 		*/
-		function renderFoldNode(node, style, onToggleFold, clickAllowed) {
+		function renderFoldNode(node, style, onExpandGroup, clickAllowed) {
+			const errors = foldErrorTally(node);
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				"data-graph-node": node.id,
 				"data-depth": node.depth,
@@ -14608,7 +18625,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				style,
 				onClick: () => {
 					if (!clickAllowed()) return;
-					onToggleFold();
+					onExpandGroup(node);
 				},
 				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(CardTop, {
 					kind: "fold",
@@ -14620,17 +18637,774 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(CardBar, {
 					state: node.foldKind === "idle" ? "idle" : "done",
 					stateWord: false,
-					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-						className: tasks_graph_module_css_default.barActivity,
-						title: foldTally(node),
-						children: foldTally(node)
-					}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-						className: tasks_graph_module_css_default.barFold,
-						"aria-hidden": "true",
-						children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutlineRegular, { size: 12 })
-					})]
+					children: [
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							className: tasks_graph_module_css_default.barFoldGlyph,
+							"aria-hidden": "true",
+							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(FoldGlyph, { size: 10 })
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							className: tasks_graph_module_css_default.barAction,
+							title: foldTally(node),
+							children: t("tasksFoldExpandShort")
+						}),
+						errors !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							className: tasks_graph_module_css_default.barError,
+							children: errors
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							className: tasks_graph_module_css_default.barFold,
+							"aria-hidden": "true",
+							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutlineRegular, { size: 12 })
+						})
+					]
 				})]
 			}, node.id);
+		}
+		//#endregion
+		//#region node_modules/.pnpm/@formkit+auto-animate@0.10.0/node_modules/@formkit/auto-animate/index.mjs
+		/**
+		* A set of all the parents currently being observe. This is the only non weak
+		* registry.
+		*/
+		const parents = /* @__PURE__ */ new Set();
+		/**
+		* Element coordinates that is constantly kept up to date.
+		*/
+		const coords = /* @__PURE__ */ new WeakMap();
+		/**
+		* Siblings of elements that have been removed from the dom.
+		*/
+		const siblings = /* @__PURE__ */ new WeakMap();
+		/**
+		* Animations that are currently running.
+		*/
+		const animations = /* @__PURE__ */ new WeakMap();
+		/**
+		* A map of existing intersection observers used to track element movements.
+		*/
+		const intersections = /* @__PURE__ */ new WeakMap();
+		/**
+		* A map of existing mutation observers used to track element movements.
+		*/
+		const mutationObservers = /* @__PURE__ */ new WeakMap();
+		/**
+		* Intervals for automatically checking the position of elements occasionally.
+		*/
+		const intervals = /* @__PURE__ */ new WeakMap();
+		/**
+		* The configuration options for each group of elements.
+		*/
+		const options = /* @__PURE__ */ new WeakMap();
+		/**
+		* Debounce counters by id, used to debounce calls to update positions.
+		*/
+		const debounces = /* @__PURE__ */ new WeakMap();
+		/**
+		* All parents that are currently enabled are tracked here.
+		*/
+		const enabled = /* @__PURE__ */ new WeakSet();
+		/**
+		* The document used to calculate transitions.
+		*/
+		let root;
+		/**
+		* The root’s XY scroll positions.
+		*/
+		let scrollX = 0;
+		let scrollY = 0;
+		/**
+		* Used to sign an element as the target.
+		*/
+		const TGT = "__aa_tgt";
+		/**
+		* Used to sign an element as being part of a removal.
+		*/
+		const DEL = "__aa_del";
+		/**
+		* Used to sign an element as being "new". When an element is removed from the
+		* dom, but may cycle back in we can sign it with new to ensure the next time
+		* it is recognized we consider it new.
+		*/
+		const NEW = "__aa_new";
+		/**
+		* Callback for handling all mutations.
+		* @param mutations - A mutation list
+		*/
+		const handleMutations = (mutations) => {
+			const elements = getElements(mutations);
+			if (elements) elements.forEach((el) => animate(el));
+		};
+		/**
+		*
+		* @param entries - Elements that have been resized.
+		*/
+		const handleResizes = (entries) => {
+			entries.forEach((entry) => {
+				if (entry.target === root) updateAllPos();
+				if (coords.has(entry.target)) updatePos(entry.target);
+			});
+		};
+		/**
+		* Determine if an element is fully outside of the current viewport.
+		* @param el - Element to test
+		*/
+		function isOffscreen(el) {
+			const rect = el.getBoundingClientRect();
+			const vw = (root === null || root === void 0 ? void 0 : root.clientWidth) || 0;
+			const vh = (root === null || root === void 0 ? void 0 : root.clientHeight) || 0;
+			return rect.bottom < 0 || rect.top > vh || rect.right < 0 || rect.left > vw;
+		}
+		/**
+		* Observe this elements position.
+		* @param el - The element to observe the position of.
+		*/
+		function observePosition(el) {
+			const oldObserver = intersections.get(el);
+			oldObserver === null || oldObserver === void 0 || oldObserver.disconnect();
+			let rect = coords.get(el);
+			let invocations = 0;
+			const buffer = 5;
+			if (!rect) {
+				rect = getCoords(el);
+				coords.set(el, rect);
+			}
+			const { offsetWidth, offsetHeight } = root;
+			const rootMargin = [
+				rect.top - buffer,
+				offsetWidth - (rect.left + buffer + rect.width),
+				offsetHeight - (rect.top + buffer + rect.height),
+				rect.left - buffer
+			].map((px) => `${-1 * Math.floor(px)}px`).join(" ");
+			const observer = new IntersectionObserver(() => {
+				++invocations > 1 && updatePos(el);
+			}, {
+				root,
+				threshold: 1,
+				rootMargin
+			});
+			observer.observe(el);
+			intersections.set(el, observer);
+		}
+		/**
+		* Update the exact position of a given element.
+		* @param el - An element to update the position of.
+		* @param debounce - Whether or not to debounce the update. After an animation is finished, it should update as soon as possible to prevent flickering on quick toggles.
+		*/
+		function updatePos(el, debounce = true) {
+			clearTimeout(debounces.get(el));
+			const optionsOrPlugin = getOptions(el);
+			const delay = debounce ? isPlugin(optionsOrPlugin) ? 500 : optionsOrPlugin.duration : 0;
+			debounces.set(el, setTimeout(async () => {
+				const currentAnimation = animations.get(el);
+				try {
+					await (currentAnimation === null || currentAnimation === void 0 ? void 0 : currentAnimation.finished);
+					coords.set(el, getCoords(el));
+					observePosition(el);
+				} catch {}
+			}, delay));
+		}
+		/**
+		* Updates all positions that are currently being tracked.
+		*/
+		function updateAllPos() {
+			clearTimeout(debounces.get(root));
+			debounces.set(root, setTimeout(() => {
+				parents.forEach((parent) => forEach(parent, (el) => lowPriority(() => updatePos(el))));
+			}, 100));
+		}
+		/**
+		* Its possible for a quick scroll or other fast events to get past the
+		* intersection observer, so occasionally we need want "cold-poll" for the
+		* latests and greatest position. We try to do this in the most non-disruptive
+		* fashion possible. First we only do this ever couple seconds, staggard by a
+		* random offset.
+		* @param el - Element
+		*/
+		function poll(el) {
+			setTimeout(() => {
+				intervals.set(el, setInterval(() => lowPriority(updatePos.bind(null, el)), 2e3));
+			}, Math.round(2e3 * Math.random()));
+		}
+		/**
+		* Perform some operation that is non critical at some point.
+		* @param callback
+		*/
+		function lowPriority(callback) {
+			if (typeof requestIdleCallback === "function") requestIdleCallback(() => callback());
+			else requestAnimationFrame(() => callback());
+		}
+		/**
+		* A resize observer, responsible for recalculating elements on resize.
+		*/
+		let resize;
+		/**
+		* Ensure the browser is supported.
+		*/
+		const supportedBrowser = typeof window !== "undefined" && "ResizeObserver" in window;
+		/**
+		* If this is in a browser, initialize our Web APIs
+		*/
+		if (supportedBrowser) {
+			root = document.documentElement;
+			new MutationObserver(handleMutations);
+			resize = new ResizeObserver(handleResizes);
+			window.addEventListener("scroll", () => {
+				scrollY = window.scrollY;
+				scrollX = window.scrollX;
+			});
+			resize.observe(root);
+		}
+		/**
+		* Retrieves all the elements that may have been affected by the last mutation
+		* including ones that have been removed and are no longer in the DOM.
+		* @param mutations - A mutation list.
+		* @returns
+		*/
+		function getElements(mutations) {
+			if (mutations.reduce((nodes, mutation) => {
+				return [
+					...nodes,
+					...Array.from(mutation.addedNodes),
+					...Array.from(mutation.removedNodes)
+				];
+			}, []).every((node) => node.nodeName === "#comment")) return false;
+			return mutations.reduce((elements, mutation) => {
+				if (elements === false) return false;
+				if (mutation.target instanceof Element) {
+					target(mutation.target);
+					if (!elements.has(mutation.target)) {
+						elements.add(mutation.target);
+						for (let i = 0; i < mutation.target.children.length; i++) {
+							const child = mutation.target.children.item(i);
+							if (!child) continue;
+							if (DEL in child) return false;
+							target(mutation.target, child);
+							elements.add(child);
+						}
+					}
+					if (mutation.removedNodes.length) for (let i = 0; i < mutation.removedNodes.length; i++) {
+						const child = mutation.removedNodes[i];
+						if (DEL in child) return false;
+						if (child instanceof Element) {
+							elements.add(child);
+							target(mutation.target, child);
+							siblings.set(child, [mutation.previousSibling, mutation.nextSibling]);
+						}
+					}
+				}
+				return elements;
+			}, /* @__PURE__ */ new Set());
+		}
+		/**
+		* Assign the target to an element.
+		* @param el - The root element
+		* @param child
+		*/
+		function target(el, child) {
+			if (!child && !(TGT in el)) Object.defineProperty(el, TGT, { value: el });
+			else if (child && !(TGT in child)) Object.defineProperty(child, TGT, { value: el });
+		}
+		/**
+		* Determines what kind of change took place on the given element and then
+		* performs the proper animation based on that.
+		* @param el - The specific element to animate.
+		*/
+		function animate(el) {
+			var _a, _b;
+			const isMounted = el.isConnected;
+			const preExisting = coords.has(el);
+			if (isMounted && siblings.has(el)) siblings.delete(el);
+			if (((_a = animations.get(el)) === null || _a === void 0 ? void 0 : _a.playState) !== "finished") (_b = animations.get(el)) === null || _b === void 0 || _b.cancel();
+			if (NEW in el) add(el);
+			else if (preExisting && isMounted) remain(el);
+			else if (preExisting && !isMounted) remove(el);
+			else add(el);
+		}
+		/**
+		* Removes all non-digits from a string and casts to a number.
+		* @param str - A string containing a pixel value.
+		* @returns
+		*/
+		function raw(str) {
+			return Number(str.replace(/[^0-9.\-]/g, ""));
+		}
+		/**
+		* Get the scroll offset of elements
+		* @param el - Element
+		* @returns
+		*/
+		function getScrollOffset(el) {
+			let p = el.parentElement;
+			while (p) {
+				if (p.scrollLeft || p.scrollTop) return {
+					x: p.scrollLeft,
+					y: p.scrollTop
+				};
+				p = p.parentElement;
+			}
+			return {
+				x: 0,
+				y: 0
+			};
+		}
+		/**
+		* Get the coordinates of elements adjusted for scroll position.
+		* @param el - Element
+		* @returns
+		*/
+		function getCoords(el) {
+			const rect = el.getBoundingClientRect();
+			const { x, y } = getScrollOffset(el);
+			return {
+				top: rect.top + y,
+				left: rect.left + x,
+				width: rect.width,
+				height: rect.height
+			};
+		}
+		/**
+		* Returns the width/height that the element should be transitioned between.
+		* This takes into account box-sizing.
+		* @param el - Element being animated
+		* @param oldCoords - Old set of Coordinates coordinates
+		* @param newCoords - New set of Coordinates coordinates
+		* @returns
+		*/
+		function getTransitionSizes(el, oldCoords, newCoords) {
+			let widthFrom = oldCoords.width;
+			let heightFrom = oldCoords.height;
+			let widthTo = newCoords.width;
+			let heightTo = newCoords.height;
+			const styles = getComputedStyle(el);
+			if (styles.getPropertyValue("box-sizing") === "content-box") {
+				const paddingY = raw(styles.paddingTop) + raw(styles.paddingBottom) + raw(styles.borderTopWidth) + raw(styles.borderBottomWidth);
+				const paddingX = raw(styles.paddingLeft) + raw(styles.paddingRight) + raw(styles.borderRightWidth) + raw(styles.borderLeftWidth);
+				widthFrom -= paddingX;
+				widthTo -= paddingX;
+				heightFrom -= paddingY;
+				heightTo -= paddingY;
+			}
+			return [
+				widthFrom,
+				widthTo,
+				heightFrom,
+				heightTo
+			].map(Math.round);
+		}
+		/**
+		* Retrieves animation options for the current element.
+		* @param el - Element to retrieve options for.
+		* @returns
+		*/
+		function getOptions(el) {
+			return TGT in el && options.has(el[TGT]) ? options.get(el[TGT]) : {
+				duration: 250,
+				easing: "ease-in-out"
+			};
+		}
+		/**
+		* Returns the target of a given animation (generally the parent).
+		* @param el - An element to check for a target
+		* @returns
+		*/
+		function getTarget(el) {
+			if (TGT in el) return el[TGT];
+		}
+		/**
+		* Checks if animations are enabled or disabled for a given element.
+		* @param el - Any element
+		* @returns
+		*/
+		function isEnabled(el) {
+			const target = getTarget(el);
+			return target ? enabled.has(target) : false;
+		}
+		/**
+		* Iterate over the children of a given parent.
+		* @param parent - A parent element
+		* @param callback - A callback
+		*/
+		function forEach(parent, ...callbacks) {
+			callbacks.forEach((callback) => callback(parent, options.has(parent)));
+			for (let i = 0; i < parent.children.length; i++) {
+				const child = parent.children.item(i);
+				if (child) callbacks.forEach((callback) => callback(child, options.has(child)));
+			}
+		}
+		/**
+		* Always return tuple to provide consistent interface
+		*/
+		function getPluginTuple(pluginReturn) {
+			if (Array.isArray(pluginReturn)) return pluginReturn;
+			return [pluginReturn];
+		}
+		/**
+		* Determine if config is plugin
+		*/
+		function isPlugin(config) {
+			return typeof config === "function";
+		}
+		/**
+		* The element in question is remaining in the DOM.
+		* @param el - Element to flip
+		* @returns
+		*/
+		function remain(el) {
+			const oldCoords = coords.get(el);
+			const newCoords = getCoords(el);
+			if (!isEnabled(el)) return coords.set(el, newCoords);
+			if (isOffscreen(el)) {
+				coords.set(el, newCoords);
+				observePosition(el);
+				return;
+			}
+			let animation;
+			if (!oldCoords) return;
+			const pluginOrOptions = getOptions(el);
+			if (typeof pluginOrOptions !== "function") {
+				let deltaLeft = oldCoords.left - newCoords.left;
+				let deltaTop = oldCoords.top - newCoords.top;
+				const deltaRight = oldCoords.left + oldCoords.width - (newCoords.left + newCoords.width);
+				if (oldCoords.top + oldCoords.height - (newCoords.top + newCoords.height) == 0) deltaTop = 0;
+				if (deltaRight == 0) deltaLeft = 0;
+				const [widthFrom, widthTo, heightFrom, heightTo] = getTransitionSizes(el, oldCoords, newCoords);
+				const start = { transform: `translate(${deltaLeft}px, ${deltaTop}px)` };
+				const end = { transform: `translate(0, 0)` };
+				if (widthFrom !== widthTo) {
+					start.width = `${widthFrom}px`;
+					end.width = `${widthTo}px`;
+				}
+				if (heightFrom !== heightTo) {
+					start.height = `${heightFrom}px`;
+					end.height = `${heightTo}px`;
+				}
+				animation = el.animate([start, end], {
+					duration: pluginOrOptions.duration,
+					easing: pluginOrOptions.easing
+				});
+			} else {
+				const [keyframes] = getPluginTuple(pluginOrOptions(el, "remain", oldCoords, newCoords));
+				animation = new Animation(keyframes);
+				animation.play();
+			}
+			animations.set(el, animation);
+			coords.set(el, newCoords);
+			animation.addEventListener("finish", updatePos.bind(null, el, false), { once: true });
+		}
+		/**
+		* Adds the element with a transition.
+		* @param el - Animates the element being added.
+		*/
+		function add(el) {
+			if (NEW in el) delete el[NEW];
+			const newCoords = getCoords(el);
+			coords.set(el, newCoords);
+			const pluginOrOptions = getOptions(el);
+			if (!isEnabled(el)) return;
+			if (isOffscreen(el)) {
+				observePosition(el);
+				return;
+			}
+			let animation;
+			if (typeof pluginOrOptions !== "function") animation = el.animate([
+				{
+					transform: "scale(.98)",
+					opacity: 0
+				},
+				{
+					transform: "scale(0.98)",
+					opacity: 0,
+					offset: .5
+				},
+				{
+					transform: "scale(1)",
+					opacity: 1
+				}
+			], {
+				duration: pluginOrOptions.duration * 1.5,
+				easing: "ease-in"
+			});
+			else {
+				const [keyframes] = getPluginTuple(pluginOrOptions(el, "add", newCoords));
+				animation = new Animation(keyframes);
+				animation.play();
+			}
+			animations.set(el, animation);
+			animation.addEventListener("finish", updatePos.bind(null, el, false), { once: true });
+		}
+		/**
+		* Clean up after removing an element from the dom.
+		* @param el - Element being removed
+		* @param styles - Optional styles that should be removed from the element.
+		*/
+		function cleanUp(el, styles) {
+			var _a;
+			el.remove();
+			coords.delete(el);
+			siblings.delete(el);
+			animations.delete(el);
+			(_a = intersections.get(el)) === null || _a === void 0 || _a.disconnect();
+			setTimeout(() => {
+				if (DEL in el) delete el[DEL];
+				Object.defineProperty(el, NEW, {
+					value: true,
+					configurable: true
+				});
+				if (styles && el instanceof HTMLElement) for (const style in styles) el.style[style] = "";
+			}, 0);
+		}
+		/**
+		* Animates the removal of an element.
+		* @param el - Element to remove
+		*/
+		function remove(el) {
+			var _a;
+			if (!siblings.has(el) || !coords.has(el)) return;
+			const [prev, next] = siblings.get(el);
+			Object.defineProperty(el, DEL, {
+				value: true,
+				configurable: true
+			});
+			const finalX = window.scrollX;
+			const finalY = window.scrollY;
+			if (next && next.parentNode && next.parentNode instanceof Element) next.parentNode.insertBefore(el, next);
+			else if (prev && prev.parentNode) prev.parentNode.appendChild(el);
+			else (_a = getTarget(el)) === null || _a === void 0 || _a.appendChild(el);
+			if (!isEnabled(el)) return cleanUp(el);
+			const [top, left, width, height] = deletePosition(el);
+			const optionsOrPlugin = getOptions(el);
+			const oldCoords = coords.get(el);
+			if (finalX !== scrollX || finalY !== scrollY) adjustScroll(el, finalX, finalY, optionsOrPlugin);
+			let animation;
+			let styleReset = {
+				position: "absolute",
+				top: `${top}px`,
+				left: `${left}px`,
+				width: `${width}px`,
+				height: `${height}px`,
+				margin: "0",
+				pointerEvents: "none",
+				transformOrigin: "center",
+				zIndex: "100"
+			};
+			if (!isPlugin(optionsOrPlugin)) {
+				Object.assign(el.style, styleReset);
+				animation = el.animate([{
+					transform: "scale(1)",
+					opacity: 1
+				}, {
+					transform: "scale(.98)",
+					opacity: 0
+				}], {
+					duration: optionsOrPlugin.duration,
+					easing: "ease-out"
+				});
+			} else {
+				const [keyframes, options] = getPluginTuple(optionsOrPlugin(el, "remove", oldCoords));
+				if ((options === null || options === void 0 ? void 0 : options.styleReset) !== false) {
+					styleReset = (options === null || options === void 0 ? void 0 : options.styleReset) || styleReset;
+					Object.assign(el.style, styleReset);
+				}
+				animation = new Animation(keyframes);
+				animation.play();
+			}
+			animations.set(el, animation);
+			animation.addEventListener("finish", () => cleanUp(el, styleReset), { once: true });
+		}
+		/**
+		* If the element being removed is at the very bottom of the page, and the
+		* the page was scrolled into a space being "made available" by the element
+		* that was removed, the page scroll will have jumped up some amount. We need
+		* to offset the jump by the amount that the page was "automatically" scrolled
+		* up. We can do this by comparing the scroll position before and after the
+		* element was removed, and then offsetting by that amount.
+		*
+		* @param el - The element being deleted
+		* @param finalX - The final X scroll position
+		* @param finalY - The final Y scroll position
+		* @param optionsOrPlugin - The options or plugin
+		* @returns
+		*/
+		function adjustScroll(el, finalX, finalY, optionsOrPlugin) {
+			const scrollDeltaX = scrollX - finalX;
+			const scrollDeltaY = scrollY - finalY;
+			const scrollBefore = document.documentElement.style.scrollBehavior;
+			if (getComputedStyle(root).scrollBehavior === "smooth") document.documentElement.style.scrollBehavior = "auto";
+			window.scrollTo(window.scrollX + scrollDeltaX, window.scrollY + scrollDeltaY);
+			if (!el.parentElement) return;
+			const parent = el.parentElement;
+			let lastHeight = parent.clientHeight;
+			let lastWidth = parent.clientWidth;
+			const startScroll = performance.now();
+			function smoothScroll() {
+				requestAnimationFrame(() => {
+					if (!isPlugin(optionsOrPlugin)) {
+						const deltaY = lastHeight - parent.clientHeight;
+						const deltaX = lastWidth - parent.clientWidth;
+						if (startScroll + optionsOrPlugin.duration > performance.now()) {
+							window.scrollTo({
+								left: window.scrollX - deltaX,
+								top: window.scrollY - deltaY
+							});
+							lastHeight = parent.clientHeight;
+							lastWidth = parent.clientWidth;
+							smoothScroll();
+						} else document.documentElement.style.scrollBehavior = scrollBefore;
+					}
+				});
+			}
+			smoothScroll();
+		}
+		/**
+		* Determines the position of the element being removed.
+		* @param el - The element being deleted
+		* @returns
+		*/
+		function deletePosition(el) {
+			var _a;
+			const oldCoords = coords.get(el);
+			const [width, , height] = getTransitionSizes(el, oldCoords, getCoords(el));
+			let offsetParent = el.parentElement;
+			while (offsetParent && (getComputedStyle(offsetParent).position === "static" || offsetParent instanceof HTMLBodyElement)) offsetParent = offsetParent.parentElement;
+			if (!offsetParent) offsetParent = document.body;
+			const parentStyles = getComputedStyle(offsetParent);
+			const parentCoords = !animations.has(el) || ((_a = animations.get(el)) === null || _a === void 0 ? void 0 : _a.playState) === "finished" ? getCoords(offsetParent) : coords.get(offsetParent);
+			return [
+				Math.round(oldCoords.top - parentCoords.top) - raw(parentStyles.borderTopWidth),
+				Math.round(oldCoords.left - parentCoords.left) - raw(parentStyles.borderLeftWidth),
+				width,
+				height
+			];
+		}
+		/**
+		* A function that automatically adds animation effects to itself and its
+		* immediate children. Specifically it adds effects for adding, moving, and
+		* removing DOM elements.
+		* @param el - A parent element to add animations to.
+		* @param options - An optional object of options.
+		*/
+		function autoAnimate(el, config = {}) {
+			if (supportedBrowser && resize) {
+				if (!(window.matchMedia("(prefers-reduced-motion: reduce)").matches && !isPlugin(config) && !config.disrespectUserMotionPreference)) {
+					enabled.add(el);
+					if (getComputedStyle(el).position === "static") Object.assign(el.style, { position: "relative" });
+					forEach(el, updatePos, poll, (element) => resize === null || resize === void 0 ? void 0 : resize.observe(element));
+					if (isPlugin(config)) options.set(el, config);
+					else options.set(el, {
+						duration: 250,
+						easing: "ease-in-out",
+						...config
+					});
+					const mo = new MutationObserver(handleMutations);
+					mo.observe(el, { childList: true });
+					mutationObservers.set(el, mo);
+					parents.add(el);
+				}
+			}
+			return Object.freeze({
+				parent: el,
+				enable: () => {
+					enabled.add(el);
+				},
+				disable: () => {
+					enabled.delete(el);
+					forEach(el, (node) => {
+						const a = animations.get(node);
+						try {
+							a === null || a === void 0 || a.cancel();
+						} catch {}
+						animations.delete(node);
+						const d = debounces.get(node);
+						if (d) clearTimeout(d);
+						debounces.delete(node);
+						const i = intervals.get(node);
+						if (i) clearInterval(i);
+						intervals.delete(node);
+					});
+				},
+				isEnabled: () => enabled.has(el),
+				destroy: () => {
+					enabled.delete(el);
+					parents.delete(el);
+					options.delete(el);
+					const mo = mutationObservers.get(el);
+					mo === null || mo === void 0 || mo.disconnect();
+					mutationObservers.delete(el);
+					forEach(el, (node) => {
+						resize === null || resize === void 0 || resize.unobserve(node);
+						const a = animations.get(node);
+						try {
+							a === null || a === void 0 || a.cancel();
+						} catch {}
+						animations.delete(node);
+						const io = intersections.get(node);
+						io === null || io === void 0 || io.disconnect();
+						intersections.delete(node);
+						const i = intervals.get(node);
+						if (i) clearInterval(i);
+						intervals.delete(node);
+						const d = debounces.get(node);
+						if (d) clearTimeout(d);
+						debounces.delete(node);
+						coords.delete(node);
+						siblings.delete(node);
+					});
+				}
+			});
+		}
+		//#endregion
+		//#region src/client/use-auto-animate.ts
+		/**
+		* The Tasks page's motion host: `@formkit/auto-animate` (FLIP) attached through
+		* ONE guarded hook, so every animated container in the page behaves the same and
+		* the test / non-WAAPI environments stay inert.
+		*
+		* Where it is used — and where it deliberately is NOT:
+		*
+		* - the tree view and the jobs drawer are normal FLOW containers, so a row the
+		*   reader folds away fades out in place while its siblings slide up: exactly
+		*   what FLIP is for;
+		* - the graph CANVAS is excluded. Its card layer carries the fit's
+		*   `transform: scale(k)`, and the library pins a leaving card with absolute
+		*   `left/top` derived from `getBoundingClientRect()` (a box the scaled layer
+		*   cannot express) and translates movers in unscaled units (k× the true
+		*   distance). Measured live, that read as "折叠展开的动效都特别怪"; the canvas
+		*   uses the CSS entrance on `.node` instead, and leaving cards are removed
+		*   instantly — the edges they hang from are not animated, so nothing
+		*   disagrees with them.
+		*
+		* The library needs `Element.prototype.animate` (Web Animations API — the
+		* plugin already requires modern Chromium for the native sidebar) and a real
+		* layout pass, so the hook attaches to nothing when either is missing: jsdom
+		* renders the same DOM without motion, and no test has to stub an animation
+		* engine.
+		*
+		* The library respects `prefers-reduced-motion` on its own (its
+		* `disrespectUserMotionPreference` option defaults to false), which is the same
+		* contract the bar's sweep keeps in CSS.
+		*/
+		/** Whether this environment can run FLIP animations at all. */
+		function canAnimate() {
+			return typeof Element !== "undefined" && typeof Element.prototype.animate === "function" && typeof document !== "undefined";
+		}
+		/**
+		* Animate one container's children.
+		*
+		* @param ref - the container whose DIRECT children are animated. Layout changes
+		*   below the direct children (a card's own rows) are not animated — that is the
+		*   library's own scope rule, and the page keeps one host per list it wants
+		*   animated.
+		*/
+		function useAutoAnimateRef(ref) {
+			(0, react.useEffect)(() => {
+				const element = ref.current;
+				if (element === null || !canAnimate()) return;
+				const controller = autoAnimate(element);
+				return () => {
+					controller.destroy?.();
+				};
+			}, [ref]);
 		}
 		//#endregion
 		//#region src/client/TasksTree.tsx
@@ -14643,17 +19417,39 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		*
 		* Behaviour contract: `role="tree"` / `role="treeitem"` + `aria-level`, a
 		* `[data-tasks-row]` focus order, ArrowUp / ArrowDown / Home / End focus moves,
-		* Enter / Space activation, and the global fold aggregate (a fold row toggles
-		* the whole page's fold state).
+		* Enter / Space activation, and the fold rows (a fold row reveals its OWN
+		* group; the control cluster keeps the page-level switch).
 		*
 		* Readability: rows sit on the page's 32px rhythm (a 2px accent bar marks the
 		* current session, hover is the native fill, settled rows recede), and every
 		* line that can be ellipsised carries its full text as `title` — the label, the
 		* workflow name and the fold previews.
 		*/
+		/**
+		* One nesting level of the tree: it exists as a COMPONENT so every level can own
+		* a FLIP host of its own. The library watches a container's direct children
+		* only, so a single host on the scroll container would animate the top level and
+		* leave every nested fold to blink — the reader's "嵌套层级也要有动效".
+		*/
+		/** The human name of a row, whatever kind it is (the disclosure names it). */
+		function nodeLabel(node) {
+			if (node.kind === "agent") return node.label;
+			if (node.kind === "workflow") return node.run.name;
+			return foldTally(node);
+		}
+		function TreeLevel(props) {
+			const ref = (0, react.useRef)(null);
+			useAutoAnimateRef(ref);
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+				className: tasks_graph_module_css_default.treeKids,
+				ref,
+				children: props.items
+			});
+		}
 		function TasksTree(props) {
-			const { nodes, folded, onNodeInfo, onWorkflowInfo, onOpenTask, onToggleFold, mode, onModeChange, loading } = props;
+			const { nodes, folded, collapsedIds, onToggleCollapse, onCollapseAll, onExpandAll, onNodeInfo, onWorkflowInfo, onOpenTask, onToggleFold, onExpandGroup, mode, onModeChange, loading } = props;
 			const bodyRef = (0, react.useRef)(null);
+			useAutoAnimateRef(bodyRef);
 			/** children by parent id (model order preserved). */
 			const childrenOf = (0, react.useMemo)(() => {
 				const map = /* @__PURE__ */ new Map();
@@ -14675,6 +19471,31 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			const onTreeKeyDown = (0, react.useCallback)((event) => {
 				const items = bodyRef.current?.querySelectorAll("[data-tasks-row]") ?? [];
 				const index = Array.prototype.indexOf.call(items, document.activeElement);
+				if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
+					const row = items[index];
+					const nodeId = row?.getAttribute("data-tree-node") ?? void 0;
+					const expandable = row?.getAttribute("data-tree-expandable") === "true";
+					const collapsed = row?.getAttribute("aria-expanded") === "false";
+					event.preventDefault();
+					if (event.key === "ArrowRight") {
+						if (nodeId !== void 0 && expandable && collapsed) {
+							onToggleCollapse(nodeId);
+							return;
+						}
+						focusAt(index + 1);
+						return;
+					}
+					if (nodeId !== void 0 && expandable && !collapsed) {
+						onToggleCollapse(nodeId);
+						return;
+					}
+					const level = Number(row?.getAttribute("aria-level") ?? "1");
+					for (let cursor = index - 1; cursor >= 0; cursor -= 1) if (Number(items[cursor]?.getAttribute("aria-level") ?? "0") < level) {
+						focusAt(cursor);
+						return;
+					}
+					return;
+				}
 				if (event.key === "ArrowDown") {
 					event.preventDefault();
 					focusAt(index + 1);
@@ -14688,7 +19509,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					event.preventDefault();
 					focusAt(items.length - 1);
 				}
-			}, [focusAt]);
+			}, [focusAt, onToggleCollapse]);
 			const activateOnKey = (event, action) => {
 				if (event.key === "Enter" || event.key === " ") {
 					event.preventDefault();
@@ -14698,44 +19519,87 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			};
 			/** One row plus its nested children (the connector line is drawn by
 			*  `.treeKids` in tasks-graph.module.css). */
-			const renderNode = (node, depth) => {
+			const renderNode = (node, depth, last) => {
 				const children = childrenOf.get(node.id) ?? [];
-				const row = node.kind === "fold" ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				/** The mode chip this row shows (also decides what the mono line holds). */
+				const chip = node.kind === "agent" ? agentChip(node) : void 0;
+				/**
+				* The row's own wrapper is the child of its parent's level: it draws the
+				* elbow that connects it to that level's thread, and the LAST sibling stops
+				* its segment at the row's marker so the thread never hangs past the group.
+				*/
+				/** Whether this row's subtree is folded away right now. */
+				const collapsed = children.length > 0 && collapsedIds.has(node.id);
+				const wrap = (body) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+					className: clsx(tasks_graph_module_css_default.treeChild, last && tasks_graph_module_css_default.treeChildLast),
+					children: [body, children.length > 0 && !collapsed && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(TreeLevel, { items: children.map((child) => renderNode(child, depth + 1, child === children[children.length - 1])) })]
+				}, node.id);
+				/**
+				* The row's own disclosure control, placed at the row's END like the canvas
+				* card's own chevron (and measured the same 16px). Rendered only for a row
+				* that has children: a leaf gets no dead control, and the reader can read
+				* the row's shape from the chevron's direction alone.
+				*/
+				const disclosure = children.length === 0 ? null : /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: tasks_graph_module_css_default.treeDisclosure,
+					"aria-label": `${t(collapsed ? "tasksTreeExpandRow" : "tasksTreeCollapseRow")} ${nodeLabel(node)}`,
+					title: t(collapsed ? "tasksTreeExpandRow" : "tasksTreeCollapseRow"),
+					onClick: (event) => {
+						event.stopPropagation();
+						onToggleCollapse(node.id);
+					},
+					children: collapsed ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronRightOutlineRegular, { size: 12 }) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutlineRegular, { size: 12 })
+				});
+				return wrap(node.kind === "fold" ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 					"data-tasks-row": true,
 					role: "treeitem",
 					tabIndex: 0,
 					"aria-level": depth + 1,
 					"aria-label": `${foldTally(node)} · ${t("tasksFoldExpand")}`,
 					className: clsx(tasks_graph_module_css_default.treeRow, tasks_graph_module_css_default.treeFoldRow),
-					onClick: onToggleFold,
-					onKeyDown: (event) => {
-						activateOnKey(event, onToggleFold);
+					"data-tree-node": node.id,
+					"data-tree-expandable": children.length > 0 ? "true" : void 0,
+					"aria-expanded": children.length === 0 ? void 0 : !collapsed,
+					onClick: () => {
+						onExpandGroup(node);
 					},
-					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-						className: tasks_graph_module_css_default.treeGlyph,
-						"aria-hidden": "true",
-						children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(FoldGlyph, {})
-					}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
-						className: tasks_graph_module_css_default.treeContent,
-						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
-							className: tasks_graph_module_css_default.treeTitle,
-							children: [foldTally(node), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+					onKeyDown: (event) => {
+						activateOnKey(event, () => {
+							onExpandGroup(node);
+						});
+					},
+					children: [
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							className: tasks_graph_module_css_default.treeGlyph,
+							"aria-hidden": "true",
+							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(FoldGlyph, {})
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+							className: tasks_graph_module_css_default.treeContent,
+							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+								className: tasks_graph_module_css_default.treeTitle,
+								children: [foldTally(node), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+									className: tasks_graph_module_css_default.treeMeta,
+									children: t("tasksFoldExpand")
+								})]
+							}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 								className: tasks_graph_module_css_default.treeMeta,
-								children: t(folded ? "tasksFoldExpand" : "tasksFoldCollapse")
+								title: foldPreviews(node.previews, node.count),
+								children: foldPreviews(node.previews, node.count)
 							})]
-						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-							className: tasks_graph_module_css_default.treeMeta,
-							title: foldPreviews(node.previews, node.count),
-							children: foldPreviews(node.previews, node.count)
-						})]
-					})]
+						}),
+						disclosure
+					]
 				}, node.id) : node.kind === "workflow" ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 					"data-tasks-row": true,
 					role: "treeitem",
 					tabIndex: 0,
 					"aria-level": depth + 1,
-					"aria-expanded": "true",
 					"aria-label": `${node.run.name} ${workflowMeta(node)}`,
+					"data-tree-node": node.id,
+					"data-tree-expandable": children.length > 0 ? "true" : void 0,
+					"aria-expanded": children.length === 0 ? void 0 : !collapsed,
 					className: clsx(tasks_graph_module_css_default.treeRow, node.run.status !== "running" && tasks_graph_module_css_default.treeRowSettled),
 					onClick: (event) => {
 						onWorkflowInfo(node, event.currentTarget);
@@ -14766,7 +19630,8 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 								className: tasks_graph_module_css_default.treeMeta,
 								children: workflowMeta(node)
 							})]
-						})
+						}),
+						disclosure
 					]
 				}, node.id) : /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 					"data-tasks-row": true,
@@ -14774,6 +19639,9 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					tabIndex: 0,
 					"aria-level": depth + 1,
 					"aria-label": `${node.label} ${agentMeta(node)}`,
+					"data-tree-node": node.id,
+					"data-tree-expandable": children.length > 0 ? "true" : void 0,
+					"aria-expanded": children.length === 0 ? void 0 : !collapsed,
 					"aria-current": node.current ? "true" : void 0,
 					className: clsx(tasks_graph_module_css_default.treeRow, node.current && tasks_graph_module_css_default.treeRowActive, (node.state === "done" || node.state === "error") && !node.current && tasks_graph_module_css_default.treeRowSettled),
 					onClick: (event) => {
@@ -14798,14 +19666,17 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
 							className: tasks_graph_module_css_default.treeContent,
 							children: [
-								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+								/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
 									className: tasks_graph_module_css_default.treeTitle,
 									title: node.label,
-									children: node.label
+									children: [node.label, chip !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+										className: tasks_graph_module_css_default.treeChip,
+										children: chip
+									})]
 								}),
 								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 									className: tasks_graph_module_css_default.treeMeta,
-									children: agentMeta(node)
+									children: chip === void 0 ? agentMeta(node) : stateLabel(node.state)
 								}),
 								node.state === "running" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(LiveLine, { live: node.live }),
 								/* @__PURE__ */ (0, react_jsx_runtime.jsx)(TaskLine, {
@@ -14813,14 +19684,10 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 									onOpenTask
 								})
 							]
-						})
+						}),
+						disclosure
 					]
-				}, node.id);
-				if (children.length === 0) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", { children: row }, node.id);
-				return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", { children: [row, /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-					className: tasks_graph_module_css_default.treeKids,
-					children: children.map((child) => renderNode(child, depth + 1))
-				})] }, node.id);
+				}, node.id));
 			};
 			const roots = childrenOf.get("") ?? [];
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
@@ -14838,17 +19705,38 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 							"aria-hidden": "true",
 							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconLoadingOutlineRegular, { size: 12 })
 						}), t("loading")]
-					}), roots.map((root) => renderNode(root, 0))]
+					}), roots.map((root) => renderNode(root, 0, false))]
 				}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 					className: tasks_graph_module_css_default.controls,
 					"data-graph-controls": true,
-					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ViewModeToggle, {
-						mode,
-						onModeChange
-					}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(FoldToggleButton, {
-						folded,
-						onToggleFold
-					})]
+					children: [
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ViewModeToggle, {
+							mode,
+							onModeChange
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)(FoldToggleButton, {
+							folded,
+							onToggleFold
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+							variant: "ghost",
+							size: "sm",
+							className: tasks_graph_module_css_default.controlText,
+							"aria-label": t("tasksTreeCollapseAll"),
+							title: t("tasksTreeCollapseAll"),
+							onClick: onCollapseAll,
+							children: t("tasksTreeCollapseAll")
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+							variant: "ghost",
+							size: "sm",
+							className: tasks_graph_module_css_default.controlText,
+							"aria-label": t("tasksTreeExpandAll"),
+							title: t("tasksTreeExpandAll"),
+							onClick: onExpandAll,
+							children: t("tasksTreeExpandAll")
+						})
+					]
 				})]
 			});
 		}
@@ -14892,8 +19780,8 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			};
 		}
 		//#endregion
-		//#region \0dsh-css:H:\MaxNull\WorkStation\third-party-plugins\DSH-better-sidebar\src\client\FloatingWindow.module.css.mjs
-		const css$3 = ".R-Oilq_window{z-index:90;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);min-width:0;min-height:0;box-shadow:var(--dsw-shadow-lv3);font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-primary);box-sizing:border-box;border-radius:8px;flex-direction:column;display:flex;position:fixed;overflow:hidden}.R-Oilq_titleBar{border-bottom:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);cursor:grab;user-select:none;flex:none;justify-content:space-between;align-items:center;gap:8px;min-height:34px;padding:0 6px 0 12px;display:flex}.R-Oilq_titleBar:active{cursor:grabbing}.R-Oilq_title{white-space:nowrap;text-overflow:ellipsis;min-width:0;font-family:var(--ds-font-family-code,monospace);color:var(--dsw-alias-label-secondary);font-size:11px;overflow:hidden}.R-Oilq_titleActions{flex:none;align-items:center;gap:2px;display:inline-flex}.R-Oilq_close{flex:none}.R-Oilq_body{overscroll-behavior:contain;flex:1;min-height:0;padding:10px 12px 12px;overflow:auto}.R-Oilq_bodyFill{flex-direction:column;display:flex}.R-Oilq_bodyFill>*{flex:1;min-height:0}.R-Oilq_footer{border-top:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base);flex:none;justify-content:space-between;align-items:center;gap:8px;padding:8px 12px;display:flex}.R-Oilq_handle{touch-action:none;position:absolute}.R-Oilq_handleRight{cursor:ew-resize;width:6px;top:34px;bottom:0;right:0}.R-Oilq_handleBottom{cursor:ns-resize;height:6px;bottom:0;left:0;right:0}.R-Oilq_handleCorner{cursor:nwse-resize;background:linear-gradient(135deg, transparent 0%, transparent 55%, color-mix(in srgb, var(--dsw-alias-label-tertiary) 45%, transparent) 55%, color-mix(in srgb, var(--dsw-alias-label-tertiary) 45%, transparent) 100%);width:16px;height:16px;bottom:0;right:0}";
+		//#region \0dsh-css:/home/runner/work/DSH-better-sidebar/DSH-better-sidebar/src/client/FloatingWindow.module.css.mjs
+		const css$3 = ".ao083W_window{z-index:90;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);min-width:0;min-height:0;box-shadow:var(--dsw-shadow-lv3);font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-primary);box-sizing:border-box;border-radius:8px;flex-direction:column;display:flex;position:fixed;overflow:hidden}.ao083W_titleBar{border-bottom:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);cursor:grab;user-select:none;flex:none;justify-content:space-between;align-items:center;gap:8px;min-height:34px;padding:0 6px 0 12px;display:flex}.ao083W_titleBar:active{cursor:grabbing}.ao083W_title{white-space:nowrap;text-overflow:ellipsis;min-width:0;font-family:var(--ds-font-family-code,monospace);color:var(--dsw-alias-label-secondary);font-size:11px;overflow:hidden}.ao083W_titleActions{flex:none;align-items:center;gap:2px;display:inline-flex}.ao083W_close{flex:none}.ao083W_body{overscroll-behavior:contain;flex:1;min-height:0;padding:10px 12px 12px;overflow:auto}.ao083W_bodyFill{flex-direction:column;display:flex}.ao083W_bodyFill>*{flex:1;min-height:0}.ao083W_footer{border-top:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base);flex:none;justify-content:space-between;align-items:center;gap:8px;padding:8px 12px;display:flex}.ao083W_handle{touch-action:none;position:absolute}.ao083W_handleRight{cursor:ew-resize;width:6px;top:34px;bottom:0;right:0}.ao083W_handleBottom{cursor:ns-resize;height:6px;bottom:0;left:0;right:0}.ao083W_handleCorner{cursor:nwse-resize;background:linear-gradient(135deg, transparent 0%, transparent 55%, color-mix(in srgb, var(--dsw-alias-label-tertiary) 45%, transparent) 55%, color-mix(in srgb, var(--dsw-alias-label-tertiary) 45%, transparent) 100%);width:16px;height:16px;bottom:0;right:0}";
 		const tagId$3 = "dsh-external/dsh-better-sidebar/FloatingWindow.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$3) + "]") === null) {
 			const tag = document.createElement("style");
@@ -14903,18 +19791,18 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			document.head.appendChild(tag);
 		}
 		var FloatingWindow_module_css_default = {
-			"handle": "R-Oilq_handle",
-			"titleBar": "R-Oilq_titleBar",
-			"bodyFill": "R-Oilq_bodyFill",
-			"titleActions": "R-Oilq_titleActions",
-			"close": "R-Oilq_close",
-			"handleBottom": "R-Oilq_handleBottom",
-			"body": "R-Oilq_body",
-			"handleRight": "R-Oilq_handleRight",
-			"window": "R-Oilq_window",
-			"footer": "R-Oilq_footer",
-			"handleCorner": "R-Oilq_handleCorner",
-			"title": "R-Oilq_title"
+			"footer": "ao083W_footer",
+			"window": "ao083W_window",
+			"titleBar": "ao083W_titleBar",
+			"titleActions": "ao083W_titleActions",
+			"title": "ao083W_title",
+			"handleRight": "ao083W_handleRight",
+			"handleCorner": "ao083W_handleCorner",
+			"close": "ao083W_close",
+			"handleBottom": "ao083W_handleBottom",
+			"handle": "ao083W_handle",
+			"body": "ao083W_body",
+			"bodyFill": "ao083W_bodyFill"
 		};
 		//#endregion
 		//#region src/client/FloatingWindow.tsx
@@ -15236,6 +20124,9 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			/** Manual override; undefined = follow the auto rule. */
 			const [manualOpen, setManualOpen] = (0, react.useState)(void 0);
 			const open = manualOpen ?? autoOpen;
+			/** The rows: a job arriving or settling slides in instead of blinking. */
+			const rowsRef = (0, react.useRef)(null);
+			useAutoAnimateRef(rowsRef);
 			const [armedId, setArmedId] = (0, react.useState)(void 0);
 			const [killingId, setKillingId] = (0, react.useState)(void 0);
 			const [killErrorId, setKillErrorId] = (0, react.useState)(void 0);
@@ -15314,6 +20205,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					}),
 					open && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						className: tasks_graph_module_css_default.jobsDrawerBody,
+						ref: rowsRef,
 						children: rows.map((row) => {
 							const { job } = row;
 							const live = isJobLive(job);
@@ -15722,7 +20614,623 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			}), document.body);
 		}
 		//#endregion
+		//#region src/client/sidechat-transcript.ts
+		/** Compact token count the way the main conversation prints usage
+		*  (517 / 12.2K / 1.2M — the host's own formatter is not exported). */
+		function formatTokens(n) {
+			const scaled = (v) => v >= 100 ? String(Math.round(v)) : String(Math.round(v * 10) / 10);
+			if (n < 1e3) return String(n);
+			if (n < 1e6) return `${scaled(n / 1e3)}K`;
+			return `${scaled(n / 1e6)}M`;
+		}
+		/** Compact duration the way the main conversation prints run times
+		*  (45.2s / 2m42s — sub-minute keeps one decimal). */
+		function formatDurationMs(ms) {
+			const seconds = ms / 1e3;
+			if (seconds < 60) return `${Math.round(seconds * 10) / 10}s`;
+			const whole = Math.round(seconds);
+			return `${Math.floor(whole / 60)}m${whole % 60}s`;
+		}
+		/** Extract the visible text of a content-block list (`text` blocks verbatim,
+		*  joined by blank lines); empty reads `…` so rows never render blank. */
+		function blockText(content) {
+			const parts = [];
+			for (const block of content) {
+				if (block === null || typeof block !== "object") continue;
+				const candidate = block;
+				if (candidate.type === "text" && typeof candidate.text === "string") parts.push(candidate.text);
+			}
+			const text = parts.join("\n\n");
+			return text === "" ? "…" : text;
+		}
+		/** Cap for a tool row's one-line argument summary (display only). */
+		const ARGS_SUMMARY_MAX = 80;
+		/** The most identifying argument keys, in priority order (bash's command,
+		*  fs tools' paths, search's pattern, …). */
+		const ARGS_SUMMARY_KEYS = [
+			"command",
+			"file_path",
+			"path",
+			"pattern",
+			"query",
+			"url",
+			"prompt"
+		];
+		function flatTruncate(text) {
+			const flat = text.replace(/\s+/g, " ").trim();
+			return flat.length > ARGS_SUMMARY_MAX ? `${flat.slice(0, 79)}…` : flat;
+		}
+		/**
+		* One-line summary of a tool call's raw arguments JSON for the collapsed
+		* row: the first identifying string field when the JSON parses, else the
+		* flattened raw text; empty when there is nothing worth showing.
+		*/
+		function toolArgsSummary(args) {
+			if (args === void 0) return "";
+			try {
+				const parsed = JSON.parse(args);
+				if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) for (const key of ARGS_SUMMARY_KEYS) {
+					const value = parsed[key];
+					if (typeof value === "string" && value.trim() !== "") return flatTruncate(value);
+				}
+			} catch {}
+			return flatTruncate(args);
+		}
+		/**
+		* The result content blocks of one tool/result message under BOTH logged
+		* shapes: 0.1.6 wrapped them in a single `type: 'tool-result'` content block
+		* on a user-role message, 0.1.7's first-class tool-role message carries them
+		* at the message's own top level. Historical logs keep the old shape forever,
+		* so both are read. Undefined when the message carries no block array.
+		*/
+		function resultBlocks(content) {
+			if (!Array.isArray(content)) return void 0;
+			for (const block of content) {
+				if (block === null || typeof block !== "object") continue;
+				const wrapper = block;
+				if (wrapper.type === "tool-result" && Array.isArray(wrapper.content)) return wrapper.content;
+			}
+			return content;
+		}
+		/** The plain text of a tool/result message (its text blocks, under either of
+		*  the two shapes {@link resultBlocks} reads). */
+		function resultTextOf(data) {
+			const message = data.message;
+			const blocks = resultBlocks(message?.content);
+			if (blocks === void 0) return "";
+			const parts = [];
+			for (const item of blocks) {
+				if (item === null || typeof item !== "object") continue;
+				const textItem = item;
+				if (textItem.type === "text" && typeof textItem.text === "string") parts.push(textItem.text);
+			}
+			return parts.join("\n");
+		}
+		/** Index of the last `session/end-seed` event (fork seed marker), or -1. */
+		function lastSeedEnd(events) {
+			for (let index = events.length - 1; index >= 0; index--) if (events[index]?.type === "session/end-seed") return index;
+			return -1;
+		}
+		/** Parse the tool's raw arguments JSON to an object, or undefined. */
+		function parseArgsObject(args) {
+			if (args === void 0) return void 0;
+			try {
+				const parsed = JSON.parse(args);
+				if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return void 0;
+				return parsed;
+			} catch {
+				return;
+			}
+		}
+		/**
+		* Call-time card from the raw `tool/call` arguments — the same literal cards
+		* the host's own presenters derive before any result exists: bash shows the
+		* command line (foreground only), edit/write show the literal replacement.
+		* `read` has no call-time window (its structure only exists in the result).
+		*/
+		function callCard(name, args) {
+			const parsed = parseArgsObject(args);
+			if (parsed === void 0) return void 0;
+			if (name === "bash") {
+				const command = typeof parsed.command === "string" && parsed.command !== "" ? parsed.command : void 0;
+				if (command === void 0 || parsed.run_in_background === true) return void 0;
+				const cwd = typeof parsed.workdir === "string" && parsed.workdir !== "" ? parsed.workdir : void 0;
+				return {
+					type: "terminal",
+					command,
+					...cwd !== void 0 ? { cwd } : {}
+				};
+			}
+			if (name === "edit" || name === "write") {
+				const path = typeof parsed.file_path === "string" && parsed.file_path !== "" ? parsed.file_path : void 0;
+				if (path === void 0) return void 0;
+				if (name === "edit") {
+					const oldText = typeof parsed.old_string === "string" ? parsed.old_string : "";
+					const newText = typeof parsed.new_string === "string" ? parsed.new_string : "";
+					return {
+						type: "diff",
+						diffs: [{
+							path,
+							oldText: oldText === "" ? null : oldText,
+							newText
+						}]
+					};
+				}
+				return {
+					type: "diff",
+					diffs: [{
+						path,
+						oldText: null,
+						newText: typeof parsed.content === "string" ? parsed.content : ""
+					}]
+				};
+			}
+		}
+		/** The `tool/result` `meta` as an object, or undefined (opaque tool payload). */
+		function metaObject(data) {
+			const meta = data.meta;
+			if (meta === null || typeof meta !== "object" || Array.isArray(meta)) return void 0;
+			return meta;
+		}
+		/** Narrow edit/write's contextual-diff meta (`{ diffs: FileDiff[] }`) to
+		*  DiffHunk[], declining on any malformed entry. */
+		function diffCardFromMeta(meta) {
+			const diffs = meta.diffs;
+			if (!Array.isArray(diffs) || diffs.length === 0) return void 0;
+			const hunks = [];
+			for (const item of diffs) {
+				if (item === null || typeof item !== "object" || Array.isArray(item)) return void 0;
+				const { path, oldText, newText } = item;
+				if (typeof path !== "string" || typeof newText !== "string") return void 0;
+				if (oldText !== null && typeof oldText !== "string") return void 0;
+				hunks.push({
+					path,
+					oldText,
+					newText
+				});
+			}
+			return {
+				type: "diff",
+				diffs: hunks
+			};
+		}
+		/** Narrow read's line-window meta (`{ path, offset, lines, totalLines, lang? }`)
+		*  to a read card, enforcing the same semantic contract the host does: 1-based
+		*  strictly increasing line numbers that never exceed `totalLines`. */
+		function readCardFromMeta(meta) {
+			const { path, offset, lines, totalLines, lang } = meta;
+			if (typeof path !== "string" || typeof offset !== "number" || typeof totalLines !== "number") return void 0;
+			if (!Number.isInteger(offset) || offset < 1) return void 0;
+			if (!Number.isInteger(totalLines) || totalLines < 0) return void 0;
+			if (!Array.isArray(lines)) return void 0;
+			const narrowed = [];
+			let previous = offset - 1;
+			for (const line of lines) {
+				if (line === null || typeof line !== "object" || Array.isArray(line)) return void 0;
+				const candidate = line;
+				if (typeof candidate.number !== "number" || !Number.isInteger(candidate.number)) return void 0;
+				if (candidate.number <= previous || candidate.number > totalLines) return void 0;
+				if (typeof candidate.text !== "string") return void 0;
+				narrowed.push({
+					number: candidate.number,
+					text: candidate.text
+				});
+				previous = candidate.number;
+			}
+			if (lang !== void 0 && typeof lang !== "string") return void 0;
+			return {
+				type: "read",
+				label: path,
+				lines: narrowed,
+				totalLines,
+				...lang !== void 0 ? { lang } : {}
+			};
+		}
+		/** The bash result's trailing exit markers (`[exit code: N]` /
+		*  `[killed by signal: X]` — the model-facing text the tool appends), stripped
+		*  the same way the host's parseExitStatus recovers the exit pill. */
+		const EXIT_SIGNAL_RE = /\n\[killed by signal: ([^\]\n]+)\]$/;
+		const EXIT_CODE_RE = /\n\[exit code: (\d+)\]$/;
+		/**
+		* Result-time card refinement: `meta`-carrying structure wins (edit/write's
+		* applied hunks, read's line window), bash's output gets its exit marker
+		* stripped into the exit pill, and a failed result always falls back to the
+		* generic row (the host's isError path renders generic output too).
+		*/
+		function resultCard(name, previous, data, resultText) {
+			if (name === "bash") {
+				if (previous === void 0 || previous.type !== "terminal" || resultText === "") return previous;
+				const signal = EXIT_SIGNAL_RE.exec(resultText);
+				if (signal?.[1] !== void 0) return {
+					...previous,
+					output: resultText.slice(0, signal.index),
+					exitCode: void 0,
+					signal: signal[1]
+				};
+				const exit = EXIT_CODE_RE.exec(resultText);
+				if (exit?.[1] !== void 0) return {
+					...previous,
+					output: resultText.slice(0, exit.index),
+					exitCode: Number(exit[1]),
+					signal: void 0
+				};
+				return {
+					...previous,
+					output: resultText,
+					exitCode: 0,
+					signal: void 0
+				};
+			}
+			const meta = metaObject(data);
+			if (meta === void 0) return previous;
+			if (name === "edit" || name === "write") return diffCardFromMeta(meta) ?? previous;
+			if (name === "read") return readCardFromMeta(meta);
+			return previous;
+		}
+		/**
+		* The human-readable text of one FAILURE reason, or undefined when the reason
+		* is not an error. `turn/end` records the failure as `reason.error.message`
+		* (the agent loop's own shape); an attempt's terminal `finish` chunk carries
+		* the adapter-failure shape `reason.failure.message` (dsh-llm's
+		* `adapterFailureChunk`). Neither present falls back to a plain string
+		* rendering of the reason, so the row is never blank.
+		*/
+		function failureText(reason) {
+			if (reason === null || typeof reason !== "object" || Array.isArray(reason)) return void 0;
+			const record = reason;
+			if (record.kind !== "error") return void 0;
+			for (const candidate of [record.error, record.failure]) {
+				if (candidate === null || typeof candidate !== "object") continue;
+				const message = candidate.message;
+				if (typeof message === "string" && message !== "") return message;
+			}
+			return String(reason);
+		}
+		/**
+		* The failure that an `assistant/attempt` carries in its durable stream: the
+		* terminal `finish` chunk's `reason`. The record walk mirrors sidechat-core's
+		* `streamTexts` (the same compact `AssistantStreamRecord[]` shape), only
+		* reading the finish reason instead of the text chunks. Undefined when the
+		* attempt ended any other way (`stop`, `max-tokens`, `aborted`, …).
+		*/
+		function attemptFailure(stream) {
+			if (!Array.isArray(stream)) return void 0;
+			for (const record of stream) {
+				if (record === null || typeof record !== "object") continue;
+				const entry = record;
+				if (entry.type !== "chunk") continue;
+				const chunk = entry.chunk;
+				if (chunk === null || typeof chunk !== "object" || chunk.type !== "finish") continue;
+				const text = failureText(chunk.reason);
+				if (text !== void 0) return text;
+			}
+		}
+		/**
+		* Map a thread child's history rows onto compact transcript rows: the
+		* inherited fork seed is cut at the last `session/end-seed`, context
+		* injections map onto a collapsible injection row, `assistant/live-chunk`
+		* deltas accumulate into streaming rows per (turn, step, block) and are
+		* superseded by the assembled `assistant/message`, and tool invocations
+		* render one expandable line each (arguments, paired result text, failure
+		* marker; a still-executing call is marked until its result lands). A failed
+		* turn renders exactly one `error` row — the attempt's stream error and the
+		* `turn/end` reason are the same failure.
+		* @param entries - history rows (event + host-computed view) in seq order,
+		*   the live deltas of the in-flight attempt appended after the durable tail.
+		* @returns display rows in log order.
+		*/
+		function transcriptRows(entries, prev) {
+			const events = entries.map((entry) => entry.event);
+			const seedEnd = lastSeedEnd(events);
+			const rows = [];
+			/** (turn, step, index, kind) key → index of its accumulating stream row. */
+			const streamRows = /* @__PURE__ */ new Map();
+			/** tool callId → index of its tool row in `rows` (result pairing). */
+			const callRows = /* @__PURE__ */ new Map();
+			/** turn → envelope time of its `turn/start` (turn-tail duration basis). */
+			const turnStarts = /* @__PURE__ */ new Map();
+			/** Turns that already rendered a failure row (an attempt error and the
+			*  `turn/end` that follows it are the SAME failure — one row per turn). */
+			const errorTurns = /* @__PURE__ */ new Set();
+			/** turn → usage aggregate: output accumulates across steps, input takes the
+			*  last request's prompt size (earlier steps' input is mostly the same
+			*  context re-sent, so summing would double-count). */
+			const turnUsage = /* @__PURE__ */ new Map();
+			for (let index = 0; index < events.length; index++) {
+				if (index <= seedEnd) continue;
+				const event = events[index];
+				if (event === void 0) continue;
+				const data = event.data;
+				switch (event.type) {
+					case "turn/start": {
+						const turn = data.turn;
+						if (typeof turn === "number" && Number.isInteger(turn)) turnStarts.set(turn, event.time);
+						break;
+					}
+					case "turn/end": {
+						const turn = data.turn;
+						if (typeof turn !== "number" || !Number.isInteger(turn)) break;
+						const failure = failureText(data.reason);
+						if (failure !== void 0 && !errorTurns.has(turn)) {
+							errorTurns.add(turn);
+							rows.push({
+								kind: "error",
+								seq: event.seq,
+								text: failure
+							});
+						}
+						const start = turnStarts.get(turn);
+						turnStarts.delete(turn);
+						const usage = turnUsage.get(turn);
+						turnUsage.delete(turn);
+						const durationMs = start !== void 0 ? Math.max(0, event.time - start) : void 0;
+						if (usage === void 0 && durationMs === void 0) break;
+						rows.push({
+							kind: "turnSummary",
+							seq: event.seq,
+							...usage !== void 0 ? {
+								inputTokens: usage.inputTokens,
+								outputTokens: usage.outputTokens
+							} : {},
+							...durationMs !== void 0 ? { durationMs } : {}
+						});
+						break;
+					}
+					case "assistant/attempt": {
+						const turn = data.turn;
+						if (typeof turn !== "number" || !Number.isInteger(turn) || errorTurns.has(turn)) break;
+						const failure = attemptFailure(data.stream);
+						if (failure === void 0) break;
+						errorTurns.add(turn);
+						rows.push({
+							kind: "error",
+							seq: event.seq,
+							text: failure
+						});
+						break;
+					}
+					case "user/message": {
+						const text = blockText(Array.isArray(data.content) ? data.content : []);
+						const messageId = typeof data.id === "string" && data.id !== "" ? data.id : void 0;
+						if (isContextInjectionMessage(data)) {
+							if (data.source?.kind === "user" && text.startsWith(`${SIDE_BOUNDARY_PROMPT}\n\n`)) {
+								rows.push({
+									kind: "injection",
+									seq: event.seq,
+									text: SIDE_BOUNDARY_PROMPT
+								});
+								const body = text.slice(SIDE_BOUNDARY_PROMPT.length + 2);
+								if (body !== "") rows.push({
+									kind: "user",
+									seq: event.seq,
+									text: body,
+									...messageId !== void 0 ? { messageId } : {}
+								});
+								break;
+							}
+							rows.push({
+								kind: "injection",
+								seq: event.seq,
+								text
+							});
+							break;
+						}
+						rows.push({
+							kind: "user",
+							seq: event.seq,
+							text,
+							...messageId !== void 0 ? { messageId } : {}
+						});
+						break;
+					}
+					case "assistant/live-chunk": {
+						const chunk = data.chunk;
+						if (chunk === null || typeof chunk !== "object") break;
+						const kind = chunk.type === "text-delta" ? "assistant" : chunk.type === "reasoning-delta" ? "reasoning" : null;
+						if (kind === null || typeof chunk.text !== "string" || chunk.text === "") break;
+						const turn = data.turn;
+						const step = data.step;
+						const blockIndex = chunk.index;
+						const key = `${String(turn)}:${String(step)}:${String(blockIndex)}:${kind}`;
+						const existing = streamRows.get(key);
+						if (existing !== void 0) {
+							const row = rows[existing];
+							if (row !== void 0 && row.kind === kind && !row.settled) rows[existing] = {
+								...row,
+								text: row.text + chunk.text
+							};
+						} else {
+							streamRows.set(key, rows.length);
+							rows.push({
+								kind,
+								seq: event.seq,
+								text: chunk.text,
+								settled: false
+							});
+						}
+						break;
+					}
+					case "assistant/message": {
+						const usageTurn = data.turn;
+						if (typeof usageTurn === "number" && Number.isInteger(usageTurn)) {
+							const usage = data.usage;
+							const input = typeof usage?.inputTokens === "number" ? usage.inputTokens : void 0;
+							const output = typeof usage?.outputTokens === "number" ? usage.outputTokens : void 0;
+							if (input !== void 0 && output !== void 0) {
+								const aggregate = turnUsage.get(usageTurn);
+								if (aggregate === void 0) turnUsage.set(usageTurn, {
+									inputTokens: input,
+									outputTokens: output
+								});
+								else turnUsage.set(usageTurn, {
+									inputTokens: input,
+									outputTokens: aggregate.outputTokens + output
+								});
+							}
+						}
+						const prefix = `${String(data.turn)}:${String(data.step)}:`;
+						const streamed = [...streamRows.entries()].filter(([key]) => key.startsWith(prefix)).map(([, rowIndex]) => rowIndex);
+						for (const key of [...streamRows.keys()]) if (key.startsWith(prefix)) streamRows.delete(key);
+						const settled = (Array.isArray(data.message?.content) ? data.message.content : []).flatMap((block) => {
+							if (block === null || typeof block !== "object") return [];
+							const candidate = block;
+							if (candidate.type === "reasoning" && typeof candidate.text === "string" && candidate.text !== "") return [{
+								kind: "reasoning",
+								seq: event.seq,
+								text: candidate.text,
+								settled: true
+							}];
+							if (candidate.type === "text" && typeof candidate.text === "string" && candidate.text !== "") return [{
+								kind: "assistant",
+								seq: event.seq,
+								text: candidate.text,
+								settled: true
+							}];
+							return [];
+						});
+						if (streamed.length === 0) rows.push(...settled);
+						else rows.splice(Math.min(...streamed), streamed.length, ...settled);
+						break;
+					}
+					case "tool/call": {
+						const callId = data.callId;
+						const name = typeof data.name === "string" ? data.name : "tool";
+						const args = typeof data.arguments === "string" ? data.arguments : void 0;
+						const card = callCard(name, args);
+						const rowIndex = rows.length;
+						if (typeof callId === "string") callRows.set(callId, rowIndex);
+						rows.push({
+							kind: "tool",
+							seq: event.seq,
+							name,
+							failed: false,
+							args,
+							executing: true,
+							...card !== void 0 ? { card } : {}
+						});
+						break;
+					}
+					case "tool/result": {
+						const source = data.message;
+						const callId = typeof source?.source?.callId === "string" ? source.source.callId : void 0;
+						const rowIndex = callId === void 0 ? void 0 : callRows.get(callId);
+						const failed = data.error !== void 0;
+						const resultText = resultTextOf(data);
+						if (rowIndex !== void 0) {
+							const row = rows[rowIndex];
+							if (row !== void 0 && row.kind === "tool") {
+								const card = failed ? void 0 : resultCard(row.name, row.card, data, resultText);
+								rows[rowIndex] = {
+									...row,
+									failed: row.failed || failed,
+									resultText: resultText === "" ? row.resultText : resultText,
+									executing: false,
+									...card !== void 0 ? { card } : { card: void 0 }
+								};
+							}
+						} else if (failed || resultText !== "") rows.push({
+							kind: "tool",
+							seq: event.seq,
+							name: callId === void 0 ? "tool" : `tool:${callId.slice(0, 8)}`,
+							failed,
+							resultText: resultText === "" ? void 0 : resultText
+						});
+						break;
+					}
+				}
+			}
+			return reuseRows(rows, prev);
+		}
+		/** Whether two rows carry identical display content (identity fields plus
+		*  every rendered field of their kind). */
+		function rowsEqual(a, b) {
+			if (a.kind !== b.kind || a.seq !== b.seq) return false;
+			switch (a.kind) {
+				case "user": {
+					const other = b;
+					return a.text === other.text && a.messageId === other.messageId;
+				}
+				case "injection":
+				case "error": {
+					const other = b;
+					return a.text === other.text;
+				}
+				case "assistant":
+				case "reasoning": {
+					const other = b;
+					return a.text === other.text && a.settled === other.settled;
+				}
+				case "tool": {
+					const other = b;
+					return a.name === other.name && a.failed === other.failed && a.args === other.args && a.resultText === other.resultText && a.executing === other.executing;
+				}
+				case "turnSummary": {
+					const other = b;
+					return a.inputTokens === other.inputTokens && a.outputTokens === other.outputTokens && a.durationMs === other.durationMs;
+				}
+			}
+		}
+		/** Re-adopt the PREVIOUS poll's row objects wherever the content is
+		*  unchanged (position-aligned, append-mostly): settled rows keep their
+		*  object identity across the transcript pulls, so React's reconciler and the
+		*  markdown/DOMPurify caches downstream skip them instead of re-rendering
+		*  the whole transcript every poll. Comparing the strings is far cheaper
+		*  than what a fresh reference costs the row below. Rows past the first
+		*  mismatch (an inserted/superseded streaming row) rebuild as usual — that
+		*  is exactly the changed tail. */
+		function reuseRows(rows, prev) {
+			if (prev === void 0) return rows;
+			const shared = Math.min(rows.length, prev.length);
+			for (let index = 0; index < shared; index++) {
+				const before = prev[index];
+				const after = rows[index];
+				if (before === void 0 || after === void 0) continue;
+				if (rowsEqual(before, after)) rows[index] = before;
+			}
+			return rows;
+		}
+		//#endregion
 		//#region src/client/TasksPopovers.tsx
+		/**
+		* The anchored-popover CONTENTS of the Tasks page (geometry and dismissal
+		* live in AnchoredPopover): the agent node detail with a transcript jump and
+		* the workflow run detail with clickable member rows. Both share one grammar:
+		* a letter-spaced uppercase head, a [glyph][title] title row, a dt/dd
+		* key/value grid, a titled well and one full-width jump action.
+		*
+		* The two cards are ONE skeleton: the same head band, the same [glyph][title]
+		* title row (the card's own host glyph, never a typed character), the same
+		* inset list well of 28px rows, and one l1 hairline around whatever closes the
+		* card. The only intended difference is where a group header sits: a single
+		* list keeps its label fixed above the well, while a multi-phase run scrolls
+		* each phase label with its own rows.
+		*
+		* Every control is a host primitive (`Button` / `StateDot` / `Tag`) — a row
+		* that opens something IS a `<button>`, so it is keyboard reachable — and the
+		* boxes around them are the page's own module classes (`popCard`, `popRows`,
+		* `popList*`). The card is the portal's content root, so it paints the floating
+		* surface itself: the popover shell only positions the box it portals.
+		*
+		* A member row with a child session jumps to that transcript; a member without
+		* one (a declaration that never spawned) stays a plain tally line.
+		*
+		* The team board is NOT here: it is always visible as a strip above the
+		* canvas (TeamBoard.tsx).
+		*/
+		/**
+		* The usage row's tooltip: the four buckets the host bills separately, in the
+		* host's own words (the `chat` namespace's usage dialog). Undefined when that
+		* wording is unavailable — an empty `title` would still swallow the hover.
+		*/
+		function usageTitle(usage) {
+			const parts = [
+				[chatT("message.turnUsage.input"), usage.uncachedInputTokens],
+				[chatT("message.turnUsage.cacheRead"), usage.cacheReadTokens],
+				[chatT("message.turnUsage.cacheWrite"), usage.cacheWriteTokens],
+				[chatT("message.turnUsage.output"), usage.outputTokens]
+			].filter(([label]) => label !== void 0).map(([label, count]) => `${label ?? ""} ${formatTokens(count)}`);
+			return parts.length === 0 ? void 0 : parts.join(" · ");
+		}
 		/** The display-state label key. */
 		function stateKey(state) {
 			switch (state) {
@@ -15764,13 +21272,89 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				})]
 			});
 		}
-		/** The agent node detail popover. */
+		/**
+		* The transcript jump, offered the way the host's own subagent list offers it:
+		* the primary action opens the child's transcript in the NATIVE right sidebar
+		* (the `subagentchat` tab type — the page never re-implements a transcript
+		* pane), and the caret beside it opens the main window instead.
+		*
+		* The ROOT node has no child to embed — it IS the main session — and a host
+		* without the `subagentchat` type has no sidebar to open into, so both keep the
+		* single button.
+		*/
+		function JumpActions(props) {
+			const { node, asideAvailable, onJump } = props;
+			const [open, setOpen] = (0, react.useState)(false);
+			const rootRef = (0, react.useRef)(null);
+			(0, _deepseek_ai_dsh_client_ui_primitives.useDismissOnOutsidePointer)(rootRef, open, setOpen);
+			const split = asideAvailable && node.childAddress !== void 0;
+			const primaryPlace = split ? "side" : "main";
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+				variant: "primary",
+				size: "sm",
+				icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconRightUpOutlineRegular, { size: 12 }),
+				onClick: () => {
+					onJump(node, primaryPlace);
+				},
+				children: t("tasksNodeJump")
+			}), split && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+				className: tasks_graph_module_css_default.jumpMore,
+				ref: rootRef,
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+					variant: "primary",
+					size: "sm",
+					className: tasks_graph_module_css_default.jumpMoreButton,
+					"aria-label": t("tasksNodeOpenMain"),
+					"aria-haspopup": "menu",
+					"aria-expanded": open,
+					title: t("tasksNodeOpenMain"),
+					onClick: () => {
+						setOpen((current) => !current);
+					},
+					children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutlineRegular, { size: 12 })
+				}), open && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MenuSurface, {
+					compact: true,
+					className: tasks_graph_module_css_default.jumpMenu,
+					role: "menu",
+					children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+						variant: "ghost",
+						size: "sm",
+						role: "menuitem",
+						className: tasks_graph_module_css_default.jumpMenuItem,
+						onClick: () => {
+							setOpen(false);
+							onJump(node, "main");
+						},
+						children: t("tasksNodeOpenMain")
+					})
+				})]
+			})] });
+		}
+		/**
+		* The agent node detail popover.
+		*
+		* The merged activity is a SUBTITLE, not a fact: it sits under the title in
+		* the card's smallest voice instead of filling a row of the key/value grid
+		* (where the right-aligned value column ellipsised it at 280px and the label
+		* "最近活动" spent a third of the width saying what the position already says).
+		* With no process data at all the block renders nothing — a settled node must
+		* never claim to be analysing a request.
+		*/
 		function AgentNodePopover(props) {
 			const { node, onJump, onOpenTask } = props;
 			/** The row's mode word; `unknown` claims no mode and this row is omitted. */
 			const nodeMode = modeLabel(node.mode);
 			const liveText = node.live?.text !== void 0 ? flatten(node.live.text) : void 0;
-			const liveTool = liveActivityLabel(node.live?.summary);
+			/** Tokens the node's own session was billed for (host projection). */
+			const usage = node.metrics?.usage;
+			/**
+			* How long it worked. Read per render on purpose: the page re-reads its live
+			* snapshot every 3s, which is also the cadence at which a running node's open
+			* turn grows (the projection's `through` only moves when an event commits).
+			*/
+			const elapsed = elapsedMs(node.metrics?.timing, Date.now());
+			const usageTip = usage === void 0 ? void 0 : usageTitle(usage);
+			const activity = activityLine(node);
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				className: tasks_graph_module_css_default.popCard,
 				children: [
@@ -15781,6 +21365,19 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					/* @__PURE__ */ (0, react_jsx_runtime.jsx)(PopTitleRow, {
 						glyph: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(AgentGlyph, { node }),
 						title: node.label
+					}),
+					(activity !== void 0 || liveText !== void 0) && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						className: tasks_graph_module_css_default.popActivityBlock,
+						"data-node-activity": true,
+						children: [activity !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							className: tasks_graph_module_css_default.popActivity,
+							title: activity,
+							children: activity
+						}), liveText !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							className: tasks_graph_module_css_default.popHint,
+							title: liveText,
+							children: liveText
+						})]
 					}),
 					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)(PopRows, { children: [
 						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)(PopRow, {
@@ -15802,16 +21399,18 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 							label: t("tasksNodeTeamRole"),
 							children: node.team.role === "lead" ? "lead" : node.team.name
 						}),
-						(liveTool !== void 0 || liveText !== void 0) && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(PopRow, {
-							label: t("tasksNodeActivity"),
-							mono: true,
-							children: liveTool ?? liveText
+						usage !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(PopRow, {
+							label: t("tasksNodeTokens"),
+							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+								...usageTip === void 0 ? {} : { title: usageTip },
+								children: formatTokens(totalTokens(usage))
+							})
+						}),
+						elapsed !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(PopRow, {
+							label: t("tasksNodeDuration"),
+							children: formatJobDuration(elapsed, t)
 						})
 					] }),
-					liveText !== void 0 && liveTool !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-						className: tasks_graph_module_css_default.popHint,
-						children: liveText
-					}),
 					(node.tasks?.length ?? 0) > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 						className: tasks_graph_module_css_default.popSection,
 						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
@@ -15846,14 +21445,10 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					}),
 					(node.childAddress !== void 0 || node.parentId === void 0) && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						className: tasks_graph_module_css_default.popFoot,
-						children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
-							variant: "primary",
-							size: "sm",
-							icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconRightUpOutlineRegular, { size: 12 }),
-							onClick: () => {
-								onJump(node);
-							},
-							children: t("tasksNodeJump")
+						children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(JumpActions, {
+							node,
+							asideAvailable: props.asideAvailable,
+							onJump
 						})
 					})
 				]
@@ -16253,9 +21848,18 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		* The read-only body: the owner line and the markdown description. The status
 		* and the owner NAME live in the window's own head row (see `TaskWindow`); this
 		* body carries the editable owner picker beside the prose it belongs to.
+		*
+		* The description is a markdown SURFACE like every other one the plugin draws:
+		* heading slugs, in-note anchor jumps and `.md` link claiming. It renders no
+		* file of its own, so a relative link target resolves against the session cwd
+		* (`sessionId` is the team root the window was opened for).
 		*/
 		function TaskViewBody(props) {
 			const { task } = props;
+			const surface = useMarkdownSurface({
+				ctx: props.ctx,
+				sessionId: props.sessionId
+			});
 			const body = task.description.trim();
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
 				/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
@@ -16281,16 +21885,20 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 					className: tasks_graph_module_css_default.taskMarkdown,
 					"data-task-description": true,
+					ref: surface.surfaceRef,
 					children: body === "" ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						className: tasks_graph_module_css_default.popHint,
 						children: t("teamTaskNoDescription")
-					}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { ...markdownTextProps(body, {
-						copyLabel: t("copy"),
-						copiedLabel: t("copied"),
-						codeLabel: t("codeBlockTitle"),
-						wrapLabel: t("codeBlockWrap"),
-						unwrapLabel: t("codeBlockUnwrap")
-					}) })
+					}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownDelegateProvider, {
+						openFile: surface.openFile,
+						children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { ...markdownTextProps(surface.rewrite(body), {
+							copyLabel: t("copy"),
+							copiedLabel: t("copied"),
+							codeLabel: t("codeBlockTitle"),
+							wrapLabel: t("codeBlockWrap"),
+							unwrapLabel: t("codeBlockUnwrap")
+						}) })
+					})
 				}),
 				/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 					className: tasks_graph_module_css_default.taskField,
@@ -16365,7 +21973,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		* one component.
 		*/
 		function TaskWindow(props) {
-			const { rootId, task, members, onClose } = props;
+			const { rootId, task, members, ctx, onClose } = props;
 			const creating = task === void 0;
 			const [editing, setEditing] = (0, react.useState)(creating);
 			const [subject, setSubject] = (0, react.useState)(task?.subject ?? "");
@@ -16391,6 +21999,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				setDescription(seed.description);
 				setSubjectTouched(false);
 				setEditing(seed.creating);
+				setArmedDelete(false);
 			}, [task?.id]);
 			const teammates = members.filter((member) => member.role === "teammate");
 			/** Run one CAS mutation with the shared busy/conflict handling. */
@@ -16572,6 +22181,8 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 							task,
 							teammates,
 							busy,
+							ctx,
+							sessionId: rootId,
 							onReassign: reassign
 						}),
 						note !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
@@ -16583,8 +22194,8 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			});
 		}
 		//#endregion
-		//#region \0dsh-css:H:\MaxNull\WorkStation\third-party-plugins\DSH-better-sidebar\src\client\SubagentView.module.css.mjs
-		const css$2 = ".AQnWfq_subagent{flex-direction:column;flex:1;min-height:0;display:flex}.AQnWfq_subagentHeader{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:8px;height:36px;padding:0 8px 0 12px;display:flex}.AQnWfq_subagentHeading{flex:1;align-items:baseline;gap:5px;min-width:0;display:flex;overflow:hidden}.AQnWfq_subagentTitle{font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary);white-space:nowrap;flex:none}.AQnWfq_subagentSubject{min-width:0;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);text-overflow:ellipsis;white-space:nowrap;flex:1;overflow:hidden}.AQnWfq_subagentSep{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);flex:none}.AQnWfq_subagentCount{font-family:var(--ds-font-family-code,monospace);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-secondary);white-space:nowrap;flex:none;font-size:10px}.AQnWfq_subagentRefresh{flex:none}.AQnWfq_subagentEmpty{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);text-align:center;flex-direction:column;gap:2px;padding:16px;display:flex}.AQnWfq_subagentEmptyHint{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary)}.AQnWfq_subagentError{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);justify-content:space-between;align-items:center;gap:8px;padding:8px 10px;display:flex}.AQnWfq_subagentErrorRetry{flex:none}";
+		//#region \0dsh-css:/home/runner/work/DSH-better-sidebar/DSH-better-sidebar/src/client/SubagentView.module.css.mjs
+		const css$2 = ".wxwsGW_subagent{flex-direction:column;flex:1;min-height:0;display:flex}.wxwsGW_subagentHeader{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:8px;height:36px;padding:0 8px 0 12px;display:flex}.wxwsGW_subagentHeading{flex:1;align-items:baseline;gap:5px;min-width:0;display:flex;overflow:hidden}.wxwsGW_subagentTitle{font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary);white-space:nowrap;flex:none}.wxwsGW_subagentSubject{min-width:0;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);text-overflow:ellipsis;white-space:nowrap;flex:1;overflow:hidden}.wxwsGW_subagentSep{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);flex:none}.wxwsGW_subagentCount{font-family:var(--ds-font-family-code,monospace);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-secondary);white-space:nowrap;flex:none;font-size:10px}.wxwsGW_subagentRefresh{flex:none}.wxwsGW_subagentEmpty{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);text-align:center;flex-direction:column;gap:2px;padding:16px;display:flex}.wxwsGW_subagentEmptyHint{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary)}.wxwsGW_subagentError{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);justify-content:space-between;align-items:center;gap:8px;padding:8px 10px;display:flex}.wxwsGW_subagentErrorRetry{flex:none}";
 		const tagId$2 = "dsh-external/dsh-better-sidebar/SubagentView.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$2) + "]") === null) {
 			const tag = document.createElement("style");
@@ -16594,18 +22205,18 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			document.head.appendChild(tag);
 		}
 		var SubagentView_module_css_default = {
-			"subagentRefresh": "AQnWfq_subagentRefresh",
-			"subagentTitle": "AQnWfq_subagentTitle",
-			"subagentHeading": "AQnWfq_subagentHeading",
-			"subagentSubject": "AQnWfq_subagentSubject",
-			"subagent": "AQnWfq_subagent",
-			"subagentSep": "AQnWfq_subagentSep",
-			"subagentErrorRetry": "AQnWfq_subagentErrorRetry",
-			"subagentHeader": "AQnWfq_subagentHeader",
-			"subagentCount": "AQnWfq_subagentCount",
-			"subagentEmpty": "AQnWfq_subagentEmpty",
-			"subagentEmptyHint": "AQnWfq_subagentEmptyHint",
-			"subagentError": "AQnWfq_subagentError"
+			"subagentEmpty": "wxwsGW_subagentEmpty",
+			"subagentTitle": "wxwsGW_subagentTitle",
+			"subagentSubject": "wxwsGW_subagentSubject",
+			"subagentEmptyHint": "wxwsGW_subagentEmptyHint",
+			"subagentHeader": "wxwsGW_subagentHeader",
+			"subagentRefresh": "wxwsGW_subagentRefresh",
+			"subagent": "wxwsGW_subagent",
+			"subagentError": "wxwsGW_subagentError",
+			"subagentHeading": "wxwsGW_subagentHeading",
+			"subagentCount": "wxwsGW_subagentCount",
+			"subagentErrorRetry": "wxwsGW_subagentErrorRetry",
+			"subagentSep": "wxwsGW_subagentSep"
 		};
 		//#endregion
 		//#region src/client/SubagentView.tsx
@@ -16631,8 +22242,9 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		*
 		* Node click jumps straight into the transcript (root → main session); the
 		* ⓘ button opens the detail popover. Completed leaf agents fold into one
-		* aggregate node per parent (click it or the control-cluster toggle to
-		* expand/collapse).
+		* aggregate node per GROUP (finished work / waiting members); clicking an
+		* aggregate reveals THAT group, while the control cluster's switch keeps the
+		* page-level expand/collapse.
 		*
 		* The shell itself is the page's own module stylesheet plus host primitives:
 		* the header's refresh and the failure banner's retry are host `Button`s, the
@@ -16640,7 +22252,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		* own their own chrome.
 		*/
 		/** Poll cadence of the live "last text + tool call" lines while a child runs. */
-		const POLL_MS$1 = 3e3;
+		const POLL_MS$3 = 3e3;
 		/** Poll cadence of the workflow-run and team views while the page is visible. */
 		const TELEMETRY_POLL_MS = 5e3;
 		/**
@@ -16659,7 +22271,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				if (!signal.aborted) setLive(result.live);
 			}, [rootId]);
 			usePolling(rootId !== void 0 && active, poll, {
-				intervalMs: POLL_MS$1,
+				intervalMs: POLL_MS$3,
 				mode: "self-scheduling",
 				immediate: true
 			});
@@ -16717,6 +22329,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			const list = (0, react.useSyncExternalStore)((0, react.useMemo)(() => (callback) => sessions.list.subscribe(callback), [sessions]), (0, react.useCallback)(() => sessions.list.getSnapshot(), [sessions]));
 			const byId = list.byId;
 			const catalogs = (0, react.useMemo)(() => subagentCatalogs(list.projectionsBySession), [list.projectionsBySession]);
+			const metrics = (0, react.useMemo)(() => sessionMetrics(list.projectionsBySession), [list.projectionsBySession]);
 			const rootId = (0, react.useMemo)(() => rootAncestor(byId, sessionId), [byId, sessionId]);
 			const rootSummary = rootId === void 0 ? void 0 : byId[rootId];
 			const live = useSubagentLive(rootId, active);
@@ -16739,10 +22352,24 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			/**
 			* Nodes the reader folded by hand from their own card bar. Kept apart from
 			* `folded` (the global rule) so the control cluster and a single card never
-			* fight: the aggregate's click clears BOTH, which is what "expand" means.
+			* fight.
 			*/
 			const [foldedIds, setFoldedIds] = (0, react.useState)(() => /* @__PURE__ */ new Set());
+			/**
+			* The fold GROUPS the reader opened by clicking one aggregate card. Expanding
+			* an aggregate reveals that group ONLY — it used to clear the manual folds and
+			* switch the global rule off, so one click unfolded the whole page. The
+			* control cluster keeps the page-level expand/collapse; collapsing there drops
+			* these per-group openings (a global collapse must really collapse).
+			*/
+			const [expandedGroups, setExpandedGroups] = (0, react.useState)(() => /* @__PURE__ */ new Set());
 			const [teamBoardCollapsed, setTeamBoardCollapsed] = (0, react.useState)(false);
+			/**
+			* Tree-mode SUBTREE disclosure: rows whose children the reader folded away.
+			* Kept here (not inside TasksTree) so switching modes and coming back keeps
+			* the shape the reader left, and cleared by 全部展开.
+			*/
+			const [collapsedIds, setCollapsedIds] = (0, react.useState)(() => /* @__PURE__ */ new Set());
 			const [popover, setPopover] = (0, react.useState)(null);
 			const model = (0, react.useMemo)(() => rootId === void 0 ? [] : buildTasksModel({
 				byId,
@@ -16750,22 +22377,26 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				rootId,
 				currentSessionId: sessionId,
 				live,
+				metrics,
 				runs,
 				teamMembers,
 				teamTasks: team?.tasks ?? [],
 				folded,
-				foldedIds
+				foldedIds,
+				expandedGroups
 			}), [
 				byId,
 				catalogs,
 				rootId,
 				sessionId,
 				live,
+				metrics,
 				runs,
 				teamMembers,
 				team,
 				folded,
-				foldedIds
+				foldedIds,
+				expandedGroups
 			]);
 			/**
 			* Show one conversation in the main view. DSH moved child and session
@@ -16783,14 +22414,27 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				if (typeof target === "string") sessions.open?.(target);
 				else sessions.openSubagent?.(target);
 			}, [ctx, sessions]);
-			const openChild = (0, react.useCallback)((address) => {
+			/**
+			* Show one child session. `'side'` (the default) hands the transcript to the
+			* host's OWN right-sidebar tab and leaves the main column alone — that is the
+			* native affordance the host's subagent list uses, and it is skipped when the
+			* deployment cannot host it (no `subagentchat` type, no right column, or no
+			* mounted seat). `'main'` is the old behavior: the shell re-roots the Tasks
+			* page on the child and the main view follows.
+			*/
+			const openChild = (0, react.useCallback)((address, place = "side") => {
+				if (place === "side" && openTranscriptAside(ctx, address)) return;
 				onOpenChild?.(address);
 				try {
 					openConversation(address);
 				} catch (error) {
 					console.error("[dsh-better-sidebar] open subagent failed:", error);
 				}
-			}, [openConversation, onOpenChild]);
+			}, [
+				ctx,
+				openConversation,
+				onOpenChild
+			]);
 			/** Jump back to the main agent (the topology root) from its node. */
 			const openMain = (0, react.useCallback)(() => {
 				if (rootId === void 0) return;
@@ -16805,9 +22449,9 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				(face.refreshProjections ?? face.refreshSubagents)?.(parentSessionId);
 			}, [sessions]);
 			/** Jump from the detail window into the node's transcript. */
-			const jumpToNode = (0, react.useCallback)((node) => {
+			const jumpToNode = (0, react.useCallback)((node, place = "side") => {
 				if (node.childAddress !== void 0) {
-					openChild(node.childAddress);
+					openChild(node.childAddress, place);
 					setPopover(null);
 					return;
 				}
@@ -16816,6 +22460,30 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					setPopover(null);
 				}
 			}, [openChild, openMain]);
+			/**
+			* Whether this deployment can host a child transcript in its right column.
+			* Read once per ctx (the services arrive with the profile, not later), and it
+			* drives whether the detail window offers the choice at all.
+			*/
+			const asideAvailable = (0, react.useMemo)(() => hasTranscriptAside(ctx), [ctx]);
+			/** One tree row's disclosure: show or hide that node's own subtree. */
+			const toggleCollapse = (0, react.useCallback)((nodeId) => {
+				setCollapsedIds((current) => {
+					const next = new Set(current);
+					if (!next.delete(nodeId)) next.add(nodeId);
+					return next;
+				});
+			}, []);
+			/** 全部收起: every node that HAS children, so only the roots stay visible. */
+			const collapseAllTree = (0, react.useCallback)(() => {
+				const parents = /* @__PURE__ */ new Set();
+				for (const node of model) if (node.parentId !== void 0) parents.add(node.parentId);
+				setCollapsedIds((current) => current.size === parents.size && [...parents].every((id) => current.has(id)) ? current : parents);
+			}, [model]);
+			/** 全部展开: forget every subtree fold. */
+			const expandAllTree = (0, react.useCallback)(() => {
+				setCollapsedIds((current) => current.size === 0 ? current : /* @__PURE__ */ new Set());
+			}, []);
 			/** Fold one settled node into its parent's aggregate (its card's chevron). */
 			const foldNode = (0, react.useCallback)((node) => {
 				setFoldedIds((current) => {
@@ -16824,11 +22492,36 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					return next;
 				});
 			}, []);
-			/** Expand every fold: the global rule off AND the manual folds cleared. */
-			const expandFold = (0, react.useCallback)(() => {
-				setFolded(false);
-				setFoldedIds((current) => current.size === 0 ? current : /* @__PURE__ */ new Set());
+			/**
+			* Expand ONE aggregate: the group the reader clicked shows its members while
+			* every other group stays folded. The members it held are also released from
+			* the manual per-node set — clicking an aggregate means "show me these nodes
+			* now", and a hand-folded member left in `foldedIds` would stay hidden inside
+			* a group the reader just opened.
+			*/
+			const expandGroup = (0, react.useCallback)((node) => {
+				setExpandedGroups((current) => {
+					if (current.has(node.id)) return current;
+					const next = new Set(current);
+					next.add(node.id);
+					return next;
+				});
+				setFoldedIds((current) => {
+					if (!node.memberIds.some((id) => current.has(id))) return current;
+					const next = new Set(current);
+					for (const id of node.memberIds) next.delete(id);
+					return next;
+				});
 			}, []);
+			/**
+			* The control cluster's page-level switch. COLLAPSING there re-folds every
+			* group, so the per-group openings are dropped with it; expanding leaves them
+			* (an unfolded page already shows everything they would reveal).
+			*/
+			const toggleFold = (0, react.useCallback)(() => {
+				if (!folded) setExpandedGroups((current) => current.size === 0 ? current : /* @__PURE__ */ new Set());
+				setFolded(!folded);
+			}, [folded]);
 			/** Open the shared task window from a board row (undefined = create). */
 			const openTaskFromBoard = (0, react.useCallback)((task, anchor) => {
 				setPopover({
@@ -16888,6 +22581,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 						rootId,
 						task,
 						members: teamMembers,
+						ctx,
 						onClose: closePopover,
 						anchor: popover.anchor
 					});
@@ -16915,6 +22609,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				});
 				if (popover.kind === "node" && node.kind === "agent") return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(AgentNodePopover, {
 					node,
+					asideAvailable,
 					onJump: jumpToNode,
 					onOpenTask: openTaskById
 				});
@@ -17010,16 +22705,18 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 							});
 						},
 						onOpenTask: openTaskById,
-						onToggleFold: () => {
-							setFolded((current) => !current);
-						},
-						onExpandFold: expandFold,
+						onToggleFold: toggleFold,
+						onExpandGroup: expandGroup,
 						onFoldNode: foldNode,
 						mode,
 						onModeChange: setModeOverride
 					}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)(TasksTree, {
 						nodes: model,
 						folded,
+						collapsedIds,
+						onToggleCollapse: toggleCollapse,
+						onCollapseAll: collapseAllTree,
+						onExpandAll: expandAllTree,
 						loading: summaryBackedLoading,
 						onNodeInfo: (node, anchor) => {
 							setPopover({
@@ -17036,9 +22733,8 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 							});
 						},
 						onOpenTask: openTaskById,
-						onToggleFold: () => {
-							setFolded((current) => !current);
-						},
+						onToggleFold: toggleFold,
+						onExpandGroup: expandGroup,
 						mode,
 						onModeChange: setModeOverride
 					})),
@@ -17066,512 +22762,101 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			});
 		}
 		//#endregion
-		//#region src/client/sidechat-transcript.ts
-		/** Compact token count the way the main conversation prints usage
-		*  (517 / 12.2K / 1.2M — the host's own formatter is not exported). */
-		function formatTokens(n) {
-			const scaled = (v) => v >= 100 ? String(Math.round(v)) : String(Math.round(v * 10) / 10);
-			if (n < 1e3) return String(n);
-			if (n < 1e6) return `${scaled(n / 1e3)}K`;
-			return `${scaled(n / 1e6)}M`;
-		}
-		/** Compact duration the way the main conversation prints run times
-		*  (45.2s / 2m42s — sub-minute keeps one decimal). */
-		function formatDurationMs(ms) {
-			const seconds = ms / 1e3;
-			if (seconds < 60) return `${Math.round(seconds * 10) / 10}s`;
-			const whole = Math.round(seconds);
-			return `${Math.floor(whole / 60)}m${whole % 60}s`;
-		}
-		/** Extract the visible text of a content-block list (`text` blocks verbatim,
-		*  joined by blank lines); empty reads `…` so rows never render blank. */
-		function blockText(content) {
-			const parts = [];
-			for (const block of content) {
-				if (block === null || typeof block !== "object") continue;
-				const candidate = block;
-				if (candidate.type === "text" && typeof candidate.text === "string") parts.push(candidate.text);
-			}
-			const text = parts.join("\n\n");
-			return text === "" ? "…" : text;
-		}
-		/** Cap for a tool row's one-line argument summary (display only). */
-		const ARGS_SUMMARY_MAX = 80;
-		/** The most identifying argument keys, in priority order (bash's command,
-		*  fs tools' paths, search's pattern, …). */
-		const ARGS_SUMMARY_KEYS = [
-			"command",
-			"file_path",
-			"path",
-			"pattern",
-			"query",
-			"url",
-			"prompt"
-		];
-		function flatTruncate(text) {
-			const flat = text.replace(/\s+/g, " ").trim();
-			return flat.length > ARGS_SUMMARY_MAX ? `${flat.slice(0, 79)}…` : flat;
-		}
+		//#region src/client/use-sidechat-push.ts
 		/**
-		* One-line summary of a tool call's raw arguments JSON for the collapsed
-		* row: the first identifying string field when the JSON parses, else the
-		* flattened raw text; empty when there is nothing worth showing.
+		* Live invalidation push for Side Chat transcripts.
+		*
+		* The transcript used to advance on a 2s poll while the thread ran, so a
+		* claimed message, a settled assistant message or a finished tool call became
+		* visible up to two seconds after the host wrote it. DSH's agent pipeline
+		* offers no client-side event feed for a hidden child session, so the plugin
+		* carries its own channel: one socket per mounted side-chat tab, watching the
+		* single thread that tab is bound to.
+		*
+		* The host's frames are INVALIDATION ONLY — `{ threadId, running? }` says
+		* "this thread's transcript is stale, re-pull `sidechat.events` with your
+		* afterSeq". No event body ever crosses this socket, so the existing delta
+		* pull stays the single source of transcript data and a dropped socket
+		* self-heals through the same pull (plus the slow fallback poll).
+		*
+		* Lifecycle mirrors use-dir-watch: one socket for the component's lifetime,
+		* a full `watch` frame re-announcing the subscription set whenever the id
+		* list changes, exponential backoff (1s → 15s) on a drop, and no socket at
+		* all while the list is empty.
 		*/
-		function toolArgsSummary(args) {
-			if (args === void 0) return "";
-			try {
-				const parsed = JSON.parse(args);
-				if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) for (const key of ARGS_SUMMARY_KEYS) {
-					const value = parsed[key];
-					if (typeof value === "string" && value.trim() !== "") return flatTruncate(value);
-				}
-			} catch {}
-			return flatTruncate(args);
-		}
+		/** How long to wait before re-opening a dropped socket; failures back off to the cap. */
+		const RETRY_BASE_MS = 1e3;
+		const RETRY_MAX_MS = 15e3;
 		/**
-		* The result content blocks of one tool/result message under BOTH logged
-		* shapes: 0.1.6 wrapped them in a single `type: 'tool-result'` content block
-		* on a user-role message, 0.1.7's first-class tool-role message carries them
-		* at the message's own top level. Historical logs keep the old shape forever,
-		* so both are read. Undefined when the message carries no block array.
+		* Follow the host's staleness notices for the given side-chat threads.
+		* @param options - the watched ids and the invalidation callback.
 		*/
-		function resultBlocks(content) {
-			if (!Array.isArray(content)) return void 0;
-			for (const block of content) {
-				if (block === null || typeof block !== "object") continue;
-				const wrapper = block;
-				if (wrapper.type === "tool-result" && Array.isArray(wrapper.content)) return wrapper.content;
-			}
-			return content;
-		}
-		/** The plain text of a tool/result message (its text blocks, under either of
-		*  the two shapes {@link resultBlocks} reads). */
-		function resultTextOf(data) {
-			const message = data.message;
-			const blocks = resultBlocks(message?.content);
-			if (blocks === void 0) return "";
-			const parts = [];
-			for (const item of blocks) {
-				if (item === null || typeof item !== "object") continue;
-				const textItem = item;
-				if (textItem.type === "text" && typeof textItem.text === "string") parts.push(textItem.text);
-			}
-			return parts.join("\n");
-		}
-		/** Index of the last `session/end-seed` event (fork seed marker), or -1. */
-		function lastSeedEnd(events) {
-			for (let index = events.length - 1; index >= 0; index--) if (events[index]?.type === "session/end-seed") return index;
-			return -1;
-		}
-		/** Parse the tool's raw arguments JSON to an object, or undefined. */
-		function parseArgsObject(args) {
-			if (args === void 0) return void 0;
-			try {
-				const parsed = JSON.parse(args);
-				if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return void 0;
-				return parsed;
-			} catch {
-				return;
-			}
-		}
-		/**
-		* Call-time card from the raw `tool/call` arguments — the same literal cards
-		* the host's own presenters derive before any result exists: bash shows the
-		* command line (foreground only), edit/write show the literal replacement.
-		* `read` has no call-time window (its structure only exists in the result).
-		*/
-		function callCard(name, args) {
-			const parsed = parseArgsObject(args);
-			if (parsed === void 0) return void 0;
-			if (name === "bash") {
-				const command = typeof parsed.command === "string" && parsed.command !== "" ? parsed.command : void 0;
-				if (command === void 0 || parsed.run_in_background === true) return void 0;
-				const cwd = typeof parsed.workdir === "string" && parsed.workdir !== "" ? parsed.workdir : void 0;
-				return {
-					type: "terminal",
-					command,
-					...cwd !== void 0 ? { cwd } : {}
+		function useSidechatPush(options) {
+			const { threadIds, onInvalidate } = options;
+			const idsKey = threadIds.join("\0");
+			const wanted = (0, react.useMemo)(() => idsKey === "" ? [] : idsKey.split("\0"), [idsKey]);
+			const wantedRef = (0, react.useRef)(wanted);
+			wantedRef.current = wanted;
+			const invalidateRef = (0, react.useRef)(onInvalidate);
+			invalidateRef.current = onInvalidate;
+			/** Set by the socket effect; re-announces the current subscription set. */
+			const reconcileRef = (0, react.useRef)(() => {});
+			/** Stable dependency: re-open the socket only when it gains or loses every id. */
+			const subscribed = idsKey !== "";
+			(0, react.useEffect)(() => {
+				if (!subscribed) return;
+				let socket = null;
+				let retry;
+				let closed = false;
+				let failures = 0;
+				/** Push this socket's whole subscription set (a full replacement). */
+				const reconcile = () => {
+					if (socket !== null && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({
+						op: "watch",
+						threadIds: [...wantedRef.current]
+					}));
 				};
-			}
-			if (name === "edit" || name === "write") {
-				const path = typeof parsed.file_path === "string" && parsed.file_path !== "" ? parsed.file_path : void 0;
-				if (path === void 0) return void 0;
-				if (name === "edit") {
-					const oldText = typeof parsed.old_string === "string" ? parsed.old_string : "";
-					const newText = typeof parsed.new_string === "string" ? parsed.new_string : "";
-					return {
-						type: "diff",
-						diffs: [{
-							path,
-							oldText: oldText === "" ? null : oldText,
-							newText
-						}]
+				reconcileRef.current = reconcile;
+				const connect = () => {
+					if (closed) return;
+					socket = new WebSocket(hostWebSocketUrl("sidebar/ws/sidechat").toString());
+					socket.onopen = () => {
+						failures = 0;
+						reconcile();
 					};
-				}
-				return {
-					type: "diff",
-					diffs: [{
-						path,
-						oldText: null,
-						newText: typeof parsed.content === "string" ? parsed.content : ""
-					}]
-				};
-			}
-		}
-		/** The `tool/result` `meta` as an object, or undefined (opaque tool payload). */
-		function metaObject(data) {
-			const meta = data.meta;
-			if (meta === null || typeof meta !== "object" || Array.isArray(meta)) return void 0;
-			return meta;
-		}
-		/** Narrow edit/write's contextual-diff meta (`{ diffs: FileDiff[] }`) to
-		*  DiffHunk[], declining on any malformed entry. */
-		function diffCardFromMeta(meta) {
-			const diffs = meta.diffs;
-			if (!Array.isArray(diffs) || diffs.length === 0) return void 0;
-			const hunks = [];
-			for (const item of diffs) {
-				if (item === null || typeof item !== "object" || Array.isArray(item)) return void 0;
-				const { path, oldText, newText } = item;
-				if (typeof path !== "string" || typeof newText !== "string") return void 0;
-				if (oldText !== null && typeof oldText !== "string") return void 0;
-				hunks.push({
-					path,
-					oldText,
-					newText
-				});
-			}
-			return {
-				type: "diff",
-				diffs: hunks
-			};
-		}
-		/** Narrow read's line-window meta (`{ path, offset, lines, totalLines, lang? }`)
-		*  to a read card, enforcing the same semantic contract the host does: 1-based
-		*  strictly increasing line numbers that never exceed `totalLines`. */
-		function readCardFromMeta(meta) {
-			const { path, offset, lines, totalLines, lang } = meta;
-			if (typeof path !== "string" || typeof offset !== "number" || typeof totalLines !== "number") return void 0;
-			if (!Number.isInteger(offset) || offset < 1) return void 0;
-			if (!Number.isInteger(totalLines) || totalLines < 0) return void 0;
-			if (!Array.isArray(lines)) return void 0;
-			const narrowed = [];
-			let previous = offset - 1;
-			for (const line of lines) {
-				if (line === null || typeof line !== "object" || Array.isArray(line)) return void 0;
-				const candidate = line;
-				if (typeof candidate.number !== "number" || !Number.isInteger(candidate.number)) return void 0;
-				if (candidate.number <= previous || candidate.number > totalLines) return void 0;
-				if (typeof candidate.text !== "string") return void 0;
-				narrowed.push({
-					number: candidate.number,
-					text: candidate.text
-				});
-				previous = candidate.number;
-			}
-			if (lang !== void 0 && typeof lang !== "string") return void 0;
-			return {
-				type: "read",
-				label: path,
-				lines: narrowed,
-				totalLines,
-				...lang !== void 0 ? { lang } : {}
-			};
-		}
-		/** The bash result's trailing exit markers (`[exit code: N]` /
-		*  `[killed by signal: X]` — the model-facing text the tool appends), stripped
-		*  the same way the host's parseExitStatus recovers the exit pill. */
-		const EXIT_SIGNAL_RE = /\n\[killed by signal: ([^\]\n]+)\]$/;
-		const EXIT_CODE_RE = /\n\[exit code: (\d+)\]$/;
-		/**
-		* Result-time card refinement: `meta`-carrying structure wins (edit/write's
-		* applied hunks, read's line window), bash's output gets its exit marker
-		* stripped into the exit pill, and a failed result always falls back to the
-		* generic row (the host's isError path renders generic output too).
-		*/
-		function resultCard(name, previous, data, resultText) {
-			if (name === "bash") {
-				if (previous === void 0 || previous.type !== "terminal" || resultText === "") return previous;
-				const signal = EXIT_SIGNAL_RE.exec(resultText);
-				if (signal?.[1] !== void 0) return {
-					...previous,
-					output: resultText.slice(0, signal.index),
-					exitCode: void 0,
-					signal: signal[1]
-				};
-				const exit = EXIT_CODE_RE.exec(resultText);
-				if (exit?.[1] !== void 0) return {
-					...previous,
-					output: resultText.slice(0, exit.index),
-					exitCode: Number(exit[1]),
-					signal: void 0
-				};
-				return {
-					...previous,
-					output: resultText,
-					exitCode: 0,
-					signal: void 0
-				};
-			}
-			const meta = metaObject(data);
-			if (meta === void 0) return previous;
-			if (name === "edit" || name === "write") return diffCardFromMeta(meta) ?? previous;
-			if (name === "read") return readCardFromMeta(meta);
-			return previous;
-		}
-		/**
-		* Map a thread child's history rows onto compact transcript rows: the
-		* inherited fork seed is cut at the last `session/end-seed`, context
-		* injections map onto a collapsible injection row, `assistant/live-chunk`
-		* deltas accumulate into streaming rows per (turn, step, block) and are
-		* superseded by the assembled `assistant/message`, and tool invocations
-		* render one expandable line each (arguments, paired result text, failure
-		* marker; a still-executing call is marked until its result lands).
-		* @param entries - history rows (event + host-computed view) in seq order,
-		*   the live deltas of the in-flight attempt appended after the durable tail.
-		* @returns display rows in log order.
-		*/
-		function transcriptRows(entries, prev) {
-			const events = entries.map((entry) => entry.event);
-			const seedEnd = lastSeedEnd(events);
-			const rows = [];
-			/** (turn, step, index, kind) key → index of its accumulating stream row. */
-			const streamRows = /* @__PURE__ */ new Map();
-			/** tool callId → index of its tool row in `rows` (result pairing). */
-			const callRows = /* @__PURE__ */ new Map();
-			/** turn → envelope time of its `turn/start` (turn-tail duration basis). */
-			const turnStarts = /* @__PURE__ */ new Map();
-			/** turn → usage aggregate: output accumulates across steps, input takes the
-			*  last request's prompt size (earlier steps' input is mostly the same
-			*  context re-sent, so summing would double-count). */
-			const turnUsage = /* @__PURE__ */ new Map();
-			for (let index = 0; index < events.length; index++) {
-				if (index <= seedEnd) continue;
-				const event = events[index];
-				if (event === void 0) continue;
-				const data = event.data;
-				switch (event.type) {
-					case "turn/start": {
-						const turn = data.turn;
-						if (typeof turn === "number" && Number.isInteger(turn)) turnStarts.set(turn, event.time);
-						break;
-					}
-					case "turn/end": {
-						const turn = data.turn;
-						if (typeof turn !== "number" || !Number.isInteger(turn)) break;
-						const start = turnStarts.get(turn);
-						turnStarts.delete(turn);
-						const usage = turnUsage.get(turn);
-						turnUsage.delete(turn);
-						const durationMs = start !== void 0 ? Math.max(0, event.time - start) : void 0;
-						if (usage === void 0 && durationMs === void 0) break;
-						rows.push({
-							kind: "turnSummary",
-							seq: event.seq,
-							...usage !== void 0 ? {
-								inputTokens: usage.inputTokens,
-								outputTokens: usage.outputTokens
-							} : {},
-							...durationMs !== void 0 ? { durationMs } : {}
-						});
-						break;
-					}
-					case "user/message": {
-						const text = blockText(Array.isArray(data.content) ? data.content : []);
-						if (isContextInjectionMessage(data)) {
-							if (data.source?.kind === "user" && text.startsWith(`${SIDE_BOUNDARY_PROMPT}\n\n`)) {
-								rows.push({
-									kind: "injection",
-									seq: event.seq,
-									text: SIDE_BOUNDARY_PROMPT
-								});
-								const body = text.slice(SIDE_BOUNDARY_PROMPT.length + 2);
-								if (body !== "") rows.push({
-									kind: "user",
-									seq: event.seq,
-									text: body
-								});
-								break;
-							}
-							rows.push({
-								kind: "injection",
-								seq: event.seq,
-								text
-							});
-							break;
+					socket.onmessage = (event) => {
+						if (typeof event.data !== "string") return;
+						let frame;
+						try {
+							frame = JSON.parse(event.data);
+						} catch {
+							return;
 						}
-						rows.push({
-							kind: "user",
-							seq: event.seq,
-							text
-						});
-						break;
-					}
-					case "assistant/live-chunk": {
-						const chunk = data.chunk;
-						if (chunk === null || typeof chunk !== "object") break;
-						const kind = chunk.type === "text-delta" ? "assistant" : chunk.type === "reasoning-delta" ? "reasoning" : null;
-						if (kind === null || typeof chunk.text !== "string" || chunk.text === "") break;
-						const turn = data.turn;
-						const step = data.step;
-						const blockIndex = chunk.index;
-						const key = `${String(turn)}:${String(step)}:${String(blockIndex)}:${kind}`;
-						const existing = streamRows.get(key);
-						if (existing !== void 0) {
-							const row = rows[existing];
-							if (row !== void 0 && row.kind === kind && !row.settled) rows[existing] = {
-								...row,
-								text: row.text + chunk.text
-							};
-						} else {
-							streamRows.set(key, rows.length);
-							rows.push({
-								kind,
-								seq: event.seq,
-								text: chunk.text,
-								settled: false
-							});
-						}
-						break;
-					}
-					case "assistant/message": {
-						const usageTurn = data.turn;
-						if (typeof usageTurn === "number" && Number.isInteger(usageTurn)) {
-							const usage = data.usage;
-							const input = typeof usage?.inputTokens === "number" ? usage.inputTokens : void 0;
-							const output = typeof usage?.outputTokens === "number" ? usage.outputTokens : void 0;
-							if (input !== void 0 && output !== void 0) {
-								const aggregate = turnUsage.get(usageTurn);
-								if (aggregate === void 0) turnUsage.set(usageTurn, {
-									inputTokens: input,
-									outputTokens: output
-								});
-								else turnUsage.set(usageTurn, {
-									inputTokens: input,
-									outputTokens: aggregate.outputTokens + output
-								});
-							}
-						}
-						const prefix = `${String(data.turn)}:${String(data.step)}:`;
-						const streamed = [...streamRows.entries()].filter(([key]) => key.startsWith(prefix)).map(([, rowIndex]) => rowIndex);
-						for (const key of [...streamRows.keys()]) if (key.startsWith(prefix)) streamRows.delete(key);
-						const settled = (Array.isArray(data.message?.content) ? data.message.content : []).flatMap((block) => {
-							if (block === null || typeof block !== "object") return [];
-							const candidate = block;
-							if (candidate.type === "reasoning" && typeof candidate.text === "string" && candidate.text !== "") return [{
-								kind: "reasoning",
-								seq: event.seq,
-								text: candidate.text,
-								settled: true
-							}];
-							if (candidate.type === "text" && typeof candidate.text === "string" && candidate.text !== "") return [{
-								kind: "assistant",
-								seq: event.seq,
-								text: candidate.text,
-								settled: true
-							}];
-							return [];
-						});
-						if (streamed.length === 0) rows.push(...settled);
-						else rows.splice(Math.min(...streamed), streamed.length, ...settled);
-						break;
-					}
-					case "tool/call": {
-						const callId = data.callId;
-						const name = typeof data.name === "string" ? data.name : "tool";
-						const args = typeof data.arguments === "string" ? data.arguments : void 0;
-						const card = callCard(name, args);
-						const rowIndex = rows.length;
-						if (typeof callId === "string") callRows.set(callId, rowIndex);
-						rows.push({
-							kind: "tool",
-							seq: event.seq,
-							name,
-							failed: false,
-							args,
-							executing: true,
-							...card !== void 0 ? { card } : {}
-						});
-						break;
-					}
-					case "tool/result": {
-						const source = data.message;
-						const callId = typeof source?.source?.callId === "string" ? source.source.callId : void 0;
-						const rowIndex = callId === void 0 ? void 0 : callRows.get(callId);
-						const failed = data.error !== void 0;
-						const resultText = resultTextOf(data);
-						if (rowIndex !== void 0) {
-							const row = rows[rowIndex];
-							if (row !== void 0 && row.kind === "tool") {
-								const card = failed ? void 0 : resultCard(row.name, row.card, data, resultText);
-								rows[rowIndex] = {
-									...row,
-									failed: row.failed || failed,
-									resultText: resultText === "" ? row.resultText : resultText,
-									executing: false,
-									...card !== void 0 ? { card } : { card: void 0 }
-								};
-							}
-						} else if (failed || resultText !== "") rows.push({
-							kind: "tool",
-							seq: event.seq,
-							name: callId === void 0 ? "tool" : `tool:${callId.slice(0, 8)}`,
-							failed,
-							resultText: resultText === "" ? void 0 : resultText
-						});
-						break;
-					}
-				}
-			}
-			return reuseRows(rows, prev);
-		}
-		/** Whether two rows carry identical display content (identity fields plus
-		*  every rendered field of their kind). */
-		function rowsEqual(a, b) {
-			if (a.kind !== b.kind || a.seq !== b.seq) return false;
-			switch (a.kind) {
-				case "user":
-				case "injection": {
-					const other = b;
-					return a.text === other.text;
-				}
-				case "assistant":
-				case "reasoning": {
-					const other = b;
-					return a.text === other.text && a.settled === other.settled;
-				}
-				case "tool": {
-					const other = b;
-					return a.name === other.name && a.failed === other.failed && a.args === other.args && a.resultText === other.resultText && a.executing === other.executing;
-				}
-				case "turnSummary": {
-					const other = b;
-					return a.inputTokens === other.inputTokens && a.outputTokens === other.outputTokens && a.durationMs === other.durationMs;
-				}
-			}
-		}
-		/** Re-adopt the PREVIOUS poll's row objects wherever the content is
-		*  unchanged (position-aligned, append-mostly): settled rows keep their
-		*  object identity across the 2s polls, so React's reconciler and the
-		*  markdown/DOMPurify caches downstream skip them instead of re-rendering
-		*  the whole transcript every poll. Comparing the strings is far cheaper
-		*  than what a fresh reference costs the row below. Rows past the first
-		*  mismatch (an inserted/superseded streaming row) rebuild as usual — that
-		*  is exactly the changed tail. */
-		function reuseRows(rows, prev) {
-			if (prev === void 0) return rows;
-			const shared = Math.min(rows.length, prev.length);
-			for (let index = 0; index < shared; index++) {
-				const before = prev[index];
-				const after = rows[index];
-				if (before === void 0 || after === void 0) continue;
-				if (rowsEqual(before, after)) rows[index] = before;
-			}
-			return rows;
+						if (frame === null || typeof frame !== "object" || typeof frame.threadId !== "string") return;
+						if (!wantedRef.current.includes(frame.threadId)) return;
+						invalidateRef.current(frame.threadId);
+					};
+					socket.onclose = () => {
+						if (closed) return;
+						failures += 1;
+						retry = window.setTimeout(connect, Math.min(RETRY_BASE_MS * 2 ** (failures - 1), RETRY_MAX_MS));
+					};
+				};
+				connect();
+				return () => {
+					closed = true;
+					reconcileRef.current = () => {};
+					if (retry !== void 0) window.clearTimeout(retry);
+					socket?.close();
+				};
+			}, [subscribed]);
+			(0, react.useEffect)(() => {
+				reconcileRef.current();
+			}, [idsKey]);
 		}
 		//#endregion
-		//#region \0dsh-css:H:\MaxNull\WorkStation\third-party-plugins\DSH-better-sidebar\src\client\SideChatView.module.css.mjs
-		const css$1 = ".Mbonuq_sidechat{flex-direction:column;flex:1;min-height:0;display:flex}.Mbonuq_sidechatDetailHeader{border-bottom:1px solid var(--dsw-alias-hairline);flex:none;align-items:center;gap:4px;min-height:36px;padding:4px 8px 4px 12px;display:flex}.Mbonuq_sidechatHeaderDot{flex:none}.Mbonuq_sidechatHeaderSpacer{flex:1;min-width:0}.Mbonuq_sidechatAgentBadge{border:1px solid var(--dsw-alias-hairline);max-width:55%;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);text-overflow:ellipsis;white-space:nowrap;border-radius:999px;flex:none;padding:1px 8px;overflow:hidden}.Mbonuq_sidechatIconBtn{width:26px;height:26px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:6px;flex:none;justify-content:center;align-items:center;padding:0;transition:background-color .1s ease-out,color .1s ease-out;display:inline-flex}.Mbonuq_sidechatIconBtn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.Mbonuq_sidechatIconBtn:disabled{opacity:.4;cursor:default}.Mbonuq_sidechatHero{min-height:0;color:var(--dsw-alias-label-tertiary);text-align:center;flex-direction:column;flex:1;justify-content:center;align-items:center;gap:8px;padding:24px 20px;animation:.2s ease-out Mbonuq_sidechatFadeIn;display:flex}.Mbonuq_sidechatHeroTitle{font:var(--dsw-font-s-14);color:var(--dsw-alias-label-primary);font-weight:500}.Mbonuq_sidechatHeroDesc{max-width:300px;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);line-height:1.6}.Mbonuq_sidechatPrimaryBtn{background:var(--dsw-alias-button-info-fill,var(--dsw-alias-accent));color:var(--dsw-alias-button-info-label,var(--dsw-alias-accent-ink,#fff));font:var(--dsw-font-s-13);cursor:pointer;border:none;border-radius:999px;flex:none;margin-top:4px;padding:6px 14px;transition:opacity .1s ease-out}.Mbonuq_sidechatPrimaryBtn:hover:not(:disabled){opacity:.88}.Mbonuq_sidechatPrimaryBtn:disabled{opacity:.4;cursor:default}.Mbonuq_sidechatHint{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);flex:none;padding:4px 12px}.Mbonuq_sidechatError{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-danger);flex:none;padding:4px 12px}.Mbonuq_sidechatScroll{flex-direction:column;flex:1;gap:10px;min-height:0;padding:10px 12px;display:flex;overflow-y:auto}.Mbonuq_sidechatScroll>*{animation:.18s ease-out Mbonuq_sidechatRowIn}.Mbonuq_sidechatUser{background:var(--dsw-specific-bubble,var(--dsw-alias-bg-base));max-width:88%;font:var(--dsw-font-s-14);color:var(--dsw-alias-label-primary);overflow-wrap:anywhere;border-radius:18px;align-self:flex-end;padding:8px 14px}.Mbonuq_sidechatAssistant{font:var(--dsw-font-s-14);color:var(--dsw-alias-label-primary);overflow-wrap:anywhere;align-self:stretch}.Mbonuq_sidechatRow{align-self:stretch}.Mbonuq_sidechatRowLine{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);align-items:center;gap:6px;padding:1px 0;display:flex}.Mbonuq_sidechatRowSummary{cursor:pointer;user-select:none;list-style:none}.Mbonuq_sidechatRowSummary::-webkit-details-marker{display:none}.Mbonuq_sidechatRowSummary:hover{color:var(--dsw-alias-label-secondary)}.Mbonuq_sidechatRowStatic{cursor:default}.Mbonuq_sidechatRowChevron{flex:none;align-items:center;transition:transform .1s ease-out;display:inline-flex}.Mbonuq_sidechatRow[open] .Mbonuq_sidechatRowChevron{transform:rotate(90deg)}.Mbonuq_sidechatRowIcon{width:16px;height:16px;color:var(--dsw-alias-label-tertiary);flex:none;justify-content:center;align-items:center;display:inline-flex}.Mbonuq_sidechatRowLabel{text-overflow:ellipsis;white-space:nowrap;max-width:60%;color:var(--dsw-alias-label-secondary);flex:none;overflow:hidden}.Mbonuq_sidechatRowMono{font-family:var(--dsw-font-mono)}.Mbonuq_sidechatRowMeta{text-overflow:ellipsis;white-space:nowrap;min-width:0;font-family:var(--dsw-font-mono);color:var(--dsw-alias-label-tertiary);flex:1;overflow:hidden}.Mbonuq_sidechatRowFailed .Mbonuq_sidechatRowLabel,.Mbonuq_sidechatRowFailed .Mbonuq_sidechatRowMeta{color:var(--dsw-alias-danger)}.Mbonuq_sidechatRowBody{border-left:1px solid var(--dsw-alias-hairline);margin:2px 0 4px 7px;padding:2px 0 2px 10px}.Mbonuq_sidechatRowProse{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow-y:auto}.Mbonuq_sidechatRowCode{font:var(--dsw-font-xxs-12);font-family:var(--dsw-font-mono);color:var(--dsw-alias-label-secondary);white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;margin:0;padding:4px 0;overflow-y:auto}.Mbonuq_sidechatRowCode+.Mbonuq_sidechatRowCode{border-top:1px solid var(--dsw-alias-hairline)}.Mbonuq_sidechatRowBody>*{margin-top:2px}.Mbonuq_sidechatTurnSummary{max-width:88%;font:var(--dsw-font-xxs-12);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary);user-select:none;align-self:flex-end;padding:0 2px}.Mbonuq_sidechatShimmerText{background-image:linear-gradient(90deg, var(--dsw-alias-label-tertiary) 0%, var(--dsw-alias-label-primary) 50%, var(--dsw-alias-label-tertiary) 100%);color:#0000;background-size:200% 100%;-webkit-background-clip:text;background-clip:text;animation:2.6s linear infinite Mbonuq_sidechatSweep}.Mbonuq_sidechatStatus{flex:none;align-items:center;gap:8px;padding:2px 14px 6px;animation:.16s ease-out Mbonuq_sidechatFadeIn;display:flex}.Mbonuq_sidechatStatusText{font:var(--dsw-font-xxs-12);background-image:linear-gradient(90deg, var(--dsw-alias-label-tertiary) 0%, var(--dsw-alias-label-primary) 50%, var(--dsw-alias-label-tertiary) 100%);color:#0000;background-size:200% 100%;-webkit-background-clip:text;background-clip:text;animation:2.6s linear infinite Mbonuq_sidechatSweep}.Mbonuq_sidechatComposer{border:1px solid var(--dsw-alias-border-l2-darkmode-thin,var(--dsw-alias-hairline));background:var(--dsw-specific-input-major,var(--dsw-alias-bg-base));box-shadow:var(--dsw-shadow-lv2,none);border-radius:16px;flex-direction:column;flex:none;gap:4px;margin:0 8px 8px;padding:8px 8px 6px 14px;display:flex}.Mbonuq_sidechatComposerInput{box-sizing:border-box;width:100%;color:var(--dsw-alias-label-primary);font:var(--dsw-font-s-14);resize:none;background:0 0;border:none;outline:none;max-height:132px;padding:2px 0;line-height:22px}.Mbonuq_sidechatComposerInput::placeholder{color:var(--dsw-alias-label-tertiary)}.Mbonuq_sidechatComposerBar{flex:none;align-items:center;gap:8px;min-height:28px;display:flex}.Mbonuq_sidechatComposerMeta{min-width:0;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);text-overflow:ellipsis;white-space:nowrap;flex:1;overflow:hidden}.Mbonuq_sidechatSendBtn{background:var(--dsw-alias-button-info-fill,var(--dsw-alias-accent));width:28px;height:28px;color:var(--dsw-alias-button-info-label,var(--dsw-alias-accent-ink,#fff));cursor:pointer;border:none;border-radius:50%;flex:none;justify-content:center;align-items:center;padding:0;transition:opacity .1s ease-out;animation:.12s ease-out Mbonuq_sidechatBtnIn;display:inline-flex}.Mbonuq_sidechatSendBtn:hover:not(:disabled){opacity:.88}.Mbonuq_sidechatSendBtn:disabled{opacity:.35;cursor:default}@keyframes Mbonuq_sidechatRowIn{0%{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}@keyframes Mbonuq_sidechatFadeIn{0%{opacity:0}to{opacity:1}}@keyframes Mbonuq_sidechatBtnIn{0%{opacity:0;transform:scale(.85)}to{opacity:1;transform:scale(1)}}@keyframes Mbonuq_sidechatSweep{0%{background-position:200% 0}to{background-position:-200% 0}}@media (prefers-reduced-motion:reduce){.Mbonuq_sidechatScroll>*,.Mbonuq_sidechatHero,.Mbonuq_sidechatStatus,.Mbonuq_sidechatSendBtn{animation:none}.Mbonuq_sidechatStatusText,.Mbonuq_sidechatShimmerText{color:var(--dsw-alias-label-tertiary);background-image:none;animation:none}.Mbonuq_sidechatRowChevron{transition:none}}";
+		//#region \0dsh-css:/home/runner/work/DSH-better-sidebar/DSH-better-sidebar/src/client/SideChatView.module.css.mjs
+		const css$1 = "._4BEzFa_sidechat{flex-direction:column;flex:1;min-height:0;display:flex}._4BEzFa_sidechatIconBtn{width:26px;height:26px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:6px;flex:none;justify-content:center;align-items:center;padding:0;transition:background-color .1s ease-out,color .1s ease-out;display:inline-flex}._4BEzFa_sidechatIconBtn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}._4BEzFa_sidechatIconBtn:disabled{opacity:.4;cursor:default}._4BEzFa_sidechatModelBtn{border:1px solid var(--dsw-alias-hairline);min-width:0;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxs-12);cursor:pointer;background:0 0;border-radius:999px;flex:0 auto;padding:1px 8px;transition:background-color .1s ease-out,color .1s ease-out}._4BEzFa_sidechatModelBtn:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}._4BEzFa_sidechatModelName{text-overflow:ellipsis;white-space:nowrap;display:block;overflow:hidden}._4BEzFa_sidechatHero{min-height:0;color:var(--dsw-alias-label-tertiary);text-align:center;flex-direction:column;flex:1;justify-content:center;align-items:center;gap:8px;padding:24px 20px;animation:.2s ease-out _4BEzFa_sidechatFadeIn;display:flex}._4BEzFa_sidechatHeroTitle{font:var(--dsw-font-s-14);color:var(--dsw-alias-label-primary);font-weight:500}._4BEzFa_sidechatHeroDesc{max-width:300px;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);line-height:1.6}._4BEzFa_sidechatPrimaryBtn{background:var(--dsw-alias-button-info-fill,var(--dsw-alias-accent));color:var(--dsw-alias-button-info-label,var(--dsw-alias-accent-ink,#fff));font:var(--dsw-font-s-13);cursor:pointer;border:none;border-radius:999px;flex:none;margin-top:4px;padding:6px 14px;transition:opacity .1s ease-out}._4BEzFa_sidechatPrimaryBtn:hover:not(:disabled){opacity:.88}._4BEzFa_sidechatPrimaryBtn:disabled{opacity:.4;cursor:default}._4BEzFa_sidechatHint{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);flex:none;padding:4px 12px}._4BEzFa_sidechatError{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-danger);flex:none;padding:4px 12px}._4BEzFa_sidechatErrorRow{border:1px solid var(--dsw-alias-danger);font:var(--dsw-font-xxs-12);color:var(--dsw-alias-danger);white-space:pre-wrap;overflow-wrap:anywhere;border-radius:8px;align-self:stretch;padding:6px 10px}._4BEzFa_sidechatScroll{flex-direction:column;flex:1;gap:10px;min-height:0;padding:10px 12px;display:flex;overflow-y:auto}._4BEzFa_sidechatScroll>*{animation:.18s ease-out _4BEzFa_sidechatRowIn}._4BEzFa_sidechatUser{background:var(--dsw-specific-bubble,var(--dsw-alias-bg-base));max-width:88%;font:var(--dsw-font-s-14);color:var(--dsw-alias-label-primary);overflow-wrap:anywhere;border-radius:18px;align-self:flex-end;padding:8px 14px}._4BEzFa_sidechatAssistant{font:var(--dsw-font-s-14);color:var(--dsw-alias-label-primary);overflow-wrap:anywhere;align-self:stretch}._4BEzFa_sidechatPending{background:var(--dsw-specific-bubble,var(--dsw-alias-bg-base));max-width:88%;font:var(--dsw-font-s-14);color:var(--dsw-alias-label-primary);overflow-wrap:anywhere;border-radius:18px;flex-direction:column;align-self:flex-end;gap:2px;padding:8px 10px 6px 14px;display:flex}._4BEzFa_sidechatPendingText{white-space:pre-wrap;min-width:0}._4BEzFa_sidechatPendingMeta{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);user-select:none;align-self:flex-end;align-items:center;gap:6px;display:flex}._4BEzFa_sidechatDequeueBtn{width:16px;height:16px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:4px;flex:none;justify-content:center;align-items:center;padding:0;transition:background-color .1s ease-out,color .1s ease-out;display:inline-flex}._4BEzFa_sidechatDequeueBtn:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}._4BEzFa_sidechatRow{align-self:stretch}._4BEzFa_sidechatRowLine{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);align-items:center;gap:6px;padding:1px 0;display:flex}._4BEzFa_sidechatRowSummary{cursor:pointer;user-select:none;list-style:none}._4BEzFa_sidechatRowSummary::-webkit-details-marker{display:none}._4BEzFa_sidechatRowSummary:hover{color:var(--dsw-alias-label-secondary)}._4BEzFa_sidechatRowStatic{cursor:default}._4BEzFa_sidechatRowChevron{flex:none;align-items:center;transition:transform .1s ease-out;display:inline-flex}._4BEzFa_sidechatRow[open] ._4BEzFa_sidechatRowChevron{transform:rotate(90deg)}._4BEzFa_sidechatRowIcon{width:16px;height:16px;color:var(--dsw-alias-label-tertiary);flex:none;justify-content:center;align-items:center;display:inline-flex}._4BEzFa_sidechatRowLabel{text-overflow:ellipsis;white-space:nowrap;max-width:60%;color:var(--dsw-alias-label-secondary);flex:none;overflow:hidden}._4BEzFa_sidechatRowMono{font-family:var(--dsw-font-mono)}._4BEzFa_sidechatRowMeta{text-overflow:ellipsis;white-space:nowrap;min-width:0;font-family:var(--dsw-font-mono);color:var(--dsw-alias-label-tertiary);flex:1;overflow:hidden}._4BEzFa_sidechatRowFailed ._4BEzFa_sidechatRowLabel,._4BEzFa_sidechatRowFailed ._4BEzFa_sidechatRowMeta{color:var(--dsw-alias-danger)}._4BEzFa_sidechatRowBody{border-left:1px solid var(--dsw-alias-hairline);margin:2px 0 4px 7px;padding:2px 0 2px 10px}._4BEzFa_sidechatRowProse{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow-y:auto}._4BEzFa_sidechatRowCode{font:var(--dsw-font-xxs-12);font-family:var(--dsw-font-mono);color:var(--dsw-alias-label-secondary);white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;margin:0;padding:4px 0;overflow-y:auto}._4BEzFa_sidechatRowCode+._4BEzFa_sidechatRowCode{border-top:1px solid var(--dsw-alias-hairline)}._4BEzFa_sidechatRowBody>*{margin-top:2px}._4BEzFa_sidechatTurnSummary{max-width:88%;font:var(--dsw-font-xxs-12);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary);user-select:none;align-self:flex-end;padding:0 2px}._4BEzFa_sidechatShimmerText{background-image:linear-gradient(90deg, var(--dsw-alias-label-tertiary) 0%, var(--dsw-alias-label-primary) 50%, var(--dsw-alias-label-tertiary) 100%);color:#0000;background-size:200% 100%;-webkit-background-clip:text;background-clip:text;animation:2.6s linear infinite _4BEzFa_sidechatSweep}._4BEzFa_sidechatStatus{flex:none;align-items:center;gap:8px;padding:2px 14px 6px;animation:.16s ease-out _4BEzFa_sidechatFadeIn;display:flex}._4BEzFa_sidechatStatusText{font:var(--dsw-font-xxs-12);background-image:linear-gradient(90deg, var(--dsw-alias-label-tertiary) 0%, var(--dsw-alias-label-primary) 50%, var(--dsw-alias-label-tertiary) 100%);color:#0000;background-size:200% 100%;-webkit-background-clip:text;background-clip:text;animation:2.6s linear infinite _4BEzFa_sidechatSweep}._4BEzFa_sidechatComposer{border:1px solid var(--dsw-alias-border-l2-darkmode-thin,var(--dsw-alias-hairline));background:var(--dsw-specific-input-major,var(--dsw-alias-bg-base));box-shadow:var(--dsw-shadow-lv2,none);border-radius:16px;flex-direction:column;flex:none;gap:4px;margin:0 8px 8px;padding:8px 8px 6px 14px;display:flex}._4BEzFa_sidechatComposerInput{box-sizing:border-box;width:100%;color:var(--dsw-alias-label-primary);font:var(--dsw-font-s-14);resize:none;background:0 0;border:none;outline:none;max-height:132px;padding:2px 0;line-height:22px}._4BEzFa_sidechatComposerInput::placeholder{color:var(--dsw-alias-label-tertiary)}._4BEzFa_sidechatComposerBar{flex:none;align-items:center;gap:4px;min-height:28px;display:flex}._4BEzFa_sidechatComposerTools{flex:none;align-items:center;gap:2px;min-width:0;display:flex}._4BEzFa_sidechatComposerSpacer{flex:1;min-width:0}._4BEzFa_sidechatTipAnchor{align-items:center;display:inline-flex}._4BEzFa_sidechatTipShrink{flex:0 auto;min-width:0}._4BEzFa_sidechatSendBtn{background:var(--dsw-alias-button-info-fill,var(--dsw-alias-accent));width:28px;height:28px;color:var(--dsw-alias-button-info-label,var(--dsw-alias-accent-ink,#fff));cursor:pointer;border:none;border-radius:50%;flex:none;justify-content:center;align-items:center;padding:0;transition:opacity .1s ease-out;animation:.12s ease-out _4BEzFa_sidechatBtnIn;display:inline-flex}._4BEzFa_sidechatSendBtn:hover:not(:disabled){opacity:.88}._4BEzFa_sidechatSendBtn:disabled{opacity:.35;cursor:default}@keyframes _4BEzFa_sidechatRowIn{0%{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}@keyframes _4BEzFa_sidechatFadeIn{0%{opacity:0}to{opacity:1}}@keyframes _4BEzFa_sidechatBtnIn{0%{opacity:0;transform:scale(.85)}to{opacity:1;transform:scale(1)}}@keyframes _4BEzFa_sidechatSweep{0%{background-position:200% 0}to{background-position:-200% 0}}@media (prefers-reduced-motion:reduce){._4BEzFa_sidechatScroll>*,._4BEzFa_sidechatHero,._4BEzFa_sidechatStatus,._4BEzFa_sidechatSendBtn,._4BEzFa_sidechatModelBtn,._4BEzFa_sidechatDequeueBtn{transition:none;animation:none}._4BEzFa_sidechatStatusText,._4BEzFa_sidechatShimmerText{color:var(--dsw-alias-label-tertiary);background-image:none;animation:none}._4BEzFa_sidechatRowChevron{transition:none}}";
 		const tagId$1 = "dsh-external/dsh-better-sidebar/SideChatView.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$1) + "]") === null) {
 			const tag = document.createElement("style");
@@ -17581,47 +22866,53 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			document.head.appendChild(tag);
 		}
 		var SideChatView_module_css_default = {
-			"sidechatRowMeta": "Mbonuq_sidechatRowMeta",
-			"sidechatHeaderSpacer": "Mbonuq_sidechatHeaderSpacer",
-			"sidechatAssistant": "Mbonuq_sidechatAssistant",
-			"sidechatRowStatic": "Mbonuq_sidechatRowStatic",
-			"sidechatRowCode": "Mbonuq_sidechatRowCode",
-			"sidechatRowProse": "Mbonuq_sidechatRowProse",
-			"sidechatStatus": "Mbonuq_sidechatStatus",
-			"sidechatFadeIn": "Mbonuq_sidechatFadeIn",
-			"sidechatScroll": "Mbonuq_sidechatScroll",
-			"sidechatRowBody": "Mbonuq_sidechatRowBody",
-			"sidechatHeroDesc": "Mbonuq_sidechatHeroDesc",
-			"sidechatRowMono": "Mbonuq_sidechatRowMono",
-			"sidechatRowFailed": "Mbonuq_sidechatRowFailed",
-			"sidechatRowIn": "Mbonuq_sidechatRowIn",
-			"sidechatTurnSummary": "Mbonuq_sidechatTurnSummary",
-			"sidechatSweep": "Mbonuq_sidechatSweep",
-			"sidechatRowLabel": "Mbonuq_sidechatRowLabel",
-			"sidechatRowLine": "Mbonuq_sidechatRowLine",
-			"sidechatComposer": "Mbonuq_sidechatComposer",
-			"sidechatComposerBar": "Mbonuq_sidechatComposerBar",
-			"sidechatComposerMeta": "Mbonuq_sidechatComposerMeta",
-			"sidechatSendBtn": "Mbonuq_sidechatSendBtn",
-			"sidechatUser": "Mbonuq_sidechatUser",
-			"sidechatBtnIn": "Mbonuq_sidechatBtnIn",
-			"sidechatHeroTitle": "Mbonuq_sidechatHeroTitle",
-			"sidechatRowIcon": "Mbonuq_sidechatRowIcon",
-			"sidechatDetailHeader": "Mbonuq_sidechatDetailHeader",
-			"sidechat": "Mbonuq_sidechat",
-			"sidechatPrimaryBtn": "Mbonuq_sidechatPrimaryBtn",
-			"sidechatHero": "Mbonuq_sidechatHero",
-			"sidechatRowSummary": "Mbonuq_sidechatRowSummary",
-			"sidechatHint": "Mbonuq_sidechatHint",
-			"sidechatIconBtn": "Mbonuq_sidechatIconBtn",
-			"sidechatError": "Mbonuq_sidechatError",
-			"sidechatRow": "Mbonuq_sidechatRow",
-			"sidechatRowChevron": "Mbonuq_sidechatRowChevron",
-			"sidechatShimmerText": "Mbonuq_sidechatShimmerText",
-			"sidechatStatusText": "Mbonuq_sidechatStatusText",
-			"sidechatHeaderDot": "Mbonuq_sidechatHeaderDot",
-			"sidechatAgentBadge": "Mbonuq_sidechatAgentBadge",
-			"sidechatComposerInput": "Mbonuq_sidechatComposerInput"
+			"sidechatComposerSpacer": "_4BEzFa_sidechatComposerSpacer",
+			"sidechatIconBtn": "_4BEzFa_sidechatIconBtn",
+			"sidechatHero": "_4BEzFa_sidechatHero",
+			"sidechatHeroTitle": "_4BEzFa_sidechatHeroTitle",
+			"sidechatPending": "_4BEzFa_sidechatPending",
+			"sidechatRowChevron": "_4BEzFa_sidechatRowChevron",
+			"sidechatRowFailed": "_4BEzFa_sidechatRowFailed",
+			"sidechatHeroDesc": "_4BEzFa_sidechatHeroDesc",
+			"sidechatRowSummary": "_4BEzFa_sidechatRowSummary",
+			"sidechatRowIcon": "_4BEzFa_sidechatRowIcon",
+			"sidechatSendBtn": "_4BEzFa_sidechatSendBtn",
+			"sidechatScroll": "_4BEzFa_sidechatScroll",
+			"sidechatAssistant": "_4BEzFa_sidechatAssistant",
+			"sidechatShimmerText": "_4BEzFa_sidechatShimmerText",
+			"sidechatPendingText": "_4BEzFa_sidechatPendingText",
+			"sidechatErrorRow": "_4BEzFa_sidechatErrorRow",
+			"sidechat": "_4BEzFa_sidechat",
+			"sidechatPendingMeta": "_4BEzFa_sidechatPendingMeta",
+			"sidechatRowCode": "_4BEzFa_sidechatRowCode",
+			"sidechatStatusText": "_4BEzFa_sidechatStatusText",
+			"sidechatRowStatic": "_4BEzFa_sidechatRowStatic",
+			"sidechatRowIn": "_4BEzFa_sidechatRowIn",
+			"sidechatModelName": "_4BEzFa_sidechatModelName",
+			"sidechatHint": "_4BEzFa_sidechatHint",
+			"sidechatModelBtn": "_4BEzFa_sidechatModelBtn",
+			"sidechatRowMono": "_4BEzFa_sidechatRowMono",
+			"sidechatRowLabel": "_4BEzFa_sidechatRowLabel",
+			"sidechatTurnSummary": "_4BEzFa_sidechatTurnSummary",
+			"sidechatSweep": "_4BEzFa_sidechatSweep",
+			"sidechatStatus": "_4BEzFa_sidechatStatus",
+			"sidechatFadeIn": "_4BEzFa_sidechatFadeIn",
+			"sidechatPrimaryBtn": "_4BEzFa_sidechatPrimaryBtn",
+			"sidechatComposer": "_4BEzFa_sidechatComposer",
+			"sidechatRow": "_4BEzFa_sidechatRow",
+			"sidechatComposerInput": "_4BEzFa_sidechatComposerInput",
+			"sidechatUser": "_4BEzFa_sidechatUser",
+			"sidechatComposerBar": "_4BEzFa_sidechatComposerBar",
+			"sidechatError": "_4BEzFa_sidechatError",
+			"sidechatComposerTools": "_4BEzFa_sidechatComposerTools",
+			"sidechatTipAnchor": "_4BEzFa_sidechatTipAnchor",
+			"sidechatTipShrink": "_4BEzFa_sidechatTipShrink",
+			"sidechatRowMeta": "_4BEzFa_sidechatRowMeta",
+			"sidechatBtnIn": "_4BEzFa_sidechatBtnIn",
+			"sidechatDequeueBtn": "_4BEzFa_sidechatDequeueBtn",
+			"sidechatRowBody": "_4BEzFa_sidechatRowBody",
+			"sidechatRowLine": "_4BEzFa_sidechatRowLine",
+			"sidechatRowProse": "_4BEzFa_sidechatRowProse"
 		};
 		//#endregion
 		//#region src/client/SideChatView.tsx
@@ -17635,8 +22926,8 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		* host wraps it with the side boundary + the in-progress snapshot parked
 		* at creation, and the thread earns its real label — and the tab its
 		* title — from that first message). Closing the tab releases the thread's
-		* live agent (its history stays persisted); the header menu reopens any
-		* existing thread into a tab (deduped by threadId).
+		* live agent (its history stays persisted); the composer bar's thread menu
+		* reopens any existing thread into a tab (deduped by threadId).
 		*
 		* Each side thread is a child session the plugin created itself with a
 		* custom seed (the parent's full log up to the click moment — see
@@ -17649,9 +22940,26 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		* cuts the inherited seed host-side and answers afterSeq deltas; the
 		* mapping (boundary row dropped, chunk streaming accumulated) lives in
 		* sidechat-transcript.ts.
+		*
+		* Freshness and visibility (2026-10-12): the transcript advances on the
+		* host's own staleness push (use-sidechat-push.ts) with a slow fallback poll;
+		* a just-sent message shows as a local echo until the host reports it in the
+		* unclaimed inbox; that inbox renders as pending bubbles with a dequeue
+		* button; and EVERY thread function (model route, thread menu, save-as-new-
+		* session, archive) lives in the COMPOSER BAR, not a top header — the reader's
+		* attention is on the input, and a header's actions went unnoticed.
 		*/
-		/** Poll cadence while the selected thread is running and the tab visible. */
-		const POLL_MS = 2e3;
+		/**
+		* Fallback poll cadence while the selected thread is running and the tab
+		* visible. The push socket is the primary refresh path (see
+		* use-sidechat-push.ts); this is the safety net for a socket that cannot be
+		* established at all.
+		*/
+		const POLL_MS$2 = 15e3;
+		/** Coalescing window for push notices: one pull per burst of host frames.
+		*  `fetchThread` already aborts its predecessor, so a shorter window would
+		*  only turn one burst into a request storm. */
+		const PUSH_DEBOUNCE_MS = 80;
 		/** Textarea auto-grow ceiling (px) — the composer scrolls beyond it. */
 		const COMPOSER_MAX_HEIGHT = 132;
 		/** The thread a tab is bound to (durable in tab.meta across refreshes). */
@@ -17677,6 +22985,84 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		/** In-flight thread creations keyed by tab id (double-mount guard: React
 		*  StrictMode / HMR must not mint two threads for one tab). */
 		const inFlightStarts = /* @__PURE__ */ new Set();
+		/** Where the last side-chat thread of each main session is remembered (the
+		*  client store's own key space, like the diff pane's redaction flag). */
+		const LAST_THREAD_KEY = "dsh-sidebar:v1:sidechat-thread";
+		/** The in-memory mirror of {@link LAST_THREAD_KEY}. */
+		const lastThreadBySession = /* @__PURE__ */ new Map();
+		/** Whether the localStorage mirror has been read into the map yet. */
+		let lastThreadsLoaded = false;
+		/**
+		* A native tab's record and its navigation params live in the host's memory
+		* only, so collapsing the sidebar (or restarting DSH) remounts the tab with
+		* NO thread bound — the autoCreate path — and the reader would land in a
+		* brand-new empty thread instead of the one they were in. Remembering the
+		* last thread per session is what makes the reattach below possible; the
+		* storage is best-effort (a denied or unparseable entry just means the
+		* reattach falls back to the newest thread).
+		*/
+		function loadLastThreads() {
+			if (lastThreadsLoaded) return;
+			lastThreadsLoaded = true;
+			try {
+				const raw = localStorage.getItem(LAST_THREAD_KEY);
+				if (raw === null) return;
+				const parsed = JSON.parse(raw);
+				if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return;
+				for (const [sessionId, threadId] of Object.entries(parsed)) if (typeof threadId === "string") lastThreadBySession.set(sessionId, threadId);
+			} catch {}
+		}
+		/** The thread a session's side-chat tab was last bound to, if any. */
+		function lastSidechatThread(sessionId) {
+			loadLastThreads();
+			return lastThreadBySession.get(sessionId);
+		}
+		/** Remember the side-chat thread a session is bound to (also across reloads). */
+		function rememberSidechatThread(sessionId, threadId) {
+			loadLastThreads();
+			if (lastThreadBySession.get(sessionId) === threadId) return;
+			lastThreadBySession.set(sessionId, threadId);
+			try {
+				localStorage.setItem(LAST_THREAD_KEY, JSON.stringify(Object.fromEntries(lastThreadBySession)));
+			} catch {}
+		}
+		/** The catalog row of one route: the model picker reads its reasoning efforts
+		*  and its default effort. Undefined when the route is not in the catalog
+		*  (an inherited route, or a catalog that failed to load). */
+		function catalogModel(catalog, provider, model) {
+			if (catalog === null || provider === void 0 || model === void 0) return void 0;
+			for (const group of catalog.groups ?? []) {
+				if (group.id !== provider) continue;
+				for (const entry of group.models ?? []) if (entry.id === model) return entry;
+			}
+		}
+		/** A stable "nothing is archived" snapshot: the archive set feeds
+		*  `useSyncExternalStore`, and a fresh `[]` per read would re-render forever. */
+		const NO_ARCHIVED_SESSIONS = [];
+		/** The sessions the host currently hides as archived. A host without the
+		*  `workspaces` service (or a context that throws on `get`) reads as "nothing
+		*  is archived", so the thread menu simply keeps every thread. */
+		function archivedSessionIdsOf(ctx) {
+			try {
+				return ctx.get("workspaces")?.list?.getSnapshot?.()?.archivedSessionIds ?? NO_ARCHIVED_SESSIONS;
+			} catch {
+				return NO_ARCHIVED_SESSIONS;
+			}
+		}
+		/** Subscribe to the host's archive set. DSH hides archived sessions from the
+		*  session list, so the thread menu has to follow the same set — otherwise it
+		*  would keep offering a thread the host refuses to open. */
+		function useArchivedSessionIds(ctx) {
+			const subscribe = (0, react.useMemo)(() => (callback) => {
+				try {
+					return ctx.get("workspaces")?.list?.subscribe?.(callback) ?? (() => {});
+				} catch {
+					return () => {};
+				}
+			}, [ctx]);
+			const getSnapshot = (0, react.useCallback)(() => archivedSessionIdsOf(ctx), [ctx]);
+			return (0, react.useSyncExternalStore)(subscribe, getSnapshot);
+		}
 		/** Merge history entries by event seq (newest wins), log order preserved. */
 		function mergeBySeq(previous, incoming) {
 			const bySeq = /* @__PURE__ */ new Map();
@@ -17689,6 +23075,32 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		function threadDisplayTitle(title) {
 			if (title === "Side: New thread") return t("sideChatUntitled");
 			return title.startsWith("Side: ") ? title.slice(6) : title;
+		}
+		/** How long a composer-bar control waits before its hover bubble opens. */
+		const TIP_DELAY_MS = 120;
+		/**
+		* One composer-bar control with its hover bubble.
+		*
+		* The bubble anchors on an ENABLED wrapper span, not on the button itself: a
+		* disabled control fires no pointer events, and save/archive are disabled
+		* exactly when their label matters most ("至少完成一轮对话后才能保存" /
+		* "该线程正在运行，停止后才能归档"). `portal` + `side="top"` keep the bubble
+		* inside the viewport from a bar pinned to the panel's bottom edge.
+		* @param props.label - bubble text.
+		* @param props.children - the control (a button, or a Menu whose trigger is one).
+		*/
+		function ComposerTip(props) {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
+				label: props.label,
+				side: "top",
+				portal: true,
+				delayMs: TIP_DELAY_MS,
+				maxWidth: 220,
+				children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+					className: clsx(SideChatView_module_css_default.sidechatTipAnchor, props.className),
+					children: props.children
+				})
+			});
 		}
 		/**
 		* One collapsible context row — the shared Codex-style chrome of tool
@@ -17778,16 +23190,18 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				default: return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconSparkleRegular, { size: 14 });
 			}
 		}
-		/** One row renderer (React keys ride the source event seq). */
-		function renderRow(row, labels) {
+		/** One row renderer (React keys ride the source event seq). `rewrite` is the
+		*  surface's markdown link pass — the rows are model prose, so a relative link
+		*  resolves against the session cwd (see use-markdown-surface). */
+		function renderRow(row, labels, rewrite) {
 			switch (row.kind) {
 				case "user": return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 					className: SideChatView_module_css_default.sidechatUser,
-					children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { ...markdownTextProps(row.text, labels) })
+					children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { ...markdownTextProps(rewrite(row.text), labels) })
 				}, `${row.kind}:${row.seq}`);
 				case "assistant": return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 					className: SideChatView_module_css_default.sidechatAssistant,
-					children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { ...markdownTextProps(row.text, labels) })
+					children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { ...markdownTextProps(rewrite(row.text), labels) })
 				}, `${row.kind}:${row.seq}`);
 				case "reasoning": return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(CollapsibleRow, {
 					label: labels.thinkLabel,
@@ -17803,6 +23217,10 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 						className: SideChatView_module_css_default.sidechatRowProse,
 						children: row.text
 					})
+				}, `${row.kind}:${row.seq}`);
+				case "error": return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+					className: SideChatView_module_css_default.sidechatErrorRow,
+					children: t("sideChatRunError", { message: row.text })
 				}, `${row.kind}:${row.seq}`);
 				case "turnSummary": {
 					const parts = [];
@@ -17885,7 +23303,28 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				};
 			}, []);
 			const list = (0, react.useSyncExternalStore)((0, react.useMemo)(() => (callback) => ctx.sessions.list.subscribe(callback), [ctx]), (0, react.useCallback)(() => ctx.sessions.list.getSnapshot(), [ctx]));
-			const threads = (0, react.useMemo)(() => sideThreadRows(list.byId, scope.sessionId), [list, scope.sessionId]);
+			const archivedIds = useArchivedSessionIds(ctx);
+			const threads = (0, react.useMemo)(() => {
+				const archived = new Set(archivedIds);
+				return sideThreadRows(list.byId, scope.sessionId).filter((row) => !archived.has(row.id));
+			}, [
+				list,
+				scope.sessionId,
+				archivedIds
+			]);
+			/** The newest thread of `candidates`: the session list carries the thread
+			*  rows but not their age, so the creation order comes from the host's
+			*  subagent catalog. An untouched "new thread" placeholder only wins when
+			*  nothing else is left. */
+			const newestThreadId = (0, react.useCallback)((candidates) => {
+				const catalog = list.projectionsBySession?.[scope.sessionId]?.values.subagentCatalog;
+				const createdAt = new Map((catalog ?? []).map((entry) => [entry.id, entry.createdAt]));
+				const rank = (id) => createdAt.get(id) ?? 0;
+				const real = candidates.filter((row) => row.title !== SIDE_NEW_THREAD_TITLE);
+				const pool = real.length > 0 ? real : candidates;
+				if (pool.length === 0) return void 0;
+				return pool.reduce((newest, row) => rank(row.id) > rank(newest.id) ? row : newest).id;
+			}, [list, scope.sessionId]);
 			const threadId = sidechatThreadIdOf(tab);
 			const autoCreate = tab.meta?.autoCreate === true;
 			const [composer, setComposer] = (0, react.useState)("");
@@ -17895,18 +23334,40 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			const [revision, setRevision] = (0, react.useState)(0);
 			const [info, setInfo] = (0, react.useState)(null);
 			const [menuOpen, setMenuOpen] = (0, react.useState)(false);
+			const [modelMenuOpen, setModelMenuOpen] = (0, react.useState)(false);
+			const [catalog, setCatalog] = (0, react.useState)(null);
+			/** Local echo of the message just sent: shown until the host reports it
+			*  pending or logs it durably (see the drop effect below). `seq` is the
+			*  transcript tail at send time, so an OLDER identical message cannot
+			*  retire the echo. */
+			const [echo, setEcho] = (0, react.useState)(null);
 			const cacheRef = (0, react.useRef)({
 				entries: [],
-				live: []
+				live: [],
+				pending: []
 			});
 			const prevRowsRef = (0, react.useRef)([]);
 			const controllerRef = (0, react.useRef)(null);
+			/** The pending push-driven pull (one per burst of host frames). */
+			const invalidateRef = (0, react.useRef)(void 0);
 			const scrollRef = (0, react.useRef)(null);
+			/** Heading slugs, anchor jumps and `.md` link claiming for the transcript (a
+			*  prose surface: it renders no file of its own, so a relative link target
+			*  resolves against the session cwd). */
+			const { surfaceRef: chatSurfaceRef, openFile: openChatFile, rewrite: rewriteChatText } = useMarkdownSurface({
+				ctx,
+				sessionId: scope.sessionId,
+				cwd: scope.cwd
+			});
+			const transcriptRef = (0, react.useCallback)((element) => {
+				scrollRef.current = element;
+				chatSurfaceRef(element);
+			}, [chatSurfaceRef]);
 			const composerRef = (0, react.useRef)(null);
 			const summary = threadId === void 0 ? void 0 : list.byId[threadId];
 			const running = summary?.running === true;
 			const connectionState = (0, react.useSyncExternalStore)((0, react.useMemo)(() => (callback) => ctx.connection?.state.subscribe(callback) ?? (() => {}), [ctx]), (0, react.useCallback)(() => ctx.connection?.state.getSnapshot(), [ctx]));
-			/** The agent-identity badge of the thread header (preset · model). */
+			/** The agent-identity badge of the composer bar (preset · model). */
 			const agentBadge = (0, react.useMemo)(() => {
 				if (info === null) return "";
 				return [info.preset, info.model ?? info.provider].filter(Boolean).join(" · ");
@@ -17919,7 +23380,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				setError(null);
 				try {
 					const { childId } = await api.sidechatStart(scope.sessionId);
-					ctx.get("betterSidebar")?.updateTab(tab.id, { meta: { threadId: childId } });
+					ctx.get("betterSidebar")?.updateTab(tab.id, { meta: { threadId: childId } }, scope.sessionId);
 				} catch (cause) {
 					setError(cause instanceof Error ? cause.message : String(cause));
 				} finally {
@@ -17931,27 +23392,55 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				scope.sessionId,
 				tab.id
 			]);
+			/**
+			* The existing thread an unbound side chat should reattach to: the binding
+			* this session was last in (kept only while the thread is still listed — a
+			* deleted or archived thread must not be revived), then the newest thread
+			* that already carries a real first prompt.
+			*/
+			const reattachTarget = (0, react.useCallback)(() => {
+				const remembered = lastSidechatThread(scope.sessionId);
+				if (remembered !== void 0 && (threads.length === 0 || threads.some((row) => row.id === remembered))) return remembered;
+				return newestThreadId(threads);
+			}, [
+				newestThreadId,
+				scope.sessionId,
+				threads
+			]);
 			(0, react.useEffect)(() => {
 				if (threadId !== void 0 || !autoCreate || !visible) return;
+				const reattach = reattachTarget();
+				if (reattach !== void 0) {
+					ctx.get("betterSidebar")?.updateTab(tab.id, { meta: { threadId: reattach } }, scope.sessionId);
+					return;
+				}
 				startThread();
 			}, [
 				threadId,
 				autoCreate,
 				visible,
-				startThread
+				startThread,
+				reattachTarget,
+				ctx,
+				tab.id,
+				scope.sessionId
 			]);
+			(0, react.useEffect)(() => {
+				if (threadId !== void 0) rememberSidechatThread(scope.sessionId, threadId);
+			}, [threadId, scope.sessionId]);
 			(0, react.useEffect)(() => {
 				const display = summary?.displayTitle;
 				if (display === void 0) return;
 				const title = threadDisplayTitle(display);
 				if (title !== "" && title !== tab.title) try {
-					ctx.get("betterSidebar")?.updateTab(tab.id, { title });
+					ctx.get("betterSidebar")?.updateTab(tab.id, { title }, scope.sessionId);
 				} catch {}
 			}, [
 				summary,
 				tab.id,
 				tab.title,
-				ctx
+				ctx,
+				scope.sessionId
 			]);
 			/** One transcript pull: the thread's own events beyond the cached tail
 			*  (first attach = the whole seed-cut slice; polls = afterSeq deltas),
@@ -17963,8 +23452,9 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				try {
 					const cache = cacheRef.current;
 					const afterSeq = cache.entries.at(-1)?.event.seq;
-					const { events, live } = await api.sidechatEvents(childId, afterSeq, controller.signal);
+					const { events, live, pending } = await api.sidechatEvents(childId, afterSeq, controller.signal);
 					cache.live = live ?? [];
+					cache.pending = pending ?? [];
 					if (events.length > 0) {
 						const incoming = events.map((event) => ({ event }));
 						cache.entries = mergeBySeq(cache.entries, incoming);
@@ -17972,7 +23462,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					setRevision((value) => value + 1);
 				} catch {}
 			}, []);
-			/** The thread header badge pull (live state + preset/model identity). */
+			/** The composer-bar badge pull (live state + preset/model identity). */
 			const fetchInfo = (0, react.useCallback)(async (childId) => {
 				try {
 					setInfo(await api.sidechatInfo(childId));
@@ -17981,13 +23471,19 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			(0, react.useEffect)(() => {
 				cacheRef.current = {
 					entries: [],
-					live: []
+					live: [],
+					pending: []
 				};
 				prevRowsRef.current = [];
 				controllerRef.current?.abort();
+				if (invalidateRef.current !== void 0) {
+					window.clearTimeout(invalidateRef.current);
+					invalidateRef.current = void 0;
+				}
 				setError(null);
 				setSaved(false);
 				setInfo(null);
+				setEcho(null);
 				if (threadId !== void 0) {
 					fetchInfo(threadId);
 					window.setTimeout(() => composerRef.current?.focus(), 0);
@@ -18011,9 +23507,33 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				fetchThread,
 				fetchInfo
 			]);
-			usePolling(visible && running && threadId !== void 0, pollTick, { intervalMs: POLL_MS });
+			usePolling(visible && running && threadId !== void 0, pollTick, { intervalMs: POLL_MS$2 });
+			const handleInvalidate = (0, react.useCallback)((childId) => {
+				if (invalidateRef.current !== void 0) window.clearTimeout(invalidateRef.current);
+				invalidateRef.current = window.setTimeout(() => {
+					invalidateRef.current = void 0;
+					fetchThread(childId);
+					fetchInfo(childId);
+				}, PUSH_DEBOUNCE_MS);
+			}, [fetchThread, fetchInfo]);
+			useSidechatPush({
+				threadIds: (0, react.useMemo)(() => threadId === void 0 ? [] : [threadId], [threadId]),
+				onInvalidate: handleInvalidate
+			});
+			(0, react.useEffect)(() => {
+				let cancelled = false;
+				api.sidechatModels().then((result) => {
+					if (!cancelled) setCatalog(result);
+				}).catch(() => {
+					if (!cancelled) setCatalog(null);
+				});
+				return () => {
+					cancelled = true;
+				};
+			}, []);
 			(0, react.useEffect)(() => () => {
 				controllerRef.current?.abort();
+				if (invalidateRef.current !== void 0) window.clearTimeout(invalidateRef.current);
 			}, []);
 			const prevConnectionRef = (0, react.useRef)(connectionState);
 			(0, react.useEffect)(() => {
@@ -18040,19 +23560,77 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				prevRowsRef.current = next;
 				return next;
 			}, [threadId, revision]);
+			/** The unclaimed inbox rows that still need a bubble: a pending message the
+			*  host already logged durably (the claim raced the read) must not render
+			*  twice, so it is matched by the durable message id. */
+			const pendingRows = (0, react.useMemo)(() => {
+				if (threadId === void 0) return [];
+				const durable = /* @__PURE__ */ new Set();
+				for (const row of rows) if (row.kind === "user" && row.messageId !== void 0) durable.add(row.messageId);
+				return cacheRef.current.pending.filter((item) => !durable.has(item.id));
+			}, [
+				threadId,
+				revision,
+				rows
+			]);
+			const echoText = echo?.text ?? "";
+			(0, react.useEffect)(() => {
+				if (echo === null || busy === "sending") return;
+				if (pendingRows.some((item) => item.text === echo.text)) {
+					setEcho(null);
+					return;
+				}
+				if (rows.some((row) => row.kind === "user" && row.seq > echo.seq && row.text === echo.text)) setEcho(null);
+			}, [
+				echo,
+				busy,
+				pendingRows,
+				rows
+			]);
+			/** The echo is hidden the moment the inbox already carries the same text
+			*  (the retire effect above then drops the state) so the message never shows
+			*  twice for a frame. */
+			const showEcho = echo !== null && !pendingRows.some((item) => item.text === echo.text);
 			const canSave = threadId !== void 0 && threadHasCompletedTurn(cacheRef.current.entries);
 			const trailingPending = threadId !== void 0 && threadTrailingPending(cacheRef.current.entries);
 			const freshThread = threadId !== void 0 && rows.length === 0;
+			/** Whether the transcript shows model output yet: until it does, a
+			*  just-sent thread gets the immediate thinking row even before the host
+			*  reports it running. A RUNNING thread keeps the row regardless (the
+			*  long-tool-call window has no streaming text to show progress). */
+			const hasOutputRow = rows.some((row) => row.kind === "assistant" || row.kind === "reasoning");
+			const showThinking = threadId !== void 0 && (running || echo !== null && !hasOutputRow);
 			(0, react.useEffect)(() => {
 				const scroller = scrollRef.current;
 				if (scroller === null) return;
 				scroller.scrollTop = scroller.scrollHeight;
-			}, [rows.length, threadId]);
-			/** Open a NEW thread tab (createTab mints the autoCreate tab; its view
-			*  creates the thread on mount). */
-			const openNewThread = () => {
+			}, [
+				rows.length,
+				pendingRows.length,
+				echoText,
+				threadId
+			]);
+			/** Open a NEW thread tab: the thread is created FIRST and parked for the
+			*  descriptor's createTab, so the tab that opens is already bound to it —
+			*  the pane never sits on the empty hero while a thread is being created,
+			*  and the native page kind (which re-delivers its one tab instead of
+			*  copying it) switches to the new thread through the same navigation the
+			*  thread menu uses. */
+			const openNewThread = async () => {
 				setMenuOpen(false);
-				ctx.get("betterSidebar")?.openTab({ type: "sidechat" }, scope);
+				if (busy !== null) return;
+				setBusy("starting");
+				setError(null);
+				try {
+					const { childId } = await api.sidechatStart(scope.sessionId);
+					rememberSidechatThread(scope.sessionId, childId);
+					parkSidechatReopen(childId);
+					ctx.get("betterSidebar")?.openTab({ type: "sidechat" }, scope);
+				} catch (cause) {
+					setError(cause instanceof Error ? cause.message : String(cause));
+				} finally {
+					setBusy(null);
+				}
 			};
 			/** Switch to an existing thread: parked for createTab, deduped to the
 			*  already-open tab when there is one. */
@@ -18084,6 +23662,88 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				}
 				return items;
 			}, [threads]);
+			/** The selected route's menu id (the picker's check mark). */
+			const selectedModelId = info?.provider !== void 0 && info.model !== void 0 ? `model:${info.provider}:${info.model}` : void 0;
+			/** The reasoning effort the thread currently requests with, as a menu id. */
+			const selectedEffortId = info?.reasoningEffort === void 0 ? void 0 : `effort:${info.reasoningEffort}`;
+			/** The model picker's rows: the host catalog grouped by provider, plus the
+			*  reasoning efforts of the model in use. Without a readable catalog (or
+			*  with an empty one) the only honest row is the inherited route — the host
+			*  has no "inherit" write, so that row is informational.
+			*
+			*  The efforts are FLAT ROWS, deliberately not a `submenu`: the host's Menu
+			*  opens a nested card to the RIGHT of its parent, and this picker sits at
+			*  the sidebar's right edge, so a submenu lands off-screen (and, worse, the
+			*  host's menu is non-scrolling as soon as any entry carries a submenu, so a
+			*  long catalog could not scroll either). One right-aligned column is
+			*  clip-proof by construction; the two groups stay distinguishable through
+			*  their labels and the per-row check marks. */
+			const modelItems = (0, react.useMemo)(() => {
+				const groups = catalog?.available === true ? catalog.groups ?? [] : [];
+				if (groups.length === 0) return [{
+					id: "$inherit",
+					label: t("sideChatModelInherit"),
+					disabled: true
+				}];
+				const items = [];
+				for (const group of groups) {
+					items.push({
+						type: "label",
+						id: `group:${group.id}`,
+						text: group.name ?? group.id
+					});
+					for (const entry of group.models ?? []) items.push({
+						id: `model:${group.id}:${entry.id}`,
+						label: entry.name ?? entry.id
+					});
+				}
+				const efforts = catalogModel(catalog, info?.provider, info?.model)?.reasoning?.efforts ?? [];
+				if (efforts.length > 0) {
+					items.push({
+						type: "separator",
+						id: "$reasoning-sep"
+					});
+					items.push({
+						type: "label",
+						id: "$reasoning",
+						text: t("sideChatReasoning")
+					});
+					for (const effort of efforts) items.push({
+						id: `effort:${effort.id}`,
+						label: effort.name ?? effort.id
+					});
+				}
+				return items;
+			}, [catalog, info]);
+			/** Pin one model route (or one reasoning effort of the current route) on the
+			*  bound thread, then re-read the composer-bar identity. */
+			const handleModelSelect = async (id) => {
+				setModelMenuOpen(false);
+				if (threadId === void 0) return;
+				let provider;
+				let model;
+				let reasoningEffort;
+				if (id.startsWith("model:")) {
+					const rest = id.slice(6);
+					const separator = rest.indexOf(":");
+					if (separator <= 0) return;
+					provider = rest.slice(0, separator);
+					model = rest.slice(separator + 1);
+					reasoningEffort = catalogModel(catalog, provider, model)?.reasoning?.defaultEffort;
+				} else if (id.startsWith("effort:")) {
+					if (info?.provider === void 0 || info.model === void 0) return;
+					provider = info.provider;
+					model = info.model;
+					reasoningEffort = id.slice(7);
+				} else return;
+				setError(null);
+				try {
+					await api.sidechatModel(threadId, provider, model, reasoningEffort);
+					await fetchInfo(threadId);
+				} catch (cause) {
+					setError(cause instanceof Error ? cause.message : String(cause));
+				}
+			};
 			const growComposer = () => {
 				const field = composerRef.current;
 				if (field === null) return;
@@ -18095,6 +23755,10 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				if (text === "" || threadId === void 0 || busy !== null) return;
 				setBusy("sending");
 				setError(null);
+				setEcho({
+					text,
+					seq: cacheRef.current.entries.at(-1)?.event.seq ?? 0
+				});
 				try {
 					await api.sidechatPrompt(threadId, text);
 					setComposer("");
@@ -18103,10 +23767,24 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					fetchThread(threadId);
 					fetchInfo(threadId);
 				} catch (cause) {
+					setEcho(null);
 					setError(cause instanceof Error ? cause.message : String(cause));
 				} finally {
 					setBusy(null);
 				}
+			};
+			/** Drop one unclaimed inbox message: the row leaves the queue immediately,
+			*  then the pull reconciles (a refused dequeue brings it back). */
+			const handleDequeue = async (id) => {
+				if (threadId === void 0) return;
+				cacheRef.current.pending = cacheRef.current.pending.filter((item) => item.id !== id);
+				setRevision((value) => value + 1);
+				try {
+					await api.sidechatDequeue(threadId, id);
+				} catch (cause) {
+					setError(cause instanceof Error ? cause.message : String(cause));
+				}
+				fetchThread(threadId);
 			};
 			const handleCancel = async () => {
 				if (threadId === void 0 || busy !== null) return;
@@ -18116,6 +23794,12 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					setError(cause instanceof Error ? cause.message : String(cause));
 				}
 			};
+			/** The thread that should replace `excludeId` once it is archived: the newest
+			*  real thread first (the host's own subagent catalog carries the creation
+			*  order), the newest placeholder only when nothing else is left, and
+			*  `undefined` when the thread menu is empty — the tab then unbinds to the
+			*  empty state instead of staying bound to an archived session. */
+			const fallbackThreadId = (0, react.useCallback)((excludeId) => newestThreadId(threads.filter((row) => row.id !== excludeId)), [newestThreadId, threads]);
 			const handleSave = async () => {
 				if (threadId === void 0 || !canSave || busy !== null) return;
 				setBusy("saving");
@@ -18138,6 +23822,28 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					setBusy(null);
 				}
 			};
+			/** Archive the bound thread on the host (the same capability the session
+			*  list's own archive action uses; `stopActivity` settles a running agent
+			*  first). The tab then moves to another live thread: leaving it bound to an
+			*  archived session would dead-end the panel, because the host refuses to
+			*  open archived sessions. */
+			const handleArchive = async () => {
+				if (threadId === void 0 || busy !== null) return;
+				setBusy("archiving");
+				setError(null);
+				setSaved(false);
+				try {
+					const service = ctx.get("uiWorkspace");
+					if (service?.archiveSession === void 0) throw new Error("the workspace service is unavailable");
+					await service.archiveSession(threadId, { stopActivity: true });
+					const next = fallbackThreadId(threadId);
+					ctx.get("betterSidebar")?.updateTab(tab.id, { meta: next === void 0 ? {} : { threadId: next } });
+				} catch (cause) {
+					setError(cause instanceof Error ? cause.message : String(cause));
+				} finally {
+					setBusy(null);
+				}
+			};
 			if (threadId === void 0) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 				className: SideChatView_module_css_default.sidechat,
 				children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
@@ -18146,7 +23852,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 						/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconNewChatOutlineRegular, {}),
 						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 							className: clsx(SideChatView_module_css_default.sidechatHeroTitle, busy === "starting" && SideChatView_module_css_default.sidechatShimmerText),
-							children: busy === "starting" ? t("sideChatCreating") : t("sideChatEmpty")
+							children: busy === "starting" || autoCreate && error === null ? t("sideChatCreating") : t("sideChatEmpty")
 						}),
 						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 							className: SideChatView_module_css_default.sidechatHeroDesc,
@@ -18156,7 +23862,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 							className: SideChatView_module_css_default.sidechatError,
 							children: t("sideChatError", { message: error })
 						}),
-						busy !== "starting" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						busy !== "starting" && (!autoCreate || error !== null) && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 							type: "button",
 							className: SideChatView_module_css_default.sidechatPrimaryBtn,
 							onClick: () => void startThread(),
@@ -18168,53 +23874,6 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				className: SideChatView_module_css_default.sidechat,
 				children: [
-					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-						className: SideChatView_module_css_default.sidechatDetailHeader,
-						children: [
-							running && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.StateDot, {
-								state: "ongoing",
-								size: 8,
-								className: SideChatView_module_css_default.sidechatHeaderDot
-							}),
-							agentBadge !== "" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-								className: SideChatView_module_css_default.sidechatAgentBadge,
-								children: agentBadge
-							}),
-							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { className: SideChatView_module_css_default.sidechatHeaderSpacer }),
-							/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Menu, {
-								open: menuOpen,
-								anchor: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-									type: "button",
-									className: SideChatView_module_css_default.sidechatIconBtn,
-									onClick: () => {
-										setMenuOpen((value) => !value);
-									},
-									title: t("sideChatThreads"),
-									children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(IconHistoryOutline16, {})
-								}),
-								items: menuItems,
-								selectedId: threadId,
-								onSelect: (id) => {
-									if (id === "$new") openNewThread();
-									else openExistingThread(id);
-								},
-								onClose: () => {
-									setMenuOpen(false);
-								},
-								align: "end",
-								portal: true,
-								dense: true
-							}),
-							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-								type: "button",
-								className: SideChatView_module_css_default.sidechatIconBtn,
-								onClick: () => void handleSave(),
-								disabled: !canSave || busy !== null,
-								title: `${t("sideChatSave")} — ${t("sideChatSaveTitle")}`,
-								children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(IconSaveOutline16, {})
-							})
-						]
-					}),
 					connectionState !== void 0 && connectionState !== "connected" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.ConnectionIndicator, {
 						state: connectionState,
 						disconnectedLabel: t("sideChatConnDisconnected"),
@@ -18225,6 +23884,63 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 						onReconnect: () => {
 							ctx.connection?.reconnect();
 						}
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						ref: transcriptRef,
+						className: SideChatView_module_css_default.sidechatScroll,
+						children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(_deepseek_ai_dsh_client_ui_primitives.MarkdownDelegateProvider, {
+							openFile: openChatFile,
+							children: [
+								rows.map((row) => renderRow(row, rowLabels, rewriteChatText)),
+								pendingRows.map((item) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+									className: SideChatView_module_css_default.sidechatPending,
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+										className: SideChatView_module_css_default.sidechatPendingText,
+										children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { ...markdownTextProps(rewriteChatText(item.text), rowLabels) })
+									}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+										className: SideChatView_module_css_default.sidechatPendingMeta,
+										children: [
+											/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.StateDot, {
+												state: "ongoing",
+												size: 8
+											}),
+											/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t("sideChatQueued") }),
+											/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+												type: "button",
+												className: SideChatView_module_css_default.sidechatDequeueBtn,
+												onClick: () => void handleDequeue(item.id),
+												title: t("sideChatDequeue"),
+												"aria-label": t("sideChatDequeue"),
+												children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCloseFillRegular, { size: 12 })
+											})
+										]
+									})]
+								}, `pending:${item.id}`)),
+								showEcho && echo !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+									className: SideChatView_module_css_default.sidechatPending,
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+										className: SideChatView_module_css_default.sidechatPendingText,
+										children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { ...markdownTextProps(rewriteChatText(echo.text), rowLabels) })
+									}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+										className: SideChatView_module_css_default.sidechatPendingMeta,
+										children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.StateDot, {
+											state: "ongoing",
+											size: 8
+										}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: busy === "sending" ? t("sideChatSending") : t("sideChatQueued") })]
+									})]
+								})
+							]
+						})
+					}),
+					showThinking && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						className: SideChatView_module_css_default.sidechatStatus,
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.StateDot, {
+							state: "ongoing",
+							size: 8
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							className: SideChatView_module_css_default.sidechatStatusText,
+							children: t("sideChatThinking")
+						})]
 					}),
 					!canSave && !freshThread && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						className: SideChatView_module_css_default.sidechatHint,
@@ -18241,21 +23957,6 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					error !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						className: SideChatView_module_css_default.sidechatError,
 						children: t("sideChatError", { message: error })
-					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-						ref: scrollRef,
-						className: SideChatView_module_css_default.sidechatScroll,
-						children: rows.map((row) => renderRow(row, rowLabels))
-					}),
-					running && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-						className: SideChatView_module_css_default.sidechatStatus,
-						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.StateDot, {
-							state: "ongoing",
-							size: 8
-						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-							className: SideChatView_module_css_default.sidechatStatusText,
-							children: t("sideChatThinking")
-						})]
 					}),
 					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 						className: SideChatView_module_css_default.sidechatComposer,
@@ -18276,34 +23977,213 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 							}
 						}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 							className: SideChatView_module_css_default.sidechatComposerBar,
-							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-								className: SideChatView_module_css_default.sidechatComposerMeta,
-								children: running ? "" : agentBadge
-							}), running ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-								type: "button",
-								className: SideChatView_module_css_default.sidechatSendBtn,
-								onClick: () => void handleCancel(),
-								disabled: busy !== null,
-								title: t("sideChatCancelTitle"),
-								children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconStopFillRegular, {})
-							}, "stop") : /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-								type: "button",
-								className: SideChatView_module_css_default.sidechatSendBtn,
-								onClick: () => void handleSend(),
-								disabled: composer.trim() === "" || busy !== null,
-								title: t("sideChatSend"),
-								children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconSendOutlineRegular, { size: 16 })
-							}, "send")]
+							children: [
+								/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+									className: SideChatView_module_css_default.sidechatComposerTools,
+									children: [
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ComposerTip, {
+											label: t("sideChatNew"),
+											children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+												type: "button",
+												className: SideChatView_module_css_default.sidechatIconBtn,
+												onClick: () => void openNewThread(),
+												disabled: busy !== null,
+												"aria-label": t("sideChatNew"),
+												children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlusOutlineRegular, { size: 16 })
+											})
+										}),
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ComposerTip, {
+											label: t("sideChatThreads"),
+											children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Menu, {
+												open: menuOpen,
+												anchor: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+													type: "button",
+													className: SideChatView_module_css_default.sidechatIconBtn,
+													onClick: () => {
+														setMenuOpen((value) => !value);
+													},
+													"aria-label": t("sideChatThreads"),
+													children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(IconHistoryOutline16, {})
+												}),
+												items: menuItems,
+												selectedId: threadId,
+												onSelect: (id) => {
+													if (id === "$new") openNewThread();
+													else openExistingThread(id);
+												},
+												onClose: () => {
+													setMenuOpen(false);
+												},
+												align: "end",
+												portal: true,
+												dense: true
+											})
+										}),
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ComposerTip, {
+											label: `${t("sideChatSave")} — ${t("sideChatSaveTitle")}`,
+											children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+												type: "button",
+												className: SideChatView_module_css_default.sidechatIconBtn,
+												onClick: () => void handleSave(),
+												disabled: !canSave || busy !== null,
+												"aria-label": t("sideChatSave"),
+												children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(IconSaveOutline16, {})
+											})
+										}),
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ComposerTip, {
+											label: running ? t("sideChatArchiveRunning") : t("sideChatArchive"),
+											children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+												type: "button",
+												className: SideChatView_module_css_default.sidechatIconBtn,
+												onClick: () => void handleArchive(),
+												disabled: running || busy !== null,
+												"aria-label": t("sideChatArchive"),
+												children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconArchiveOutlineRegular, { size: 16 })
+											})
+										})
+									]
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { className: SideChatView_module_css_default.sidechatComposerSpacer }),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ComposerTip, {
+									label: agentBadge === "" ? t("sideChatModel") : `${t("sideChatModel")} — ${agentBadge}`,
+									className: SideChatView_module_css_default.sidechatTipShrink,
+									children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Menu, {
+										open: modelMenuOpen,
+										anchor: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+											type: "button",
+											className: SideChatView_module_css_default.sidechatModelBtn,
+											onClick: () => {
+												setModelMenuOpen((value) => !value);
+											},
+											"aria-label": t("sideChatModel"),
+											children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+												className: SideChatView_module_css_default.sidechatModelName,
+												children: info?.model ?? info?.provider ?? t("sideChatModel")
+											})
+										}),
+										items: modelItems,
+										selectedIds: [selectedModelId, selectedEffortId].filter((id) => id !== void 0),
+										onSelect: (id) => {
+											handleModelSelect(id);
+										},
+										onClose: () => {
+											setModelMenuOpen(false);
+										},
+										align: "end",
+										portal: true,
+										dense: true
+									})
+								}),
+								running ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ComposerTip, {
+									label: t("sideChatCancelTitle"),
+									children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+										type: "button",
+										className: SideChatView_module_css_default.sidechatSendBtn,
+										onClick: () => void handleCancel(),
+										disabled: busy !== null,
+										"aria-label": t("sideChatCancelTitle"),
+										children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconStopFillRegular, {})
+									}, "stop")
+								}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ComposerTip, {
+									label: t("sideChatSend"),
+									children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+										type: "button",
+										className: SideChatView_module_css_default.sidechatSendBtn,
+										onClick: () => void handleSend(),
+										disabled: composer.trim() === "" || busy !== null,
+										"aria-label": t("sideChatSend"),
+										children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconSendOutlineRegular, { size: 16 })
+									}, "send")
+								})
+							]
 						})]
 					})
 				]
 			});
 		}
 		//#endregion
+		//#region src/client/terminal-lazy.tsx
+		/** The terminal view, deferred until its tab is first mounted. */
+		const LazyTerminalBottom = lazyChunkComponent("terminal", (mod) => mod.TerminalBottomView);
+		//#endregion
+		//#region src/client/terminal-client.ts
+		/**
+		* The host terminal service, when this deployment mounts it.
+		*
+		* Structural detection (`view` + `close` + `recover` are the members this
+		* plugin calls); a service that does not look like the pinned contract reads
+		* as absent rather than throwing at the first keystroke.
+		* @param ctx - the client context.
+		*/
+		function webTerminals(ctx) {
+			const service = ctx.get("webTerminals");
+			if (service === void 0 || service === null) return void 0;
+			if (typeof service.view !== "function" || typeof service.close !== "function") return void 0;
+			if (typeof service.recover !== "function") return void 0;
+			return service;
+		}
+		/** Namespace for the plugin's own occurrence key and content identity. */
+		const TERMINAL_NS = "dsh-better-sidebar:terminal-bottom";
+		/** The persisted `tab.meta` field identifying ONE terminal tab instance. */
+		const INSTANCE_FIELD = "terminalInstance";
+		/** The persisted `tab.meta` field holding the content-identity generation. */
+		const RUN_FIELD = "terminalRun";
+		/**
+		* The content identity of the bottom terminal at `run`.
+		*
+		* The host keys its recovery binding on `(sessionId, contentId)`, so a stable
+		* value is what makes a page reload adopt the SAME host terminal instead of
+		* allocating a new one. A "new terminal" (the run bump) deliberately changes
+		* it: the old binding points at a process that is gone — a host restart, or a
+		* terminal closed elsewhere — and reusing it would wedge the tab on
+		* `missingTerminal` forever.
+		*
+		* The SAME value is the occurrence key the host memoizes one view by
+		* (`view(sessionId, key, contentId)`), so a run bump has to move both: the
+		* namespace is what keeps it from colliding with a host layout tab id (`tab1`).
+		*
+		* The bottom workbench hosts SEVERAL terminals (#774 follow-up), so each tab
+		* carries its own `instance`, spliced in before the run suffix: two tabs never
+		* share an id and therefore never share a shell. A tab WITHOUT an instance —
+		* one persisted before the follow-up — keeps the byte-identical legacy
+		* identity, so its host binding still reattaches.
+		* @param run - the content-identity generation (0 for a tab's first terminal).
+		* @param instance - the tab's own instance id (`undefined` on legacy tabs).
+		*/
+		function bottomTerminalContentId(run, instance) {
+			const base = instance === void 0 || instance === "" ? TERMINAL_NS : `${TERMINAL_NS}:${instance}`;
+			return run === 0 ? base : `${base}#${run}`;
+		}
+		/** The per-tab instance id a tab carries (absent/legacy tabs read as `undefined`). */
+		function terminalInstanceOf(tab) {
+			const instance = (tab.meta !== null && typeof tab.meta === "object" && !Array.isArray(tab.meta) ? tab.meta : {})[INSTANCE_FIELD];
+			return typeof instance === "string" && instance !== "" ? instance : void 0;
+		}
+		/** The content-identity generation a tab carries (absent/corrupt reads as 0). */
+		function terminalRunOf(tab) {
+			const run = (tab.meta !== null && typeof tab.meta === "object" && !Array.isArray(tab.meta) ? tab.meta : {})[RUN_FIELD];
+			return typeof run === "number" && Number.isSafeInteger(run) && run >= 0 ? run : 0;
+		}
+		/**
+		* End the tab's host terminal (the descriptor's `onClose`). Unmounting the
+		* view deliberately does NOT do this — that is the host's "a view survives DOM
+		* unmount" contract, and it is what lets a reload reattach — so without this
+		* every closed bottom terminal would leave its shell running invisibly.
+		* @param ctx - the client context.
+		* @param tab - the closing tab (its `meta` names the content identity).
+		* @param sessionId - the tab's session.
+		*/
+		function closeBottomTerminal(ctx, tab, sessionId) {
+			const service = webTerminals(ctx);
+			if (service === void 0) return;
+			const id = bottomTerminalContentId(terminalRunOf(tab), terminalInstanceOf(tab));
+			service.close(sessionId, id, id);
+		}
+		//#endregion
 		//#region src/client/builtins/tabs.tsx
 		/**
 		* The built-in tab descriptors: the plugin registers its own pages
-		* (editor / git — the unified changes tab / subagent / sidechat / browser /
+		* (editor / git — the unified changes tab / subagent / sidechat / terminal-bottom /
 		* diff) through
 		* the same {@link BetterSidebarService} external plugins use — eating its
 		* own dogfood. The editor IS the files window (the old standalone explorer
@@ -18314,9 +24194,15 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		* interactive shells outright, and the host's `browser` kind (delegated to
 		* from the chat's http(s) links) owns embedded pages. See
 		* docs/plans/2026-09-21-dsh-0.1.6-alpha.2-adaptation.md.
+		*
+		* `terminal-bottom` (#774) is the one type that is NOT a host tab: it is the
+		* plugin's own bottom workbench terminal, driving the host's session-scoped
+		* terminal service through a self-drawn xterm. It declares `bottomOnly` so it
+		* can never become a second right-Sidebar terminal capsule beside the host's
+		* own. See docs/plans/2026-10-05-bottom-terminal-tab.md.
 		*/
-		/** The 5 built-in tab descriptors (the host owns terminal and browser). */
-		function builtinTabs() {
+		/** The 6 built-in tab descriptors (the host owns the right-Sidebar terminal and browser). */
+		function builtinTabs(ctx) {
 			return [
 				{
 					id: "editor",
@@ -18343,6 +24229,12 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 								title: () => t("editorExplorerSplit"),
 								desc: () => t("editorExplorerSplitDesc")
 							}]
+						}, {
+							key: "explorerExclude",
+							type: "patterns",
+							title: () => t("explorerExclude"),
+							desc: () => t("explorerExcludeDesc"),
+							patternsPlaceholder: t("explorerExcludePlaceholder")
 						}],
 						pluginToggles: [{
 							key: "openWithPluginTargets",
@@ -18373,6 +24265,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					icon: changesTabIcon,
 					order: 20,
 					single: true,
+					settings: { render: CommitModelSettings },
 					badge: (_ctx, scope) => {
 						const count = opCountOf(scope.sessionId);
 						return count === void 0 || count === 0 ? null : count;
@@ -18467,6 +24360,27 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					})
 				},
 				{
+					id: "terminal-bottom",
+					title: () => t("terminal"),
+					description: () => t("guideDescTerminal"),
+					icon: terminalTabIcon,
+					order: 40,
+					bottomOnly: true,
+					createTab: () => ({ tab: {
+						id: `terminal-bottom:${crypto.randomUUID()}`,
+						type: "terminal-bottom",
+						title: t("terminal"),
+						meta: { [INSTANCE_FIELD]: crypto.randomUUID() }
+					} }),
+					available: (ctx) => webTerminals(ctx) !== void 0,
+					component: LazyTerminalBottom,
+					onClose: (tab, scope) => {
+						const sessionId = scope?.sessionId;
+						if (sessionId === void 0 || sessionId === "") return;
+						closeBottomTerminal(ctx, tab, sessionId);
+					}
+				},
+				{
 					id: "diff",
 					title: () => t("changes"),
 					icon: changesTabIcon,
@@ -18484,8 +24398,8 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		//#endregion
 		//#region src/client/builtins/viewers.tsx
 		/**
-		* The 3 built-in file viewer descriptors (markdown / html / code), exactly
-		* like external plugins register theirs.
+		* The 4 built-in file viewer descriptors (markdown / html / jsonl / code),
+		* exactly like external plugins register theirs.
 		*
 		* DSH 0.1.7 ships `ui-sidebar-documentpreview`, its own code / spreadsheet /
 		* office / pdf / image / html / markdown / text previews with zoom and
@@ -18495,6 +24409,9 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		*    sanitation, floating TOC), which the user prefers to the host's;
 		*  - `html` — the sandboxed iframe preview plus the host-less
 		*    `htmlViewerNoSandbox` / `htmlViewerDefaultUnsafe` escape hatches;
+		*  - `jsonl` — a record-per-row preview (the host maps `.jsonl` to its JSON
+		*    highlighter but renders it as one long text document) with the JSONL
+		*    editor behind the mode toggle;
 		*  - `code` — the catch-all (`exts: []`, lowest priority) that claims any
 		*    file no other viewer did, and it is an EDITABLE CodeMirror with save —
 		*    the host's equivalents are read-only previews.
@@ -18522,7 +24439,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		* shape (the view reads only its own subset of FileViewerProps).
 		*/
 		const LazyTextEditor = lazyChunkComponent("editor", (mod) => mod.TextEditor);
-		/** The 3 built-in file viewer descriptors. */
+		/** The 4 built-in file viewer descriptors. */
 		function builtinViewers() {
 			return [
 				{
@@ -18551,12 +24468,31 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					component: (props) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(LazyTextEditor, { ...props })
 				},
 				{
+					id: "jsonl",
+					title: () => t("viewerJsonl"),
+					icon: (size) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCodeOutlineRegular, { size }),
+					exts: ["jsonl", "ndjson"],
+					priority: 0,
+					fetchStrategy: "fsRead",
+					settings: { toggles: [{
+						key: "editorGitGutter",
+						title: () => t("settingsEditorGitGutterTitle"),
+						desc: () => t("settingsEditorGitGutterDesc")
+					}] },
+					component: (props) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(LazyTextEditor, { ...props })
+				},
+				{
 					id: "code",
 					title: () => t("viewerCode"),
 					icon: (size) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCodeOutlineRegular, { size }),
 					exts: [],
 					priority: -100,
 					fetchStrategy: "fsRead",
+					settings: { toggles: [{
+						key: "editorGitGutter",
+						title: () => t("settingsEditorGitGutterTitle"),
+						desc: () => t("settingsEditorGitGutterDesc")
+					}] },
 					component: (props) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(LazyTextEditor, { ...props })
 				}
 			];
@@ -18566,12 +24502,13 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		/**
 		* Register all built-in tabs and viewers with the service. Returns a
 		* disposer that unregisters everything (cordis auto-invokes it on fiber
-		* disposal). The `ctx` is threaded into tab descriptors that need it
-		* (EditorHost reads `ctx.betterSidebar` for file-viewer matching).
+		* disposal). The `ctx` is threaded into the descriptor factory that needs it
+		* (the bottom terminal's `onClose` probes `ctx.webTerminals` to end the host
+		* process; components read `ctx.betterSidebar` from their props).
 		*/
 		function registerBuiltins(ctx, service) {
 			const disposers = [];
-			for (const tab of builtinTabs()) disposers.push(service.registerTab(tab));
+			for (const tab of builtinTabs(ctx)) disposers.push(service.registerTab(tab));
 			for (const viewer of builtinViewers()) disposers.push(service.registerFileViewer(viewer));
 			return () => {
 				for (const d of disposers) try {
@@ -18589,7 +24526,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		*/
 		function spliceInsert(draft, text, caret) {
 			if (caret === null || draft === "") {
-				const next = draft.trim() === "" ? text : `${draft} ${text}`;
+				const next = draft.trim() === "" ? text : `${draft}${/\s$/.test(draft) ? "" : " "}${text}`;
 				return {
 					draft: next,
 					caretAfter: next.length
@@ -18603,7 +24540,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			};
 			const left = prefix === "" || /\s$/.test(prefix) ? "" : " ";
 			return {
-				draft: `${prefix}${left}${text}${suffix === "" || /^\s/.test(suffix) ? "" : " "}${suffix}`,
+				draft: `${prefix}${left}${text}${suffix === "" || /^\s/.test(suffix) || /\s$/.test(text) ? "" : " "}${suffix}`,
 				caretAfter: prefix.length + left.length + text.length
 			};
 		}
@@ -18709,33 +24646,80 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			}
 		}
 		/**
-		* The DSH `@file` spelling for one relative path, mirroring the host grammar
+		* The DSH `@` spelling for one relative path, mirroring the host grammar
 		* (`formatFileMention` in `@deepseek-ai/dsh-file-reference`): plain when
 		* there is no whitespace, quoted when there is, and `undefined` when the
 		* path contains a control character or an embedded quote the editor grammar
 		* cannot represent.
+		*
+		* Files and folders share this one constructor so the quoting rule cannot
+		* drift between them. A folder spells the trailing slash *inside* the quotes
+		* (`@"my dir/"`, `@docs/`): the host's folder token matcher
+		* (`FOLDER_REF_RE` in `dsh-client-ui-conversation`) only accepts a quoted
+		* directory once the quote closes, and the message bubble's tokenizer
+		* (`@"[^"\n]+"` in `dsh-client-ui-primitives`) only classifies a closed
+		* quoted token as a folder — unquoted `@my dir/` decorates as a file chip
+		* covering just `my`. The host's own picker emits the *open* form
+		* (`@"my dir/`) while the user is still descending through completion; a
+		* programmatic reference is a finished mention, so it closes the quote.
 		*/
-		function fileMention(relativePath) {
+		function mentionFor(relativePath, kind) {
 			const path = relativePath.replace(/[\\/]+$/, "");
 			if (/[\u0000-\u001f\u007f-\u009f"]/u.test(path)) return void 0;
-			const mention = /\s/u.test(path) ? `@"${path}"` : `@${path}`;
-			const at = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+			const target = kind === "folder" ? `${path}/` : path;
 			return {
-				mention,
-				label: at === -1 ? path : path.slice(at + 1)
+				mention: /\s/u.test(target) ? `@"${target}"` : `@${target}`,
+				label: baseName$1(path)
 			};
+		}
+		/**
+		* A complete directory token (`@docs/`, `@"my dir/"`): the explorer inserts a
+		* finished mention, so the trailing slash sits inside the closing quote.
+		* Separators normalize to '/' first (the fs-tree spelling); the spelling
+		* itself is {@link mentionFor}'s single job, folder kind — this helper adds no
+		* quoting rule of its own.
+		*/
+		function directoryMention(relativePath) {
+			return mentionFor(relativePath.replace(/\\/g, "/"), "folder")?.mention;
+		}
+		/**
+		* Insert an explorer entry using WorkspaceView.path, selected by exact
+		* session membership (the same lookup as the native conversation shell).
+		* Read the public workspace snapshot at click time so reconnects and session
+		* changes cannot leave a captured root stale. Missing/unready membership or
+		* an unrepresentable path is a logged no-op; never guess from session cwd.
+		*/
+		function insertWorkspaceReference(ctx, sessionId, path, isDir) {
+			try {
+				const snapshot = ctx.get("workspaces")?.list.getSnapshot();
+				const relative = workspaceRelativePath(snapshot?.phase === "ready" && snapshot.state === "idle" ? snapshot.items.find((workspace) => workspace.sessionIds.includes(sessionId))?.path : void 0, path);
+				if (relative === void 0) {
+					console.warn("[dsh-better-sidebar] reference insert skipped: workspace root unavailable or path outside workspace");
+					return false;
+				}
+				const mention = isDir ? directoryMention(relative) : mentionFor(relative, "file")?.mention;
+				if (mention === void 0) {
+					console.warn("[dsh-better-sidebar] reference insert skipped: path cannot be represented as a mention");
+					return false;
+				}
+				if (!isDir && insertFileReference(ctx, sessionId, relative)) return true;
+				return appendToDraft(ctx, sessionId, isDir ? `${mention} ` : mention);
+			} catch (error) {
+				console.warn("[dsh-better-sidebar] workspace-reference insert failed:", error);
+				return false;
+			}
 		}
 		/**
 		* Insert one FILE reference as a structured chip (like DSH's own `@` picker).
 		* The chip displays `@<basename>` but serializes to `@<relative path>` on
 		* send, so the reference stays a single link from trigger to basename.
 		*
-		* Directories are NOT handled here: DSH's folder grammar wants the trailing
-		* slash as plain text (`@dir/`) so completion can descend, which
-		* `appendToDraft` already covers.
+		* Directories keep the sidebar's plain-text completion behavior (`@dir/`)
+		* through `insertWorkspaceReference`. The rc.1 picker also supports folder
+		* chips on explicit selection; its drill action still inserts plain text.
 		*/
 		function insertFileReference(ctx, sessionId, relativePath) {
-			const reference = fileMention(relativePath);
+			const reference = mentionFor(relativePath, "file");
 			if (reference === void 0) return false;
 			try {
 				const actx = ctx.sessions.scope(sessionId);
@@ -18771,17 +24755,277 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		* Reference one path in the session's conversation draft.
 		* @param ctx - the client context.
 		* @param sessionId - the session whose draft receives the reference.
-		* @param cwd - that session's workspace root (for the relative spelling).
-		* @param path - the absolute or workspace-relative path to reference.
+		* @param path - the absolute entry path the explorer row carries.
 		* @param isDir - whether the path is a directory (folder mention vs file chip).
 		*/
-		function referenceInChat(ctx, sessionId, cwd, path, isDir) {
-			const rel = relativeTo(cwd ?? "", path);
-			if (isDir) {
-				appendToDraft(ctx, sessionId, `@${rel === "." ? "./" : `${rel}/`}`);
-				return;
+		function referenceInChat(ctx, sessionId, path, isDir) {
+			insertWorkspaceReference(ctx, sessionId, path, isDir);
+		}
+		//#endregion
+		//#region src/client/session-phase.ts
+		/**
+		* 会话相位的客户端读取（issue #698 / #623）。
+		*
+		* blank 会话里宿主不渲染会话头，插件的会话头入口随之不可达；客户端据此在输入区渲染
+		* 备用入口，并在会话脱离 blank（发出第一条消息）后退场、把入口还给会话头。
+		*
+		* 判定来自插件 host 半区的只读路由（与会话对象同源），**不做任何 DOM 探测**。
+		* 轮询策略：仅在 blank 期间每 1s 重取一次；翻转为非 blank（发出第一条消息）即停止；
+		* 路由/宿主不支持时按非 blank 降级（入口留在会话头，行为与今天一致）。
+		*/
+		/** 轮询间隔：blank 是一次性状态（发一条消息即翻转），无需更快。 */
+		const POLL_MS$1 = 1e3;
+		/**
+		* 跟踪一个会话的 blank 相位。
+		* @param sessionId - 当前会话（undefined 时不读取，返回 undefined）。
+		* @returns 相位；尚未读到时为 undefined（调用方应视为非 blank，先不渲染备用入口）。
+		*/
+		function useSessionPhase(sessionId) {
+			const [phase, setPhase] = (0, react.useState)(void 0);
+			(0, react.useEffect)(() => {
+				if (sessionId === void 0) {
+					setPhase(void 0);
+					return;
+				}
+				let alive = true;
+				let timer;
+				const stop = () => {
+					if (timer === void 0) return;
+					clearInterval(timer);
+					timer = void 0;
+				};
+				const tick = () => {
+					sessionPhase(sessionId).then((next) => {
+						if (!alive) return;
+						setPhase(next);
+						if (!next.blank) stop();
+					}).catch(() => {
+						if (!alive) return;
+						setPhase({ blank: false });
+						stop();
+					});
+				};
+				tick();
+				timer = setInterval(tick, POLL_MS$1);
+				return () => {
+					alive = false;
+					stop();
+				};
+			}, [sessionId]);
+			return phase;
+		}
+		//#endregion
+		//#region src/client/sidebar/right-panel-open.ts
+		/**
+		* 宿主右侧面板当前是否**展开**。
+		*
+		* 插件不拥有右侧栏（那是宿主 `ui-sidebar-right` 的地盘，插件只往里投 tab 类型与
+		* tab 体），所以没有服务端的开关可读；宿主把状态打在自己的角落控件上：
+		*
+		* - **收起**时该座位是 `[data-sidebar-right-expand]`（aria-label「Open right sidebar」）；
+		* - **展开**时那个属性整个消失，同一座位换成 `[data-sidebar-right-toggle]`
+		*   （aria-label「Collapse right sidebar」），旁边还并排着 Split / Fullscreen。
+		*
+		* 两个条件都要求，是为了让**失败方向安全**：宿主哪天改了命名，这里读成 `false`
+		* （= 不隐藏），按钮照旧出现、位置由 {@link ./dock-fallback.tsx} 的让位逻辑兜住；
+		* 而不是读成「永远展开」把按钮永久藏掉。
+		*/
+		/** 复核间隔：与备用入口的位置对齐同一节拍（500ms）。 */
+		const POLL_MS = 500;
+		/**
+		* 读取一次宿主右侧面板的展开态。
+		*
+		* **判据必须是「可见」，不能只是「在不在 DOM 里」**：实测宿主把两个角落控件都
+		* 放在文档里（落屏时 `[data-sidebar-right-expand]` 与 `[data-sidebar-right-toggle]`
+		* 各 1 个、面板明明已经展开），只有**可见性**才区分得开——展开时可见的是
+		* Collapse（`data-sidebar-right-toggle`），收起时可见的是 Open（`data-sidebar-right-expand`）。
+		* 早先按「属性在不在」判定会一直读成「没展开」，按钮于是照旧出现在宿主编簇旁边。
+		* @returns 展开时为 true；`document` 缺席（SSR/极端环境）时为 false。
+		*/
+		function readRightPanelOpen() {
+			if (typeof document === "undefined") return false;
+			const visible = (element) => {
+				const rect = element.getBoundingClientRect();
+				if (rect.width <= 0 || rect.height <= 0) return false;
+				const style = getComputedStyle(element);
+				return style.visibility !== "hidden" && style.display !== "none";
+			};
+			return [...document.querySelectorAll("[data-sidebar-right-toggle]")].some(visible) && ![...document.querySelectorAll("[data-sidebar-right-expand]")].some(visible);
+		}
+		/**
+		* 跟踪宿主右侧面板的展开态。
+		* @returns 展开时为 true（首帧同步读取，之后每 500ms 复核一次）。
+		*/
+		function useRightPanelOpen() {
+			const [open, setOpen] = (0, react.useState)(readRightPanelOpen);
+			(0, react.useEffect)(() => {
+				const timer = setInterval(() => {
+					setOpen(readRightPanelOpen());
+				}, POLL_MS);
+				return () => {
+					clearInterval(timer);
+				};
+			}, []);
+			return open;
+		}
+		//#endregion
+		//#region src/client/sidebar/dock-fallback.tsx
+		/**
+		* 空白会话专用的底部工作台开关（issue #698 / #623）。
+		*
+		* blank 会话里宿主不渲染会话头，本插件挂在 `header.utilities` 的入口随之不可达；
+		* 这里把同一个开关以 `position: fixed` 放到宿主「Open right sidebar」按钮的**左侧紧邻**
+		* （按该按钮的 rect 对齐，随窗口 resize 与 500ms 周期重对齐）。
+		*
+		* **相位不足以判定互斥**：相位是每 1s 轮询来的，而会话头的入口由宿主在它认为合适的
+		* 时机渲染，两者之间必然有窗口；相位读取失败时还会按「非 blank」降级，一个从未成功
+		* 读到的会话可能一直停在 blank。而两套入口在版面上是**同一个位置**——真同时在场就是
+		* 精确重叠成一团。所以除了相位，再加一条与相位无关的兜底：**会话头那套入口只要真的
+		* 在 DOM 里，备用入口就让位**（`data-dsh-bottom-toggle` 不在 `[data-dsh-dock-fallback]`
+		* 内的那个）。
+		*/
+		/** 按钮尺寸与宿主展开按钮一致（28px），间距 8px。 */
+		const BUTTON_SIZE = 28;
+		const GAP = 8;
+		/** 让位时的搜索步长（像素）：够细以免跨过窄芯片，够粗以免几百次命中测试。 */
+		const STEP_PX = 4;
+		/**
+		* 整个槽位是否空着——**必须采样多个点**。
+		*
+		* 只测中心点是不够的：槽位宽 28px，中心空着不代表左右两边不压着邻居
+		* （实测中心判空、box 却压在 Split/Fullscreen 上）。这里沿水平方向采 5 个点，
+		* 全部未被占才算空。
+		* @param left - 槽位左边（视口坐标）。
+		* @param top - 槽位上边（视口坐标）。
+		* @returns 整格都空时为 true。
+		*/
+		function slotFree(left, top) {
+			const cy = top + BUTTON_SIZE / 2;
+			for (const dx of [
+				2,
+				8,
+				BUTTON_SIZE / 2,
+				20,
+				26
+			]) if (slotOccupied(left + dx, cy)) return false;
+			return true;
+		}
+		/** 超过这个宽度就认为它是「背景板」而不是占位控件（不透明整行容器不算占位）。 */ /** 超过这个宽度就认为它是「背景板」而不是占位控件（不透明整行容器不算占位）。 */
+		const MAX_OCCUPANT_W = 300;
+		/**
+		* 会话头那套入口现在是否在 DOM 里（备用入口自身不算）。
+		* @returns 只要存在一个不在 `[data-dsh-dock-fallback]` 里的
+		*  `[data-dsh-bottom-toggle]` 就为 true。
+		*/
+		function headerEntryPresent() {
+			return [...document.querySelectorAll("[data-dsh-bottom-toggle]")].some((element) => element.closest("[data-dsh-dock-fallback]") === null);
+		}
+		/**
+		* 该槽位是否被宿主的东西占着。
+		*
+		* **用命中测试，不猜宿主的 DOM 形状**：早先的版本把「占位」定义成
+		* `button, [role="button"]`，而右侧栏的**页签芯片**未必是这两者——于是页签一多，
+		* 让位会在芯片上停下来（tab 多的时候位置就错）。`elementsFromPoint` 直接把该点下面
+		* 的整摞元素交出来，芯片、图标、文字都跑不掉，与宿主用什么标签、什么类名无关。
+		*
+		* 判定为「占着」的条件：这一摞里存在一个**不透明**或**可交互**的元素（我们自己的
+		* 外壳、`html`/`body` 除外）。只负责排版的透明容器（会话头的 titleRow、面板的
+		* tabStrip 外框等）不算。
+		* @param cx - 槽位中心 x（视口坐标）。
+		* @param cy - 槽位中心 y（视口坐标）。
+		* @returns 被占时为 true。
+		*/
+		function slotOccupied(cx, cy) {
+			if (typeof document.elementsFromPoint !== "function") return slotOccupiedByRect(cx, cy);
+			return document.elementsFromPoint(cx, cy).some((element) => {
+				if (element.closest("[data-dsh-dock-fallback]") !== null) return false;
+				if (element === document.body || element === document.documentElement) return false;
+				if (element.matches("button, a, input, select, textarea, [role=\"button\"], [role=\"tab\"], [role=\"menuitem\"], [role=\"link\"]")) return true;
+				if (element.getBoundingClientRect().width > MAX_OCCUPANT_W) return false;
+				const background = getComputedStyle(element).backgroundColor;
+				return background !== "" && background !== "transparent" && background !== "rgba(0, 0, 0, 0)";
+			});
+		}
+		/**
+		* 命中测试缺席时（jsdom）的占位判定：拿同排宿主按钮的 rect 做相交测试。
+		* 真实浏览器不会走这条路径（见 {@link slotOccupied}）。
+		* @param cx - 槽位中心 x（视口坐标）。
+		* @param cy - 槽位中心 y（视口坐标）。
+		* @returns 被占时为 true。
+		*/
+		function slotOccupiedByRect(cx, cy) {
+			return [...document.querySelectorAll("button, [role=\"button\"]")].filter((element) => !element.hasAttribute("data-dsh-bottom-toggle")).map((element) => element.getBoundingClientRect()).filter((box) => box.width > 4 && box.height > 4).some((box) => cx > box.left - GAP / 2 && cx < box.right + GAP / 2 && cy > box.top && cy < box.bottom);
+		}
+		/**
+		* 量本按钮应放的 top/left：贴在宿主「右侧栏角落控件」的**左侧空位**上。
+		*
+		* 三件事都不能靠猜：
+		*
+		* 1. **锚点要认控件的两种形态**——右侧栏关闭时它带 `data-sidebar-right-expand`，
+		*    打开时该属性整个消失、同一座位换成 `data-sidebar-right-toggle`。只认前者会落到
+		*    视口兜底坐标（`innerWidth - 44`），而那里正是宿主自己的角落按钮群。
+		* 2. **让位不能让一个固定偏移**——宿主的角落控件是肩并肩一簇（实测打开态：
+		*    `Split@2094 / Fullscreen@2130 / Collapse@2166`，各 28px、间隔 8px）。只往左挪
+		*    `GAP + BUTTON_SIZE` 正好落在**下一个**按钮上（实测精确压住 Fullscreen 28x28px）。
+		* 3. **占位与否要真的去问页面**——见 {@link slotOccupied}：页签芯片会把那一排填满，
+		*    按角色筛元素是筛不干净的。
+		*
+		* 因此这里从锚点左侧起逐像素左移，取**最近的一个真的空着**的槽位；一直退到视口
+		* 左缘仍被占时停在最左（宁可贴边，也不叠在宿主控件上）。
+		* @returns 视口坐标下的 top/left。
+		*/
+		function measure() {
+			const anchor = document.querySelector("[data-sidebar-right-expand], [data-sidebar-right-toggle]");
+			if (anchor === null) return {
+				top: 8,
+				left: window.innerWidth - BUTTON_SIZE - GAP - 8
+			};
+			const rect = anchor.getBoundingClientRect();
+			const top = Math.max(4, rect.top + (rect.height - BUTTON_SIZE) / 2);
+			let left = Math.max(4, rect.left - GAP - BUTTON_SIZE);
+			for (let step = 0; step < 400; step++) {
+				if (slotFree(left, top)) break;
+				left -= STEP_PX;
+				if (left <= 4) {
+					left = 4;
+					break;
+				}
 			}
-			if (!insertFileReference(ctx, sessionId, rel)) appendToDraft(ctx, sessionId, `@${rel}`);
+			return {
+				top,
+				left
+			};
+		}
+		function DockFallback({ store }) {
+			const phase = useSessionPhase((0, react.useSyncExternalStore)((0, react.useCallback)((callback) => store.subscribe(callback), [store]), (0, react.useCallback)(() => store.getSnapshot(), [store])).sessionId);
+			const rightOpen = useRightPanelOpen();
+			const [pos, setPos] = (0, react.useState)(measure);
+			const [headerEntry, setHeaderEntry] = (0, react.useState)(headerEntryPresent);
+			(0, react.useEffect)(() => {
+				const onResize = () => {
+					const next = measure();
+					setPos((prev) => prev.top === next.top && prev.left === next.left ? prev : next);
+					setHeaderEntry(headerEntryPresent());
+				};
+				window.addEventListener("resize", onResize);
+				const timer = setInterval(onResize, 500);
+				return () => {
+					window.removeEventListener("resize", onResize);
+					clearInterval(timer);
+				};
+			}, []);
+			if (phase === void 0 || !phase.blank) return null;
+			if (headerEntry) return null;
+			if (rightOpen) return null;
+			return (0, react_dom.createPortal)(/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				className: sidebar_module_css_default.dockFallback,
+				"data-dsh-dock-fallback": true,
+				style: {
+					top: pos.top,
+					left: pos.left
+				},
+				children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(BottomDockToggle, { store })
+			}), document.body);
 		}
 		//#endregion
 		//#region src/client/TabBar.tsx
@@ -18792,7 +25036,8 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		* are draggable; dropping onto another tab inserts before it, dropping on the
 		* strip background appends to this pane. Right-clicking a tab opens the tab
 		* context menu (close / close others / close to the left / close to the
-		* right, the close ones scoped to this pane).
+		* right / close all — every close scoped to this pane — plus reveal the
+		* right-clicked tab's file in the OS file manager).
 		*/
 		/** Drag payload for tab moves (HTML5 DnD dataTransfer). */
 		const TAB_DRAG_TYPE = "application/x-dsh-tab";
@@ -18814,12 +25059,17 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			else document.body.removeAttribute("data-dsh-tab-dragging");
 		}
 		function TabBar(props) {
-			const { paneId, tabs, active, onActivate, onClose, onNewTab, newTabOptions, onDropTab, getTabIcon, getTabBadge } = props;
+			const { paneId, tabs, active, onActivate, onClose, onNewTab, newTabOptions, onDropTab, getTabIcon, getTabBadge, getTabRightActions, isTabUnread, onRevealInFileManager } = props;
 			const [menuOpen, setMenuOpen] = (0, react.useState)(false);
 			const [tabMenu, setTabMenu] = (0, react.useState)(null);
 			const [dragOver, setDragOver] = (0, react.useState)(false);
 			const listRef = (0, react.useRef)(null);
 			const tabMenuIndex = tabMenu === null ? -1 : tabs.findIndex((tab) => tab.id === tabMenu.tabId);
+			const tabMenuPath = tabs[tabMenuIndex]?.path;
+			const canReveal = onRevealInFileManager !== void 0 && tabMenuPath !== void 0 && tabMenuPath !== "";
+			const activeRightTab = tabs.find((tab) => tab.id === active);
+			const rightActions = getTabRightActions !== void 0 && activeRightTab !== void 0 ? getTabRightActions(activeRightTab, paneId) : null;
+			const hasRightActions = rightActions !== null && rightActions !== void 0 && rightActions !== false;
 			const onCloseRef = (0, react.useRef)(onClose);
 			const middlePressed = (0, react.useRef)(null);
 			(0, react.useEffect)(() => {
@@ -18866,7 +25116,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					window.removeEventListener("blur", clear);
 				};
 			}, []);
-			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				className: clsx(sidebar_module_css_default.tabBar, dragOver && sidebar_module_css_default.tabBarDrop),
 				onDragOver: (event) => {
 					event.preventDefault();
@@ -18884,7 +25134,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					const payload = parseDrag(event.dataTransfer.getData(TAB_DRAG_TYPE));
 					if (payload !== null) onDropTab(payload, null);
 				},
-				children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 					ref: listRef,
 					className: sidebar_module_css_default.tabList,
 					children: [
@@ -18943,6 +25193,12 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 									className: sidebar_module_css_default.tabTitle,
 									children: tab.title
 								}),
+								isTabUnread?.(tab) === true ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+									className: sidebar_module_css_default.tabUnreadDot,
+									role: "img",
+									"aria-label": t("tabUnread"),
+									title: t("tabUnread")
+								}) : null,
 								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 									type: "button",
 									className: sidebar_module_css_default.tabClose,
@@ -19009,6 +25265,15 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 									id: "closeRight",
 									label: t("closeRightTabs"),
 									...tabMenuIndex >= tabs.length - 1 ? { disabled: true } : {}
+								},
+								{
+									id: "closeAll",
+									label: t("closeAllTabs")
+								},
+								{
+									id: "revealInFileManager",
+									label: t("revealTabInFileManager"),
+									...canReveal ? {} : { disabled: true }
 								}
 							],
 							onSelect: (id) => {
@@ -19022,6 +25287,11 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 									for (const tab of tabs) if (tab.id !== target.tabId) onClose(tab.id);
 								} else if (id === "closeLeft") for (const tab of tabs.slice(0, index)) onClose(tab.id);
 								else if (id === "closeRight") for (const tab of tabs.slice(index + 1)) onClose(tab.id);
+								else if (id === "closeAll") for (const tab of tabs) onClose(tab.id);
+								else if (id === "revealInFileManager") {
+									const path = tabs[index]?.path;
+									if (path !== void 0 && path !== "") onRevealInFileManager?.(path);
+								}
 							},
 							portal: true,
 							compact: true,
@@ -19030,7 +25300,10 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 							anchor: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {})
 						})
 					]
-				})
+				}), hasRightActions ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+					className: sidebar_module_css_default.tabBarRightActions,
+					children: rightActions
+				}) : null]
 			});
 		}
 		//#endregion
@@ -19141,7 +25414,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		}
 		/** A leaf: tab strip + active content + VSCode-style drop target for tabs. */
 		function LeafView(props) {
-			const { leaf, newTabOptions, actions, onNewTab, renderTab, getTabIcon, getTabBadge } = props;
+			const { leaf, newTabOptions, actions, onNewTab, renderTab, getTabIcon, getTabBadge, getTabRightActions, onRevealInFileManager, isTabUnread } = props;
 			const [dropZone, setDropZone] = (0, react.useState)(null);
 			const activeTab = leaf.tabs.find((tab) => tab.id === leaf.active) ?? leaf.tabs[leaf.tabs.length - 1];
 			(0, react.useEffect)(() => {
@@ -19194,6 +25467,9 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 						newTabOptions,
 						getTabIcon,
 						getTabBadge,
+						isTabUnread,
+						getTabRightActions,
+						onRevealInFileManager,
 						onDropTab: (payload, before) => {
 							if (before === null) actions.moveTabToEdge(payload, leaf.id, "center");
 							else actions.moveTabBefore(payload, leaf.id, before);
@@ -19214,7 +25490,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		}
 		/** Recursive node renderer. */
 		function NodeView(props) {
-			const { node, state, newTabOptions, actions, onNewTab, renderTab, getTabIcon, getTabBadge } = props;
+			const { node, state, newTabOptions, actions, onNewTab, renderTab, getTabIcon, getTabBadge, getTabRightActions, onRevealInFileManager, isTabUnread } = props;
 			if (node.kind === "leaf") return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(LeafView, {
 				leaf: node,
 				newTabOptions,
@@ -19222,7 +25498,10 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				onNewTab,
 				renderTab,
 				getTabIcon,
-				getTabBadge
+				getTabBadge,
+				isTabUnread,
+				getTabRightActions,
+				onRevealInFileManager
 			});
 			const isRow = node.dir === "row";
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
@@ -19248,7 +25527,10 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 						onNewTab,
 						renderTab,
 						getTabIcon,
-						getTabBadge
+						getTabBadge,
+						isTabUnread,
+						getTabRightActions,
+						onRevealInFileManager
 					})
 				})] }, child.id))
 			});
@@ -19258,7 +25540,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		*  `state.bottomSplits` — the actions route by pane id, so one action set
 		*  serves both). */
 		function Workbench(props) {
-			const { state, tree, newTabOptions, actions, onNewTab, renderTab, getTabIcon, getTabBadge } = props;
+			const { state, tree, newTabOptions, actions, onNewTab, renderTab, getTabIcon, getTabBadge, getTabRightActions, onRevealInFileManager, isTabUnread } = props;
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 				className: sidebar_module_css_default.workbench,
 				children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(NodeView, {
@@ -19269,7 +25551,10 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					onNewTab,
 					renderTab,
 					getTabIcon,
-					getTabBadge
+					getTabBadge,
+					isTabUnread,
+					getTabRightActions,
+					onRevealInFileManager
 				})
 			});
 		}
@@ -19290,129 +25575,6 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			const viewportHeight = finiteNonNegative(input.viewportHeight);
 			const maxHeight = Math.max(0, viewportHeight - Math.min(280, viewportHeight));
 			return Math.min(finiteNonNegative(input.height), maxHeight);
-		}
-		//#endregion
-		//#region src/client/wco.ts
-		/** Snapshot when the API is unavailable (plain browser / non-overlay shell). */
-		const WCO_NONE = Object.freeze({
-			present: false,
-			height: 0
-		});
-		let source;
-		let snapshot = WCO_NONE;
-		let attached = false;
-		let sourceListener;
-		const listeners = /* @__PURE__ */ new Set();
-		function read() {
-			if (source === void 0) return WCO_NONE;
-			try {
-				if (source.visible !== true) return {
-					present: false,
-					height: 0
-				};
-				const rect = source.getTitlebarAreaRect();
-				const height = Math.round(rect.height);
-				return Number.isFinite(height) && height > 0 ? {
-					present: true,
-					height
-				} : {
-					present: true,
-					height: 0
-				};
-			} catch {
-				return {
-					present: false,
-					height: 0
-				};
-			}
-		}
-		function onGeometryChange() {
-			snapshot = read();
-			emit();
-		}
-		function emit() {
-			for (const listener of listeners) listener();
-		}
-		/** Attach the native geometrychange listener (once). */
-		function attach() {
-			if (attached) return;
-			attached = true;
-			const candidate = source ?? navigator.windowControlsOverlay;
-			if (candidate === void 0) return;
-			source = candidate;
-			sourceListener = onGeometryChange;
-			snapshot = read();
-			source.addEventListener("geometrychange", sourceListener);
-		}
-		/** Detach the native listener (last subscriber left or source swapped). */
-		function detach() {
-			if (source !== void 0 && sourceListener !== void 0) source.removeEventListener("geometrychange", sourceListener);
-			sourceListener = void 0;
-			attached = false;
-		}
-		/** Read the current snapshot (returns the frozen NONE when unavailable). */
-		function getWcoSnapshot() {
-			return snapshot;
-		}
-		/**
-		* Subscribe to overlay geometry changes. Attaches to the real
-		* `navigator.windowControlsOverlay` on first subscribe; the disposer
-		* detaches the native listener when the last subscriber leaves.
-		*/
-		function subscribeWco(onChange) {
-			listeners.add(onChange);
-			attach();
-			return () => {
-				listeners.delete(onChange);
-				if (listeners.size === 0) detach();
-			};
-		}
-		//#endregion
-		//#region src/client/shell-presets.ts
-		/**
-		* Built-in desktop-shell presets for the "位置兼容模式" secondary setting
-		* (scheme `preset`). DATA-DRIVEN by design: each shell's adaptation lives
-		* in one entry (strip values / optional CSS), the core applies it through
-		* the SAME generic strip variable and CSS-injection mechanism — adding a
-		* shell is adding data, never a code path.
-		*
-		* Inclusion rule (maintained in docs/external-plugin-guide.md §12): only shells that (a) appear
-		* in this repo's issues/PRs (a user actually hit a problem) and (b) have
-		* 100+ GitHub stars (a real user base). The mechanism is opt-in: auto
-		* detection never applies a preset — the settings badge only SUGGESTS it.
-		*/
-		const PRESETS = [{
-			id: "dsh-desktop",
-			title: "DeepSeek Harness Desktop",
-			desc: () => t("presetDshDesktopDesc"),
-			stripFor: (env) => {
-				if (env.mode !== "advanced") return void 0;
-				if (env.platform === "darwin") return 20;
-				if (env.platform === "win32") return 32;
-			},
-			detect: (env) => env.mode === "advanced"
-		}];
-		/** All built-in shell presets (registration order = settings list order). */
-		function getShellPresets() {
-			return PRESETS;
-		}
-		/** One preset by id, or undefined for an unknown/empty id. */
-		function getShellPreset(id) {
-			return PRESETS.find((preset) => preset.id === id);
-		}
-		/** The strip the active preset contributes for the given environment. */
-		function presetStripFor(preset, env) {
-			return preset?.stripFor?.(env);
-		}
-		//#endregion
-		//#region src/client/titlebar-strip.ts
-		function computeTitleBarStrip(env, wco, scheme, preset, customStripPx) {
-			if (scheme === "web") return 0;
-			if (wco.present) return wco.height;
-			if (env.titlebarInset > 0) return env.titlebarInset;
-			if (scheme === "preset") return presetStripFor(preset, env) ?? 0;
-			if (scheme === "custom") return customStripPx;
-			return 0;
 		}
 		//#endregion
 		//#region src/client/OrphanedTab.tsx
@@ -19733,128 +25895,6 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			};
 		}
 		//#endregion
-		//#region src/client/resource-address.ts
-		/**
-		* The DSH resource-address grammar for files (`dsh-resource://file/…`).
-		*
-		* DSH's right Sidebar opens content by ADDRESS, and a file's address IS the
-		* tab's content identity: the same address is the same tab. Two scopes exist:
-		*
-		* - `dsh-resource://file/session/<sessionId>/<path>` names a file by its path
-		*   relative to that session's workspace root OR by its absolute path kept
-		*   absolute inside the session scope (`src/a.ts` vs `/outside/a.ts` — the
-		*   leading `/` survives; the host resolves it against the root it holds for
-		*   the session);
-		* - `dsh-resource://file/absolute/<path>` names a file by its absolute path
-		*   with the leading `/` dropped (`absolute/home/me/x.txt`; Windows
-		*   `absolute/C:/x/y.txt`; a UNC path keeps an empty first segment,
-		*   `absolute//server/share/x.txt`). It carries no session. `fileAddressFor`
-		*   no longer produces this scope on DSH 0.1.5-alpha.2, but it must keep
-		*   parsing: legacy and third-party addresses still spell it.
-		*
-		* Every id and path segment is component-encoded, so a name carrying `#`, `?`
-		* or a space survives the round trip; `:` stays literal so a drive letter
-		* reads as written.
-		*
-		* The plugin parses these addresses itself instead of importing
-		* `@deepseek-ai/dsh-util-workspace-path`: the client bundle's purity gate
-		* forbids value-importing an unlisted `@deepseek-ai/*` package. This module
-		* mirrors that package's implementation — `packages/util/workspace-path/src/file-address.ts`
-		* and `fileAddressFor` in `packages/util/workspace-path/src/index.ts` in
-		* DSH 0.1.5-alpha.2 (github.com/deepseek-ai/deepseek-harness, tag
-		* `dsh-v0.1.5-alpha.2`) — and is pinned by tests/resource-address.spec.ts.
-		*/
-		/** The scheme and type every file address opens with. */
-		const FILE_ADDRESS_PREFIX = "dsh-resource://file/";
-		/** Component-encode one id or path segment, keeping `:` literal for drive letters. */
-		function encodeSegment(segment) {
-			return encodeURIComponent(segment).replace(/%3A/gi, ":");
-		}
-		/** Encode a `/`-separated path segment by segment. */
-		function encodePath(path) {
-			return path.split("/").map(encodeSegment).join("/");
-		}
-		/** Whether a decoded first path segment is a Windows drive (`C:`). */
-		function isDriveSegment(segment) {
-			return segment !== void 0 && /^[A-Za-z]:$/.test(segment);
-		}
-		/**
-		* Build the address of a file read through one session.
-		* @param sessionId - the session whose workspace root resolves the path.
-		* @param path - absolute or workspace-relative path; backslashes are normalized
-		*   to `/`, and leading `./` prefixes are dropped (a leading `/` is KEPT: an
-		*   absolute path stays absolute inside the session scope).
-		* @returns the `dsh-resource://file/session/<sessionId>/<path>` address.
-		*/
-		function sessionFileAddress(sessionId, path) {
-			const normalized = path.replace(/\\/g, "/").replace(/^(?:\.\/)+/, "");
-			return `${FILE_ADDRESS_PREFIX}session/${encodeSegment(sessionId)}/${encodePath(normalized)}`;
-		}
-		/**
-		* Read a file address back into its parts without resolving `.` or `..`.
-		* Query and fragment suffixes are ignored; encoded path segments are decoded.
-		* @param address - a candidate address.
-		* @returns the parts, or `undefined` when the string is not a
-		*   `dsh-resource://file/` URI in a known scope with a path, or a segment is
-		*   not validly encoded.
-		*/
-		function parseFileAddress(address) {
-			try {
-				if (!address.startsWith("dsh-resource://file/")) return void 0;
-				const end = address.search(/[?#]/);
-				const [scope, ...rest] = address.slice(20, end === -1 ? void 0 : end).split("/");
-				if (scope === "session") {
-					const [id, ...segments] = rest;
-					if (id === void 0 || id === "" || segments.length === 0) return void 0;
-					return {
-						scope,
-						sessionId: decodeURIComponent(id),
-						path: segments.map(decodeURIComponent).join("/")
-					};
-				}
-				if (scope === "absolute") {
-					const unc = rest[0] === "" && rest.length > 1;
-					const segments = (unc ? rest.slice(1) : rest).map(decodeURIComponent);
-					if (segments.length === 0 || segments[0] === "") return void 0;
-					if (unc) return {
-						scope,
-						path: `//${segments.join("/")}`
-					};
-					return {
-						scope,
-						path: isDriveSegment(segments[0]) ? segments.join("/") : `/${segments.join("/")}`
-					};
-				}
-				return;
-			} catch {
-				return;
-			}
-		}
-		/** Whether a path is absolute in either spelling the host accepts. */
-		function isAbsolutePath(path) {
-			return path.startsWith("/") || /^[A-Za-z]:[/\\]/.test(path) || path.startsWith("\\\\");
-		}
-		/**
-		* The address for a path as a caller holds it: ALWAYS session-scoped. A
-		* relative path, or an absolute path inside the session's workspace, becomes
-		* the relative spelling; an absolute path outside it, or one whose workspace
-		* root is unknown, keeps its absolute path in that session's address. (Mirror
-		* of `fileAddressFor` — on alpha.2 this helper no longer produces the
-		* `absolute` scope, though such addresses still parse.)
-		* @param sessionId - the session the path is read in.
-		* @param cwd - that session's workspace root, when known.
-		* @param path - absolute or workspace-relative path, either separator spelling.
-		* @returns the `dsh-resource://file/…` address.
-		*/
-		function fileAddressFor(sessionId, cwd, path) {
-			const normalized = path.replace(/\\/g, "/");
-			if (!isAbsolutePath(normalized)) return sessionFileAddress(sessionId, normalized);
-			const root = cwd === void 0 ? "" : cwd.replace(/\\/g, "/").replace(/\/+$/, "");
-			if (root !== "" && normalized === root) return sessionFileAddress(sessionId, "");
-			if (root !== "" && normalized.startsWith(`${root}/`)) return sessionFileAddress(sessionId, normalized.slice(root.length + 1));
-			return sessionFileAddress(sessionId, normalized);
-		}
-		//#endregion
 		//#region src/client/native/surface.ts
 		/** The native controller, probed at call time (the service can arrive late). */
 		function controllerOf(ctx) {
@@ -19932,10 +25972,6 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 						api.openTab(entry.tabKind, options);
 						return true;
 					}
-					if (api.openTabIn !== void 0) {
-						api.openTabIn(entry.sessionId, entry.tabKind, options);
-						return true;
-					}
 					return false;
 				}
 				const options = {
@@ -19945,10 +25981,6 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				};
 				if (onScreen) {
 					api.openResource(entry.address, options);
-					return true;
-				}
-				if (api.openResourceIn !== void 0) {
-					api.openResourceIn(entry.sessionId, entry.address, options);
 					return true;
 				}
 				return false;
@@ -19963,6 +25995,49 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			const enqueue = (entry) => {
 				if (!place(entry)) pending.push(entry);
 			};
+			/**
+			* The seat session a bare tab id belongs to.
+			*
+			* The public write face speaks ids without sessions (its consumer contract),
+			* while records are per seat session — the same native id names a tab in
+			* EVERY session. The mounted seat answers for a caller acting on what is on
+			* screen; with no seat mounted (a global panel) a unique match across the
+			* live sessions still resolves, and an id that names a tab in more than one
+			* session resolves to none — guessing would write into another conversation.
+			* @param tabId - the native tab id.
+			* @param sessionId - the explicit session, when the caller has one.
+			* @returns the owning session, or undefined.
+			*/
+			const sessionOf = (tabId, sessionId) => {
+				if (sessionId !== void 0) return records.has(sessionId, tabId) ? sessionId : void 0;
+				const mounted = mountedSessionId(ctx);
+				if (mounted !== void 0 && records.has(mounted, tabId)) return mounted;
+				const byId = ctx.sessions.list.getSnapshot().byId ?? {};
+				let found;
+				for (const candidate of Object.keys(byId)) {
+					if (!records.has(candidate, tabId)) continue;
+					if (found !== void 0 && found !== candidate) return void 0;
+					found = candidate;
+				}
+				return found;
+			};
+			/**
+			* Forget the records of sessions that no longer exist.
+			*
+			* A `keepMounted` body survives until its tab or its session ends, and a
+			* session the user DELETED never unmounts anything the plugin can hook, so
+			* its records (and their tree/edit state) would live for the life of the
+			* page. The mounted session is always kept: it can be missing from `byId`
+			* for a moment while the list reloads.
+			*/
+			const evictGoneSessions = () => {
+				try {
+					const live = new Set(Object.keys(ctx.sessions.list.getSnapshot().byId ?? {}));
+					const mounted = mountedSessionId(ctx);
+					if (mounted !== void 0) live.add(mounted);
+					records.retain(live);
+				} catch {}
+			};
 			let mountedUnsubscribe;
 			const onListChange = () => {
 				if (mountedUnsubscribe === void 0) {
@@ -19970,8 +26045,10 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					if (typeof mounted?.subscribe === "function") mountedUnsubscribe = mounted.subscribe(flushPending);
 				}
 				flushPending();
+				evictGoneSessions();
 			};
 			const unsubscribeList = ctx.sessions.list.subscribe(onListChange);
+			evictGoneSessions();
 			return {
 				openTab({ sessionId, kind, params, revealIfOpened, preferNewPane }) {
 					enqueue({
@@ -19996,10 +26073,13 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				fileAddress(sessionId, cwd, path) {
 					return fileAddressFor(sessionId, cwd, path);
 				},
+				tabTypeOf(sessionId, tabId) {
+					return records.get(sessionId, tabId)?.tab.type;
+				},
 				close(sessionId, tabId) {
-					const record = records.get(tabId);
+					const record = records.get(sessionId, tabId);
 					if (record === void 0) return void 0;
-					records.drop(tabId);
+					records.drop(sessionId, tabId);
 					const api = controller();
 					if (api !== void 0) {
 						if (sessionId === mountedSessionId(ctx)) api.close(tabId);
@@ -20007,18 +26087,23 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					}
 					return {
 						type: record.tab.type,
-						title: record.tab.title
+						title: record.tab.title,
+						...record.tab.meta === void 0 ? {} : { meta: record.tab.meta }
 					};
 				},
-				update(tabId, patch) {
-					if (!records.has(tabId)) return false;
-					records.update(tabId, patch);
+				update(tabId, patch, sessionId) {
+					const owner = sessionOf(tabId, sessionId);
+					if (owner === void 0) return false;
+					records.update(owner, tabId, patch);
 					return true;
 				},
-				activate(tabId) {
-					return records.has(tabId);
+				activate(tabId, sessionId) {
+					if (sessionOf(tabId, sessionId) === void 0) return false;
+					controller()?.focus?.(tabId);
+					return true;
 				},
-				has: (tabId) => records.has(tabId),
+				has: (tabId, sessionId) => sessionOf(tabId, sessionId) !== void 0,
+				pathTabs: () => records.pathTabs(),
 				flushPending,
 				dispose: () => {
 					unsubscribeList();
@@ -20065,15 +26150,54 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		* when the activation FIRES (the debounced subagent trigger included), so a
 		* resize while arming is honoured.
 		*
+		* A background activation must not replace the page the reader is on either,
+		* on ANY viewport: the host's open focuses what it opens, so "activate" means
+		* "take the column over", and doing that while the reader is in a document
+		* (a file, a diff, a side chat) throws their page out of view on every new
+		* subagent / background job — the one thing a DELAYED trigger may never do.
+		* The gate is the wide-viewport twin of the park below and asks the same
+		* question — is the column in use? — of the same session: a COLLAPSED column
+		* shows nothing, so its tabs may be re-pointed freely (that is where the two
+		* switches still land, and where the narrow park keeps them), while an
+		* EXPANDED one showing a page other than the Tasks page is in use and is left
+		* alone. A column already on the Tasks page is re-focused in place as before
+		* (single-instance semantics make it a no-op).
+		*
+		* Leaving it at that would DROP the event: the page the background work
+		* belongs to must still be created, it just may not take the column over.
+		* So a gated activation opens the same page with `reveal: false` — the host
+		* places the tab without focusing it (`openContent`'s `revealIfOpened: false`
+		* suppresses exactly the focus op; the page kind has no focus path of its own,
+		* and re-opening a page that IS already there is a focus either way, which is
+		* precisely what the gate refuses) — and marks the tab type unread, which is
+		* the dot the reader follows to it later. The two halves are one change:
+		* without the dot the tab would be created invisibly, and without the open
+		* there would be nothing for the dot to point at.
+		*
 		* @param ctx - the client context (`ctx.sidebarRight` + `ctx.betterSidebar`).
+		* @param store - the plugin store (the unread dot lives in the session state).
 		* @param sessionId - the session the feed reports the activity for.
-		* @param options.background - `true` for background activity (parks on narrow
-		*   viewports); `false` for the explicit topology jump-back, which is a user
-		*   gesture and always leaves the column as the host expanded it.
+		* @param options.background - `true` for background activity (refuses a
+		*   column the reader is using, parks on narrow viewports); `false` for the
+		*   explicit topology jump-back, which is a user gesture and always leaves the
+		*   column as the host expanded it.
 		*/
-		function activateTasksPage(ctx, sessionId, options) {
+		function activateTasksPage(ctx, store, sessionId, options) {
 			const column = ctx.get("sidebarRight");
-			const park = options.background && mountedSessionId(ctx) === sessionId && isNarrowWidth(window.innerWidth) && column?.isExpanded?.() === false;
+			const onScreen = mountedSessionId(ctx) === sessionId;
+			if (options.background && onScreen && column?.isExpanded?.() === true) {
+				const shown = column.active?.();
+				if (shown !== void 0 && shown.kind !== "subagent") {
+					ctx.get("betterSidebar")?.openTab({
+						type: "subagent",
+						title: t("subagent"),
+						reveal: false
+					});
+					store.markUnread("subagent");
+					return;
+				}
+			}
+			const park = options.background && onScreen && isNarrowWidth(window.innerWidth) && column?.isExpanded?.() === false;
 			ctx.get("betterSidebar")?.openTab({
 				type: "subagent",
 				title: t("subagent")
@@ -20104,8 +26228,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				let failures = 0;
 				const connect = () => {
 					if (closed) return;
-					const url = new URL("/sidebar/ws/agent-opens", sidebarWebSocketBase());
-					url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+					const url = hostWebSocketUrl("sidebar/ws/agent-opens");
 					url.search = new URLSearchParams({ sessionId }).toString();
 					socket = new WebSocket(url.toString());
 					socket.onmessage = (event) => {
@@ -20163,7 +26286,8 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			* focus an existing tab in place; a new tab lands in that column and is
 			* never duplicated. Landing it EXPANDS the column on wide viewports, while
 			* a narrow viewport (where the host draws that column fullscreen) parks the
-			* tab instead of taking the screen over — see {@link activateTasksPage}.
+			* tab instead of taking the screen over — see {@link activateTasksPage},
+			* which also refuses a column the reader has expanded onto another page.
 			* Switching to a session that already has subagents never triggers — its
 			* baseline starts at the current count — so a deliberate layout is never
 			* fought.
@@ -20195,7 +26319,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					if (!store.getPrefs().autoOpenSubagent) return;
 					if (store.getPrefs().mobileNoAutoOpen && isNarrowWidth(window.innerWidth)) return;
 					if (ctx.get("betterSidebar")?.isTabEnabled("subagent") === false) return;
-					activateTasksPage(ctx, sessionId, { background: true });
+					activateTasksPage(ctx, store, sessionId, { background: true });
 				}, AUTO_OPEN_DEBOUNCE_MS);
 				autoOpenPendingRef.current = {
 					baseline,
@@ -20218,7 +26342,8 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			* auto-open pref is on, and the Tasks tab type is enabled, activate the Tasks
 			* page that contains the background-jobs section — in DSH's native right
 			* Sidebar, expanded on wide viewports and parked on narrow ones exactly like
-			* the subagent trigger ({@link activateTasksPage}). Unlike that trigger
+			* the subagent trigger ({@link activateTasksPage}, which leaves a column the
+			* reader has expanded onto another page untouched). Unlike that trigger
 			* (0 → N only), ANY new job id triggers: the agent may start several jobs in
 			* one session, and each should surface.
 			*
@@ -20262,7 +26387,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				if (!store.getPrefs().autoOpenJobs) return;
 				if (store.getPrefs().mobileNoAutoOpen && isNarrowWidth(window.innerWidth)) return;
 				if (ctx.get("betterSidebar")?.isTabEnabled("subagent") === false) return;
-				activateTasksPage(ctx, sessionId, { background: true });
+				activateTasksPage(ctx, store, sessionId, { background: true });
 			}, [
 				jobsService,
 				jobsSnapshot,
@@ -20287,13 +26412,68 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				const pending = subagentJumpRef.current;
 				if (pending === void 0 || sessionId !== pending) return;
 				subagentJumpRef.current = void 0;
-				activateTasksPage(ctx, sessionId, { background: false });
+				activateTasksPage(ctx, store, sessionId, { background: false });
 			}, [
 				sessionId,
 				store,
 				ctx
 			]);
 			return { subagentJumpRef };
+		}
+		//#endregion
+		//#region src/client/use-session-root.ts
+		/**
+		* The root the explorer and the git panel should use for one session.
+		*
+		* The client session list carries the session HEADER cwd, captured once when
+		* the session started. The HOST is the authority on where the session is
+		* actually working, because it can follow the agent into a linked git worktree
+		*  including one belonging to a different repository. Ask the host, prefer
+		* its answer, and re-ask when the window regains focus, when a file refresh is
+		* requested, and on a slow timer so a mid-session worktree move is picked up.
+		*
+		* Shared by both client surfaces: the plugin's own sidebar shell
+		* (`Sidebar.tsx`) and the native DSH right-sidebar tab body
+		* (`native/tab-adapter.tsx`). They used to disagree  the native body read the
+		* frozen list summary directly, so a host-side worktree change never reached
+		* the file list drawn in the host's own right Sidebar.
+		*/
+		/** How often the host is re-asked while the document is visible. */
+		const SESSION_ROOT_POLL_MS = 5e3;
+		/**
+		* Resolve the live workspace root for one session.
+		* @param ctx - client plugin context (owns the session list feed + API).
+		* @param sessionId - the session to resolve; `undefined` resolves to `undefined`.
+		* @returns the host's active root, falling back to the list summary cwd.
+		*/
+		function useSessionRoot(ctx, sessionId) {
+			const summaryCwd = (0, react.useSyncExternalStore)((0, react.useMemo)(() => (listener) => ctx.sessions.list.subscribe(listener), [ctx]), () => sessionId === void 0 ? void 0 : ctx.sessions.list.getSnapshot().byId[sessionId]?.cwd);
+			const [fetched, setFetched] = (0, react.useState)(void 0);
+			(0, react.useEffect)(() => {
+				if (sessionId === void 0) return;
+				let cancelled = false;
+				const load = () => {
+					if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+					api.sessionCwd({ sessionId }).then((result) => {
+						if (cancelled) return;
+						setFetched((previous) => previous !== void 0 && previous.sessionId === sessionId && previous.cwd === result.cwd ? previous : {
+							sessionId,
+							cwd: result.cwd
+						});
+					}).catch(() => {});
+				};
+				load();
+				window.addEventListener("focus", load);
+				window.addEventListener("dsh-sidebar:refresh-files", load);
+				const timer = window.setInterval(load, SESSION_ROOT_POLL_MS);
+				return () => {
+					cancelled = true;
+					window.removeEventListener("focus", load);
+					window.removeEventListener("dsh-sidebar:refresh-files", load);
+					window.clearInterval(timer);
+				};
+			}, [sessionId]);
+			return fetched !== void 0 && fetched.sessionId === sessionId ? fetched.cwd : summaryCwd;
 		}
 		//#endregion
 		//#region src/client/Sidebar.tsx
@@ -20415,54 +26595,27 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			}, [current, store]);
 			const state = snapshot.state;
 			const sessionId = snapshot.sessionId;
-			const summaryCwd = sessionId === void 0 ? void 0 : sessionList.byId[sessionId]?.cwd;
-			const desktopEnv = parseDesktopEnv();
-			const wco = (0, react.useSyncExternalStore)((0, react.useMemo)(() => subscribeWco, []), getWcoSnapshot);
-			const scheme = snapshot.prefs.titleBarScheme;
-			const preset = scheme === "preset" ? getShellPreset(snapshot.prefs.titleBarPresetId) : void 0;
-			const titleBarStrip = computeTitleBarStrip(desktopEnv, wco, scheme, preset, snapshot.prefs.titleBarStripPx);
-			const titleBarCompat = titleBarStrip > 0;
+			const dirtyRevision = (0, react.useSyncExternalStore)(subscribeEditorDirty, () => editorDirtyRevision());
 			(0, react.useEffect)(() => {
-				const root = document.documentElement;
-				if (titleBarCompat) {
-					document.body.setAttribute("data-dsh-title-bar-compat", "");
-					root.style.setProperty("--dsh-title-bar-strip", `${titleBarStrip}px`);
-				} else {
-					document.body.removeAttribute("data-dsh-title-bar-compat");
-					root.style.removeProperty("--dsh-title-bar-strip");
-				}
-				return () => {
-					document.body.removeAttribute("data-dsh-title-bar-compat");
-					root.style.removeProperty("--dsh-title-bar-strip");
+				const onBeforeUnload = (event) => {
+					if (dirtyCount() === 0) return;
+					event.preventDefault();
+					event.returnValue = "";
 				};
-			}, [titleBarCompat, titleBarStrip]);
-			const presetCss = scheme === "preset" ? preset?.css ?? "" : "";
-			const customCss = scheme === "custom" ? snapshot.prefs.customCss : "";
+				window.addEventListener("beforeunload", onBeforeUnload);
+				return () => {
+					window.removeEventListener("beforeunload", onBeforeUnload);
+				};
+			}, [dirtyRevision]);
+			const customCss = snapshot.prefs.customCss;
 			(0, react.useEffect)(() => {
 				const tags = [];
-				if (presetCss !== "") tags.push(injectUserCss("data-dsh-preset-css", preset?.id ?? "", presetCss));
 				if (customCss !== "") tags.push(injectUserCss("data-dsh-custom-css", "custom", customCss));
 				return () => {
 					for (const tag of tags) tag.remove();
 				};
-			}, [
-				presetCss,
-				customCss,
-				preset?.id
-			]);
-			const [fetchedCwd, setFetchedCwd] = (0, react.useState)(void 0);
-			(0, react.useEffect)(() => {
-				setFetchedCwd(void 0);
-				if (sessionId === void 0 || summaryCwd !== void 0) return;
-				let cancelled = false;
-				api.sessionCwd({ sessionId }).then((result) => {
-					if (!cancelled) setFetchedCwd(result.cwd);
-				}).catch(() => {});
-				return () => {
-					cancelled = true;
-				};
-			}, [sessionId, summaryCwd]);
-			const cwd = summaryCwd ?? fetchedCwd;
+			}, [customCss]);
+			const cwd = useSessionRoot(ctx, sessionId);
 			const newTabOptions = (0, react.useMemo)(() => state === void 0 || sessionId === void 0 ? [] : buildNewTabOptions(state, ctx, {
 				sessionId,
 				cwd
@@ -20631,6 +26784,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			}, [draggingBottom]);
 			const actions = (0, react.useMemo)(() => ({
 				closeTab: (paneId, tabId) => {
+					if (!confirmDiscardDraft(tabId, t("closeUnsavedConfirm"), sessionId)) return;
 					ctx.get("betterSidebar")?.closeTab(tabId, sessionId === void 0 ? void 0 : {
 						sessionId,
 						cwd
@@ -20669,28 +26823,44 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				ctx
 			]);
 			/**
-			* The explorer's @-reference button. Directories append the folder mention
-			* (`@dir/`) as plain text so DSH's folder decoration and completion keep
-			* working; files insert a structured chip like the native `@` picker, so
-			* the whole reference stays one link instead of decorating only the
-			* leading folder. Resolves the session-scope ctx and the conversation
-			* input service at click time; a missing service or scope degrades to a
-			* logged no-op, never a crash. Defined above the no-session early return
-			* — a hook must never sit behind a conditional return (React counts hooks
-			* per render).
+			* The explorer's @-reference button. The token is spelled against the
+			* host-confirmed workspace root (see `referenceInChat`), directories as a
+			* complete plain-text folder mention so DSH's folder decoration and
+			* completion keep working, files as a structured chip like the native `@`
+			* picker. Resolves the session-scope ctx, the conversation input service
+			* and the workspace snapshot at click time; a missing service or an
+			* unresolved workspace degrades to a logged no-op, never a crash. Defined
+			* above the no-session early return — a hook must never sit behind a
+			* conditional return (React counts hooks per render).
 			*/
 			const referenceInChat$1 = (0, react.useCallback)((path, isDir) => {
 				if (sessionId === void 0) return;
-				referenceInChat(ctx, sessionId, cwd, path, isDir);
-			}, [
-				ctx,
-				sessionId,
-				cwd
-			]);
+				referenceInChat(ctx, sessionId, path, isDir);
+			}, [ctx, sessionId]);
+			/**
+			* The tab context menu's "reveal in the file manager" row. The host's
+			* open-in-app capability is the ONLY path this plugin reveals through
+			* (`ctx.remote.session.openWorkspacePath({action:'reveal'})`, shared with
+			* the explorer's own reveal row via `createOpenInApp`); a deployment
+			* without a desktop (plain web) answers false, which is logged and
+			* otherwise a no-op — the bottom panel has no error strip to write to, and
+			* a failed reveal must never take the strip down. Defined above the
+			* no-session early return — a hook must never sit behind a conditional
+			* return (React counts hooks per render).
+			*/
+			const openInApp = (0, react.useMemo)(() => createOpenInApp(ctx), [ctx]);
+			const revealTabFile = (0, react.useCallback)((path) => {
+				openInApp.reveal(path).then((ok) => {
+					if (!ok) console.error(`[dsh-better-sidebar] reveal in file manager failed: ${path}`);
+				}).catch((error) => {
+					console.error("[dsh-better-sidebar] reveal in file manager error:", error);
+				});
+			}, [openInApp]);
 			if (state === void 0 || sessionId === void 0) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 				"data-dsh-panel-host": true,
 				...osFileDragShield
 			});
+			const blankEntry = /* @__PURE__ */ (0, react_jsx_runtime.jsx)(DockFallback, { store });
 			const bottomPanelHeight = bottomPushHeight({
 				open: true,
 				height: state.bottomHeight,
@@ -20749,6 +26919,35 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				});
 			};
 			/**
+			* Whether one workbench tab carries the unread dot: its page holds
+			* background work the reader has not looked at yet. Reads the SAME session
+			* state the native chip does, so the two carriers cannot disagree, and the
+			* shell re-renders on the store change that sets or retires the mark.
+			*/
+			const isTabUnread = (tab) => isUnread(state, tab.type);
+			/**
+			* The active tab's right-aligned action area from the tab-type registry:
+			* a descriptor that declares `rightActions` supplies its own toolbar
+			* rendered at its pane's tab-strip right end. The open `tab` and its
+			* `paneId` ride along so the resolver can target the right instance (a
+			* split workbench renders one strip per pane, each with its own active
+			* tab). A throwing resolver is swallowed (no actions) — the tab strip
+			* must never break because a plugin's resolver failed.
+			*/
+			const tabRightActionsOf = (tab, paneId) => {
+				const descriptor = ctx.get("betterSidebar")?.getTab(tab.type);
+				if (descriptor?.rightActions === void 0) return null;
+				try {
+					return descriptor.rightActions(ctx, {
+						sessionId,
+						cwd
+					}, state, tab, paneId);
+				} catch (error) {
+					console.error("[dsh-better-sidebar] tab rightActions error:", error);
+					return null;
+				}
+			};
+			/**
 			* Render one tab's content. `active` (from the workbench) tells whether
 			* this tab is the active one in its pane; combined with the panel's
 			* open/closed state it gates live views (the Subagent topology pauses its
@@ -20780,10 +26979,10 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					tabsVersion
 				});
 			};
-			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				"data-dsh-panel-host": true,
 				...osFileDragShield,
-				children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				children: [blankEntry, /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 					ref: bottomRef,
 					className: clsx(sidebar_module_css_default.bottomPanel, !state.bottomOpen && sidebar_module_css_default.bottomPanelHidden),
 					"data-dsh-panel": true,
@@ -20854,18 +27053,23 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 								onNewTab,
 								renderTab,
 								getTabIcon: tabIconOf,
-								getTabBadge: tabBadgeOf
+								getTabBadge: tabBadgeOf,
+								isTabUnread,
+								getTabRightActions: tabRightActionsOf,
+								onRevealInFileManager: revealTabFile
 							})
 						})
 					]
-				})
+				})]
 			});
 		}
 		/** The header control that expands/collapses the bottom workbench (see
 		*  sidebar/bottom-toggle.tsx — registered into DSH's session header). */
 		function BottomDockToggle(props) {
 			const { store } = props;
-			const open = (0, react.useSyncExternalStore)((0, react.useCallback)((callback) => store.subscribe(callback), [store]), (0, react.useCallback)(() => store.getSnapshot(), [store])).state?.bottomOpen === true;
+			const snapshot = (0, react.useSyncExternalStore)((0, react.useCallback)((callback) => store.subscribe(callback), [store]), (0, react.useCallback)(() => store.getSnapshot(), [store]));
+			if (useRightPanelOpen()) return null;
+			const open = snapshot.state?.bottomOpen === true;
 			const label = open ? t("collapseBottomPanel") : t("expandBottomPanel");
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
 				label,
@@ -20881,7 +27085,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					onClick: () => {
 						store.reduce(toggleBottomPanel);
 					},
-					children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(IconPanelBottomOutline16, {})
+					children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(IconPanelBottomOutline16, { size: 15 })
 				})
 			});
 		}
@@ -20916,6 +27120,18 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		const CHIP_ICON_SIZE = 14;
 		/** The editor kind: a chip for a file row shows the file's own glyph. */
 		const EDITOR_KIND$1 = "editor";
+		/**
+		* The record key: one native tab id names a tab in EVERY session (the host's
+		* per-session counter restarts at `tab1`), and DSH 0.1.7 keeps visited bodies
+		* mounted through hiding, tab selection and Session switches
+		* (`SidebarRightTabDefinition.keepMounted`). Two sessions' `tab1` are therefore
+		* ALIVE AT THE SAME TIME — a registry keyed by the bare id would hand one
+		* session's tree/scroll/draft state to the other. The seat's session is part
+		* of the record's identity.
+		*/
+		function viewKey(sessionId, id) {
+			return `${sessionId}::${id}`;
+		}
 		/** Whether two expansion sets hold the same paths in the same order. */
 		function samePaths(left, right) {
 			return left.length === right.length && left.every((path, index) => path === right[index]);
@@ -20924,12 +27140,25 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		function createNativeTabRecords() {
 			const views = /* @__PURE__ */ new Map();
 			const instances = /* @__PURE__ */ new Map();
+			/**
+			* Record key -> the navigation revision whose seed meta was last adopted.
+			*
+			* `meta` has two writers: an opener's navigation (a page kind is
+			* re-delivered with fresh `params` on every open — the side chat switches
+			* threads that way) and the view itself through `updateTab` (a tab that
+			* minted a thread binds its id there). The native surface re-delivers the
+			* SAME navigation on every render, so adopting the seed unconditionally
+			* would let the plugin's own write be overwritten on the next pass: the tab
+			* would fall back to "unbound" and mint thread after thread. Only a
+			* revision this record has not adopted yet may seed.
+			*/
+			const navigationRevisions = /* @__PURE__ */ new Map();
 			const listeners = /* @__PURE__ */ new Set();
 			const notify = () => {
 				for (const listener of listeners) listener();
 			};
-			const put = (id, view) => {
-				views.set(id, {
+			const put = (key, view) => {
+				views.set(key, {
 					...view,
 					version: view.version + 1
 				});
@@ -20968,38 +27197,46 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					next.subscribe(syncExpanded);
 					syncExpanded();
 				},
-				ensure({ id, kind, title, params, scope, mint }) {
-					const existing = views.get(id);
+				ensure({ sessionId, id, kind, title, params, scope, revision, mint }) {
+					const key = viewKey(sessionId, id);
+					const existing = views.get(key);
 					if (existing === void 0) {
 						const seeded = params?.title === void 0 && params?.meta === void 0 ? mint?.() : void 0;
 						const meta = params?.meta ?? seeded?.meta;
+						const path = params?.path ?? params?.url;
 						const minted = {
 							tab: {
 								id,
 								type: kind,
 								title: params?.title ?? seeded?.title ?? title,
-								...params?.path === void 0 ? {} : { path: params.path },
+								...path === void 0 ? {} : { path },
+								...params?.line === void 0 ? {} : { line: params.line },
 								...params?.diff === void 0 ? {} : { diff: params.diff },
 								...meta === void 0 ? {} : { meta }
 							},
 							scope,
+							seat: sessionId,
 							expanded: expandedOf(scope.sessionId),
 							revealed: [],
 							version: 0
 						};
-						views.set(id, minted);
+						views.set(key, minted);
+						if (revision !== void 0) navigationRevisions.set(key, revision);
 						return minted;
 					}
 					const patch = {};
-					if (params?.path !== void 0 && params.path !== existing.tab.path) patch.path = params.path;
+					const newNavigation = revision === void 0 || navigationRevisions.get(key) !== revision;
+					if (revision !== void 0 && newNavigation) {
+						navigationRevisions.set(key, revision);
+						if (params?.meta !== void 0) patch.meta = params.meta;
+					}
+					const nextPath = params?.path ?? params?.url;
+					if (nextPath !== void 0 && nextPath !== existing.tab.path && newNavigation) patch.path = nextPath;
+					if (params?.line !== existing.tab.line) patch.line = params?.line;
 					if (params?.diff !== void 0) patch.diff = params.diff;
-					if (params?.url !== void 0) patch.meta = {
-						...typeof existing.tab.meta === "object" && existing.tab.meta !== null ? existing.tab.meta : {},
-						url: params.url
-					};
 					const expanded = expandedOf(scope.sessionId);
 					if (existing.scope.sessionId !== scope.sessionId || !samePaths(existing.expanded, expanded)) {
-						views.set(id, {
+						views.set(key, {
 							...existing,
 							scope,
 							expanded,
@@ -21008,10 +27245,10 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 								...patch
 							}
 						});
-						return views.get(id);
+						return views.get(key);
 					}
 					if (existing.scope.cwd !== scope.cwd) {
-						views.set(id, {
+						views.set(key, {
 							...existing,
 							scope,
 							tab: {
@@ -21019,7 +27256,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 								...patch
 							}
 						});
-						return views.get(id);
+						return views.get(key);
 					}
 					if (Object.keys(patch).length === 0) return existing;
 					const next = {
@@ -21029,42 +27266,70 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 							...patch
 						}
 					};
-					views.set(id, next);
+					views.set(key, next);
 					return next;
 				},
-				get: (id) => views.get(id),
-				has: (id) => views.has(id),
-				update(id, patch) {
-					const entry = views.get(id);
+				get: (sessionId, id) => views.get(viewKey(sessionId, id)),
+				pathTabs() {
+					const tabs = [];
+					for (const entry of views.values()) {
+						const path = entry.tab.path;
+						if (path !== void 0) tabs.push({
+							sessionId: entry.seat,
+							scopeSessionId: entry.scope.sessionId,
+							cwd: entry.scope.cwd,
+							id: entry.tab.id,
+							path
+						});
+					}
+					return tabs;
+				},
+				has: (sessionId, id) => views.has(viewKey(sessionId, id)),
+				update(sessionId, id, patch) {
+					const key = viewKey(sessionId, id);
+					const entry = views.get(key);
 					if (entry === void 0) return;
-					put(id, {
+					const next = {
+						...entry.tab,
+						...patch
+					};
+					if (patch.path !== void 0 && patch.path !== entry.tab.path) next.line = void 0;
+					put(key, {
 						...entry,
-						tab: {
-							...entry.tab,
-							...patch
-						}
+						tab: next
 					});
 				},
-				drop(id) {
-					if (views.delete(id)) notify();
+				drop(sessionId, id) {
+					const key = viewKey(sessionId, id);
+					navigationRevisions.delete(key);
+					if (views.delete(key)) notify();
 				},
-				toggleExpanded(id, path) {
-					const entry = views.get(id);
+				toggleExpanded(sessionId, id, path) {
+					const entry = views.get(viewKey(sessionId, id));
 					if (entry === void 0 || store === void 0) return;
-					const sessionId = entry.scope.sessionId;
-					if (store.getSnapshot().sessionId === sessionId) {
+					const scopeSessionId = entry.scope.sessionId;
+					if (store.getSnapshot().sessionId === scopeSessionId) {
 						store.reduce((state) => toggleExpanded(state, path));
 						return;
 					}
-					store.reduceFor(sessionId, (state) => toggleExpanded(state, path));
+					store.reduceFor(scopeSessionId, (state) => toggleExpanded(state, path));
 					syncExpanded();
+				},
+				retain(sessions) {
+					let dropped = false;
+					for (const [key, entry] of [...views]) if (!sessions.has(entry.seat)) {
+						views.delete(key);
+						navigationRevisions.delete(key);
+						dropped = true;
+					}
+					if (dropped) notify();
 				},
 				nextInstance(kind) {
 					const next = (instances.get(kind) ?? 0) + 1;
 					instances.set(kind, next);
 					return next;
 				},
-				versionOf: (id) => views.get(id)?.version ?? 0,
+				versionOf: (sessionId, id) => views.get(viewKey(sessionId, id))?.version ?? 0,
 				subscribe(listener) {
 					listeners.add(listener);
 					return () => {
@@ -21074,29 +27339,33 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			};
 		}
 		/** Subscribe a component to its own record's mutations. */
-		function useRecordVersion(records, id) {
-			return (0, react.useSyncExternalStore)((listener) => records.subscribe(listener), () => records.versionOf(id));
-		}
-		/** The current session's workspace root, live from the client session list. */
-		function useSessionCwd(ctx, sessionId) {
-			return (0, react.useSyncExternalStore)((0, react.useMemo)(() => (listener) => ctx.sessions.list.subscribe(listener), [ctx]), () => ctx.sessions.list.getSnapshot().byId[sessionId]?.cwd);
+		function useRecordVersion(records, sessionId, id) {
+			return (0, react.useSyncExternalStore)((listener) => records.subscribe(listener), () => records.versionOf(sessionId, id));
 		}
 		/**
 		* One plugin tab rendered inside the native right Sidebar: the descriptor's
 		* own component with the plugin's props, over a synthetic record minted from
-		* the native tab and dropped when the record ends.
+		* the native tab.
+		*
+		* The record OUTLIVES this component on purpose. `keepMounted` holds a body
+		* mounted through hiding and tab switches, but a Session switch still remounts
+		* it on the host side (measured: `drop`+`mint` for the SAME key inside one
+		* switch), and the reader's exploration state only lives in the record. The
+		* registry therefore keeps it until the tab is closed (`surface.close`) or its
+		* session disappears (`retain`) — see the record registry's own notes.
 		*/
 		function NativeTabBody(props) {
 			const { ctx, store, service, records, descriptorId, useTabInfo } = props;
 			const info = useTabInfo();
 			const nativeTab = info.tab;
-			useRecordVersion(records, nativeTab.id);
-			const sessionId = props.sessionIdOf?.(info) ?? props.sessionId;
-			const cwd = useSessionCwd(ctx, sessionId);
+			const seatSessionId = props.sessionId;
+			const scopeSessionId = props.sessionIdOf?.(info) ?? seatSessionId;
+			useRecordVersion(records, seatSessionId, nativeTab.id);
+			const cwd = useSessionRoot(ctx, scopeSessionId);
 			const scope = (0, react.useMemo)(() => ({
-				sessionId,
+				sessionId: scopeSessionId,
 				cwd
-			}), [sessionId, cwd]);
+			}), [scopeSessionId, cwd]);
 			const derived = props.paramsOf?.(info);
 			const params = derived === void 0 && nativeTab.navigation.params === void 0 ? void 0 : {
 				...derived,
@@ -21104,11 +27373,13 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			};
 			const descriptor = service.getTab(descriptorId);
 			const view = records.ensure({
+				sessionId: seatSessionId,
 				id: nativeTab.id,
 				kind: nativeTab.kind,
 				title: nativeTab.title,
 				params,
 				scope,
+				revision: nativeTab.navigation.revision,
 				mint: () => {
 					const state = store.getSnapshot().state;
 					if (descriptor?.createTab === void 0 || state === void 0) return void 0;
@@ -21119,9 +27390,6 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					};
 				}
 			});
-			(0, react.useEffect)(() => () => {
-				records.drop(nativeTab.id);
-			}, [records, nativeTab.id]);
 			if (descriptor === void 0) return (0, react.createElement)("div", {
 				className: sidebar_module_css_default.nativeTabHost,
 				"data-dsh-native-tab-host": ""
@@ -21144,10 +27412,10 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				expanded: view.expanded,
 				revealed: view.revealed,
 				onToggleDir: (path) => {
-					records.toggleExpanded(nativeTab.id, path);
+					records.toggleExpanded(seatSessionId, nativeTab.id, path);
 				},
 				onReferenceFile: (path, isDir) => {
-					referenceInChat(ctx, sessionId, cwd, path, isDir);
+					referenceInChat(ctx, scopeSessionId, path, isDir);
 				},
 				onOpenDiff: (tab) => {
 					service.openTab({
@@ -21180,20 +27448,87 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		* cannot drift apart.
 		*/
 		function NativeTabTitle(props) {
-			const { records, service, descriptorId, useTabInfo } = props;
-			const nativeTab = useTabInfo().tab;
-			(0, react.useSyncExternalStore)((listener) => records.subscribe(listener), () => records.versionOf(nativeTab.id));
-			const record = records.get(nativeTab.id);
+			const { records, service, descriptorId, sessionId, paramsOf, useTabInfo } = props;
+			const info = useTabInfo();
+			const nativeTab = info.tab;
+			(0, react.useSyncExternalStore)((listener) => records.subscribe(listener), () => records.versionOf(sessionId, nativeTab.id));
+			const record = records.get(sessionId, nativeTab.id);
 			const title = record?.tab.title ?? nativeTab.title;
 			const descriptor = service.getTab(descriptorId) ?? service.getTab(record?.tab.type ?? nativeTab.kind);
-			const path = record?.tab.path;
+			const path = record?.tab.path ?? paramsOf?.(info)?.path;
 			const glyph = (path !== void 0 && descriptorId === EDITOR_KIND$1 ? service.fileIcon(path, CHIP_ICON_SIZE) : void 0) ?? (typeof descriptor?.icon === "function" ? descriptor.icon(CHIP_ICON_SIZE) : descriptor?.icon);
-			if (glyph === void 0 || glyph === null) return title;
-			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-				className: sidebar_module_css_default.chipIcon,
-				"aria-hidden": "true",
-				children: glyph
-			}), title] });
+			const unread = (0, react.useSyncExternalStore)((listener) => service.subscribeState(listener), () => isUnread(service.getSnapshot().state, record?.tab.type ?? descriptorId));
+			const type = record?.tab.type ?? descriptorId;
+			const visible = nativeTab.visible === true;
+			(0, react.useEffect)(() => {
+				if (visible && unread) service.clearUnread(type, sessionId);
+			}, [
+				visible,
+				unread,
+				type,
+				sessionId,
+				service
+			]);
+			if (glyph === void 0 || glyph === null) return unread ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [title, /* @__PURE__ */ (0, react_jsx_runtime.jsx)(UnreadDot, {})] }) : title;
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
+				/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+					className: sidebar_module_css_default.chipIcon,
+					"aria-hidden": "true",
+					children: glyph
+				}),
+				title,
+				unread ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)(UnreadDot, {}) : null
+			] });
+		}
+		/**
+		* The native chip's unread mark. `role="img"` + a label so the dot is
+		* announced rather than skipped as decoration (the glyph beside it is the
+		* decorative one — `aria-hidden` — while this carries the state).
+		*/
+		function UnreadDot() {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				className: sidebar_module_css_default.chipUnread,
+				role: "img",
+				"aria-label": t("tabUnread"),
+				title: t("tabUnread")
+			});
+		}
+		//#endregion
+		//#region src/client/path-line.ts
+		/**
+		* A trailing line spec: `:<line>`, `:<line>-<end>` or `:<line>:<column>`.
+		*
+		* Line numbers are 1-based with no leading zero, exactly as the host's own
+		* fragment rule (`^L([1-9]\d*)`) — so `version:0` and a bare `:0` are file
+		* names, not line references. The regex is anchored at the END of the string,
+		* which is what keeps `data:2024.csv` and `C:` intact.
+		*/
+		const TRAILING_LINE_SPEC = /:([1-9]\d{0,8})(?:-([1-9]\d{0,8}))?(?::([1-9]\d{0,8}))?$/u;
+		/**
+		* Split a trailing `path:line` spec off a path.
+		*
+		* Rejected on purpose, because stripping them would break a path that is
+		* already a valid file name: a spec with nothing in front of it (`:131`), a
+		* one-character remainder (`C:131`, where `C` could only be a drive letter),
+		* and an inverted range (`a.c:20-12`) — the host rejects that one too.
+		* @param path - a path as a caller holds it, in either separator spelling.
+		* @returns the path without the spec plus the line it named, or `undefined`
+		* when the path carries no trailing line spec.
+		*/
+		function splitTrailingLineSpec(path) {
+			const match = TRAILING_LINE_SPEC.exec(path);
+			if (match === null) return void 0;
+			const head = path.slice(0, match.index);
+			if (head.length < 2) return void 0;
+			const line = Number(match[1]);
+			const end = match[2] === void 0 ? line : Number(match[2]);
+			if (end < line) return void 0;
+			return {
+				path: head,
+				line,
+				end,
+				column: match[3] === void 0 ? void 0 : Number(match[3])
+			};
 		}
 		//#endregion
 		//#region src/client/native/index.ts
@@ -21296,8 +27631,38 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		function fileTitleOf(address) {
 			const parsed = parseFileAddress(address);
 			if (parsed === void 0) return void 0;
-			const segments = parsed.path.split("/").filter((segment) => segment !== "");
+			const segments = (splitTrailingLineSpec(parsed.path)?.path ?? parsed.path).split("/").filter((segment) => segment !== "");
 			return segments.length === 0 ? void 0 : segments[segments.length - 1];
+		}
+		/**
+		* The plugin-side seed a file-address tab carries.
+		*
+		* The path comes from the address, and that is also where a `path:line` spec
+		* the host's markdown grammar left in it has to come off: DSH reads a `#`-less
+		* destination as the file name verbatim, so `[a/b.c](a/b.c:131)` addresses a
+		* file called `b.c:131` and the editor reports it missing (#826). The tab
+		* TITLE is seeded from the same spec, because the host derives it from the same
+		* string and would otherwise label the tab `b.c:131`.
+		*
+		* The LINE rides along in the same seed. DSH's own `#L131` form already
+		* arrives as `navigation.params.line` (the host parses it and sends it down),
+		* so seeding it here is what makes both spellings land on the same row — see
+		* {@link NativeTabParams.line}. The range end and the column are deliberately
+		* dropped: {@link splitTrailingLineSpec} parses them, and a start line is all
+		* the editor has anywhere to put a cursor.
+		* @param info - the native tab record the body is drawing.
+		* @returns the seed, or `undefined` when the tab is not a file address.
+		*/
+		function fileParamsOf(info) {
+			const address = parseFileAddress(info.tab.contentId);
+			if (address === void 0) return void 0;
+			const spec = splitTrailingLineSpec(address.path);
+			if (spec === void 0) return { path: address.path };
+			return {
+				path: spec.path,
+				title: baseName$1(spec.path),
+				line: spec.line
+			};
 		}
 		/**
 		* Run one registration disposer, reporting a failure instead of propagating
@@ -21333,10 +27698,6 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				const tabs = injected.get("sidebarRightTabs");
 				if (tabs === void 0) return;
 				const live = /* @__PURE__ */ new Map();
-				const fileParamsOf = (info) => {
-					const address = parseFileAddress(info.tab.contentId);
-					return address === void 0 ? void 0 : { path: address.path };
-				};
 				const fileSessionIdOf = (info) => {
 					const address = parseFileAddress(info.tab.contentId);
 					return address !== void 0 && address.scope === "session" ? address.sessionId : void 0;
@@ -21366,10 +27727,12 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 						disposers.push(ctx.slots.inject("sidebar.right.pane.tab.title", () => ctx.slots.register({
 							name: "sidebar.right.pane.tab.title",
 							key: id,
-							inject: () => ({
+							inject: (sessionId) => ({
 								records,
 								service,
-								descriptorId: injected.descriptorId
+								descriptorId: injected.descriptorId,
+								sessionId,
+								...params.paramsOf === void 0 ? {} : { paramsOf: params.paramsOf }
 							})
 						}, NativeTabTitle)));
 					} catch (error) {
@@ -21386,6 +27749,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					const disposeType = tabs.register({
 						id,
 						kind: descriptor.id,
+						keepMounted: true,
 						...isEditor ? {
 							patterns: ["dsh-resource://file/**"],
 							canOpen: (address) => {
@@ -21430,6 +27794,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					const disposeType = tabs.register({
 						id,
 						kind: FILES_KIND,
+						keepMounted: true,
 						priority: "extension",
 						title: () => t("files"),
 						guide: [{
@@ -21463,6 +27828,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					const wanted = /* @__PURE__ */ new Map();
 					for (const descriptor of service.getTabs()) {
 						if (!service.isTabEnabled(descriptor.id)) continue;
+						if (descriptor.bottomOnly === true) continue;
 						wanted.set(descriptor.id, () => registerDescriptor(descriptor));
 					}
 					for (const [descriptorId, registration] of live) {
@@ -21707,6 +28073,20 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				install: "cd ~/.dsh && dsh plugin --profile web add dsh-better-sidebar && dsh plugin --profile web add git+https://github.com/Fisfzy/ego-browser.git"
 			},
 			{
+				id: "@modusensus/dsh-mneme",
+				name: () => t("pluginMnemeName"),
+				url: "https://github.com/modusensus/dsh-mneme",
+				description: () => t("pluginMnemeDesc"),
+				install: "cd ~/.dsh && dsh plugin --profile web add dsh-better-sidebar && dsh plugin --profile web add @modusensus/dsh-mneme"
+			},
+			{
+				id: "dsh-agent-persona",
+				name: () => t("pluginAgentPersonaName"),
+				url: "https://github.com/Awoodwhale/dsh-agent-persona",
+				description: () => t("pluginAgentPersonaDesc"),
+				install: "cd ~/.dsh && dsh plugin --profile web add dsh-better-sidebar && dsh plugin --profile web add dsh-agent-persona"
+			},
+			{
 				id: "dsh-better-overleaf",
 				name: () => t("pluginBetterOverleafName"),
 				url: "https://github.com/Hoemr/dsh-better-overleaf",
@@ -21714,11 +28094,32 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				install: "cd ~/.dsh && dsh plugin --profile web add dsh-better-sidebar && dsh plugin --profile web add dsh-better-overleaf"
 			},
 			{
+				id: "dsh-dev-git-graph",
+				name: "dsh-dev-git-graph 提交图",
+				url: "https://github.com/kp-z/dsh-dev-git-graph",
+				description: () => t("pluginDevGitGraphDesc"),
+				install: "cd ~/.dsh && dsh plugin --profile web add dsh-better-sidebar && dsh plugin --profile web add dsh-dev-git-graph"
+			},
+			{
 				id: "dsh-docs-panel",
 				name: () => t("pluginDocsPanelName"),
 				url: "https://github.com/mlosun/dsh-docs-panel",
 				description: () => t("pluginDocsPanelDesc"),
 				install: "cd ~/.dsh && dsh plugin --profile web add dsh-better-sidebar && dsh plugin --profile web add dsh-docs-panel"
+			},
+			{
+				id: "@dsh-external/dsh-file-trace",
+				name: () => t("pluginFileTraceName"),
+				url: "https://github.com/lhh010/dsh-file-trace",
+				description: () => t("pluginFileTraceDesc"),
+				install: "cd ~/.dsh && dsh plugin --profile web add dsh-better-sidebar && dsh plugin --profile web add '@dsh-external/dsh-file-trace@github:lhh010/dsh-file-trace#v0.3.24'"
+			},
+			{
+				id: "dsh-tylina",
+				name: () => t("pluginTylinaName"),
+				url: "https://github.com/tylina/dsh-tylina",
+				description: () => t("pluginTylinaDesc"),
+				install: "cd ~/.dsh && dsh plugin --profile web add dsh-better-sidebar && dsh plugin --profile web add dsh-tylina"
 			},
 			{
 				id: "dsh-flowglass",
@@ -21730,16 +28131,9 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			{
 				id: "dsh-git-forge",
 				name: () => t("pluginGitForgeName"),
-				url: "https://github.com/thirsty5034/dsh-git-forge",
+				url: "https://github.com/OMSociety/dsh-git-forge",
 				description: () => t("pluginGitForgeDesc"),
-				install: "cd ~/.dsh && dsh plugin --profile web add dsh-better-sidebar && dsh plugin --profile web add \"dsh-git-forge@github:thirsty5034/dsh-git-forge\""
-			},
-			{
-				id: "dsh-git-remotes",
-				name: () => t("pluginGitRemotesName"),
-				url: "https://github.com/yq04/dsh-git-remotes",
-				description: () => t("pluginGitRemotesDesc"),
-				install: "cd ~/.dsh && dsh plugin --profile web add dsh-better-sidebar && dsh plugin --profile web add git+https://github.com/yq04/dsh-git-remotes.git"
+				install: "cd ~/.dsh && dsh plugin --profile web add dsh-better-sidebar && dsh plugin --profile web add dsh-git-forge@1.0.0"
 			},
 			{
 				id: "dsh-github-workbench",
@@ -21747,6 +28141,20 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				url: "https://github.com/meyaomiao/dsh-github-workbench",
 				description: () => t("pluginGithubWorkbenchDesc"),
 				install: "cd ~/.dsh && dsh plugin --profile web add \"github:meyaomiao/dsh-github-workbench#v0.1.0\""
+			},
+			{
+				id: "dsh-ide-git",
+				name: () => t("pluginIdeGitName"),
+				url: "https://github.com/KannaKuron/dsh-ide-git",
+				description: () => t("pluginIdeGitDesc"),
+				install: "cd ~/.dsh && dsh plugin --profile web add dsh-ide-git"
+			},
+			{
+				id: "dsh-memory-delta",
+				name: () => t("pluginDshMemoryDeltaName"),
+				url: "https://github.com/lpf20200901/dsh-memory-delta",
+				description: () => t("pluginDshMemoryDeltaDesc"),
+				install: "cd ~/.dsh && dsh plugin --profile web add \"github:lpf20200901/dsh-memory-delta#v1.3.3\""
 			},
 			{
 				id: "dsh-sidebar-qa",
@@ -21770,6 +28178,13 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				install: "cd ~/.dsh && dsh plugin --profile web add dsh-better-sidebar && dsh plugin --profile web add dsh-server-deck@latest"
 			},
 			{
+				id: "dsh-side-chat",
+				name: "Side Chat",
+				url: "https://github.com/xlennart/dsh-side-chat",
+				description: "Independent native DSH side conversation with a standalone split view and an optional Better Sidebar page; its own shortcut remains available in both modes.",
+				install: "cd ~/.dsh && dsh plugin --profile web add dsh-better-sidebar && dsh plugin --profile web add \"github:xlennart/dsh-side-chat#v1.2.1\""
+			},
+			{
 				id: "dsh-suhuang-scroll",
 				name: () => t("pluginSuhuangScrollName"),
 				url: "https://github.com/YZDame/dsh-suhuang-scroll",
@@ -21779,16 +28194,9 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			{
 				id: "dsh-ssh-tunnel",
 				name: () => t("pluginSshTunnelName"),
-				url: "https://github.com/thirsty5034/dsh-ssh-tunnel",
+				url: "https://github.com/OMSociety/dsh-ssh-tunnel",
 				description: () => t("pluginSshTunnelDesc"),
-				install: "cd ~/.dsh && dsh plugin --profile web add dsh-better-sidebar && dsh plugin --profile web add \"dsh-ssh-tunnel@github:thirsty5034/dsh-ssh-tunnel\""
-			},
-			{
-				id: "dsh-turn-review",
-				name: () => t("pluginTurnReviewName"),
-				url: "https://github.com/yq04/dsh-turn-review",
-				description: () => t("pluginTurnReviewDesc"),
-				install: "cd ~/.dsh && dsh plugin --profile web add dsh-better-sidebar && dsh plugin --profile web add git+https://github.com/yq04/dsh-turn-review.git"
+				install: "cd ~/.dsh && dsh plugin --profile web add dsh-better-sidebar && dsh plugin --profile web add dsh-ssh-tunnel@1.0.0"
 			},
 			{
 				id: "dsh-bilingual-reader",
@@ -21796,6 +28204,13 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				url: "https://github.com/Johnblur/dsh-bilingual-reader",
 				description: () => t("pluginBilingualReaderDesc"),
 				install: "cd ~/.dsh && dsh plugin --profile web add dsh-better-sidebar && dsh plugin --profile web add github:Johnblur/dsh-bilingual-reader"
+			},
+			{
+				id: "dsh-turn-outline",
+				name: () => t("pluginTurnOutlineName"),
+				url: "https://github.com/Andor-Z/dsh-turn-outline",
+				description: () => t("pluginTurnOutlineDesc"),
+				install: "cd ~/.dsh && dsh plugin --profile web add dsh-better-sidebar && dsh plugin --profile web add dsh-turn-outline"
 			}
 		];
 		//#endregion
@@ -21840,6 +28255,13 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				url: "https://github.com/zemul/dsh-video-preview",
 				description: () => t("pluginVideoPreviewDesc"),
 				install: "cd ~/.dsh && dsh plugin --profile web add dsh-video-preview"
+			},
+			{
+				id: "@huanlin/dsh-plugin-better-sidebar-plugin-audio",
+				name: () => t("pluginAudioName"),
+				url: "https://github.com/HuanLinOTO/dsh-plugin-better-sidebar-plugin-audio",
+				description: () => t("pluginAudioDesc"),
+				install: "cd ~/.dsh && dsh plugin --profile web add @huanlin/dsh-plugin-better-sidebar-plugin-audio"
 			}
 		];
 		//#endregion
@@ -22095,16 +28517,6 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			if (a.hidden !== b.hidden) return a.hidden === true ? 1 : -1;
 			return (a.order ?? 100) - (b.order ?? 100);
 		}
-		/**
-		* The scheme dropdown's current value: the plain scheme, or `preset:<id>`
-		* while a preset is active. Falls back to `auto` when the stored preset id
-		* is no longer registered (the strip resolves to 0 then anyway).
-		*/
-		function titleBarSchemeValue(prefs) {
-			if (prefs.titleBarScheme !== "preset") return prefs.titleBarScheme;
-			const preset = getShellPreset(prefs.titleBarPresetId);
-			return preset !== void 0 ? `preset:${preset.id}` : "auto";
-		}
 		/** Viewer inventory order: priority desc (the catch-all `code` comes last). */
 		function viewerOrder(a, b) {
 			return (b.priority ?? 0) - (a.priority ?? 0);
@@ -22187,12 +28599,18 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		* without opening the Modal (the Modal portal renders only while open).
 		*/
 		function FeatureSettingsRows(props) {
-			const { toggles, prefs, onToggle, onCommit, onSelectValue, valueSource } = props;
+			const { toggles, prefs, onToggle, onCommit, onSelectValue, onPatterns, valueSource } = props;
 			const read = valueSource ?? ((key) => prefs[key]);
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 				className: SideCardSection_module_css_default.popupRows,
 				children: toggles.map((toggle) => {
 					const title = textOf(toggle.title);
+					if (toggle.type === "patterns") return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(PatternsRow, {
+						toggle,
+						title,
+						value: read(toggle.key),
+						onPatterns
+					}, toggle.key);
 					if (toggle.type === "select") return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(SelectRow, {
 						toggle,
 						title,
@@ -22279,10 +28697,10 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			});
 		}
 		/**
-		* The multi-line custom-CSS input (scheme `custom`): a monospace textarea
-		* whose draft is local state, committed on blur or Cmd/Ctrl+Enter through
-		* the parent's handler. Keyed by the stored value so an external commit
-		* remounts it with the canonical text (same pattern as TypedRow).
+		* The multi-line custom-CSS input (the user-space escape hatch): a monospace
+		* textarea whose draft is local state, committed on blur or Cmd/Ctrl+Enter
+		* through the parent's handler. Keyed by the stored value so an external
+		* commit remounts it with the canonical text (same pattern as TypedRow).
 		*/
 		function CssDraft(props) {
 			const { value, onCommit, label, placeholder } = props;
@@ -22311,8 +28729,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		* per option (big-icon cards when any option carries an icon). Single-pick
 		* commits the option's value and closes; `multi` toggles membership and
 		* commits the picked values as an array (in options order), staying open.
-		* Shared by the declarative select rows (SelectRow) and the title-bar
-		* scheme dropdown on the General row.
+		* Used by the declarative select rows (SelectRow).
 		*/
 		function SelectMenu(props) {
 			const { label, value, options, multi, onSelect, placeholder } = props;
@@ -22426,6 +28843,80 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			});
 		}
 		/**
+		* One patterns row (`type: 'patterns'`): an editable string list — the
+		* committed values render as removable chips, and a permanently-present
+		* input adds new entries (Enter or the add button; blanks and duplicates
+		* are dropped). Every add/remove commits the WHOLE list through the
+		* parent's onPatterns — the list is one atomic pref value.
+		*/
+		function PatternsRow(props) {
+			const { toggle, title, value, onPatterns } = props;
+			const patterns = Array.isArray(value) ? value.filter((item) => typeof item === "string") : [];
+			const [draft, setDraft] = (0, react.useState)("");
+			const commitAdd = () => {
+				const next = draft.trim();
+				setDraft("");
+				if (next === "" || patterns.includes(next)) return;
+				onPatterns?.(toggle, [...patterns, next]);
+			};
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				className: SideCardSection_module_css_default.patternsRow,
+				children: [
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+						className: SideCardSection_module_css_default.rowText,
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							className: SideCardSection_module_css_default.title,
+							children: title
+						}), textOf(toggle.desc) !== "" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							className: SideCardSection_module_css_default.desc,
+							children: textOf(toggle.desc)
+						})]
+					}),
+					patterns.length > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						className: SideCardSection_module_css_default.patternsChips,
+						children: patterns.map((pattern, index) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+							className: SideCardSection_module_css_default.patternsChip,
+							children: [pattern, /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: SideCardSection_module_css_default.patternsChipRemove,
+								"aria-label": `${t("explorerExcludeRemove")} ${pattern}`,
+								title: t("explorerExcludeRemove"),
+								onClick: () => {
+									onPatterns?.(toggle, patterns.filter((_, at) => at !== index));
+								},
+								children: "×"
+							})]
+						}, `${pattern}:${index}`))
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						className: SideCardSection_module_css_default.patternsAdd,
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Input, {
+							type: "text",
+							className: SideCardSection_module_css_default.patternsInput,
+							value: draft,
+							placeholder: toggle.patternsPlaceholder ?? toggle.placeholder,
+							"aria-label": title,
+							spellCheck: false,
+							onChange: (event) => {
+								setDraft(event.currentTarget.value);
+							},
+							onKeyDown: (event) => {
+								if (event.key === "Enter") {
+									event.preventDefault();
+									commitAdd();
+								}
+							}
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: SideCardSection_module_css_default.done,
+							onClick: commitAdd,
+							children: t("explorerExcludeAdd")
+						})]
+					})
+				]
+			});
+		}
+		/**
 		* The secondary settings popup body of one feature (tab or viewer):
 		* - the host-prefs `toggles` rows, then the plugin-owned `pluginToggles`
 		*   rows (their values live in `pluginSettings[feature.id]`, projected onto
@@ -22436,7 +28927,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		*   open-behavior picker) and still ship a custom configuration area.
 		*/
 		function SettingsBody(props) {
-			const { feature, prefs, store, service, onToggle, onCommit, onSelectValue, onPluginToggle, onPluginCommit, onPluginSelectValue, onPluginWrite, onClose } = props;
+			const { feature, prefs, store, service, onToggle, onCommit, onSelectValue, onPatterns, onPluginToggle, onPluginCommit, onPluginSelectValue, onPluginPatterns, onPluginWrite, onClose } = props;
 			const render = feature.settings?.render;
 			const toggles = feature.settings?.toggles ?? [];
 			const pluginToggles = feature.settings?.pluginToggles ?? [];
@@ -22449,13 +28940,15 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					prefs,
 					onToggle,
 					onCommit,
-					onSelectValue
+					onSelectValue,
+					onPatterns
 				}), pluginToggles.length > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(FeatureSettingsRows, {
 					toggles: pluginToggles,
 					prefs,
 					onToggle: onPluginToggle,
 					onCommit: onPluginCommit,
 					onSelectValue: onPluginSelectValue,
+					onPatterns: onPluginPatterns,
 					valueSource: (key) => pluginBlob[key]
 				})]
 			}), render !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(SettingsRender, {
@@ -22479,8 +28972,6 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			const [prefs, setPrefs] = (0, react.useState)(() => store.getPrefs());
 			const [error, setError] = (0, react.useState)(null);
 			const [settingsFor, setSettingsFor] = (0, react.useState)(null);
-			const [stripSettingsOpen, setStripSettingsOpen] = (0, react.useState)(false);
-			const detectedEnv = (0, react.useMemo)(() => parseDesktopEnv(), []);
 			const [addPluginsOpen, setAddPluginsOpen] = (0, react.useState)(null);
 			const optimisticRef = (0, react.useRef)(prefs);
 			(0, react.useEffect)(() => {
@@ -22568,6 +29059,10 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			const onSelectSetting = (toggle, next) => {
 				applyPref({ [toggle.key]: next });
 			};
+			/** Commit one declaratively-declared patterns row (the whole string list). */
+			const onPatternsSetting = (toggle, next) => {
+				applyPref({ [toggle.key]: next });
+			};
 			/**
 			* Commit one declaratively-declared text/number row. Numbers are parsed
 			* and clamped to the toggle's declared min/max (an unparsable input falls
@@ -22589,34 +29084,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				applyPref({ [toggle.key]: raw });
 				return raw;
 			};
-			/**
-			* Pick the title-bar / shell compatibility scheme. Mirrors the legacy
-			* `titleBarCompat` flag (true = anything but the conservative auto) so
-			* documents stay readable by older plugin versions.
-			*/
-			/**
-			* Pick the title-bar / shell compatibility scheme from the dropdown. The
-			* option values are `auto` | `web` | `custom` | `preset:<id>`; selecting
-			* a preset stores both the scheme and its id. Mirrors the legacy
-			* `titleBarCompat` flag (true for preset/custom) so documents stay
-			* readable by older plugin versions.
-			*/
-			const onSchemeSelect = (value) => {
-				if (typeof value !== "string") return;
-				if (value === "auto" || value === "web" || value === "custom") {
-					applyPref({
-						titleBarScheme: value,
-						titleBarCompat: value === "custom"
-					});
-					return;
-				}
-				if (value.startsWith("preset:") && getShellPreset(value.slice(7)) !== void 0) applyPref({
-					titleBarScheme: "preset",
-					titleBarPresetId: value.slice(7),
-					titleBarCompat: true
-				});
-			};
-			/** Commit the free-form custom CSS (scheme `custom`). */
+			/** Commit the free-form custom CSS (the user-space escape hatch). */
 			const commitCustomCss = (raw) => {
 				applyPref({ customCss: raw });
 			};
@@ -22716,82 +29184,40 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					}),
 					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 						className: SideCardSection_module_css_default.group,
-						children: [
-							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-								className: SideCardSection_module_css_default.groupHeading,
-								children: t("settingsGeneralTitle")
-							}),
-							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-								className: SideCardSection_module_css_default.row,
-								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
-									className: SideCardSection_module_css_default.rowText,
-									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-										className: SideCardSection_module_css_default.title,
-										children: t("settingsOpenToolsTitle")
-									}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-										className: SideCardSection_module_css_default.desc,
-										children: t("settingsOpenToolsDesc")
-									})]
-								}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Switch, {
-									label: t("settingsOpenToolsTitle"),
-									checked: prefs.agentOpenTools,
-									onChange: (next) => {
-										applyPref({ agentOpenTools: next });
-									}
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+							className: SideCardSection_module_css_default.groupHeading,
+							children: t("settingsGeneralTitle")
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							className: SideCardSection_module_css_default.row,
+							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+								className: SideCardSection_module_css_default.rowText,
+								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+									className: SideCardSection_module_css_default.title,
+									children: t("settingsOpenToolsTitle")
+								}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+									className: SideCardSection_module_css_default.desc,
+									children: t("settingsOpenToolsDesc")
 								})]
-							}),
-							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-								className: SideCardSection_module_css_default.row,
-								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
-									className: SideCardSection_module_css_default.rowText,
-									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-										className: SideCardSection_module_css_default.title,
-										children: t("settingsTitleBarTitle")
-									}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-										className: SideCardSection_module_css_default.desc,
-										children: t("settingsTitleBarDesc")
-									})]
-								}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
-									className: SideCardSection_module_css_default.control,
-									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(SelectMenu, {
-										label: t("settingsTitleBarTitle"),
-										value: titleBarSchemeValue(prefs),
-										options: [
-											{
-												value: "auto",
-												title: t("settingsSchemeAutoTitle"),
-												desc: t("settingsSchemeAutoDesc")
-											},
-											{
-												value: "web",
-												title: t("settingsSchemeWebTitle"),
-												desc: t("settingsSchemeWebDesc")
-											},
-											...getShellPresets().map((preset) => ({
-												value: `preset:${preset.id}`,
-												title: preset.title,
-												desc: preset.detect?.(detectedEnv) === true ? `${textOf(preset.desc)}（${t("settingsSchemeDetectedSuffix")}）` : textOf(preset.desc)
-											})),
-											{
-												value: "custom",
-												title: t("settingsSchemeCustomTitle"),
-												desc: t("settingsSchemeCustomDesc")
-											}
-										],
-										onSelect: onSchemeSelect
-									}), prefs.titleBarScheme === "custom" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-										type: "button",
-										className: SideCardSection_module_css_default.rowGear,
-										"aria-label": `${t("settingsTitleBarTitle")} ${t("settingsPopup")}`,
-										title: t("settingsPopup"),
-										onClick: () => {
-											setStripSettingsOpen(true);
-										},
-										children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconSettingsOutlineRegular, { size: 14 })
-									})]
-								})]
-							})
-						]
+							}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Switch, {
+								label: t("settingsOpenToolsTitle"),
+								checked: prefs.agentOpenTools,
+								onChange: (next) => {
+									applyPref({ agentOpenTools: next });
+								}
+							})]
+						})]
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						className: SideCardSection_module_css_default.group,
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+							className: SideCardSection_module_css_default.groupHeading,
+							children: t("settingsCustomCssTitle")
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(CssDraft, {
+							value: prefs.customCss,
+							label: t("settingsCustomCssTitle"),
+							placeholder: t("settingsCustomCssPlaceholder"),
+							onCommit: commitCustomCss
+						}, prefs.customCss)]
 					}),
 					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 						className: SideCardSection_module_css_default.group,
@@ -22949,11 +29375,15 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 							onToggle: onToggleSetting,
 							onCommit: onCommitSetting,
 							onSelectValue: onSelectSetting,
+							onPatterns: onPatternsSetting,
 							onPluginToggle: (toggle, next) => {
 								onPluginToggle(settingsFor.id, toggle, next);
 							},
 							onPluginCommit: (toggle, raw) => onPluginCommitSetting(settingsFor.id, toggle, raw),
 							onPluginSelectValue: (toggle, next) => {
+								applyPluginSetting(settingsFor.id, toggle.key, next);
+							},
+							onPluginPatterns: (toggle, next) => {
 								applyPluginSetting(settingsFor.id, toggle.key, next);
 							},
 							onPluginWrite: (key, value) => {
@@ -22964,46 +29394,6 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 							},
 							store,
 							service
-						})
-					}),
-					stripSettingsOpen && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Modal, {
-						open: true,
-						onClose: () => {
-							setStripSettingsOpen(false);
-						},
-						title: t("settingsTitleBarTitle"),
-						description: t("settingsPopupDesc", { feature: t("settingsTitleBarTitle") }),
-						closeLabel: t("close"),
-						className: SideCardSection_module_css_default.popupDialog,
-						footer: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: SideCardSection_module_css_default.done,
-							onClick: () => {
-								setStripSettingsOpen(false);
-							},
-							children: t("settingsDone")
-						}),
-						children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-							className: SideCardSection_module_css_default.popupRows,
-							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(FeatureSettingsRows, {
-								toggles: [{
-									key: "titleBarStripPx",
-									type: "number",
-									title: () => t("settingsTitleBarStripTitle"),
-									desc: () => t("settingsTitleBarStripDesc"),
-									min: 0,
-									max: 120,
-									unit: "px"
-								}],
-								prefs,
-								onToggle: onToggleSetting,
-								onCommit: onCommitSetting
-							}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(CssDraft, {
-								value: prefs.customCss,
-								label: t("settingsCustomCssTitle"),
-								placeholder: t("settingsCustomCssPlaceholder"),
-								onCommit: commitCustomCss
-							}, prefs.customCss)]
 						})
 					}),
 					addPluginsOpen !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(AddPluginModal, {
@@ -23022,8 +29412,8 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			});
 		}
 		//#endregion
-		//#region \0dsh-css:H:\MaxNull\WorkStation\third-party-plugins\DSH-better-sidebar\src\client\layout.css.mjs
-		const css = "/**\r\n * Layout push: the bottom workbench occupies layout instead of floating over\r\n * the conversation. The right column belongs to DSH's native Sidebar, so this\r\n * stylesheet pushes no width — only the workbench's height.\r\n *\r\n * The workbench squeezes only the conversation column. The anchor is the\r\n * [data-dsh-center-col] tag the Sidebar shell's locator writes on the\r\n * frame's measured center grid item (Sidebar.tsx locate — not a positional\r\n * path: the frame also contains an overlay layer and drag handles). A\r\n * stretched grid item shrinks by its bottom margin, so the conversation\r\n * output and composer lift without touching either sidebar.\r\n *\r\n * The size rides a CSS variable updated by the Sidebar shell (0 while\r\n * collapsed). Expand/collapse uses the host theme duration; drags disable\r\n * transitions so the reserved edge tracks the pointer.\r\n */\r\n/* The AppFrame's center column. The Sidebar shell's locator (Sidebar.tsx\r\n   locate/measureCenter, resolving via center-column.ts) tags the measured\r\n   column node with [data-dsh-center-col] — one attribute write per node\r\n   lifetime. The locator anchors on the conversation slot host\r\n   (`main.conversation` on DSH 0.1.5-alpha.2+, `conversation` on alpha.1)\r\n   and skips the transparent display:contents slot hosts above it. The rule\r\n   used to anchor on a structural has()-selector over the conversation slot\r\n   wrapper, whose match cache invalidates on every #root subtree mutation\r\n   (the streaming chat mutates it constantly), re-evaluating the selector\r\n   against the whole document; the tag is evaluated once per node instead.\r\n   A stretched grid item shrinks by its margins, so the conversation\r\n   content (output + input bar) lifts without touching the sidebars. */\r\n#root [data-dsh-center-col] {\r\n  margin-bottom: var(--dsh-sidebar-height, 0px);\r\n  /* Grid/flex items default to min-height:auto. A long unbreakable token\r\n     (OAuth URL) then grows this column past the viewport and clips the\r\n     composer + left-rail Settings row. min-height:0 lets the cell shrink;\r\n     overflow-wrap lets the token wrap instead of forcing its intrinsic\r\n     size. The host's own descendants remain responsible for scrolling. */\r\n  min-height: 0;\r\n  overflow-wrap: anywhere;\r\n  transition: margin-bottom var(--ds-transition-duration-slow) var(--ds-ease-in-out);\r\n}\r\n\r\n/* When the sidebar is collapsed, the toggle cluster reclaims the top-right\r\n   corner. Push the DSH session header's right padding out so its right-aligned\r\n   utilities (the \"Session log\" download capsule) yield the corner instead of\r\n   hiding under the cluster. The header default right-pads 28px; the 2-button\r\n   cluster spans right 10→70px, so 78px clears it with an 8px gap. Anchor on\r\n   the header's slot host wrapper ([data-slot=\"conversation.session.header\"])\r\n   rather than a positional path: DSH 0.1.x nests the header several levels\r\n   under the center column. The Sidebar shell toggles the body attribute with\r\n   the panel open state. */\r\nbody[data-dsh-sidebar-collapsed] [data-slot=\"conversation.session.header\"] > header {\r\n  padding-right: 78px;\r\n}\r\n\r\nbody[data-dsh-sidebar-dragging] #root [data-dsh-center-col] {\r\n  transition: none;\r\n}\r\n\r\n/* DSH 0.1.x gives external settings sections a generic gear and exposes no\r\n   icon field in the settings.section contract. settings-nav-icon.ts marks\r\n   only this plugin's localized row; render the requested Lucide\r\n   gallery-horizontal-end SVG as a currentColor mask so it follows the native\r\n   nav hover/active colors without changing the shell's 16px icon rhythm. */\r\n[data-dsh-better-sidebar-settings-nav] > svg:first-child {\r\n  display: none;\r\n}\r\n\r\n[data-dsh-better-sidebar-settings-nav]::before {\r\n  content: '';\r\n  flex: none;\r\n  width: 16px;\r\n  height: 16px;\r\n  background: currentColor;\r\n  -webkit-mask: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 7v10'/%3E%3Cpath d='M6 5v14'/%3E%3Crect width='12' height='18' x='10' y='3' rx='2'/%3E%3C/svg%3E\") center / contain no-repeat;\r\n  mask: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 7v10'/%3E%3Cpath d='M6 5v14'/%3E%3Crect width='12' height='18' x='10' y='3' rx='2'/%3E%3C/svg%3E\") center / contain no-repeat;\r\n}\r\n\r\n@media (prefers-reduced-motion: reduce) {\r\n  #root [data-dsh-center-col] {\r\n    transition: none;\r\n  }\r\n\r\n/* Context-menu submenu flip (viewport clamping for the portaled menus).\r\n *\r\n * The ui-primitives Menu clamps its main portal list into the viewport but\r\n * positions nested submenus with static CSS only — anchored at the parent\r\n * row's bottom, growing UP and to the RIGHT — with no clamp whatsoever.\r\n * Both defaults are the worst case for our menus: a tall \"open with\" submenu\r\n * escapes past the viewport top when the row menu opens near the top, and\r\n * past the right edge in a narrow workbench pane (a pane can be far narrower\r\n * than the card 218 + gap + submenu 165 a submenu needs).\r\n *\r\n * menu-flip.ts publishes `data-dsh-sidebar-submenu` on <body> — with the\r\n * words \"down\" and/or \"left\" — for exactly the lifetime of one of OUR\r\n * submenu-bearing menus (FileTree row menu, TabBar tab menu). The tokens\r\n * flip the growth direction; the attribute's absence restores the\r\n * primitive's own geometry untouched, and host-owned menus are never\r\n * affected because they never open while the attribute exists (each side\r\n * closes on the other's outside pointerdown).\r\n *\r\n * No max-height/overflow scroll cap here on purpose: overflow clipping\r\n * would cut the submenu's ::before hover bridge (the corridor that keeps\r\n * itemWrap's mouseleave from closing the card mid-crossing). */\r\n\r\n/* Visual tether, part 1 — the parent row stays lit while its submenu is\r\n * open. The primitive only styles :hover, so once the pointer crossed into\r\n * the side card the parent row's fill cleared and the floating card read as\r\n * unrelated. The Menu marks the open parent row with aria-expanded=\"true\"\r\n * (host-rendered, stable), so the same hover token re-applies for the\r\n * submenu's whole lifetime. */\r\nbody[data-dsh-sidebar-submenu] div[role=\"menu\"] button[aria-expanded=\"true\"] {\r\n  background: var(--dsw-alias-interactive-bg-hover);\r\n}\r\n\r\n/* Visual tether, part 2 — the side card hugs its parent (10px → 4px gap),\r\n * with the ::before hover corridor narrowed to match. Ordered BEFORE the\r\n * flip overrides below so their left/right flips still win. */\r\nbody[data-dsh-sidebar-submenu] div[role=\"menu\"] div[role=\"menu\"] {\r\n  left: calc(100% + 4px);\r\n}\r\n\r\nbody[data-dsh-sidebar-submenu] div[role=\"menu\"] div[role=\"menu\"]::before {\r\n  left: -4px;\r\n  width: 4px;\r\n}\r\n\r\nbody[data-dsh-sidebar-submenu~=\"down\"] div[role=\"menu\"] div[role=\"menu\"] {\r\n  top: -4px;\r\n  bottom: auto;\r\n}\r\n\r\nbody[data-dsh-sidebar-submenu~=\"left\"] div[role=\"menu\"] div[role=\"menu\"] {\r\n  left: auto;\r\n  right: calc(100% + 4px);\r\n}\r\n\r\n/* The hover bridge follows the card to the left side of the parent row. */\r\nbody[data-dsh-sidebar-submenu~=\"left\"] div[role=\"menu\"] div[role=\"menu\"]::before {\r\n  left: auto;\r\n  right: -4px;\r\n}\r\n";
+		//#region \0dsh-css:/home/runner/work/DSH-better-sidebar/DSH-better-sidebar/src/client/layout.css.mjs
+		const css = "/**\n * Layout push: the bottom workbench occupies layout instead of floating over\n * the conversation. The right column belongs to DSH's native Sidebar, so this\n * stylesheet pushes no width — only the workbench's height.\n *\n * The workbench squeezes only the conversation column. The anchor is the\n * [data-dsh-center-col] tag the Sidebar shell's locator writes on the\n * frame's measured center grid item (Sidebar.tsx locate — not a positional\n * path: the frame also contains an overlay layer and drag handles). A\n * stretched grid item shrinks by its bottom margin, so the conversation\n * output and composer lift without touching either sidebar.\n *\n * The size rides a CSS variable updated by the Sidebar shell (0 while\n * collapsed). Expand/collapse uses the host theme duration; drags disable\n * transitions so the reserved edge tracks the pointer.\n */\n/* The AppFrame's center column. The Sidebar shell's locator (Sidebar.tsx\n   locate/measureCenter, resolving via center-column.ts) tags the measured\n   column node with [data-dsh-center-col] — one attribute write per node\n   lifetime. The locator anchors on the conversation slot host\n   (`main.conversation` on DSH 0.1.5-alpha.2+, `conversation` on alpha.1)\n   and skips the transparent display:contents slot hosts above it. The rule\n   used to anchor on a structural has()-selector over the conversation slot\n   wrapper, whose match cache invalidates on every #root subtree mutation\n   (the streaming chat mutates it constantly), re-evaluating the selector\n   against the whole document; the tag is evaluated once per node instead.\n   A stretched grid item shrinks by its margins, so the conversation\n   content (output + input bar) lifts without touching the sidebars. */\n#root [data-dsh-center-col] {\n  margin-bottom: var(--dsh-sidebar-height, 0px);\n  /* Grid/flex items default to min-height:auto. A long unbreakable token\n     (OAuth URL) then grows this column past the viewport and clips the\n     composer + left-rail Settings row. min-height:0 lets the cell shrink;\n     overflow-wrap lets the token wrap instead of forcing its intrinsic\n     size. The host's own descendants remain responsible for scrolling. */\n  min-height: 0;\n  overflow-wrap: anywhere;\n  transition: margin-bottom var(--ds-transition-duration-slow) var(--ds-ease-in-out);\n}\n\n/* When the sidebar is collapsed, the toggle cluster reclaims the top-right\n   corner. Push the DSH session header's right padding out so its right-aligned\n   utilities (the \"Session log\" download capsule) yield the corner instead of\n   hiding under the cluster. The header default right-pads 28px; the 2-button\n   cluster spans right 10→70px, so 78px clears it with an 8px gap. Anchor on\n   the header's slot host wrapper ([data-slot=\"conversation.session.header\"])\n   rather than a positional path: DSH 0.1.x nests the header several levels\n   under the center column. The Sidebar shell toggles the body attribute with\n   the panel open state. */\nbody[data-dsh-sidebar-collapsed] [data-slot=\"conversation.session.header\"] > header {\n  padding-right: 78px;\n}\n\nbody[data-dsh-sidebar-dragging] #root [data-dsh-center-col] {\n  transition: none;\n}\n\n/* DSH 0.1.x gives external settings sections a generic gear and exposes no\n   icon field in the settings.section contract. settings-nav-icon.ts marks\n   only this plugin's localized row; render the requested Lucide\n   gallery-horizontal-end SVG as a currentColor mask so it follows the native\n   nav hover/active colors without changing the shell's 16px icon rhythm. */\n[data-dsh-better-sidebar-settings-nav] > svg:first-child {\n  display: none;\n}\n\n[data-dsh-better-sidebar-settings-nav]::before {\n  content: '';\n  flex: none;\n  width: 16px;\n  height: 16px;\n  background: currentColor;\n  -webkit-mask: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 7v10'/%3E%3Cpath d='M6 5v14'/%3E%3Crect width='12' height='18' x='10' y='3' rx='2'/%3E%3C/svg%3E\") center / contain no-repeat;\n  mask: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 7v10'/%3E%3Cpath d='M6 5v14'/%3E%3Crect width='12' height='18' x='10' y='3' rx='2'/%3E%3C/svg%3E\") center / contain no-repeat;\n}\n\n@media (prefers-reduced-motion: reduce) {\n  #root [data-dsh-center-col] {\n    transition: none;\n  }\n\n/* Context-menu submenu flip (viewport clamping for the portaled menus).\n *\n * The ui-primitives Menu clamps its main portal list into the viewport but\n * positions nested submenus with static CSS only — anchored at the parent\n * row's bottom, growing UP and to the RIGHT — with no clamp whatsoever.\n * Both defaults are the worst case for our menus: a tall \"open with\" submenu\n * escapes past the viewport top when the row menu opens near the top, and\n * past the right edge in a narrow workbench pane (a pane can be far narrower\n * than the card 218 + gap + submenu 165 a submenu needs).\n *\n * menu-flip.ts publishes `data-dsh-sidebar-submenu` on <body> — with the\n * words \"down\" and/or \"left\" — for exactly the lifetime of one of OUR\n * submenu-bearing menus (FileTree row menu, TabBar tab menu). The tokens\n * flip the growth direction; the attribute's absence restores the\n * primitive's own geometry untouched, and host-owned menus are never\n * affected because they never open while the attribute exists (each side\n * closes on the other's outside pointerdown).\n *\n * No max-height/overflow scroll cap here on purpose: overflow clipping\n * would cut the submenu's ::before hover bridge (the corridor that keeps\n * itemWrap's mouseleave from closing the card mid-crossing). */\n\n/* Visual tether, part 1 — the parent row stays lit while its submenu is\n * open. The primitive only styles :hover, so once the pointer crossed into\n * the side card the parent row's fill cleared and the floating card read as\n * unrelated. The Menu marks the open parent row with aria-expanded=\"true\"\n * (host-rendered, stable), so the same hover token re-applies for the\n * submenu's whole lifetime. */\nbody[data-dsh-sidebar-submenu] div[role=\"menu\"] button[aria-expanded=\"true\"] {\n  background: var(--dsw-alias-interactive-bg-hover);\n}\n\n/* Visual tether, part 2 — the side card hugs its parent (10px → 4px gap),\n * with the ::before hover corridor narrowed to match. Ordered BEFORE the\n * flip overrides below so their left/right flips still win. */\nbody[data-dsh-sidebar-submenu] div[role=\"menu\"] div[role=\"menu\"] {\n  left: calc(100% + 4px);\n}\n\nbody[data-dsh-sidebar-submenu] div[role=\"menu\"] div[role=\"menu\"]::before {\n  left: -4px;\n  width: 4px;\n}\n\nbody[data-dsh-sidebar-submenu~=\"down\"] div[role=\"menu\"] div[role=\"menu\"] {\n  top: -4px;\n  bottom: auto;\n}\n\nbody[data-dsh-sidebar-submenu~=\"left\"] div[role=\"menu\"] div[role=\"menu\"] {\n  left: auto;\n  right: calc(100% + 4px);\n}\n\n/* The hover bridge follows the card to the left side of the parent row. */\nbody[data-dsh-sidebar-submenu~=\"left\"] div[role=\"menu\"] div[role=\"menu\"]::before {\n  left: auto;\n  right: -4px;\n}\n";
 		const tagId = "dsh-external/dsh-better-sidebar/layout.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
 			const tag = document.createElement("style");
@@ -23254,9 +29644,13 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 						if (decision?.suspended) unmount();
 						else mount();
 					};
-					sync();
+					sync().catch((error) => {
+						fail("sync", error);
+					});
 					const offRemote = ctx.get("remote")?.$on?.("settings/document-updated", () => {
-						sync();
+						sync().catch((error) => {
+							fail("sync", error);
+						});
 					});
 					return () => {
 						disposed = true;

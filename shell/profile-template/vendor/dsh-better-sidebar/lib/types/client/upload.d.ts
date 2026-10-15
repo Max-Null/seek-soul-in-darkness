@@ -26,7 +26,7 @@ export interface UploadResult {
     relativePath: string;
     ok: boolean;
     path?: string;
-    /** Wire error code when the host refused the upload ('too-large', ...). */
+    /** Wire error code when the host refused the upload. */
     code?: string;
     /** The host's error message (English wire text; localize via `code`). */
     error?: string;
@@ -44,12 +44,6 @@ export declare function uploadItemsFromFiles(files: FileList | readonly File[]):
  * API is unavailable; an entry that fails to read is skipped, not fatal.
  */
 export declare function uploadItemsFromDrop(data: DataTransfer | undefined): Promise<UploadItem[]>;
-/**
- * Client-side pre-check cap. Mirrors the host's default (config `uploadLimit`)
- * only — the host enforces the real, configurable limit, so a lowered host
- * limit surfaces as a `too-large` wire error, never as a silent pass.
- */
-export declare const MAX_UPLOAD_BYTES: number;
 /** How long a success hint stays before fading (failures stay until the next action). */
 export declare const UPLOAD_HINT_MS = 3500;
 /**

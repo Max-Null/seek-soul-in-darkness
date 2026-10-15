@@ -1,5 +1,5 @@
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots';
-import { type SidebarPrefs } from '../prefs-shared.ts';
+import type { SidebarPrefs } from '../prefs-shared.ts';
 import type { SidebarStore } from './state.ts';
 import type { BetterSidebarService, FileViewerDescriptor, SidebarSettingToggle, TabDescriptor } from './service.ts';
 /** Injected business face: the shared store (prefs cache) + the sidebar service (registries). */
@@ -35,6 +35,9 @@ export declare function FeatureSettingsRows(props: {
      *  of picked values (`multi: true`). Optional: rows with no handler are
      *  display-only. */
     onSelectValue?: (toggle: SidebarSettingToggle, next: unknown) => void;
+    /** Commit one patterns row: the whole string list after an add/remove.
+     *  Optional: rows with no handler are display-only. */
+    onPatterns?: (toggle: SidebarSettingToggle, next: string[]) => void;
     /** Explicit value source (v0.12.0+): when given, rows read their values
      *  from it instead of the `prefs` face — plugin-owned rows read their
      *  own blob, so a plugin key can never collide with (or silently read)
@@ -60,9 +63,11 @@ export declare function SettingsBody(props: {
     onToggle: (toggle: SidebarSettingToggle, next: boolean) => void;
     onCommit: (toggle: SidebarSettingToggle, raw: string) => string;
     onSelectValue: (toggle: SidebarSettingToggle, next: unknown) => void;
+    onPatterns: (toggle: SidebarSettingToggle, next: string[]) => void;
     onPluginToggle: (toggle: SidebarSettingToggle, next: boolean) => void;
     onPluginCommit: (toggle: SidebarSettingToggle, raw: string) => string;
     onPluginSelectValue: (toggle: SidebarSettingToggle, next: unknown) => void;
+    onPluginPatterns: (toggle: SidebarSettingToggle, next: string[]) => void;
     onPluginWrite: (key: string, value: unknown) => void;
     onClose: () => void;
 }): import("react").JSX.Element | null;

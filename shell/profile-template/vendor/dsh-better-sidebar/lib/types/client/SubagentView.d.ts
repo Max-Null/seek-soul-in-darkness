@@ -20,8 +20,9 @@
  *
  * Node click jumps straight into the transcript (root → main session); the
  * ⓘ button opens the detail popover. Completed leaf agents fold into one
- * aggregate node per parent (click it or the control-cluster toggle to
- * expand/collapse).
+ * aggregate node per GROUP (finished work / waiting members); clicking an
+ * aggregate reveals THAT group, while the control cluster's switch keeps the
+ * page-level expand/collapse.
  *
  * The shell itself is the page's own module stylesheet plus host primitives:
  * the header's refresh and the failure banner's retry are host `Button`s, the

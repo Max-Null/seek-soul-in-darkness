@@ -1,5 +1,6 @@
+import { ReasoningEffortId } from '@deepseek-ai/dsh-llm';
 import type { Context } from './context-types.ts';
-import { SIDE_INJECTION_SOURCE_KIND, type SidechatLiveEvent, type SidechatLogEvent, type SidechatThreadInfo } from './sidechat-core.ts';
+import { SIDE_INJECTION_SOURCE_KIND, type SidechatLiveEvent, type SidechatLogEvent, type SidechatModelCatalog, type SidechatModelSelection, type SidechatPendingInput, type SidechatThreadInfo } from './sidechat-core.ts';
 import type { AssistantLiveBuffer } from './assistant-live.ts';
 /**
  * The plugin's producer-owned message source kind. Message sources are a
@@ -18,7 +19,25 @@ declare module '@deepseek-ai/dsh-llm' {
         };
     }
 }
-/** The six Side Chat routes of the sidebar API (wire method names). */
+/**
+ * The session-local model selection event. Its owning package
+ * (`dsh-api-session-controller`) is not a plugin dependency, but the event is
+ * part of the durable session format the plugin must write to change a
+ * thread's model the way the host's own composer does — so the key is
+ * declared here with the exact shape that package's own projection folds
+ * (provider, model, optional branded effort).
+ */
+declare module '@deepseek-ai/dsh-session' {
+    interface SessionEventMap {
+        /** Session-local model selection for the next request. */
+        'model/selection': {
+            provider: string;
+            model: string;
+            reasoningEffort?: ReasoningEffortId;
+        };
+    }
+}
+/** The Side Chat routes of the sidebar API (wire method names). */
 export interface SidechatRoutes {
     /** Create a side thread child seeded with the parent's log up to now.
      *  `question` is optional: empty creates an EMPTY thread (Codex-style
@@ -39,16 +58,37 @@ export interface SidechatRoutes {
     'sidechat.dispose'(payload: unknown): Promise<{
         accepted: true;
     }>;
-    /** Live state + agent identity for the thread header. */
+    /** Live state + the thread's EFFECTIVE model route and preset. */
     'sidechat.info'(payload: unknown): Promise<SidechatThreadInfo>;
     /** The thread's OWN transcript events, seed-cut host-side (the inherited
      *  parent log never crosses the wire); `afterSeq` narrows the response to
      *  the delta beyond it (poll tail). `live` carries the thread's in-flight
      *  model deltas, which DSH 0.1.5 publishes outside the session log — it is
-     *  the CURRENT attempt's rows on every poll, never a delta. */
+     *  the CURRENT attempt's rows on every poll, never a delta. `pending` is
+     *  the thread's live UNCLAIMED inbox in claim order: accepted input that
+     *  has not reached the log yet, so the transcript can show it instead of
+     *  looking dead until a claim logs it. */
     'sidechat.events'(payload: unknown): Promise<{
         events: SidechatLogEvent[];
         live: SidechatLiveEvent[];
+        pending: SidechatPendingInput[];
+    }>;
+    /** Drop one unclaimed inbox message, or the whole queue when `messageId` is
+     *  omitted. A cold thread has nothing live to drop and answers `removed: 0`. */
+    'sidechat.dequeue'(payload: unknown): Promise<{
+        accepted: true;
+        removed: number;
+    }>;
+    /** The host model catalog the composer itself lists (degraded to
+     *  `available: false` when the host exposes no such service). */
+    'sidechat.models'(payload: unknown): Promise<SidechatModelCatalog>;
+    /** Install one model selection on the thread: durably logged as
+     *  `model/selection` (the host's own commit shape) and applied to the next
+     *  request through the agent-scoped selection the host installs for its
+     *  composer. */
+    'sidechat.model'(payload: unknown): Promise<{
+        accepted: true;
+        selection: SidechatModelSelection;
     }>;
 }
 /** Build the Side Chat routes (all optional services degrade to a wire

@@ -1,3 +1,4 @@
+import type { Context } from '../../context-types.ts';
 import type { SessionScope } from '../api.ts';
 import type { SidebarDiffRef, SidebarTab } from '../state.ts';
 import { type FileOp } from './ops.ts';
@@ -29,6 +30,7 @@ export declare function HtmlRenderPreview(props: {
 export declare function diffTabOf(ref: SidebarDiffRef): SidebarTab;
 export interface DiffPaneProps {
     target: ChangesPreview;
+    ctx: Context;
     scope: SessionScope;
     /** The persisted pane height (px); drag commits a new one upwards. */
     height: number;
@@ -37,4 +39,4 @@ export interface DiffPaneProps {
     /** Expand the current git target into a dedicated diff tab. */
     onExpand: () => void;
 }
-export declare function DiffPane({ target, scope, height, onHeightCommit, onClose, onExpand }: DiffPaneProps): import("react").JSX.Element;
+export declare function DiffPane({ target, ctx, scope, height, onHeightCommit, onClose, onExpand }: DiffPaneProps): import("react").JSX.Element;

@@ -20,13 +20,19 @@ export declare function TreePanel(props: {
     openWithTargets?: OpenWithTarget[];
     openWithPinned?: string[];
     openWithSsh?: boolean;
-    onOpenWith?: (targetId: string, path: string) => void;
+    /** Open one plugin target (passed through to FileTree; `false`/rejection →
+     *  the tree reports the failure in its strip). */
+    onOpenWith?: (targetId: string, path: string) => void | boolean | Promise<void | boolean>;
     onToggleOpenWithPin?: (targetId: string) => void;
     /** Show the plugin's own open-with targets even when the host lists local
      *  applications for the path (the `openWithPluginTargets` setting; passed
      *  through to FileTree). */
     openWithShowPluginTargets?: boolean;
     onReferenceFile: (path: string, isDir: boolean) => void;
+    /** The explorerExclude pref patterns: the host filters the tree listing AND
+     *  the name search with them (passed through to FileTree, and carried on the
+     *  search request so both surfaces agree). */
+    exclude?: readonly string[];
     /** A tree rename landed (passed through to FileTree for tab retargeting). */
     onPathRenamed?: (oldPath: string, newPath: string) => void;
     /** A tree delete landed (passed through to FileTree for tab closing). */

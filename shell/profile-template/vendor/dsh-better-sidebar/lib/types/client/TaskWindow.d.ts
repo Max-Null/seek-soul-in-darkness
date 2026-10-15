@@ -19,7 +19,7 @@
  * the shared `MarkdownText` renderer with the plugin's copy labels.
  */
 import { type ReactNode } from 'react';
-import type { SidebarTeamTaskView } from '../context-types.ts';
+import type { Context, SidebarTeamTaskView } from '../context-types.ts';
 import type { TeamMemberRow } from './team-projection.ts';
 /**
  * The plugin's own multi-line input: the host primitive set ships no
@@ -38,6 +38,9 @@ export interface TaskWindowProps {
     /** The task under view/edit; undefined = create mode. */
     task: SidebarTeamTaskView | undefined;
     members: readonly TeamMemberRow[];
+    /** Client context: the description's markdown surface opens a claimed `.md`
+     *  link through the plugin's own file path. */
+    ctx: Context;
     /** Where the window first appears (the row that opened it). */
     anchor?: HTMLElement | null;
     /** Close the window (the caller's popover state). */

@@ -13,6 +13,9 @@
  *   /sidebar/html/S/Users/me/proj/index.html
  *     + ./style.css → /sidebar/html/S/Users/me/proj/style.css
  *   Windows: C:\Users\me\a.html → /sidebar/html/S/C%3A/Users/me/a.html
+ *   Home-relative (#713): ~/notes/x.html → /sidebar/html/S/~/notes/x.html —
+ *     the '~' first segment survives VERBATIM (the decoder keeps it unslashed
+ *     so the route's resolver still expands it against the user's home)
  *   UNC (\\server\share\... or //server/share/...):
  *     → /sidebar/html/S//server/share/proj/a.html  ('//' right after the
  *       sessionId marks the UNC prefix; the WHATWG URL keeps '//' intact so

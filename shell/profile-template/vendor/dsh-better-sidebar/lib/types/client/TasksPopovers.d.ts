@@ -2,8 +2,8 @@
  * The anchored-popover CONTENTS of the Tasks page (geometry and dismissal
  * live in AnchoredPopover): the agent node detail with a transcript jump and
  * the workflow run detail with clickable member rows. Both share one grammar:
- * a letter-spaced uppercase head, a dt/dd key/value grid, a titled well and
- * one full-width jump action.
+ * a letter-spaced uppercase head, a [glyph][title] title row, a dt/dd
+ * key/value grid, a titled well and one full-width jump action.
  *
  * The two cards are ONE skeleton: the same head band, the same [glyph][title]
  * title row (the card's own host glyph, never a typed character), the same
@@ -24,13 +24,28 @@
  * The team board is NOT here: it is always visible as a strip above the
  * canvas (TeamBoard.tsx).
  */
-import type { ReactNode } from 'react';
+import { type ReactNode } from 'react';
 import type { SidebarSubagentAddress } from '../context-types.ts';
 import type { TasksAgentNode, TasksWorkflowNode } from './tasks-model.ts';
-/** The agent node detail popover. */
+/**
+ * The agent node detail popover.
+ *
+ * The merged activity is a SUBTITLE, not a fact: it sits under the title in
+ * the card's smallest voice instead of filling a row of the key/value grid
+ * (where the right-aligned value column ellipsised it at 280px and the label
+ * "最近活动" spent a third of the width saying what the position already says).
+ * With no process data at all the block renders nothing — a settled node must
+ * never claim to be analysing a request.
+ */
 export declare function AgentNodePopover(props: {
     node: TasksAgentNode;
-    onJump(node: TasksAgentNode): void;
+    /**
+     * Whether the host can host a child transcript in its right column. Without
+     * it (no `subagentchat` tab type, no right column) the footer is a single
+     * main-view button — the choice simply does not exist.
+     */
+    asideAvailable: boolean;
+    onJump(node: TasksAgentNode, place: 'side' | 'main'): void;
     /** Open the shared task window for one of the node's tasks. */
     onOpenTask(taskId: string, anchor: HTMLElement): void;
 }): ReactNode;

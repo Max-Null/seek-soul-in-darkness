@@ -3,7 +3,7 @@
 > [!IMPORTANT]
 > **v0.19.0 起接入 DSH 原生侧边栏**：右列就是 DSH 自己的右侧栏，插件把每个 tab 类型注册为原生 tab（不再自绘右侧面板），只保留自绘的底部工作台与开放给所有插件的 `ctx.betterSidebar` 服务。
 >
-> **v0.24.1 起要求 DSH `0.2.0-rc.1+`**（peer 下限 `^0.2.0-rc.1`）。0.2.0 对本插件所用的全部宿主 API 是**纯增量**（零导出删除、会话格式仍 v4、CLI 与客户端运行时未变），所以这一版没有运行时兼容分支，只把支持线整体前移。**DSH 0.1.7 线的用户请固定 `dsh-better-sidebar@0.22.1`——caret 范围跨 minor 不成立，`^0.1.7-rc.1` 在 0.2.0 宿主上会被启动预检静默禁用**；按 DSH 版本选插件版本的对照表见[安装](#-安装)。
+> **v0.25.0 起要求 DSH `0.2.0-rc.2+`**（peer 下限 `^0.2.0-rc.2`，v0.26.0 不变）。0.2.0 对本插件所用的全部宿主 API 是**纯增量**（零导出删除、会话格式仍 v4、CLI 与客户端运行时未变），所以这条支持线上没有运行时兼容分支，只把基线整体前移。**DSH 0.1.7 线的用户请固定 `dsh-better-sidebar@0.22.1`——caret 范围跨 minor 不成立，`^0.1.7-rc.1` 在 0.2.0 宿主上会被启动预检静默禁用**；按 DSH 版本选插件版本的对照表见[安装](#-安装)。
 
 <!-- Hero -->
 <div align="center">
@@ -14,7 +14,7 @@
   <a href="https://github.com/omdsh-dev/DSH-better-sidebar/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/omdsh-dev/DSH-better-sidebar" /></a>
   <a href="https://opensource.org/licenses/MIT"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-yellow.svg" /></a>
   <a href="https://dshfind.com/zh/plugins/omdsh-dev/DSH-better-sidebar?ref=badge"><img alt="dshfind" src="https://dshfind.com/api/badge/omdsh-dev/DSH-better-sidebar?lang=zh" /></a><br /><br />
-  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh?activeTab=versions"><img alt="支持的 DSH 版本（v0.24.1）：0.2.0-rc.1+" src="https://img.shields.io/badge/DSH-0.2.0--rc.1%2B-4d6bfe" /></a>
+  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh?activeTab=versions"><img alt="支持的 DSH 版本（v0.26.0）：0.2.0-rc.2+" src="https://img.shields.io/badge/DSH-0.2.0--rc.2%2B-4d6bfe" /></a>
   <a href="https://github.com/topics/dsh-better-sidebar"><img alt="插件生态：GitHub topic dsh-better-sidebar" src="https://img.shields.io/badge/%E6%8F%92%E4%BB%B6%E7%94%9F%E6%80%81-topic%20dsh--better--sidebar-4d6bfe" /></a><br /><br />
   <img alt="文件管理" src="https://img.shields.io/badge/-文件管理-4d6bfe" /> <img alt="编辑预览" src="https://img.shields.io/badge/-编辑预览-4d6bfe" /> <img alt="底部工作台" src="https://img.shields.io/badge/-底部工作台-4d6bfe" /> <img alt="文件变动" src="https://img.shields.io/badge/-文件变动-4d6bfe" /> <img alt="后台任务" src="https://img.shields.io/badge/-后台任务-4d6bfe" /> <img alt="侧边对话" src="https://img.shields.io/badge/-侧边对话-4d6bfe" /> <img alt="插件接入" src="https://img.shields.io/badge/-插件接入-4d6bfe" /><br /><br />
   <b>右侧栏 + 底部面板双工作台</b>，并把 <code>ctx.betterSidebar</code> 服务开放给所有插件——<br />
@@ -48,13 +48,13 @@
 相比 DSH 官方侧边栏，本插件补上的关键能力：
 
 - **🖥️ 可编辑的代码编辑器**：官方文档预览是**只读**的 → 插件保留**可编辑**的 CodeMirror 编辑器（保存、语法高亮、预览切换）；Markdown / HTML 也走插件自有渲染（Mermaid 图表安全渲染 + 点击放大、README 级内嵌 HTML、浮动目录大纲、HTML 沙箱预览）
-- **🗂️ 增强文件树**：接管内置「文件」页——懒加载目录树、**展开的目录实时 watch 自动刷新**、软链接识别、全局文件名搜索、拖拽上传、悬浮 `@文件` 一键引用进输入框；**Ctrl/Cmd 多选 + Shift 连选**（批量复制路径 / 批量删除）、**Git 变更着色 + 状态字母**（VS Code 同款）、**新建文件夹**、**多选右键「压缩并打包下载」**（服务端流式打 ZIP，无第三方依赖）；右键「打开方式」= **DSH 自带 open-in-app**（宿主探测到的本机关联应用 + 文件管理器显示）**+ 插件自研打开方式**（资源管理器 / VS Code / Cursor / Zed / 自定义编辑器 URL 模板、SSH 远端、固定到菜单）两者并存
+- **🗂️ 增强文件树**：接管内置「文件」页——懒加载目录树、**展开的目录实时 watch 自动刷新**、软链接识别、全局文件名搜索（**粘贴绝对路径直开、相对路径按路径匹配**）、拖拽上传、悬浮 `@文件` 一键引用进输入框；**Ctrl/Cmd 多选 + Shift 连选**（批量复制路径 / 批量删除）、**Git 变更着色 + 状态字母**（VS Code 同款）、**新建文件夹 / 新建文件**（行内输入；服务端拒绝非法名、Windows 保留设备名与已存在的目标，绝不截断同名文件）、**排序**（名称 / 类型 + 文件夹优先开关，默认与宿主原有顺序一致）、**多选右键「压缩并打包下载」**（服务端流式打 ZIP，无第三方依赖）；右键「打开方式」= **DSH 自带 open-in-app**（宿主探测到的本机关联应用 + 文件管理器显示）**+ 插件自研打开方式**（资源管理器 / VS Code / Cursor / Zed / 自定义编辑器 URL 模板、SSH 远端、固定到菜单）两者并存
 - **🌿 文件变动**（官方侧栏没有 Git 面板）：Git 视角（暂存 / 提交 / 历史 / 工作树与子仓库）+ 本轮 AI 改动视角双合一，统一 diff 渲染（行内字符级高亮、语法着色、敏感内容脱敏）；两视角共用一套 28px 行、单一空态/错误通道与吸底提交条
 - **🧩 任务管理**（官方没有）：子代理拓扑实时预览 + 后台任务清单（退出码 / 实时输出 / 强制终止）
 - **💬 侧边对话**（官方没有，beta）：Codex 风格侧边线程——继承主会话完整上下文独立运行，可持续追问，一键提升为顶层会话
 - **🖥️ 底部工作台**（官方没有）：右列交给 DSH 原生右侧栏，插件另加自绘底部工作台（拖拽分栏 / 按会话持久化），可与原生栏同时展开
 - **📂 模型打开侧边栏（可选）**：`sidebar_open` 工具让模型主动在侧边栏打开文件 / 文件夹 / 网页
-- **🔌 服务化扩展**：`ctx.betterSidebar` 向所有插件开放（`registerTab` / `registerFileViewer`），内置 5 tab + 3 viewer 走同一套 API，已有 **28+ 生态插件**（见「🌐 插件生态」）
+- **🔌 服务化扩展**：`ctx.betterSidebar` 向所有插件开放（`registerTab` / `registerFileViewer`），内置 6 tab + 3 viewer 走同一套 API，已有 **28+ 生态插件**（见「🌐 插件生态」）
 - **⚡ 按需加载**：启动只拉 ~325KB 核心，编辑器 / Mermaid / 第三语言词典按需加载 · **🌏 多语言**跟随 DSH · **🔁 会话隔离**按会话持久化布局
 
 ## 🚀 安装
@@ -62,16 +62,16 @@
 **前置**：已装好 DSH（`dsh web` 能正常运行），Node.js ≥ 20、pnpm ≥ 10。
 
 **支持的 DSH 版本**：
-<a href="https://www.npmjs.com/package/@deepseek-ai/dsh?activeTab=versions"><img alt="支持的 DSH 版本（v0.24.0）：0.2.0-rc.1+" src="https://img.shields.io/badge/DSH-0.2.0--rc.1%2B-4d6bfe" /></a>
+<a href="https://www.npmjs.com/package/@deepseek-ai/dsh?activeTab=versions"><img alt="支持的 DSH 版本（v0.26.0）：0.2.0-rc.2+" src="https://img.shields.io/badge/DSH-0.2.0--rc.2%2B-4d6bfe" /></a>
 
-> 📌 **通道与支持线**：`v0.24.1` 适配 DSH **0.2.0-rc.1+**（0.2.0 首个候选版走 npm `next` 通道，`latest` 仍是 0.1.7-rc.2）。**装 DSH 请写精确版本号**：`npm i -g @deepseek-ai/dsh@0.2.0-rc.1`。**0.1.7 线的用户请固定 `dsh-better-sidebar@0.22.1`**：0.2.0 是宿主 minor 变更，`^0.1.7-rc.1` 这类 caret 范围在 0.2.0 上会被宿主的启动兼容性预检判定失败、整行静默禁用。
+> 📌 **通道与支持线**：`v0.26.0` 适配 DSH **0.2.0-rc.2+**（npm 的 `latest` / `next` 都是 `0.2.0-rc.2`）。**装 DSH 请写精确版本号**：`npm i -g @deepseek-ai/dsh@0.2.0-rc.2`（`alpha` 通道的 `0.2.1-alpha.x` 不在本版支持线内）。**0.1.7 线的用户请固定 `dsh-better-sidebar@0.22.1`**：0.2.0 是宿主 minor 变更，`^0.1.7-rc.1` 这类 caret 范围在 0.2.0 上会被宿主的启动兼容性预检判定失败、整行静默禁用。
 
 > 🧭 **按你的 DSH 版本选插件版本**：
 >
 > | 你的 DSH 版本 | 安装命令 | 版本 / peer 声明 |
 > | --- | --- | --- |
-> | **0.2.0-rc.1+**（含之后的 0.2.0 正式版） | `dsh plugin --profile web add dsh-better-sidebar@latest` | **0.24.1**，`^0.2.0-rc.1` |
-> | **0.1.7-rc.1 ~ 0.1.7-rc.2**（含 0.1.7 正式版；npm `latest` 目前仍是 0.1.7-rc.2） | `dsh plugin --profile web add dsh-better-sidebar@0.22.1` | **0.22.1**，`^0.1.7-rc.1` |
+> | **0.2.0-rc.2+**（含之后的 0.2.0 正式版） | `dsh plugin --profile web add dsh-better-sidebar@latest` | **0.26.0**，`^0.2.0-rc.2` |
+> | **0.1.7-rc.1 ~ 0.1.7-rc.2**（含 0.1.7 正式版） | `dsh plugin --profile web add dsh-better-sidebar@0.22.1` | **0.22.1**，`^0.1.7-rc.1` |
 > | 0.1.7-alpha.1 / 0.1.7-alpha.2 | **没有可装版本**——先把 DSH 升到 rc.1，再跑上一行：<br>`npm i -g @deepseek-ai/dsh@0.1.7-rc.1` | — |
 > | 0.1.6-alpha.2 及更早、`0.1.5-rc.*`（含 npm `latest` 的 0.1.5-rc.3） | `dsh plugin --profile web add dsh-better-sidebar@0.19.1` | **0.19.1**，`^0.1.5-rc.1` |
 > | `0.1.5-alpha.2` | `dsh plugin --profile web add dsh-better-sidebar@0.19.0-alpha.1` | `^0.1.5-alpha.2` |
@@ -121,7 +121,7 @@ dsh plugin --profile web add dsh-better-sidebar@latest
 | 报「找不到 profile 目录」 | 先跑一次 `dsh web`，让它初始化 `~/.dsh/profiles/web`。 |
 | 页面出现**两个侧边栏** | 双挂载。旧的手动挂载行：`~/.dsh/profiles/web/cordis.patch.yml` 还留着 `- insert: ... better-sidebar ...`，删掉那段（同 id 重复挂载 loader 会直接报 `duplicate loader entry id`）。聚合包（如 `@linxin666/dsh-web-ui-all`）以**不同 id** 挂载本包时，0.13.x 起插件自身 bundle patch 会自动退让（检测到已有启用中的同包名挂载就不挂自己），无需手动处理；若仍双挂载，先确认聚合包的 bundle 顺序在 `dsh-better-sidebar` 之前。 |
 | 升级后设置页的值去哪了 | DSH 0.1.7 删除了插件可注册的设置命名空间：偏好现在写在 profile 里本插件的**挂载行**上（默认 entry id `better-sidebar`），不再是 `~/.dsh/settings.yaml`。插件会在首次启动时把旧 `settings.yaml`（已被宿主改名为 `settings.yaml.imported`）里 `dsh-better-sidebar` 段一次性回迁，只迁移当前 schema 仍声明的字段、且只在该行还没有用户值时执行，不会覆盖升级后新设的值。 |
-| 终端无法使用 / 提示 shell 启动失败 | 终端由 **DSH 自身的 `ui-sidebar-terminal`** 提供（本插件不再自带终端与 `node-pty`，也没有终端相关设置项）。遇到问题请查 DSH 侧文档；若报错提到构建脚本，见上一行。 |
+| 终端无法使用 / 提示 shell 启动失败 | 右侧栏终端由 **DSH 自身的 `ui-sidebar-terminal`** 提供（本插件不再自带 PTY 与 `node-pty`，也没有终端相关设置项）；底部工作台的那条也走**同一个宿主服务**（`ctx.webTerminals`），所以两侧的失败原因一致。遇到问题请查 DSH 侧文档；若报错提到构建脚本，见上一行。底部终端显示「宿主未提供终端能力」= 这个 DSH 部署没有挂终端控制器。 |
 | 提示 `dsh: command not found` | 先安装 DSH；或直接用 `npx -y --package @deepseek-ai/dsh dsh plugin --profile web add dsh-better-sidebar@latest`。 |
 
 </details>
@@ -135,12 +135,12 @@ dsh plugin --profile web add dsh-better-sidebar@latest
 1. git clone https://github.com/omdsh-dev/DSH-better-sidebar.git ~/Code/DSH-better-sidebar
    cd ~/Code/DSH-better-sidebar && pnpm install && pnpm build
 2. ~/.dsh/profiles/web/package.json 的 dependencies 写 "dsh-better-sidebar": "link:<克隆目录绝对路径>"
-3. ~/.dsh/profiles/web/cordis.patch.yml 追加挂载行（这一行的 `config` 就是本插件的设置表单：部署限额 `readLimit` / `mediaLimit` / `uploadLimit` / `listLimit` 加用户偏好字段，设置页写的就是它；不写则全部用 schema 默认值）：
+3. ~/.dsh/profiles/web/cordis.patch.yml 追加挂载行（这一行的 `config` 就是本插件的设置表单：部署限额 `listLimit` 加用户偏好字段，设置页写的就是它；不写则全部用 schema 默认值。**`readLimit` / `mediaLimit` / `uploadLimit` 三个键已在 v0.26.0 删除**——上传、下载、HTML 预览与打包全部改为流式，不再有大小限制；旧 profile 里残留的这三个键会被当作未知键静默忽略，不会报错）：
    - insert:
        - id: better-sidebar
          name: 'dsh-better-sidebar'
          config:
-           readLimit: 524288
+           listLimit: 1000
 4. 在 ~/.dsh/profiles/web 执行 pnpm install
 5. 硬刷新浏览器（Cmd/Ctrl+Shift+R）即可看到效果（client 改动无需重启 DSH；host 半改动才需重启）
 ```
@@ -172,9 +172,9 @@ dsh registry enable dsh-external/dsh-better-sidebar
 
 | | |
 |---|---|
-| **🗂️ 文件工作台：资源管理器**<br/><sub>支持两种格式的资源管理器：内嵌在文件预览中 / 独立显示文件树。懒加载目录树、**展开的目录由宿主按目录 watch、改动后自动重列**、软链接按目标类型展示（目录软链接可展开、失效链接标红）、全局文件名搜索、上传文件/文件夹与拖放上传、右键菜单（在新 Tab 打开 / 在侧边打开 / 新建文件夹 / 打开方式：**宿主探测到的系统关联应用**（open-in-app）+ **插件自研目标**（资源管理器 / VS Code / Cursor / Zed / 自定义编辑器，支持 SSH 远端与固定到菜单）/ 复制路径 / 重命名 / 删除）、**Ctrl/Cmd 多选与 Shift 连选**（批量复制路径 / 批量删除 / **压缩并下载**）、**Git 变更按状态着色并带 M/A/D/U 字母**、悬浮 `@文件` 一键引用进输入框。</sub><br/><div align="center"><img width="420" alt="文件资源管理器" src="https://github.com/user-attachments/assets/a410bfd2-a8ba-43e6-873e-22417756e94d" /></div> | **📝 Markdown · HTML 内联预览**<br/><sub>Markdown 预览支持 **Mermaid 图表**（`securityLevel: 'strict'` 安全渲染 + 二次清洗；点击图表弹窗放大、滚轮缩放、拖拽平移）、**README 级内嵌 HTML**（徽章墙 `<div align=center>`、`<details>` 折叠块内嵌 markdown、表格单元格内联标签——DOMPurify 白名单消毒真实渲染，`<script>` 等活性内容剥除，本地图片经会话媒体路由重写）与**浮动目录大纲**（≥3 标题出现，点击平滑跳转、自动展开折叠块）；HTML 走插件自带的**沙箱预览**，并带 `htmlViewerNoSandbox` / `htmlViewerDefaultUnsafe` 两个宿主没有的逃生门开关。**图片 / PDF / 表格 / Office 不再是插件能力**——那些格式由 DSH 自己的文档预览渲染。</sub><br/><div align="center"><img width="420" alt="Markdown + Mermaid 预览" src="https://github.com/user-attachments/assets/fe0e5182-55bb-45cc-b98b-a2877c2bdd38" /></div> |
+| **🗂️ 文件工作台：资源管理器**<br/><sub>支持两种格式的资源管理器：内嵌在文件预览中 / 独立显示文件树。懒加载目录树、**展开的目录由宿主按目录 watch、改动后自动重列**、软链接按目标类型展示（目录软链接可展开、失效链接标红）、全局文件名搜索、上传文件/文件夹与拖放上传、右键菜单（在新 Tab 打开 / 在侧边打开 / 新建文件夹 / 新建文件 / 打开方式：**宿主探测到的系统关联应用**（open-in-app）+ **插件自研目标**（资源管理器 / VS Code / Cursor / Zed / 自定义编辑器，支持 SSH 远端与固定到菜单）/ 复制路径 / 重命名 / 删除）、**Ctrl/Cmd 多选与 Shift 连选**（批量复制路径 / 批量删除 / **压缩并下载**）、**Git 变更按状态着色并带 M/A/D/U 字母**、头部工具区可切**名称 / 类型排序 + 文件夹优先开关**（默认即宿主原顺序）、悬浮 `@文件` 一键引用进输入框。</sub><br/><div align="center"><img width="420" alt="文件资源管理器" src="https://github.com/user-attachments/assets/a410bfd2-a8ba-43e6-873e-22417756e94d" /></div> | **📝 Markdown · HTML 内联预览**<br/><sub>Markdown 预览支持 **Mermaid 图表**（`securityLevel: 'strict'` 安全渲染 + 二次清洗；点击图表弹窗放大、滚轮缩放、拖拽平移）、**README 级内嵌 HTML**（徽章墙 `<div align=center>`、`<details>` 折叠块内嵌 markdown、表格单元格内联标签——DOMPurify 白名单消毒真实渲染，`<script>` 等活性内容剥除，本地图片经会话媒体路由重写）与**浮动目录大纲**（≥3 标题出现，点击平滑跳转、自动展开折叠块）；HTML 走插件自带的**沙箱预览**，并带 `htmlViewerNoSandbox` / `htmlViewerDefaultUnsafe` 两个宿主没有的逃生门开关。**图片 / PDF / 表格 / Office 不再是插件能力**——那些格式由 DSH 自己的文档预览渲染。</sub><br/><div align="center"><img width="420" alt="Markdown + Mermaid 预览" src="https://github.com/user-attachments/assets/fe0e5182-55bb-45cc-b98b-a2877c2bdd38" /></div> |
 | **🖥️ CodeMirror 代码编辑器**<br/><sub>**可编辑**的文本 / 代码编辑器（保存、语法高亮、预览切换）——宿主自己的文档预览是**只读**的，这是插件保留 catch-all viewer 的理由。</sub><br/><div align="center"><img width="420" alt="CodeMirror 代码编辑器" src="https://github.com/user-attachments/assets/b44b488e-568c-4ee0-b96c-e9c906598a77" /></div> | **🖼️ 图片 / PDF / 表格 / Office 预览（由 DSH 内置提供）**<br/><sub>这些只读格式由 DSH 自己的 `ui-sidebar-documentpreview` 渲染：宿主侧 Office→PDF 转换、电子表格 worker 表格、图片 / PDF 缩放视口，并**按目录自动刷新**。插件已删除自己的 image / pdf / 下载兜底 viewer，也不再认领这些扩展名。</sub><br/><div align="center"><img width="420" alt="图片内联预览" src="https://github.com/user-attachments/assets/f9a58c30-5b7a-48b5-9e22-37d7e071f593" /></div> |
-| **💻 终端（由 DSH 内置提供）**<br/><sub>右侧栏终端由 DSH 自己的 `ui-sidebar-terminal` 提供：shell 选择、双击重命名、断线重连、刷新后恢复、主题与对比度跟随。插件不再自带终端实现。<br/><br/>⚠️ **模型侧提示**：插件原来自带的 8 个 `terminal_*` 工具（默认关）是模型唯一的**跨调用持久**终端；上游等价物 `@deepseek-ai/dsh-tool-terminal` 未被任何内置 bundle 默认挂载，若你需要该能力，请在 profile 的 `cordis.patch.yml` 里自行插入一行 `tool-terminal`。</sub><br/><div align="center"><img width="420" alt="真实终端" src="https://github.com/user-attachments/assets/0dad6ad3-ff3f-4b5a-86d2-f832ce65323e" /></div> | **🌿 文件变动：Git 视角 + 本轮文件**<br/><sub>双视角合一：**Git 视角**保留完整源代码管理（暂存 / 取消暂存 / 提交（`Ctrl+Enter`）/ 还原、历史、worktree 与子仓库选择）；**本轮文件视角**实时折叠会话事件日志，记录模型读 / 写 / 编辑的每个文件（按文件分组、按类型筛选、操作数角标）。点击任意改动在底部**可拖拽预览面板**查看统一 diff——删红 / 增绿 / 改蓝配对 + 行内字符级高亮 + 语法着色 + 上下文折叠——也可一键展开为 VSCode 式独立 diff tab（同一渲染栈）。两个视角共用 36px 头（宿主 SegmentedControl 切换）、28px 行、单一空态与吸底提交条；**Git 视角按目录层级（树）展示变更**——单子目录链压缩成一行、目录行可折叠并带下级变更数、文件行带状态字母与文件图标；git 状态与文件树共享同一份快照，暂存/提交后文件树着色同步刷新。</sub><br/><div align="center"><img width="420" alt="文件变动" src="https://github.com/user-attachments/assets/e7fc1220-305f-4bca-8583-e77ab4f4fa78" /></div> |
+| **💻 终端（右侧栏由 DSH 内置提供；底部工作台由本插件提供）**<br/><sub>**右侧栏**终端由 DSH 自己的 `ui-sidebar-terminal` 提供：shell 选择、双击重命名、断线重连、刷新后恢复、主题与对比度跟随。插件不再自带 PTY 实现。**底部工作台**另有一条独立终端（#774，`+` 菜单里的「终端」）：页面是插件自绘的 xterm，进程仍由**宿主的会话级终端服务**供给，刷新后按同一份 `(会话, contentId)` 认回同一个 shell，「新建终端」才另起一个；它只投底部、不占宿主右栏的终端入口（宿主那条仍恰好一个）。<br/><br/>⚠️ **模型侧提示**：插件原来自带的 8 个 `terminal_*` 工具（默认关）是模型唯一的**跨调用持久**终端；上游等价物 `@deepseek-ai/dsh-tool-terminal` 未被任何内置 bundle 默认挂载，若你需要该能力，请在 profile 的 `cordis.patch.yml` 里自行插入一行 `tool-terminal`。</sub><br/><div align="center"><img width="420" alt="真实终端" src="https://github.com/user-attachments/assets/0dad6ad3-ff3f-4b5a-86d2-f832ce65323e" /></div> | **🌿 文件变动：Git 视角 + 本轮文件**<br/><sub>双视角合一：**Git 视角**保留完整源代码管理（暂存 / 取消暂存 / 提交（`Ctrl+Enter`）/ 还原、历史、worktree 与子仓库选择）；**本轮文件视角**实时折叠会话事件日志，记录模型读 / 写 / 编辑的每个文件（按文件分组、按类型筛选、操作数角标）。点击任意改动在底部**可拖拽预览面板**查看统一 diff——删红 / 增绿 / 改蓝配对 + 行内字符级高亮 + 语法着色 + 上下文折叠——也可一键展开为 VSCode 式独立 diff tab（同一渲染栈）。两个视角共用 36px 头（宿主 SegmentedControl 切换）、28px 行、单一空态与吸底提交条；**Git 视角按目录层级（树）展示变更**——单子目录链压缩成一行、目录行可折叠并带下级变更数、文件行带状态字母与文件图标；git 状态与文件树共享同一份快照，暂存/提交后文件树着色同步刷新。</sub><br/><div align="center"><img width="420" alt="文件变动" src="https://github.com/user-attachments/assets/e7fc1220-305f-4bca-8583-e77ab4f4fa78" /></div> |
 | **🌐 外链接管（浏览器视图由 DSH 提供）**<br/><sub>网页 tab 是 DSH 自己的 `ui-sidebar-browser`（多开 / 后退前进刷新 / 地址栏 / 沙箱 iframe），**0.1.7 起只在 desktop profile 挂载**——Web profile 里没有这个 kind。插件保留宿主没有的那一半：**只认领有 tab 类型通过 `urlTarget` 明确声明的链接**（Ctrl/Cmd 点击始终放行），**其余一律放行给宿主**（正文链接的去向由宿主的用户设置 `linkOpening` 决定）；按协议分流的三个外链接管设置项已删除，认领成功但目标类型此刻不可用时兜底到 `window.open`。</sub><br/><div align="center"><img width="420" alt="内嵌浏览器" src="https://github.com/user-attachments/assets/9bc6b65a-64fc-4942-a685-76e391e55606" /></div> | **🧩 任务页：子代理拓扑 + 后台任务**<br/><sub>子代理树实时拓扑（运行状态、批量实时预览）+ 后台任务清单（退出码 / 实时输出 / 强制终止）；新子代理 / 新任务可自动激活任务页，宽屏同时展开侧边栏，窄屏不强制展开全屏抽屉（可关）。</sub><br/><div align="center"><img width="420" alt="任务页：子代理拓扑" src="https://github.com/user-attachments/assets/dcd8ed2f-59fa-405b-937b-2d250f5034dd" /></div> |
 | **💬 侧边对话(beta)**<br/><sub>Codex 风格侧边线程：**每个对话一个独立 Tab**；线程继承主会话完整上下文（含进行中回合，以 interrupted 诚实冻结）独立运行，不污染主会话；可持续追问、重启冷恢复；一键「保存为新会话」提升为顶层会话。</sub><br/><div align="center"><img width="420" alt="侧边对话(beta)" src="https://github.com/user-attachments/assets/3a338c36-f5de-4000-95f3-4b1cd04f60fc" /></div> | **🖥️ DSH 原生右侧栏 + 插件底部工作台**<br/><sub>右列是 DSH 自己的右侧栏：插件把每个 tab 类型注册成原生 tab（含接管内置「文件」页），聊天里的文件点击直接落到原生栏——**宿主自己的文档预览已覆盖的格式由宿主渲染**，插件只认领 Markdown / HTML / 可编辑代码；插件自有底部面板可与其同时展开，拖 Tab 到分栏边缘**拆分**、拖到中间**合并**，高度拖上缘调节；开合按钮在会话头右侧。</sub><br/><div align="center"><img width="420" alt="双工作台（右侧栏 + 底部面板）" src="https://github.com/user-attachments/assets/dfdb875e-a1a8-4d4b-8340-353736b1708f" /></div> |
 | **⚙️ 声明式设置**<br/><sub>设置页「侧边卡片」分区：每个 tab / 预览器一张小卡片，独立开关（高亮启用态 + 品牌开关滑块）；二级设置经卡片底部「功能设置」条弹窗（开关 / 文本 / 数字 / 下拉）；插件自有设置持久化在 `pluginSettings`，整份偏好则写在 profile 里本插件的**挂载行**上（DSH 0.1.7 起设置按 Loader entry id 寻址）。</sub><br/><div align="center"><img width="420" alt="声明式设置：侧边卡片" src="https://github.com/user-attachments/assets/0800ca64-621e-48da-b7df-aecfddc3ec29" /></div> | **📱 移动端**<br/><sub>窄屏（<768px）自动切换为全宽抽屉：底栏 tab 一次性并入右侧栏，触屏拖拽可调。</sub><br/><div align="center"><img width="360" alt="移动端全宽抽屉" src="https://github.com/user-attachments/assets/a82ba78a-f4cf-4d85-80e8-050a05beb144" /></div> |
@@ -191,7 +191,19 @@ dsh registry enable dsh-external/dsh-better-sidebar
 
 ## 🆕 最近更新
 
-**支持的 DSH 版本**：<a href="https://www.npmjs.com/package/@deepseek-ai/dsh?activeTab=versions"><img alt="支持的 DSH 版本（v0.24.0）：0.2.0-rc.1+" src="https://img.shields.io/badge/DSH-0.2.0--rc.1%2B-4d6bfe" /></a> · 完整发布历史见 [Releases](https://github.com/omdsh-dev/DSH-better-sidebar/releases)
+**支持的 DSH 版本**：<a href="https://www.npmjs.com/package/@deepseek-ai/dsh?activeTab=versions"><img alt="支持的 DSH 版本（v0.26.0）：0.2.0-rc.2+" src="https://img.shields.io/badge/DSH-0.2.0--rc.2%2B-4d6bfe" /></a> · 完整发布历史见 [Releases](https://github.com/omdsh-dev/DSH-better-sidebar/releases)
+
+### v0.26.0
+
+> 🚀 **四件大事**：① **传输全面流式化**——上传 / 下载 / HTML 预览 / 打包都不再有大小上限（三个部署限额键 `readLimit` / `mediaLimit` / `uploadLimit` 随之删除），编辑器保存也拆掉了 1 MiB 的请求体墙；② **超大文件从「截断成半份文档」改为只读分页预览**（滚到底自动续读 + 「加载全部」，到 5 万行提示改用下载），并新增第 4 个内置 viewer **`.jsonl` / `.ndjson`**（逐条可折叠卡片 + 可保存编辑）；③ **侧边对话补齐到接近原生**——实时推送（纯失效帧 + 增量重拉）、排队可见与按 id 撤回、per-thread 模型选择；④ **任务管理面板整批重构**（按组展开、Token 用量与耗时、画布动效与错峰入场）。另有底部工作台**多终端 Tab**、编辑器**引用行号**的四处收尾、文件改名 / 删除**同时作用于原生右栏页签**（修掉「改名后保存把旧文件重建」「删掉的文件被保存复活」这类数据面问题）、三处静默数据问题等，逐条见 [CHANGELOG](./CHANGELOG.md#v0260)。
+
+> ⚡ **性能**：修掉一个会让界面发卡的 git 状态轮询——编辑器打开文件后**不再长期持有轮询**（此前每 2.5 s 跑一次 `git status --untracked-files=all` 加两条全仓库 `--numstat`，在未忽略的大目录上实测 59,631 条 / 9.24 MB / 0.13 s 一次），基线改为 **30 s** 并按实测自动退档（60 s / 180 s / 停止自动轮询），**空闲轮询也不再触发重渲染**；文件树的折叠链预加载与逐子目录探测两处放大一并收敛。
+
+### v0.25.0
+
+> 📦 **支持线前移：仅适配 DSH `0.2.0-rc.2+`**（peer 下限 `^0.2.0-rc.2`，CI 与挂载 lane 钉 `@deepseek-ai/dsh@0.2.0-rc.2`）。DSH 的 npm `latest` 现在正是 **0.2.0-rc.2**，本版就钉在它上面；**0.2.0-rc.1 及更早（含 0.1.7 线）请固定 v0.24.1**——`^0.2.0-rc.2` 对 rc.1 判定为 false，会被宿主的启动兼容性预检整行静默禁用。本次前移是一次**纯声明与钉版变更**：0.2.0-rc.2 对本插件消费的宿主面仍是纯增量，运行时零改动。
+>
+> 🙏 本版包含多位贡献者的工作（按合并先后列在 [CHANGELOG](./CHANGELOG.md#v0250) 里）。
 
 ### v0.24.1
 
@@ -224,9 +236,9 @@ dsh registry enable dsh-external/dsh-better-sidebar
 > 📦 **正式版**（npm `latest`）：支持线**不变**——仍仅支持 **DSH 0.1.7-rc.1+**（peer 下限 `^0.1.7-rc.1`，CI 钉 `@deepseek-ai/dsh@0.1.7-rc.1`），0.21.1 的用户直接升级即可。**DSH 0.1.6-alpha.2 及更早请继续固定 v0.19.1**。
 
 - 🧩 **任务管理页重做成工作流图**（主显示模式）：会话树渲染为分层节点 + 贝塞尔连线——拖拽平移、滚轮缩放到光标、内容包围盒居中适配、右下角控制条（图/树切换 + 折叠开关 + 缩放 + 适配）；**经典缩进树保留**（键盘可导航），两种模式共享同一个视图模型，折叠状态与团队富化不会视觉漂移。
-- 🃏 **双段式节点卡**：上段是类型徽章（主代理 / 子代理 / 成员 / 工作流 / 已完成聚合）+ 相位徽标 + 名称 + 元信息；下段小条是状态点 + 状态词 + **主 Agent 同款合并活动行**（并发工具按类别归并 + 计数 + 在跑那条的细节，措辞取宿主 `chat` 词条）+ 已完成节点的折叠按钮；运行中小条从左到右**完整扫过**（`prefers-reduced-motion` 下关闭）。8px 圆角、层级只用上段极淡底色表达、当前会话加粗 accent 描边。
+- 🃏 **双段式节点卡**：上段是类型徽章（主代理 / 子代理 / 成员 / 工作流 / 已完成聚合）+ 相位徽标 + **模式 chip**（一次性 / 可持续，与徽标同一行）+ 名称（只有工作流 run 另带一行状态 / 成员元信息）；下段小条是状态点 + **原生状态文本**（**主 Agent 同款合并活动行**：并发工具按类别归并 + 计数 + 在跑那条的细节，措辞取宿主 `chat` 词条——`正在分析请求` / `正在读取文件 · main.ts` / `正在准备读取文件` / `正在运行命令 · npm run build`），运行中与已结算都由它**取代状态词**（不再念两遍「运行中 / 已完成」），`空闲` 与 `出错` 保留状态词、没有活动数据时回退状态词；已完成节点在小条上有折叠按钮；运行中小条从左到右**完整扫过**（`prefers-reduced-motion` 下关闭）。8px 圆角、层级只用上段极淡底色表达、当前会话加粗 accent 描边。
 - 🔀 **工作流 run 入图**：从 `tool-workflow/*` 事件折叠出 run（与官方面板同一批），run 挂在发起代理下、成员 agent 重挂到 run 下并按相位分框、同色相位徽标；catalog 里没有的成员用 run 数据合成占位节点，跑完的 run 仍能看到成员。
-- 🗂 **折叠分两组、各自说清是什么**：`✓ N 已完成`（含出错，失败单独报 `出错 N`）与 `N 个待命`（跑完一轮、随时可被叫起来的 teammate）是**两行**；手动折叠按钮永远有效，自动聚合只在待命成员 ≥3 时收空闲成员；聚合卡名字行写「前两个名字 + `+N`」，点聚合全部展开。
+- 🗂 **折叠分两组、各自说清是什么**：`✓ N 已完成`（含出错，失败单独报 `出错 N`）与 `N 个待命`（跑完一轮、随时可被叫起来的 teammate）是**两行**；手动折叠按钮永远有效，自动聚合只在待命成员 ≥3 时收空闲成员；聚合卡名字行写「前两个名字 + `+N`」、徽标写**真实计数**（`✓ N 已完成` / `N 个待命`），小条是动作行（图标 + 「展开」+ 出错尾注 + 展开箭头）；**点聚合只展开该组**（兄弟组与页级折叠都不动），页级展开/折叠仍在右下控制条，且那里收起时会把按组展开一并清掉。
 - 🪟 **两个常驻浮动窗**（抽出可复用的 `FloatingWindow`）：后台任务输出与共享任务详情/编辑——可拖拽、可四边拉伸、内容区自滚动，只靠关闭按钮或 Escape 结束（外部点击 / 失焦 / 锚点离屏都不关）；任务窗把余量交给描述区，拉大是给内容更多空间而不是留白，动作行固定在底部。
 - 👥 **Agent Teams 任务板（实验层）**：成员富化到对应节点、常驻任务条列出成员与共享任务；状态机跟随宿主（待办 → 认领 → 进行中 → 完成 → 重开）+ 改派 / 编辑 / 两击删除，CAS 过期修订单独提示；成员活动由 `subagents.live` 的 running 叠加。
 - 🔄 **后台任务改读宿主客户端 `ctx.jobs`**（推送 roster + 非消费输出流 + kill）：删掉自建的 `jobs.list` / `jobs.output` / `jobs.kill` 三条路由与事件回放镜像，彻底不碰模型 `job_output` 游标；输出在常驻浮动窗里流式显示并尾随，代理数 ≥8 时抽屉自动折叠。
@@ -241,16 +253,19 @@ dsh registry enable dsh-external/dsh-better-sidebar
 | 操作 | 按键 |
 |---|---|
 | 保存编辑 | `Ctrl/Cmd + S` |
+| 文件内查找 / 替换 | `Ctrl/Cmd + F`（面板含替换行；`Enter` / `Shift + Enter` 下一个 / 上一个，`Esc` 关闭） |
+| 查找下一个 / 上一个 | `Ctrl/Cmd + G` / `Shift + Ctrl/Cmd + G` |
+| 选中下一个相同片段 | `Ctrl/Cmd + D` |
 | Git 提交 | `Ctrl + Enter` |
 | 关闭 Tab | 鼠标中键 |
-| Tab 右键菜单 | 关闭 / 关闭其他页签 / 关闭左侧页签 / 关闭右侧页签（当前标签组） |
+| Tab 右键菜单 | 关闭 / 关闭其他页签 / 关闭左侧页签 / 关闭右侧页签 / 关闭全部页签（均限当前标签组）；在资源管理器中定位（该页签对应一个文件时可用） |
 | 拆分/合并分栏 | 拖 Tab 到分栏边缘 / 中间 |
 | 引用文件到输入框 | 悬浮行尾 `@文件` 按钮 |
 | 复制文件路径 | 右键行 → 复制相对/绝对地址 |
 
 ## 🔌 服务化扩展
 
-从 v0.4.0 起暴露 `ctx.betterSidebar` 服务，其他插件可注册侧边栏页面与文件预览器（内置 5 tab + 3 viewer 亦通过同一服务注册）。v0.12.1 补齐基座能力（完整类型导出、能力探测、状态订阅、tab 角标、生命周期回调、定向打开、插件自有设置等）。v0.19.0 起新增文件图标注册：`registerFileIcon` 按扩展名（或保留的 `'folder'` / `'folder-open'` 目录扩展名、`exts: []` 全局默认）替换文件树与文件 tab 的图标，彩色 ReactNode 亦可——内置消费、注册即生效，无需自己接线。
+从 v0.4.0 起暴露 `ctx.betterSidebar` 服务，其他插件可注册侧边栏页面与文件预览器（内置 6 tab + 3 viewer 亦通过同一服务注册）。v0.12.1 补齐基座能力（完整类型导出、能力探测、状态订阅、tab 角标、生命周期回调、定向打开、插件自有设置等）。v0.19.0 起新增文件图标注册：`registerFileIcon` 按扩展名（或保留的 `'folder'` / `'folder-open'` 目录扩展名、`exts: []` 全局默认）替换文件树与文件 tab 的图标，彩色 ReactNode 亦可——内置消费、注册即生效，无需自己接线。
 
 完整接入文档（全字段、匹配算法、HMR 陷阱、声明式设置、版本探测、原生栏承载面与皮肤契约）：**[`docs/external-plugin-guide.md`](./docs/external-plugin-guide.md)**；仓库开发规则（硬约束 / CI / 发版）见 [`AGENTS.md`](./AGENTS.md)。
 
@@ -293,6 +308,7 @@ make clean          # 清理 lib/、*.tgz、playwright-report/、test-results/
 ## ⚠️ 已知限制
 
 - Git 无 push/pull/fetch；Markdown 预览提供手动刷新按钮，刷新未保存编辑前会确认是否丢弃草稿；文件树只对**已展开**的目录做 watch（折叠的目录不订阅，也不做全工作区递归扫描）；工具行内文件打开按钮不可拦截
+- 未保存草稿：关闭编辑器标签页、删除文件、浏览器刷新/关闭页面都会先确认（查找/替换面板只作用于当前编辑器，不做跨文件搜索）；磁盘上被其他来源改动后再保存会被拒绝（提示「重新载入」），不会静默覆盖对方字节
 - **只读预览的格式由宿主决定**：表格 / PDF / 图片 / Office 走 DSH 自己的 `ui-sidebar-documentpreview`，插件只渲染 Markdown / HTML 与可编辑的文本代码；宿主的实现（渲染细节、缩放、刷新时机）随 DSH 版本走
 - **浏览器视图只在 desktop profile 存在**：Web profile 没有宿主 `browser` kind，插件也不再自带浏览器 tab，因此网页 tab 只在 desktop profile 可用；登录态 / 第三方 Cookie / `X-Frame-Options` 等限制随宿主实现
 - HTML 预览渲染的是已保存文件（不反映未保存草稿）
@@ -304,7 +320,7 @@ Windows / Linux / macOS 三平台适配（macOS 日常验证；其余经单元�
 
 ## 🌐 插件生态
 
-`ctx.betterSidebar` 服务向所有插件开放两个扩展点：**`registerTab`（注册侧边栏页面）** 与 **`registerFileViewer`（注册文件预览器）**。内置的 5 tab + 3 viewer 与第三方插件走同一套 API，能力完全对等。
+`ctx.betterSidebar` 服务向所有插件开放两个扩展点：**`registerTab`（注册侧边栏页面）** 与 **`registerFileViewer`（注册文件预览器）**。内置的 6 tab + 3 viewer 与第三方插件走同一套 API，能力完全对等。
 
 ```ts
 import type {} from 'dsh-better-sidebar'  // 触发 ctx.betterSidebar 类型合并
@@ -331,7 +347,8 @@ GitHub topic [`dsh-better-sidebar`](https://github.com/topics/dsh-better-sidebar
 ### 📑 Tab 插件（注册侧边栏页面）
 
 <details>
-<summary><b>24 个插件（点击展开）</b></summary>
+<summary><b>26 个插件（点击展开）</b></summary>
+<summary><b>25 个插件（点击展开）</b></summary>
 
 | 插件 | ⭐ | 简介 |
 |---|---|---|
@@ -347,11 +364,13 @@ GitHub topic [`dsh-better-sidebar`](https://github.com/topics/dsh-better-sidebar
 | [ztyhehe/dsh-better-sidebar-svn](https://github.com/ztyhehe/dsh-better-sidebar-svn) | <img alt="stars" src="https://img.shields.io/github/stars/ztyhehe/dsh-better-sidebar-svn?style=flat&color=4d6bfe" /> | SVN 源码管理页：status / diff / log / commit / update / revert / 冲突解决，与内置 Git 面板对称 |
 | [Melody-max114/dsh-excel-panel](https://github.com/Melody-max114/dsh-excel-panel) | <img alt="stars" src="https://img.shields.io/github/stars/Melody-max114/dsh-excel-panel?style=flat&color=4d6bfe" /> | Excel 编辑页：xlsx 预览 / 编辑、公式实时计算、合并单元格、保存回原文件 |
 | [v587d/dsh-anysearch-refs](https://github.com/v587d/dsh-anysearch-refs) | <img alt="stars" src="https://img.shields.io/github/stars/v587d/dsh-anysearch-refs?style=flat&color=4d6bfe" /> | AnySearch 搜索结果引用卡片：搜索词、来源摘要、关键词高亮 |
+| [Lukeknow0/dsh-markdown-link-preview](https://github.com/Lukeknow0/dsh-markdown-link-preview) | <img alt="stars" src="https://img.shields.io/github/stars/Lukeknow0/dsh-markdown-link-preview?style=flat&color=4d6bfe" /> | Markdown 产物链接预览：点击聊天中的同源 `.md` 输出文件，直接在侧边栏阅读，不再唤起外部 App |
 | [mlosun/dsh-docs-panel](https://github.com/mlosun/dsh-docs-panel) | <img alt="stars" src="https://img.shields.io/github/stars/mlosun/dsh-docs-panel?style=flat&color=4d6bfe" /> | 全局文档面板：随身 Markdown 笔记，任何工作区随时可读 |
+| [tylina/dsh-tylina](https://github.com/tylina/dsh-tylina) | <img alt="stars" src="https://img.shields.io/github/stars/tylina/dsh-tylina?style=flat&color=4d6bfe" /> | Typst 文档编辑工具：与当前会话共用工作区，WYSIWYG 编辑排版 Typst 文档，可用于编写和排版论文、报告、试卷、简历、图表、海报、乐谱和 PPTX 格式导出的 Slides |
 | [lnyuqian/dsh-skill-sidebar](https://github.com/lnyuqian/dsh-skill-sidebar) | <img alt="stars" src="https://img.shields.io/github/stars/lnyuqian/dsh-skill-sidebar?style=flat&color=4d6bfe" /> | 技能面板：扫描本机技能目录，4-6 字功能短语 + 一键复制调用 + 置顶 |
 | [g-yixuan/dsh-sidenote](https://github.com/g-yixuan/dsh-sidenote) | <img alt="stars" src="https://img.shields.io/github/stars/g-yixuan/dsh-sidenote?style=flat&color=4d6bfe" /> | Codex 风格侧边对话 + 划选引用注释（轻量消费插件） |
-| [thirsty5034/dsh-ssh-tunnel](https://github.com/thirsty5034/dsh-ssh-tunnel) | <img alt="stars" src="https://img.shields.io/github/stars/thirsty5034/dsh-ssh-tunnel?style=flat&color=4d6bfe" /> | 多主机 SSH 隧道 + SSH 管理器页 |
-| [thirsty5034/dsh-git-forge](https://github.com/thirsty5034/dsh-git-forge) | <img alt="stars" src="https://img.shields.io/github/stars/thirsty5034/dsh-git-forge?style=flat&color=4d6bfe" /> | GitHub / Gitea 账号、项目授权与推送策略 |
+| [OMSociety/dsh-ssh-tunnel](https://github.com/OMSociety/dsh-ssh-tunnel) | <img alt="stars" src="https://img.shields.io/github/stars/OMSociety/dsh-ssh-tunnel?style=flat&color=4d6bfe" /> | 多主机 SSH 隧道 + SSH 管理器页 |
+| [OMSociety/dsh-git-forge](https://github.com/OMSociety/dsh-git-forge) | <img alt="stars" src="https://img.shields.io/github/stars/OMSociety/dsh-git-forge?style=flat&color=4d6bfe" /> | GitHub / Gitea 账号、项目授权与推送策略 |
 | [YesSanSan/dsh-conversation-outline](https://github.com/YesSanSan/dsh-conversation-outline) | <img alt="stars" src="https://img.shields.io/github/stars/YesSanSan/dsh-conversation-outline?style=flat&color=4d6bfe" /> | 对话大纲页：按轮次结构化展示、一键跳转、LLM 一句话标题 |
 | [Wulabalabo/dsh-sidebar-Explorer-Plus](https://github.com/Wulabalabo/dsh-sidebar-Explorer-Plus) | <img alt="stars" src="https://img.shields.io/github/stars/Wulabalabo/dsh-sidebar-Explorer-Plus?style=flat&color=4d6bfe" /> | 文件管理页：上传 / 移动 / 删除 / 重命名 / 新建文件夹（补全写操作） |
 | [yq04/dsh-turn-review](https://github.com/yq04/dsh-turn-review) | <img alt="stars" src="https://img.shields.io/github/stars/yq04/dsh-turn-review?style=flat&color=4d6bfe" /> | 本轮审查：逐回合审查 agent 改动 |
@@ -360,17 +379,19 @@ GitHub topic [`dsh-better-sidebar`](https://github.com/topics/dsh-better-sidebar
 | [dong-victor/dsh-better-sidebar-starter](https://github.com/dong-victor/dsh-better-sidebar-starter) | <img alt="stars" src="https://img.shields.io/github/stars/dong-victor/dsh-better-sidebar-starter?style=flat&color=4d6bfe" /> | 运行配置页：IDEA 式 Run/Debug 配置（npm / springboot / python / custom）——一键启动、历史保存、WebSocket 实时日志（ANSI 彩色）、多实例并行、进程树跨平台杀死 |
 | [baosfeng/my-dsh-plugins](https://github.com/baosfeng/my-dsh-plugins) | <img alt="stars" src="https://img.shields.io/github/stars/baosfeng/my-dsh-plugins?style=flat&color=4d6bfe" /> | 个人多插件合集（`dsh-file-activity`）：侧边栏文件活动页——记录文件读取 / 新增 / 修改历史与统计，按文件夹平铺，点击用原生预览打开 |
 | [Hoemr/dsh-better-overleaf](https://github.com/Hoemr/dsh-better-overleaf) | <img alt="stars" src="https://img.shields.io/github/stars/Hoemr/dsh-better-overleaf?style=flat&color=4d6bfe" /> | Overleaf 标签页：直连 CDP 浏览器登录（支持第三方 Chromium）、项目切换、工作区下 overleaf/ 目录本地 git 镜像与双向同步 |
+| [Andor-Z/dsh-turn-outline](https://github.com/Andor-Z/dsh-turn-outline) | <img alt="stars" src="https://img.shields.io/github/stars/Andor-Z/dsh-turn-outline?style=flat&color=4d6bfe" /> | 轮次轨迹页：按用户轮次折叠会话（输入 + 工具步骤 + 输出），点击任意步骤一键跳回对话原位；零 LLM、只读 |
 
 </details>
 
 ### 🖼️ 预览插件（注册文件预览器）
 
 <details>
-<summary><b>3 个插件（点击展开）</b></summary>
+<summary><b>4 个插件（点击展开）</b></summary>
 
 | 插件 | ⭐ | 简介 |
 |---|---|---|
 | [HuanLinOTO/dsh-plugin-better-sidebar-plugin-office](https://github.com/HuanLinOTO/dsh-plugin-better-sidebar-plugin-office) | <img alt="stars" src="https://img.shields.io/github/stars/HuanLinOTO/dsh-plugin-better-sidebar-plugin-office?style=flat&color=4d6bfe" /> | Office 三件套预览（.docx / .xlsx / .pptx），独立 bundle 瘦身主体（官方推荐目录收录） |
+| [HuanLinOTO/dsh-plugin-better-sidebar-plugin-audio](https://github.com/HuanLinOTO/dsh-plugin-better-sidebar-plugin-audio) | <img alt="stars" src="https://img.shields.io/github/stars/HuanLinOTO/dsh-plugin-better-sidebar-plugin-audio?style=flat&color=4d6bfe" /> | 音频预览：可缩放波形播放器（点击/拖动定位、A-B 循环、声道切换、倍速）+ 实时频谱（柱状/折线/瀑布）+ 全曲频谱图，自带 HTTP Range 流式媒体路由，任意大小可拖进度 |
 | [zemul/dsh-video-preview](https://github.com/zemul/dsh-video-preview) | <img alt="stars" src="https://img.shields.io/github/stars/zemul/dsh-video-preview?style=flat&color=4d6bfe" /> | 视频内联预览：.mp4 / .webm / .mov / .mkv / .avi，自带 /video 路由支持 HTTP Range 拖进度条 |
 | [dong-victor/dsh-better-sidebar-jupyter](https://github.com/dong-victor/dsh-better-sidebar-jupyter) | <img alt="stars" src="https://img.shields.io/github/stars/dong-victor/dsh-better-sidebar-jupyter?style=flat&color=4d6bfe" /> | `.ipynb` 可运行 Notebook 视图：懒启动 Python kernel、流式输出、保存回写 |
 
@@ -412,6 +433,7 @@ GitHub topic [`dsh-better-sidebar`](https://github.com/topics/dsh-better-sidebar
 - [dsh-tianshu-tui](https://github.com/huiliyi37/dsh-tianshu-tui)：DeepSeek Harness 交互式终端 UI 插件（渲染核心由自研 harness agent Tianshu-Tui 演进而来），在官方基础上增加 TDD 与证据门等工作流
 - [dsh-TUI](https://github.com/ccch1mneyyy/dsh-TUI)：Claude Code 风格全屏交互终端插件——像素鲸鱼顶栏、实时工作状态行、思考流式展开、双击 Esc 回滚、上下文进度条 + TPS 仪表，npm 一键安装
 - [dshfind 插件超市](https://dshfind.com/zh/plugins)：三方插件市场——GitHub topic `dsh-plugin` 下的公开仓库清单，每日同步 star、贡献者与增长数据
+- [DeepSeek Harness Desktop Tauri](https://github.com/hairyf/deepseek-harness-desktop)：DeepSeek Harness 的 Tauri 桌面版——仅 5MB 安装包、零环境配置、预置插件开箱即用，支持 Windows / macOS / Linux 三平台
 - [DeepSeek Harness Desktop](https://github.com/anywhere-labs/deepseek-harness-desktop)：为 DeepSeek Harness 生态打造的现代化桌面端——无需配置 Node.js 或执行命令即可启动和管理本地 Harness 服务；[官网](https://www.dshdesktop.cn)
 
 ---

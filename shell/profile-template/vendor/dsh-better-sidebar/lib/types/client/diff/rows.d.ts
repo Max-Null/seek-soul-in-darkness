@@ -19,6 +19,15 @@ export interface DiffRow {
     readonly text: string;
 }
 /**
+ * Cell ceiling for the dense LCS table: `oldLines.length * newLines.length`
+ * above this never builds the table (see {@link diffLines}). The table is one
+ * JS number per cell and measures at ~8 bytes/cell, so the cost is entirely
+ * about the input's line counts: a 5000×5000 pair allocates 193MB, a
+ * 10000×10000 pair 765MB. 4M cells ≈ 32MB keeps a worst case well inside a
+ * browser tab's budget while still pairing a 2000×2000 rewrite exactly.
+ */
+export declare const MAX_LCS_CELLS = 4000000;
+/**
  * Pair each del-run with the add-run that follows it: the overlapping
  * `min(len)` rows on both sides become 'mod' so rewrites tint distinctly and
  * receive intra-line highlighting. Pure — returns a new array when anything
@@ -29,6 +38,13 @@ export declare function pairMods(rows: readonly DiffRow[]): DiffRow[];
 /**
  * Line diff by LCS walk with rewrite pairing: the raw walk emits context/del/
  * add rows; `pairMods` marks rewritten pairs as 'mod'.
+ *
+ * Inputs whose line-count product exceeds {@link MAX_LCS_CELLS} skip the dense
+ * table entirely (it would allocate hundreds of MB on the main thread) and
+ * degrade to every old line as 'del' (old order, `oldLine` 1..n) followed by
+ * every new line as 'add' (new order, `newLine` 1..m). The degenerate output
+ * carries no 'context' and no 'mod' rows: pairing is skipped too, since with no
+ * alignment found every del/add pair would be marked rewritten.
  * @param oldText - the previous content; empty string diffs against nothing.
  * @param newText - the next content.
  * @returns ordered diff rows, old-side deletions before new-side additions.
@@ -120,9 +136,9 @@ export interface DiffHunk {
 }
 /** One parsed file section of a unified diff. */
 export interface DiffFile {
-    /** The `---` path verbatim ('/dev/null' for a new file). */
+    /** The old-side path ('/dev/null' for a new file); '' when git named none. */
     oldPath: string;
-    /** The `+++` path verbatim ('/dev/null' for a deleted file). */
+    /** The new-side path ('/dev/null' for a deleted file); '' when git named none. */
     newPath: string;
     /** The file changed with binary content: no hunks to draw. */
     binary: boolean;
@@ -133,12 +149,35 @@ export interface ParsedDiff {
     files: DiffFile[];
 }
 /**
+ * Undo git's C-quoting of a path (`"a/\346\226\207.md"` → `a/中文.md`).
+ * git quotes a path holding a byte outside ASCII, a control character, a
+ * quote or a backslash; `-c core.quotePath=false` (see `runGit`) already
+ * removes the non-ASCII half for our own commands, so this is the remaining
+ * defensive half — and what keeps replayed/pasted diff text readable.
+ * Unquoted input comes back unchanged.
+ * @param raw - the path as it appears in the diff text.
+ * @returns the literal path.
+ */
+export declare function decodeGitPath(raw: string): string;
+/**
  * Parse `git diff --no-color` output into file sections and hunks. Rows
  * outside a file section (leading noise) and metadata rows between the
  * `diff --git`/`---`/`+++` headers and the first hunk (index lines, mode
- * changes, rename/similarity lines) are skipped; a section that never
- * reaches a hunk (a mode/rename-only change) stays hunkless so the caller
- * can still draw its path.
+ * changes, rename/similarity lines) are skipped.
+ *
+ * Paths come from whichever header names them: `---`/`+++` win when present,
+ * otherwise the section's own `rename from|to`, `Binary files … differ` or
+ * `diff --git` line supplies them. git emits no `---`/`+++` at all for a
+ * binary file, a pure rename and a mode-only change, so without those
+ * fallbacks the section renders as an anonymous header (the badge with no
+ * file name the reader cannot place).
+ *
+ * Both of those header branches are gated on `!inHunk`, because a hunk line can
+ * wear the same prefix: a deleted line is `-` plus its text, so deleting `-- x`
+ * emits `--- x` — a hunk line that starts exactly like the separator, and one
+ * that used to be read as a NEW file's header (truncating the hunk here, then
+ * stamping the deleted text onto the path). The hunk is the tiebreaker: git
+ * never writes `---`/`+++` inside one.
  */
 export declare function parseUnifiedDiff(text: string): ParsedDiff;
 /**
@@ -163,7 +202,14 @@ export declare function untrackedFile(path: string, content: string): DiffFile;
 export declare function foldRowsFromContents(fold: FoldSegment, oldContent: string, newContent: string): DiffRow[];
 /** Strip the `a/` / `b/` prefix git puts on diff paths (not on /dev/null). */
 export declare function displayPath(path: string): string;
-/** The diff's add/del/mod row counts (the "+n −m" header chips). */
+/**
+ * The diff's insert/delete counts (the "+n −m" header chips), in git's
+ * accounting: one rewritten line is one insertion plus one deletion. It
+ * renders as a pair of `mod` rows (one per side), so count SIDES rather than
+ * rows — counting each `mod` row as both an add and a delete reported a
+ * single-line rewrite as +2 −2, which matched neither `git diff --numstat`
+ * nor the `-old` / `+new` pair drawn on screen.
+ */
 export declare function diffStats(segments: readonly DiffSegment[]): {
     added: number;
     deleted: number;

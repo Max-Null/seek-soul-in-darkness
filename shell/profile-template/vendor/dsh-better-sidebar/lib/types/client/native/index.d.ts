@@ -25,7 +25,27 @@
 import type { Context } from '../../context-types.ts';
 import type { BetterSidebarService } from '../service.ts';
 import type { SidebarStore } from '../state.ts';
-import { type NativeTabRecords } from './tab-adapter.tsx';
+import { type NativeTabInfo, type NativeTabParams, type NativeTabRecords } from './tab-adapter.tsx';
+/**
+ * The plugin-side seed a file-address tab carries.
+ *
+ * The path comes from the address, and that is also where a `path:line` spec
+ * the host's markdown grammar left in it has to come off: DSH reads a `#`-less
+ * destination as the file name verbatim, so `[a/b.c](a/b.c:131)` addresses a
+ * file called `b.c:131` and the editor reports it missing (#826). The tab
+ * TITLE is seeded from the same spec, because the host derives it from the same
+ * string and would otherwise label the tab `b.c:131`.
+ *
+ * The LINE rides along in the same seed. DSH's own `#L131` form already
+ * arrives as `navigation.params.line` (the host parses it and sends it down),
+ * so seeding it here is what makes both spellings land on the same row — see
+ * {@link NativeTabParams.line}. The range end and the column are deliberately
+ * dropped: {@link splitTrailingLineSpec} parses them, and a start line is all
+ * the editor has anywhere to put a cursor.
+ * @param info - the native tab record the body is drawing.
+ * @returns the seed, or `undefined` when the tab is not a file address.
+ */
+export declare function fileParamsOf(info: NativeTabInfo): NativeTabParams | undefined;
 /** Everything the registrations need. */
 export interface NativeSurfaceDeps {
     readonly ctx: Context;

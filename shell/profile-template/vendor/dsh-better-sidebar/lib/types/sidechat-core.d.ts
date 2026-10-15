@@ -187,13 +187,115 @@ export interface SidechatThreadInfo {
     live: boolean;
     /** Live lifecycle state; absent on cold threads. */
     status?: 'idle' | 'running';
-    /** Provider route of the live agent. */
+    /** Provider route the thread actually requests with (see
+     *  {@link parentModelSelection} — NOT the frozen creation-time default). */
     provider?: string;
-    /** Model id of the live agent. */
+    /** Model id the thread actually requests with. */
     model?: string;
+    /** Reasoning effort of the effective selection, when the log records one. */
+    reasoningEffort?: string;
     /** The recorded agent preset (live header, or persisted on cold reads). */
     preset?: string;
 }
+/**
+ * One UNCLAIMED inbox message of a live side thread — the queue the next step
+ * or turn will claim. The transcript renders these as pending user bubbles
+ * (with a spinner and a dequeue affordance) instead of leaving accepted input
+ * invisible until a claim logs it as a durable `user/message`.
+ */
+export interface SidechatPendingInput {
+    /** Durable message identity — the `sidechat.dequeue` key. */
+    id: string;
+    /** Which boundary will claim it; `next-step` entries are claimed first. */
+    target: 'next-turn' | 'next-step';
+    /** Flattened text of the message content ('' when it carries no text). */
+    text: string;
+}
+/** One routable model in the host model catalog (a structural slice of the
+ *  session controller's own `modelCatalog` rows). */
+export interface SidechatModelInfo {
+    id: string;
+    name?: string;
+    description?: string;
+    /** Provider-declared reasoning efforts, when the model has any. */
+    reasoning?: {
+        efforts: readonly {
+            id: string;
+            name?: string;
+            description?: string;
+        }[];
+        defaultEffort?: string;
+    };
+}
+/** One provider group of the host model catalog. */
+export interface SidechatModelGroup {
+    id: string;
+    name?: string;
+    models: readonly SidechatModelInfo[];
+}
+/**
+ * The host model catalog as the side-chat model picker consumes it. Sourced
+ * from the host's own `sessionController.modelCatalog()` (the exact catalog
+ * the main composer lists), degraded to `available: false` when that service
+ * is absent — the picker then offers only "inherit the parent".
+ */
+export interface SidechatModelCatalog {
+    /** Whether a host catalog was readable at all. */
+    available: boolean;
+    /** The deployment default selection, when readable. */
+    default?: SidechatModelSelection;
+    /** Provider groups with at least one routable model. */
+    groups: readonly SidechatModelGroup[];
+    /** Providers whose catalog read failed (kept so the picker can say so). */
+    failures: readonly {
+        id: string;
+        name?: string;
+        message: string;
+    }[];
+}
+/** The identity one inbox message carries (`MessageId`, a branded string). */
+export declare function pendingInputId(message: unknown): string | undefined;
+/**
+ * Project one agent's inbox into wire rows, in CLAIM order: every `next-step`
+ * entry first, then the queued turns (the host's `Inbox.claim` drains exactly
+ * that way). Messages without an identity are skipped — they could not be
+ * dequeued, so showing them as pending would offer a dead button.
+ */
+export declare function pendingInputs(nextStep: readonly unknown[], nextTurn: readonly unknown[]): SidechatPendingInput[];
+/**
+ * Fold a log's `agent/inbox/spliced` events into the message ids STILL pending
+ * after it — the durable record of the inbox (the host's own
+ * `inboxProjectionDefinition` semantics: apply every splice in order).
+ *
+ * This is the reading the ghost sweep needs: a seeded thread's inherited
+ * prefix can leave messages "pending" that the parent had already claimed
+ * (the claim splice sits inside the parent's open turn, which the seed
+ * truncation cuts away), and those must never be delivered as the child's
+ * own input.
+ * @param events - the log (or any prefix of it), contiguous from seq 0.
+ * @param limit - exclusive upper bound of event count to fold (the inherited
+ *   prefix length, or the whole log).
+ * @returns the ids of messages still pending after the folded events.
+ */
+export declare function pendingIdsInLog(events: readonly SidechatLogEvent[], limit?: number): string[];
+/**
+ * The message ids a seeded thread INHERITED as still-pending but never
+ * actually owned: fold only the inherited prefix (`[0, inheritedEventCount)`),
+ * which is exactly the region the parent's own claim splices may have been
+ * cut out of. The caller removes precisely these from the live inbox, so a
+ * user's genuinely queued side-thread input is never touched.
+ * @param events - the thread's log.
+ * @param inheritedEventCount - the thread's inherited prefix length.
+ * @returns the ghost message ids present in the prefix fold.
+ */
+export declare function inheritedPendingIds(events: readonly SidechatLogEvent[], inheritedEventCount: number): string[];
+/**
+ * The thread's effective model selection: `pending ?? lastUsed` of its own
+ * `model/selection` / `request/header` fold (see {@link parentModelSelection},
+ * which this is the same projection as). Used by the routes to report what the
+ * thread will actually request with.
+ */
+export declare function effectiveModelSelection(events: readonly SidechatLogEvent[]): SidechatModelSelection | undefined;
 /** The events a thread produced itself: everything after the LAST
  *  `session/end-seed` marker (the fork-seed boundary). A log with no marker
  *  (a thread created before seeding existed) is returned whole. */
@@ -219,3 +321,32 @@ export declare function threadTrailingPending(entries: readonly SidebarHistoryEn
 export declare function resolvePresetId(header: {
     agentPreset?: string;
 }, events: readonly SidechatLogEvent[]): string | undefined;
+/** One model route as the durable log records it (the shape of a
+ *  `model/selection` event payload and of the core `modelSelection`
+ *  projection rows). */
+export interface SidechatModelSelection {
+    provider: string;
+    model: string;
+    reasoningEffort?: string;
+}
+/**
+ * The model selection a session CURRENTLY runs, projected from its durable
+ * log (mirror of the core `modelSelection` projection — replicated here
+ * like resolvePresetId to avoid a host dependency). An explicit
+ * `model/selection` event stays PENDING until a same-route `request/header`
+ * consumes it; the value the composer's model selector shows is
+ * `pending ?? lastUsed`.
+ *
+ * This is NOT what `agent.options.provider/model` holds: those freeze the
+ * creation-time deployment default and are never rewritten by a UI model
+ * switch — DSH 0.1.5 routes requests through the session-local selection
+ * and its `agent/request` waterfall instead. Anyone inheriting "the
+ * parent's current model" must read this projection; inheriting
+ * `parent.options` verbatim silently ships the stale creation default
+ * (issue #368).
+ *
+ * A `request/header` contributes provider/model/effort, EXCEPT when its
+ * effort is marked as an adapter default (`adapterDefaults.reasoningEffort`)
+ * which the core selection getter deliberately does not adopt as a sticky pick.
+ */
+export declare function parentModelSelection(events: readonly SidechatLogEvent[]): SidechatModelSelection | undefined;

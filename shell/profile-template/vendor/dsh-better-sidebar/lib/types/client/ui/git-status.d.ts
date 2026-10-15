@@ -1,4 +1,4 @@
-import { type GitStatusResult } from '../api.ts';
+import { type GitStatusResult, type SessionScope } from '../api.ts';
 /** The semantic class of one changed path (drives the row's ink). */
 export type GitTone = 'modified' | 'added' | 'deleted' | 'untracked' | 'renamed' | 'copied' | 'conflict';
 /** One path's git state, derived from its two-letter porcelain code. */
@@ -38,14 +38,16 @@ export interface GitStatusView {
     dirHasChanges(absoluteDir: string): boolean;
 }
 /**
- * Subscribe to the shared git status of one session (optionally of one
- * linked worktree). The poll runs while `visible` is true, at `pollMs`.
+ * Subscribe to the shared git status of one session (optionally of one linked
+ * worktree). While `visible` is true the consumer holds the answer; while
+ * `poll` is also true it holds the automatic timer (at `pollMs`, escalated by
+ * the slow tiers). `poll: false` is for a consumer that wants one reading and
+ * event-driven refreshes — the editor's gutter — so it can never keep a git
+ * process running in the background.
  */
-export declare function useGitStatus(scope: {
-    sessionId: string;
-    cwd?: string;
-}, options?: {
+export declare function useGitStatus(scope: SessionScope, options?: {
     worktree?: string;
     visible?: boolean;
     pollMs?: number;
+    poll?: boolean;
 }): GitStatusView;

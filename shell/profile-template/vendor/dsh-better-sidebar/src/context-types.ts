@@ -43,11 +43,23 @@ export interface SidebarHttpRequest {
 }
 
 /** The response face route handlers write to (structural subset of node's
- *  ServerResponse: the status/header/body writes the routes use). */
+ *  ServerResponse: the status/header/body writes the routes use).
+ *
+ *  `write` / `headersSent` / `destroy` exist for the raw byte routes
+ *  (`/sidebar/file`, `/sidebar/html`, `/sidebar/archive`), which stream a file
+ *  instead of buffering it. They stay plain structural members on purpose —
+ *  see the module header on why node types cannot appear here. */
 export interface SidebarHttpResponse {
   statusCode: number
+  /** True once a status line went out; a late failure can no longer become a
+   *  JSON envelope, so callers destroy the response instead. */
+  headersSent?: boolean
   writeHead(status: number, headers?: Record<string, string>): void
+  /** Append one body chunk; false means "wait for drain". */
+  write(chunk: string | Uint8Array): boolean
   end(body?: string | Uint8Array): void
+  /** Tear the connection down (mid-stream failure, client abort). */
+  destroy?(error?: Error): void
 }
 
 /** The upgrade socket face (structural subset: the destroy the fences use). */
@@ -525,9 +537,41 @@ export interface SidebarProjectionSnapshot {
     subagentCatalog?: readonly SidebarSubagentCatalogEntry[]
     /** The Lead Session's team board (only the team's Lead carries one). */
     agentTeam?: SidebarTeamProjection
+    /** Provider-reported token usage, accumulated over the session's log. */
+    tokenUsage?: SidebarTokenUsage
+    /** Turn timing of a descriptor-backed CHILD session (see ./session-metrics.ts). */
+    subagentTiming?: SidebarSubagentTiming
   }
   state: 'idle' | 'loading' | 'ready' | 'error'
   error: { code?: string; message?: string } | null
+}
+
+/**
+ * The host's `tokenUsage` projection: provider-reported usage accumulated over
+ * the session's whole durable log, in four DISJOINT buckets (`uncachedInputTokens`
+ * is what the provider billed at full price; reasoning tokens are already inside
+ * `outputTokens`). It is a SESSION total, not a per-turn figure.
+ */
+export interface SidebarTokenUsage {
+  uncachedInputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+}
+
+/**
+ * The host's `subagentTiming` projection: how long a descriptor-backed child
+ * session actually worked.
+ *
+ * Neither half is a session AGE. `settledMs` sums CLOSED turn durations and is
+ * 0 until the child's first `turn/end`; `active` exists only while an open turn
+ * is running, and a session with no `subagent/descriptor` — the topology ROOT,
+ * any ordinary session — never gets one at all.
+ */
+export interface SidebarSubagentTiming {
+  settledMs: number
+  /** The open turn: `since` = its `turn/start` time, `through` = the newest folded event. */
+  active?: { since: number; through: number }
 }
 
 /** One direct-child row of the host's `subagentCatalog` projection. */
@@ -623,6 +667,21 @@ export interface SidebarSessionInput {
 export interface SidebarConversation {
   input: {
     for(actx: Context): SidebarSessionInput
+  }
+}
+
+/** Read-only subset of api-workspace-controller's public IWorkspaces.list. */
+export interface SidebarWorkspacesService {
+  readonly list: {
+    getSnapshot(): {
+      readonly phase: 'pending' | 'ready'
+      readonly state: 'idle' | 'loading' | 'error'
+      readonly items: readonly {
+        /** Canonical host directory, from WorkspaceView.path. */
+        readonly path: string
+        readonly sessionIds: readonly string[]
+      }[]
+    }
   }
 }
 
@@ -795,6 +854,8 @@ export interface SidebarContextShape {
   }
   /** The composer draft face (client ui-conversation, lazy `ctx.get` probe). */
   conversation: SidebarConversation
+  /** Host-authoritative workspace membership; resolved lazily at reference insertion. */
+  workspaces?: SidebarWorkspacesService
   /**
    * The client-side sidebar registry: external plugins register tab types
    * and file previewers here. Provided by the client half (see

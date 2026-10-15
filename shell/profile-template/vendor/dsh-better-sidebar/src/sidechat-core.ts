@@ -546,12 +546,175 @@ export interface SidechatThreadInfo {
   live: boolean
   /** Live lifecycle state; absent on cold threads. */
   status?: 'idle' | 'running'
-  /** Provider route of the live agent. */
+  /** Provider route the thread actually requests with (see
+   *  {@link parentModelSelection} — NOT the frozen creation-time default). */
   provider?: string
-  /** Model id of the live agent. */
+  /** Model id the thread actually requests with. */
   model?: string
+  /** Reasoning effort of the effective selection, when the log records one. */
+  reasoningEffort?: string
   /** The recorded agent preset (live header, or persisted on cold reads). */
   preset?: string
+}
+
+/**
+ * One UNCLAIMED inbox message of a live side thread — the queue the next step
+ * or turn will claim. The transcript renders these as pending user bubbles
+ * (with a spinner and a dequeue affordance) instead of leaving accepted input
+ * invisible until a claim logs it as a durable `user/message`.
+ */
+export interface SidechatPendingInput {
+  /** Durable message identity — the `sidechat.dequeue` key. */
+  id: string
+  /** Which boundary will claim it; `next-step` entries are claimed first. */
+  target: 'next-turn' | 'next-step'
+  /** Flattened text of the message content ('' when it carries no text). */
+  text: string
+}
+
+/** One routable model in the host model catalog (a structural slice of the
+ *  session controller's own `modelCatalog` rows). */
+export interface SidechatModelInfo {
+  id: string
+  name?: string
+  description?: string
+  /** Provider-declared reasoning efforts, when the model has any. */
+  reasoning?: {
+    efforts: readonly { id: string; name?: string; description?: string }[]
+    defaultEffort?: string
+  }
+}
+
+/** One provider group of the host model catalog. */
+export interface SidechatModelGroup {
+  id: string
+  name?: string
+  models: readonly SidechatModelInfo[]
+}
+
+/**
+ * The host model catalog as the side-chat model picker consumes it. Sourced
+ * from the host's own `sessionController.modelCatalog()` (the exact catalog
+ * the main composer lists), degraded to `available: false` when that service
+ * is absent — the picker then offers only "inherit the parent".
+ */
+export interface SidechatModelCatalog {
+  /** Whether a host catalog was readable at all. */
+  available: boolean
+  /** The deployment default selection, when readable. */
+  default?: SidechatModelSelection
+  /** Provider groups with at least one routable model. */
+  groups: readonly SidechatModelGroup[]
+  /** Providers whose catalog read failed (kept so the picker can say so). */
+  failures: readonly { id: string; name?: string; message: string }[]
+}
+
+/** Flatten one pending message's content into the text the bubble shows. */
+function pendingText(message: unknown): string {
+  const content = (message as { content?: unknown } | undefined)?.content
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  const parts: string[] = []
+  for (const block of content) {
+    if (block === null || typeof block !== 'object') continue
+    const item = block as { type?: unknown; text?: unknown }
+    if (item.type === 'text' && typeof item.text === 'string') parts.push(item.text)
+  }
+  return parts.join('\n')
+}
+
+/** The identity one inbox message carries (`MessageId`, a branded string). */
+export function pendingInputId(message: unknown): string | undefined {
+  const id = (message as { id?: unknown } | undefined)?.id
+  return typeof id === 'string' && id !== '' ? id : undefined
+}
+
+/**
+ * Project one agent's inbox into wire rows, in CLAIM order: every `next-step`
+ * entry first, then the queued turns (the host's `Inbox.claim` drains exactly
+ * that way). Messages without an identity are skipped — they could not be
+ * dequeued, so showing them as pending would offer a dead button.
+ */
+export function pendingInputs(
+  nextStep: readonly unknown[],
+  nextTurn: readonly unknown[],
+): SidechatPendingInput[] {
+  const rows: SidechatPendingInput[] = []
+  const add = (message: unknown, target: SidechatPendingInput['target']): void => {
+    const id = pendingInputId(message)
+    if (id === undefined) return
+    rows.push({ id, target, text: pendingText(message) })
+  }
+  for (const message of nextStep) add(message, 'next-step')
+  for (const message of nextTurn) add(message, 'next-turn')
+  return rows
+}
+
+/**
+ * Fold a log's `agent/inbox/spliced` events into the message ids STILL pending
+ * after it — the durable record of the inbox (the host's own
+ * `inboxProjectionDefinition` semantics: apply every splice in order).
+ *
+ * This is the reading the ghost sweep needs: a seeded thread's inherited
+ * prefix can leave messages "pending" that the parent had already claimed
+ * (the claim splice sits inside the parent's open turn, which the seed
+ * truncation cuts away), and those must never be delivered as the child's
+ * own input.
+ * @param events - the log (or any prefix of it), contiguous from seq 0.
+ * @param limit - exclusive upper bound of event count to fold (the inherited
+ *   prefix length, or the whole log).
+ * @returns the ids of messages still pending after the folded events.
+ */
+export function pendingIdsInLog(events: readonly SidechatLogEvent[], limit?: number): string[] {
+  const nextTurn: unknown[] = []
+  const nextStep: unknown[] = []
+  const end = limit === undefined ? events.length : Math.min(limit, events.length)
+  for (let index = 0; index < end; index++) {
+    const event = events[index]
+    if (event === undefined || event.type !== 'agent/inbox/spliced') continue
+    const data = dataOf(event)
+    const target = data.target === 'next-step' ? nextStep : data.target === 'next-turn' ? nextTurn : undefined
+    if (target === undefined) continue
+    const start = typeof data.start === 'number' && Number.isSafeInteger(data.start) ? data.start : 0
+    const removed = typeof data.removedCount === 'number' && Number.isSafeInteger(data.removedCount) ? data.removedCount : 0
+    const inserted = Array.isArray(data.inserted) ? data.inserted : []
+    target.splice(Math.max(0, Math.min(start, target.length)), Math.max(0, removed), ...inserted)
+  }
+  const ids: string[] = []
+  for (const message of [...nextStep, ...nextTurn]) {
+    const id = pendingInputId(message)
+    if (id !== undefined) ids.push(id)
+  }
+  return ids
+}
+
+/**
+ * The message ids a seeded thread INHERITED as still-pending but never
+ * actually owned: fold only the inherited prefix (`[0, inheritedEventCount)`),
+ * which is exactly the region the parent's own claim splices may have been
+ * cut out of. The caller removes precisely these from the live inbox, so a
+ * user's genuinely queued side-thread input is never touched.
+ * @param events - the thread's log.
+ * @param inheritedEventCount - the thread's inherited prefix length.
+ * @returns the ghost message ids present in the prefix fold.
+ */
+export function inheritedPendingIds(
+  events: readonly SidechatLogEvent[],
+  inheritedEventCount: number,
+): string[] {
+  return pendingIdsInLog(events, Math.max(0, Math.trunc(inheritedEventCount)))
+}
+
+/**
+ * The thread's effective model selection: `pending ?? lastUsed` of its own
+ * `model/selection` / `request/header` fold (see {@link parentModelSelection},
+ * which this is the same projection as). Used by the routes to report what the
+ * thread will actually request with.
+ */
+export function effectiveModelSelection(
+  events: readonly SidechatLogEvent[],
+): SidechatModelSelection | undefined {
+  return parentModelSelection(events)
 }
 
 /** The events a thread produced itself: everything after the LAST
@@ -609,4 +772,87 @@ export function resolvePresetId(
     if (typeof preset === 'string') return preset
   }
   return header.agentPreset
+}
+
+/** One model route as the durable log records it (the shape of a
+ *  `model/selection` event payload and of the core `modelSelection`
+ *  projection rows). */
+export interface SidechatModelSelection {
+  provider: string
+  model: string
+  reasoningEffort?: string
+}
+
+/**
+ * The model selection a session CURRENTLY runs, projected from its durable
+ * log (mirror of the core `modelSelection` projection — replicated here
+ * like resolvePresetId to avoid a host dependency). An explicit
+ * `model/selection` event stays PENDING until a same-route `request/header`
+ * consumes it; the value the composer's model selector shows is
+ * `pending ?? lastUsed`.
+ *
+ * This is NOT what `agent.options.provider/model` holds: those freeze the
+ * creation-time deployment default and are never rewritten by a UI model
+ * switch — DSH 0.1.5 routes requests through the session-local selection
+ * and its `agent/request` waterfall instead. Anyone inheriting "the
+ * parent's current model" must read this projection; inheriting
+ * `parent.options` verbatim silently ships the stale creation default
+ * (issue #368).
+ *
+ * A `request/header` contributes provider/model/effort, EXCEPT when its
+ * effort is marked as an adapter default (`adapterDefaults.reasoningEffort`)
+ * which the core selection getter deliberately does not adopt as a sticky pick.
+ */
+export function parentModelSelection(
+  events: readonly SidechatLogEvent[],
+): SidechatModelSelection | undefined {
+  let pending: SidechatModelSelection | undefined
+  let lastUsed: SidechatModelSelection | undefined
+  for (const event of events) {
+    if (event.type === 'model/selection') {
+      const selection = looseSelection(dataOf(event))
+      if (selection !== undefined) pending = selection
+      continue
+    }
+    if (event.type !== 'request/header') continue
+    const header = (dataOf(event).header as {
+      config?: unknown
+      adapterDefaults?: { reasoningEffort?: boolean }
+    } | undefined)
+    const config = header?.config
+    if (config === null || typeof config !== 'object') continue
+    const selection = looseSelection(config as Record<string, unknown>)
+    if (selection === undefined) continue
+    const isDefaultEffort = header?.adapterDefaults?.reasoningEffort === true
+    lastUsed = {
+      provider: selection.provider,
+      model: selection.model,
+      ...(!isDefaultEffort && selection.reasoningEffort !== undefined ? { reasoningEffort: selection.reasoningEffort } : {}),
+    }
+    if (sameSelection(pending, lastUsed)) pending = undefined
+  }
+  return pending ?? lastUsed
+}
+
+function sameSelection(
+  left: SidechatModelSelection | undefined,
+  right: SidechatModelSelection | undefined,
+): boolean {
+  if (left === right) return true
+  if (left === undefined || right === undefined) return false
+  return left.provider === right.provider
+    && left.model === right.model
+    && left.reasoningEffort === right.reasoningEffort
+}
+
+/** Narrow one loose record into a model selection (non-empty strings only). */
+function looseSelection(data: Record<string, unknown>): SidechatModelSelection | undefined {
+  const { provider, model, reasoningEffort } = data
+  if (typeof provider !== 'string' || provider === '') return undefined
+  if (typeof model !== 'string' || model === '') return undefined
+  return {
+    provider,
+    model,
+    ...(typeof reasoningEffort === 'string' && reasoningEffort !== '' ? { reasoningEffort } : {}),
+  }
 }
