@@ -473,6 +473,28 @@ function anchorKey(sessionId: string, cwd: string | undefined, path: string): st
 }
 
 /**
+ * Drop every parked fragment whose TTL ran out.
+ *
+ * The TTL is already honoured when a fragment is TAKEN, but a fragment parked
+ * for a document the reader never opens is never taken — it would sit in the
+ * map for the page's lifetime (since v0.25 every visited native tab body stays
+ * mounted, and every cross-file link click parks one entry). Sweeping on WRITE
+ * is what bounds it: a write is the only event that can add an entry.
+ *
+ * @returns how many expired entries were dropped.
+ */
+export function sweepPendingAnchors(): number {
+  const now = Date.now()
+  let dropped = 0
+  for (const [key, entry] of pendingAnchors) {
+    if (now - entry.at <= PENDING_TTL_MS) continue
+    pendingAnchors.delete(key)
+    dropped += 1
+  }
+  return dropped
+}
+
+/**
  * Park the fragment a cross-file link wants to land on, for the target
  * document's own surface to take once it mounts.
  * @param sessionId - the session both documents live in.
@@ -487,6 +509,7 @@ export function rememberMarkdownAnchor(
   fragment: string,
 ): void {
   if (fragment === '') return
+  sweepPendingAnchors()
   pendingAnchors.set(anchorKey(sessionId, cwd, path), { fragment, at: Date.now() })
 }
 

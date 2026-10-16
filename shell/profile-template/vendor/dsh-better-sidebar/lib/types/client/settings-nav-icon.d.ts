@@ -8,6 +8,10 @@
  * an icon field, the plugin identifies only its own localized row after the
  * dialog mounts. The marker owns no shell structure and is removed on fiber
  * disposal, so the adaptation remains HMR-safe.
+ *
+ * Mutation bursts are coalesced into one sync per animation frame: the
+ * observer watches the whole body, so chat streaming would otherwise run the
+ * document-wide row query at microtask cadence.
  */
 export declare const SETTINGS_NAV_MARKER = "data-dsh-better-sidebar-settings-nav";
 /**

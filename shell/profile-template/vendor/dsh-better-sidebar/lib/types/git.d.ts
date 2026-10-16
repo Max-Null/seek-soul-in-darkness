@@ -96,8 +96,22 @@ export interface GitWorktreeRecord {
 export declare function parseWorktreeList(output: string): GitWorktreeRecord[];
 /** Parse `git log --pretty=format:%h%x1f%s%x1f%an%x1f%ai%x1f%H%x1f%D` rows. */
 export declare function parseLogLines(output: string): GitLogEntry[];
+/** Per-command knobs of {@link runGit}. */
+export interface RunGitOptions {
+    /** Stdout ceiling in bytes; exceeding it kills the child and rejects. */
+    maxBytes?: number;
+    /**
+     * Number of NUL-framed fields after which the child is killed and the output
+     * produced SO FAR resolves — the caller's row cap made real during
+     * production instead of after parsing. One field is one row, but a
+     * rename/copy record costs TWO (its new name and its origin), so a caller
+     * that must never cut a row off early passes twice its row cap; a torn tail
+     * is fine, {@link parsePorcelainZ} already tolerates one.
+     */
+    maxNulFields?: number;
+}
 /** Run one git command; resolves with stdout, rejects with GitCommandError. */
-export declare function runGit(cwd: string, args: string[], timeoutMs?: number): Promise<string>;
+export declare function runGit(cwd: string, args: string[], timeoutMs?: number, options?: RunGitOptions): Promise<string>;
 /** One parsed `git blame --porcelain` row (the editor's hover blame). */
 export interface GitBlameLine {
     /** 1-based line number in the file as it exists in the worktree. */
@@ -152,6 +166,14 @@ export declare function currentBranch(cwd: string): Promise<string>;
  * per file, and callers keep their existing refresh cadence. A numstat failure
  * costs only the counts (the rows fall back to their count-less rendering) —
  * the status answer itself must never fail because of it.
+ *
+ * The porcelain read now comes FIRST, because its paths become the pathspec of
+ * both numstat diffs: the counts only ever ride rows the status read itself
+ * reports, and limiting the diffs to those paths is what keeps an unignored
+ * nested `node_modules` (59 631 entries / 9.24 MB of numstat) out of the two
+ * whole-repo walks. `--literal-pathspecs` is required: porcelain paths are
+ * literal file names, and without it a name like `:colon.txt` is parsed as
+ * pathspec magic and silently loses its counts.
  */
 export declare function status(cwd: string, selected?: string): Promise<GitStatusResult>;
 /** All linked checkouts of the repository containing `cwd`, enriched with a

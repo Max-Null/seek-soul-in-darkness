@@ -243,14 +243,49 @@ export function parseLogLines(output: string): GitLogEntry[] {
   return rows
 }
 
+/**
+ * Hard ceiling on one git command's stdout. A runaway command — a whole-repo
+ * `diff` with no pathspec (the shape a repository with an unignored nested
+ * `node_modules` produced: 59 631 entries / 9.24 MB), a `show` of a generated
+ * file — must not be accumulated into an unbounded JS string. Exceeding it
+ * kills the child and rejects with the ordinary {@link GitCommandError} shape;
+ * callers that treat a git failure as "no answer" (the numstat sides, blame)
+ * keep their existing fallback.
+ */
+const GIT_OUTPUT_MAX_BYTES = 8 * 1024 * 1024
+
+/** Per-command knobs of {@link runGit}. */
+export interface RunGitOptions {
+  /** Stdout ceiling in bytes; exceeding it kills the child and rejects. */
+  maxBytes?: number
+  /**
+   * Number of NUL-framed fields after which the child is killed and the output
+   * produced SO FAR resolves — the caller's row cap made real during
+   * production instead of after parsing. One field is one row, but a
+   * rename/copy record costs TWO (its new name and its origin), so a caller
+   * that must never cut a row off early passes twice its row cap; a torn tail
+   * is fine, {@link parsePorcelainZ} already tolerates one.
+   */
+  maxNulFields?: number
+}
+
+/** Count the NUL bytes of one stdout chunk (the `-z` field separator). */
+function countNulFields(chunk: Buffer): number {
+  let count = 0
+  for (let at = chunk.indexOf(0); at !== -1; at = chunk.indexOf(0, at + 1)) count += 1
+  return count
+}
+
 /** Run one git command; resolves with stdout, rejects with GitCommandError. */
-export function runGit(cwd: string, args: string[], timeoutMs = 30_000): Promise<string> {
+export function runGit(cwd: string, args: string[], timeoutMs = 30_000, options: RunGitOptions = {}): Promise<string> {
   // `core.quotePath=false`: emit paths verbatim instead of C-quoting them
   // (git's default turns a CJK/space path into an octal-escaped, quoted
   // string, and every diff surface renders that string as the file name).
   // The `-z`-framed porcelain callers are unaffected: git never quotes
   // NUL-framed output.
   const full = ['-C', cwd, '--no-pager', '-c', 'color.ui=false', '-c', 'core.quotePath=false', ...args]
+  const maxBytes = options.maxBytes ?? GIT_OUTPUT_MAX_BYTES
+  const maxNulFields = options.maxNulFields
   return new Promise<string>((resolvePromise, reject) => {
     const child = spawn('git', full, {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -258,12 +293,44 @@ export function runGit(cwd: string, args: string[], timeoutMs = 30_000): Promise
       env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
     })
     let stdout = ''
+    let outBytes = 0
+    let outFields = 0
     let stderr = ''
+    // Set when the caller's row cap stopped production: the partial answer is
+    // then the answer, and the killed child's non-zero exit must not be
+    // reported as a git failure of its own.
+    let fieldCapped = false
     const timer = setTimeout(() => {
       child.kill('SIGKILL')
       reject(new GitCommandError(`git ${args[0] ?? ''} timed out after ${timeoutMs}ms`, 'git-error', args.join(' ')))
     }, timeoutMs)
-    child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8') })
+    child.stdout.on('data', (chunk: Buffer) => {
+      // The caller's row cap already decided the answer: ignore everything
+      // that arrives afterwards. Without this guard the retained output kept
+      // growing by whatever the killed child had already buffered into the
+      // pipe, so "capped" was only a claim about the kill and not a bound on
+      // what the caller receives (CI: a 125 KB answer plus a fast child made
+      // the capped call return all 2,500 rows).
+      if (fieldCapped) return
+      stdout += chunk.toString('utf8')
+      outBytes += chunk.length
+      if (outBytes > maxBytes) {
+        child.kill('SIGKILL')
+        reject(new GitCommandError(
+          `git ${args[0] ?? ''} output exceeded ${maxBytes} bytes`,
+          'git-error',
+          args.join(' '),
+        ))
+        return
+      }
+      if (maxNulFields !== undefined) {
+        outFields += countNulFields(chunk)
+        if (outFields >= maxNulFields) {
+          fieldCapped = true
+          child.kill('SIGKILL')
+        }
+      }
+    })
     child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8') })
     child.on('error', (error) => {
       clearTimeout(timer)
@@ -271,7 +338,7 @@ export function runGit(cwd: string, args: string[], timeoutMs = 30_000): Promise
     })
     child.on('close', (code) => {
       clearTimeout(timer)
-      if (code === 0) {
+      if (fieldCapped || code === 0) {
         resolvePromise(stdout)
       } else {
         reject(new GitCommandError(stderr.trim() || `git exited with ${String(code)}`, 'git-error', args.join(' ')))
@@ -488,6 +555,16 @@ export async function currentBranch(cwd: string): Promise<string> {
 const GIT_STATUS_LIMIT = 2_000
 
 /**
+ * NUL-field budget of the status read (the row cap enforced while git is
+ * producing, not after parsing a megabyte of untracked paths). Porcelain
+ * frames one field per row and TWO per rename/copy record, so the budget is
+ * twice the row cap: at least `GIT_STATUS_LIMIT + 1` ROWS always fit, which is
+ * what keeps the truncation flag honest for a rename-heavy tree, while a
+ * 59k-entry untracked walk is still stopped after ~200 KB instead of 9 MB.
+ */
+const GIT_STATUS_MAX_FIELDS = (GIT_STATUS_LIMIT + 1) * 2
+
+/**
  * Fold one path's counts from both numstat sides into a running map. A file
  * changed in the index AND in the worktree is measured on each side against
  * HEAD, so the two readings ADD UP; a binary reading on either side wins,
@@ -511,6 +588,59 @@ function addLineCounts(into: Map<string, GitLineCounts>, from: Map<string, GitLi
   }
 }
 
+/** Byte budget one numstat pathspec may carry (well under every platform's
+ *  command-line cap, so a repository with thousands of tracked modifications
+ *  falls back to the whole-repo diff instead of failing to spawn). */
+const NUMSTAT_PATHSPEC_MAX_BYTES = 8_000
+
+/**
+ * The paths the two `--numstat` diffs of {@link status} actually have to look
+ * at, read from the SAME porcelain output:
+ *
+ *  - every reported path EXCEPT untracked ones (`??`): a file absent from the
+ *    index exists on neither diff side, so git can never print a numstat row
+ *    for it — and in the pathological case (an unignored nested
+ *    `node_modules`) those are 59k of the 59k paths, i.e. all of the argv;
+ *  - the ORIGIN path of every rename/copy record (the next NUL field): a
+ *    pathspec that keeps only the new name hides the pair from git's rename
+ *    detection, and the counts silently degrade from `0 0` to a full-file add.
+ *
+ * `[]` means "no tracked change at all": both diffs are guaranteed empty and
+ * the caller skips the two processes entirely. `undefined` means the set is
+ * too large to spell out on a command line (Windows caps one at ~32k chars) —
+ * the caller falls back to the unpathspec'd whole-repo diff, which is the old
+ * behaviour, not a wrong answer.
+ */
+function numstatPathsof(porcelainZ: string): string[] | undefined {
+  const fields = porcelainZ.split('\0')
+  const paths: string[] = []
+  let bytes = 0
+  const add = (path: string): boolean => {
+    if (path === '') return true
+    bytes += Buffer.byteLength(path) + 1
+    if (bytes > NUMSTAT_PATHSPEC_MAX_BYTES) return false
+    paths.push(path)
+    return true
+  }
+  let index = 0
+  while (index < fields.length) {
+    const field = fields[index]!
+    index += 1
+    if (field === '') continue
+    const xy = field.slice(0, 2)
+    // A torn tail (the row cap kills the child mid-record) has no path.
+    const path = field.slice(3)
+    if (path === '' || xy === '??') continue
+    if (!add(path)) return undefined
+    if (xy[0] === 'R' || xy[0] === 'C') {
+      const origin = fields[index]
+      index += 1
+      if (origin !== undefined && !add(origin)) return undefined
+    }
+  }
+  return paths
+}
+
 /**
  * Working-tree status (untracked included). `--untracked-files=all` lists
  * the contents of new directories as individual entries, while preserving
@@ -521,18 +651,49 @@ function addLineCounts(into: Map<string, GitLineCounts>, from: Map<string, GitLi
  * per file, and callers keep their existing refresh cadence. A numstat failure
  * costs only the counts (the rows fall back to their count-less rendering) —
  * the status answer itself must never fail because of it.
+ *
+ * The porcelain read now comes FIRST, because its paths become the pathspec of
+ * both numstat diffs: the counts only ever ride rows the status read itself
+ * reports, and limiting the diffs to those paths is what keeps an unignored
+ * nested `node_modules` (59 631 entries / 9.24 MB of numstat) out of the two
+ * whole-repo walks. `--literal-pathspecs` is required: porcelain paths are
+ * literal file names, and without it a name like `:colon.txt` is parsed as
+ * pathspec magic and silently loses its counts.
  */
 export async function status(cwd: string, selected?: string): Promise<GitStatusResult> {
   const repositories = await repoRoots(cwd)
   if (repositories.length === 0) return { isRepo: false, entries: [], repositories: [] }
   const root = await repoRoot(cwd, selected)
-  const [branch, raw, unstagedNumstat, stagedNumstat] = await Promise.all([
-    currentBranch(root).catch(() => 'HEAD'),
-    runGit(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all']),
-    runGit(root, ['diff', '--numstat', '-z']).catch(() => ''),
-    runGit(root, ['diff', '--cached', '--numstat', '-z']).catch(() => ''),
-  ])
+  const branchPromise = currentBranch(root).catch(() => 'HEAD')
+  const raw = await runGit(
+    root,
+    ['status', '--porcelain=v1', '-z', '--untracked-files=all'],
+    undefined,
+    // The row cap is enforced while git is still producing, not after parsing
+    // a megabyte of untracked paths: see {@link GIT_STATUS_MAX_FIELDS}.
+    { maxNulFields: GIT_STATUS_MAX_FIELDS },
+  )
   const parsed = parsePorcelainZ(raw)
+  const pathspec = numstatPathsof(raw)
+  let unstagedNumstat = ''
+  let stagedNumstat = ''
+  // `undefined` = too many paths to spell out on one command line (fall back
+  // to the whole-repo diff); `[]` = no tracked change at all, so both diffs are
+  // known empty and neither process is spawned.
+  if (pathspec === undefined || pathspec.length > 0) {
+    // `--literal-pathspecs` must precede the subcommand (`git <flag> diff …`).
+    // Porcelain paths are literal file names, and without it a name like
+    // `:colon.txt` is parsed as pathspec magic and silently loses its counts.
+    const literal = pathspec === undefined ? [] : ['--literal-pathspecs']
+    const paths = pathspec === undefined ? [] : ['--', ...pathspec]
+    const [unstaged, staged] = await Promise.all([
+      runGit(root, [...literal, 'diff', '--numstat', '-z', ...paths]).catch(() => ''),
+      runGit(root, [...literal, 'diff', '--cached', '--numstat', '-z', ...paths]).catch(() => ''),
+    ])
+    unstagedNumstat = unstaged
+    stagedNumstat = staged
+  }
+  const branch = await branchPromise
   const lineCounts = new Map<string, GitLineCounts>()
   addLineCounts(lineCounts, parseNumstat(stagedNumstat))
   addLineCounts(lineCounts, parseNumstat(unstagedNumstat))

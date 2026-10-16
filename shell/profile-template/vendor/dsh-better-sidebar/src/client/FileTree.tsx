@@ -124,6 +124,14 @@ function isFileDrag(event: DragEvent): boolean {
 /** How long the row's "copied" label stays after a successful write. */
 const COPIED_MS = 1200
 
+/**
+ * How many per-path open-with listings one tree keeps. The host answers from
+ * the machine's own application registry, so a handful covers any realistic
+ * menu session; the cap is what keeps the map from growing for the life of the
+ * page (the host keeps every visited tab body mounted).
+ */
+const APPS_CACHE_MAX = 32
+
 /** One changed row's tooltip word (the badge's status vocabulary). */
 function gitToneLabel(tone: GitTone): string {
   switch (tone) {
@@ -1024,11 +1032,15 @@ export function FileTree(props: {
   // Live refresh: the host watches the folders this tree has expanded and
   // names the one that changed, so exactly that level is dropped and
   // re-listed instead of the whole tree. Without it a folder listed once when
-  // it was opened stayed stale for the rest of the session.
+  // it was opened stayed stale for the rest of the session. A PARKED tree
+  // (the host keeps every visited tab body mounted) closes the socket — and
+  // with it the host's `fs.watch` handles — and re-lists the watched levels
+  // once when it comes back.
   useDirectoryWatch({
     sessionId,
     root: cwd,
     dirs: expanded,
+    visible: visible !== false,
     onStale: retryDir,
   })
 
@@ -1451,7 +1463,9 @@ export function FileTree(props: {
    * the machine + the path, so reopening the same row's menu is instant: no
    * request, no disabled "Loading…" frame. A newly installed application shows
    * up on the next tree mount — the alternative (re-probing per open) is the
-   * churn the menu was reported for.
+   * churn the menu was reported for. The cache is bounded (LRU): the host
+   * keeps every visited tab body mounted, so an unbounded per-tree map of
+   * paths would live for the life of the page.
    */
   const appsCacheRef = useRef(new Map<string, readonly OpenInAppEntry[]>())
   useEffect(() => {
@@ -1462,6 +1476,9 @@ export function FileTree(props: {
     if (cached !== undefined) {
       // Already answered for this path: publish it without a null frame (the
       // submenu never flashes its disabled "Loading…" row on a reopen).
+      // Re-inserted so the LRU below evicts the least recently opened path.
+      appsCacheRef.current.delete(key)
+      appsCacheRef.current.set(key, cached)
       setApps({ path, entries: cached })
       return
     }
@@ -1469,7 +1486,15 @@ export function FileTree(props: {
     const listing = isDir ? openInApp.directoryApps() : openInApp.fileApps(path)
     void listing.then((entries) => {
       if (cancelled) return
-      if (entries !== null) appsCacheRef.current.set(key, entries)
+      if (entries !== null) {
+        appsCacheRef.current.set(key, entries)
+        if (appsCacheRef.current.size > APPS_CACHE_MAX) {
+          for (const oldest of appsCacheRef.current.keys()) {
+            appsCacheRef.current.delete(oldest)
+            break
+          }
+        }
+      }
       setApps({ path, entries })
       if (entries === null) reportOpenFailure(path)
     }).catch(() => {

@@ -234,7 +234,7 @@ export function createNativeTabRecords(): NativeTabRecords {
   let store: SidebarStore | undefined
   /** The session's expansion set (absent session = nothing expanded yet). */
   const expandedOf = (sessionId: string): string[] =>
-    store?.getSessionStates().get(sessionId)?.expanded ?? []
+    store?.getSessionState(sessionId)?.expanded ?? []
   /**
    * Re-read every view's expansion projection from the session state. Views
    * that changed get a version bump (which is what re-renders their bodies);
@@ -243,11 +243,12 @@ export function createNativeTabRecords(): NativeTabRecords {
    */
   const syncExpanded = (): void => {
     if (store === undefined) return
-    // One map copy for the whole pass (getSessionStates copies by contract).
-    const states = store.getSessionStates()
     let changed = false
     for (const [id, entry] of views) {
-      const next = states.get(entry.scope.sessionId)?.expanded ?? []
+      // Per-session reads, not one whole-map copy per pass: this runs on EVERY
+      // store notify and the map copy allocated (and invalidated downstream
+      // memos) once per notification.
+      const next = store.getSessionState(entry.scope.sessionId)?.expanded ?? []
       if (samePaths(entry.expanded, next)) continue
       views.set(id, { ...entry, expanded: next, version: entry.version + 1 })
       changed = true
@@ -482,7 +483,10 @@ export function NativeTabBody(props: NativeBodyInjected & NativeBodyFrameworkPro
   const seatSessionId = props.sessionId
   const scopeSessionId = props.sessionIdOf?.(info) ?? seatSessionId
   const version = useRecordVersion(records, seatSessionId, nativeTab.id)
-  const cwd = useSessionRoot(ctx, scopeSessionId)
+  // A parked body (`visible: false`) must not poll: the host keeps every
+  // visited tab body mounted, so an un-gated 5 s `session.cwd` per body is one
+  // host-side `git` spawn per tab per tick, forever.
+  const cwd = useSessionRoot(ctx, scopeSessionId, { visible: nativeTab.visible })
   const scope = useMemo((): SessionScope => ({ sessionId: scopeSessionId, cwd }), [scopeSessionId, cwd])
   // `version` is not read: it only forces this render when the record changed.
   void version

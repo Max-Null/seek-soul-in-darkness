@@ -284,6 +284,12 @@ export declare class SidebarStore {
     /** Per-session persist debounce timers (v0.12.0+: one per session, so a
      *  targeted open never cancels another session's pending write). */
     private readonly persistTimers;
+    /**
+     * The `getSessionStates()` answer, rebuilt on the next read after a write.
+     * Callers use the map as a memo input / `useSyncExternalStore` value, so a
+     * fresh copy per call invalidated every downstream memo on each render.
+     */
+    private sessionStatesCache;
     /** User-facing side card prefs seeding brand-new session states (defaults until the settings RPC resolves). */
     private prefs;
     /**
@@ -353,13 +359,25 @@ export declare class SidebarStore {
      */
     tabOpen(sessionId: string, tabId: string): boolean;
     /**
-     * Read-only view of EVERY cached session's state (v0.17.0+). The
-     * PinnedRail uses this to collect pinned terminals across sessions
-     * without each render reading private fields. The map is the live
-     * `bySession` reference — callers MUST treat it as read-only (mutations
-     * go through {@link reduce} / {@link reduceFor}). A session that has
-     * never been visited in this run is absent (its pinned tabs are not
-     * visible until first load — accepted as YAGNI by the design).
+     * One session's cached state, or `undefined` when it has never been loaded
+     * in this run (see {@link getSessionStates} for the whole map). The
+     * reference is STABLE while nothing writes that session — the store's state
+     * objects are immutable and replaced wholesale — so a hot reader may use it
+     * as a memo input instead of copying the whole map per render.
+     */
+    getSessionState(sessionId: string): SidebarState | undefined;
+    /**
+     * Read-only view of EVERY cached session's state (v0.17.0+): the whole-map
+     * read, for a caller that needs several sessions at once (a per-session
+     * question should use {@link getSessionState} — it does not allocate).
+     * Callers MUST treat the returned map as read-only (mutations go through
+     * {@link reduce} / {@link reduceFor}); it is a cached SNAPSHOT, invalidated
+     * by the next write, so two reads with no write between them return the same
+     * object — a fresh copy per call invalidated every consumer's memo on every
+     * render. A session that has never been visited in this run is absent (its
+     * pinned tabs are not visible until first load — accepted as YAGNI by the
+     * design), and the same is true of a session evicted by the retention cap
+     * ({@link SESSION_STATE_CAP}) until it is loaded again.
      */
     getSessionStates(): ReadonlyMap<string, SidebarState>;
     /** Apply a pure reducer (returns the next state). */
@@ -372,6 +390,26 @@ export declare class SidebarStore {
      * session's layout and is visible whenever the user switches to it.
      */
     reduceFor(sessionId: string, reducer: (state: SidebarState) => SidebarState): void;
+    /**
+     * Record one session's state: refresh its recency and bound the map.
+     * Every write to `bySession` goes through here, so the LRU order and the
+     * `getSessionStates()` snapshot stay in step with the entries.
+     */
+    private putSession;
+    /**
+     * Drop the least recently touched sessions beyond {@link SESSION_STATE_CAP}.
+     * The current session is never dropped, and an evicted session's state is
+     * not lost: it lives in localStorage, so the next `setSession` reloads it.
+     */
+    private evictSessions;
+    /**
+     * Write one session's state NOW instead of waiting for its debounce timer.
+     * Eviction flushes before dropping an entry: the in-memory copy is what the
+     * reader sees until they switch back, and a pending write that landed after
+     * a switch-back would leave the reloaded state behind the storage one.
+     */
+    private flushPersist;
+    private writePersisted;
     private schedulePersist;
     /**
      * Fan one store change out to every subscribed listener. A throwing

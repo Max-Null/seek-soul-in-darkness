@@ -263,7 +263,11 @@ export function Sidebar(props: { ctx: Context; store: SidebarStore }) {
 
   // The live root shared by both client surfaces: the host follows the
   // session's active linked git worktree, the list summary only seeds first paint.
-  const cwd = useSessionRoot(ctx, sessionId)
+  // Visibility is the bottom panel's own open state — collapsed means the
+  // workbench is slid off-screen (`bottomPanelHidden`), which is the same
+  // signal `renderTab` already gates its tab bodies on, so a collapsed shell
+  // holds no session-root timer (the store adds `document.hidden` on top).
+  const cwd = useSessionRoot(ctx, sessionId, { visible: state?.bottomOpen === true })
 
   // The + menu options ride a memo so the workbench does not rebuild the
   // array identity across renders that did not change the store (drag state,

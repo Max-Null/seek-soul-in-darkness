@@ -688,7 +688,12 @@ function buildApi(
       // The client's explorerExclude pref rides the request (compiled here so
       // the listing and the singleton fold probe share one matcher).
       const exclude = compileExcludePatterns(record.exclude, cwd)
-      return listDirectory(target, resolved.listLimit, exclude)
+      // One request-wide probe gate, exactly like the batch route below: a
+      // single-level listing bounds its own probe pools anyway (the shared
+      // budget equals them on purpose — see PROBE_BUDGET), but building one
+      // here keeps the two listing routes the same shape, so neither can ever
+      // fan out per row without a budget.
+      return listDirectory(target, resolved.listLimit, exclude, createProbeGate())
     },
     // Batch listing: one request for every level the tree has expanded, so a
     // mount/refresh costs one round trip instead of N. Each path rides the
@@ -1796,9 +1801,18 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
   ctx.effect(() => () => {
     openToolsDisposers?.()
     agentOpenRegistry.dispose()
-    agentOpenWss.close()
-    fsWatchWss.close()
-    sidechatWss.close()
+    // `WebSocketServer.close()` on a `noServer` server only stops accepting
+    // upgrades: with ws@8 an already-upgraded socket is NOT terminated (the
+    // server just waits for it), so the accepted sockets must be closed
+    // explicitly or every fs-watch `fs.watch` handle and the agent-opens
+    // subscriber set survives the plugin unmount until the browser disconnects.
+    // The sockets' own `close` handlers stay the ones releasing those
+    // resources (they are idempotent, and a socket already closing ignores a
+    // second close).
+    for (const wss of [agentOpenWss, fsWatchWss, sidechatWss]) {
+      for (const client of wss.clients) client.close()
+      wss.close()
+    }
   }, 'dsh-better-sidebar: teardown')
 }
 

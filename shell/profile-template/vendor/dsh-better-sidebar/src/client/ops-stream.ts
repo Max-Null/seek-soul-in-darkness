@@ -37,7 +37,12 @@
  * The stream record outlives its members (only the poller stops): a tab that
  * becomes visible again re-joins, the leader resumes from the persisted `seq`
  * cursor, and the missed delta is folded then — so a file the model rewrote
- * while the tab was parked is still seen as touched.
+ * while the tab was parked is still seen as touched. What it does NOT do is
+ * live for the page: the record map is bounded and least-recently-joined
+ * first (see {@link STREAM_CAP}). A session evicted after that many newer ones
+ * re-joins as a FRESH stream, which re-baselines exactly like a page reload
+ * (see {@link pullStream}) — the only state a returner can lose, and only
+ * after the bound was actually reached.
  */
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import type { SidebarSessionEvent } from '../context-types.ts'
@@ -67,6 +72,17 @@ const IDLE_EVENT_WINDOW = 32
 
 /** Touched paths remembered per session (oldest insertion evicted past this). */
 const TOUCH_WINDOW = 256
+
+/**
+ * How many session records the store holds. The record already shrinks to what
+ * a re-join needs once its last member goes ({@link IDLE_EVENT_WINDOW} events
+ * plus the published touches), but the MAP itself was "alive for the page":
+ * every session an editor tab had ever watched kept its cursor, baseline and
+ * touch table forever. A session still inside this window resumes from its
+ * cursor and folds the delta it missed; the oldest record that nobody is
+ * watching is what a new mint evicts.
+ */
+const STREAM_CAP = 32
 
 /** The op kinds that changed a file's bytes. */
 export type FileOpTouchKind = 'write' | 'edit'
@@ -140,27 +156,44 @@ interface Stream {
   cwd: string | undefined
 }
 
-/** Every session's stream, alive for the page (only its poller stops). */
+/** Every session's stream, bounded by {@link STREAM_CAP} (see `streamOf`). */
 const streams = new Map<string, Stream>()
 
 /** The stream record of one session, created on first use. */
 function streamOf(sessionId: string): Stream {
-  let stream = streams.get(sessionId)
-  if (stream === undefined) {
-    stream = {
-      state: EMPTY_STATE,
-      listeners: new Set(),
-      members: new Set(),
-      leader: undefined,
-      seq: 0,
-      primed: false,
-      events: [],
-      published: new Set(),
-      cwd: undefined,
+  const existing = streams.get(sessionId)
+  if (existing !== undefined) return existing
+  // Bound the store before minting: a session nobody is watching is what goes.
+  // A record WITH members is never evicted — it owns the leader election and
+  // the members' published state — so the cap is soft while many sessions are
+  // genuinely open.
+  if (streams.size >= STREAM_CAP) {
+    for (const [key, candidate] of streams) {
+      if (candidate.members.size > 0) continue
+      streams.delete(key)
+      if (streams.size < STREAM_CAP) break
     }
-    streams.set(sessionId, stream)
   }
+  const stream: Stream = {
+    state: EMPTY_STATE,
+    listeners: new Set(),
+    members: new Set(),
+    leader: undefined,
+    seq: 0,
+    primed: false,
+    events: [],
+    published: new Set(),
+    cwd: undefined,
+  }
+  streams.set(sessionId, stream)
   return stream
+}
+
+/** Move one session's record to the back of the eviction order (LRU). */
+function touchStream(sessionId: string, stream: Stream): void {
+  if (streams.get(sessionId) !== stream) return
+  streams.delete(sessionId)
+  streams.set(sessionId, stream)
 }
 
 /** Publish one delta's settled write/edit ops to every member of the stream. */
@@ -243,6 +276,9 @@ export function useFileOpStream(scope: SessionScope, enabled: boolean): FileOpSt
       return
     }
     const stream = streamOf(sessionId)
+    // The session that just joined is the most recently used, so an ACTIVE
+    // session is never the record a later mint evicts.
+    touchStream(sessionId, stream)
     const member: Member = { lead: (value: boolean) => { setLeading(value) } }
     stream.members.add(member)
     if (stream.leader === undefined) {

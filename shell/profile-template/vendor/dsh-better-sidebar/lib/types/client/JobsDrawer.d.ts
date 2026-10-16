@@ -35,6 +35,10 @@ export interface JobsDrawerProps {
     onOpenOutput(row: TreeJob, anchor: HTMLElement): void;
     /** The job whose output popover is currently open (row highlight). */
     openJobId?: string;
+    /** Whether the page hosting the drawer is really on screen (the native tab's
+     *  own `visible`). Omitted = assume it is: a parked Tasks tab must not keep a
+     *  per-second clock running. */
+    visible?: boolean;
 }
 export declare function JobsDrawer(props: JobsDrawerProps): ReactNode;
 /**

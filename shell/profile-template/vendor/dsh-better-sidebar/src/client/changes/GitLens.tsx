@@ -95,6 +95,55 @@ function errorMessage(reason: unknown): string {
   return reason instanceof Error ? reason.message : String(reason)
 }
 
+/**
+ * Whether two inventory listings say the same thing. Every listing pass answers
+ * with a fresh array of fresh rows, so identity alone would republish on each
+ * poll; a field-by-field compare is what lets an unchanged silent tick stay
+ * silent (see `runOnce`).
+ */
+function sameWorktrees(left: readonly GitWorktree[], right: readonly GitWorktree[]): boolean {
+  if (left === right) return true
+  if (left.length !== right.length) return false
+  return left.every((entry, index) => {
+    const other = right[index]!
+    return entry.path === other.path && entry.branch === other.branch
+      && entry.current === other.current && entry.changes === other.changes
+  })
+}
+
+/**
+ * How many scopes' commit drafts are remembered. The lens is a kept-mounted tab
+ * body, so this record lives for the page: without a bound, a session that
+ * walked through many projects would pin one message per project forever.
+ */
+export const COMMIT_DRAFT_CAP = 32
+
+/**
+ * Write one scope's draft into the record, remembering at most
+ * {@link COMMIT_DRAFT_CAP} scopes. Re-writing a key moves it to the back, so
+ * the draft evicted past the cap is the scope typed into longest ago — a typed
+ * message for another project is never what a commit here submits (the record
+ * is keyed by scope, and `commit()` reads only its own key).
+ *
+ * @param prev - the current record (never mutated).
+ * @param key - the scope key (session + cwd).
+ * @param text - the draft (`''` = cleared; the key stays, so it reads back as
+ *  an empty box rather than as a missing one).
+ * @returns the next record.
+ */
+export function withCommitDraft(
+  prev: Record<string, string>,
+  key: string,
+  text: string,
+): Record<string, string> {
+  const next: Record<string, string> = { ...prev }
+  delete next[key]
+  next[key] = text
+  const keys = Object.keys(next)
+  for (const stale of keys.slice(0, Math.max(0, keys.length - COMMIT_DRAFT_CAP))) delete next[stale]
+  return next
+}
+
 /** The pending destructive action (discard / revert / cherry-pick), gated by a confirm dialog. */
 interface ConfirmState {
   title: string
@@ -346,12 +395,13 @@ export function GitLens(props: GitLensProps) {
    *  and a staged row, so a draft typed against another project would submit
    *  verbatim under this one. Keyed rather than cleared on a scope swap, so a
    *  kept-mounted tab shows a conversation its own message when it comes back
-   *  (#712). */
+   *  (#712) — bounded to the newest {@link COMMIT_DRAFT_CAP} scopes, because
+   *  that tab lives for the whole page. */
   const [commitDrafts, setCommitDrafts] = useState<Record<string, string>>({})
   const draftKey = `${scope.sessionId}\u0000${scope.cwd ?? ''}`
   const commitMsg = commitDrafts[draftKey] ?? ''
   const writeDraft = (text: string): void => {
-    setCommitDrafts(prev => ({ ...prev, [draftKey]: text }))
+    setCommitDrafts(prev => withCommitDraft(prev, draftKey, text))
   }
   const [busy, setBusy] = useState(false)
   /** Whether a commit-message suggestion is being generated host-side (the
@@ -503,7 +553,13 @@ export function GitLens(props: GitLensProps) {
       return
     }
     if (signal?.aborted === true || generation !== scopeGen.current) return
-    setWorktrees(listed)
+    // Republish the inventory only when it really says something new. Handing
+    // React a fresh array (and fresh rows) on every 30 s tick re-rendered the
+    // whole lens — the change trees included — although nothing had changed,
+    // which is exactly what the "silent" tick below was supposed to avoid.
+    // Keeping the previous identity when the listing is equal makes the tick
+    // silent; a new linked checkout or a moved change count still lands.
+    setWorktrees(previous => (sameWorktrees(previous, listed) ? previous : listed))
     const current = listed.find(entry => entry.current)
     const stillListed = chosenPathRef.current !== undefined
       && listed.some(entry => entry.path === chosenPathRef.current)

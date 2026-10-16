@@ -290,8 +290,24 @@ function parseLogLines(output) {
 	}
 	return rows;
 }
+/**
+* Hard ceiling on one git command's stdout. A runaway command — a whole-repo
+* `diff` with no pathspec (the shape a repository with an unignored nested
+* `node_modules` produced: 59 631 entries / 9.24 MB), a `show` of a generated
+* file — must not be accumulated into an unbounded JS string. Exceeding it
+* kills the child and rejects with the ordinary {@link GitCommandError} shape;
+* callers that treat a git failure as "no answer" (the numstat sides, blame)
+* keep their existing fallback.
+*/
+const GIT_OUTPUT_MAX_BYTES = 8388608;
+/** Count the NUL bytes of one stdout chunk (the `-z` field separator). */
+function countNulFields(chunk) {
+	let count = 0;
+	for (let at = chunk.indexOf(0); at !== -1; at = chunk.indexOf(0, at + 1)) count += 1;
+	return count;
+}
 /** Run one git command; resolves with stdout, rejects with GitCommandError. */
-function runGit(cwd, args, timeoutMs = 3e4) {
+function runGit(cwd, args, timeoutMs = 3e4, options = {}) {
 	const full = [
 		"-C",
 		cwd,
@@ -302,6 +318,8 @@ function runGit(cwd, args, timeoutMs = 3e4) {
 		"core.quotePath=false",
 		...args
 	];
+	const maxBytes = options.maxBytes ?? GIT_OUTPUT_MAX_BYTES;
+	const maxNulFields = options.maxNulFields;
 	return new Promise((resolvePromise, reject) => {
 		const child = spawn("git", full, {
 			stdio: [
@@ -316,13 +334,30 @@ function runGit(cwd, args, timeoutMs = 3e4) {
 			}
 		});
 		let stdout = "";
+		let outBytes = 0;
+		let outFields = 0;
 		let stderr = "";
+		let fieldCapped = false;
 		const timer = setTimeout(() => {
 			child.kill("SIGKILL");
 			reject(new GitCommandError(`git ${args[0] ?? ""} timed out after ${timeoutMs}ms`, "git-error", args.join(" ")));
 		}, timeoutMs);
 		child.stdout.on("data", (chunk) => {
+			if (fieldCapped) return;
 			stdout += chunk.toString("utf8");
+			outBytes += chunk.length;
+			if (outBytes > maxBytes) {
+				child.kill("SIGKILL");
+				reject(new GitCommandError(`git ${args[0] ?? ""} output exceeded ${maxBytes} bytes`, "git-error", args.join(" ")));
+				return;
+			}
+			if (maxNulFields !== void 0) {
+				outFields += countNulFields(chunk);
+				if (outFields >= maxNulFields) {
+					fieldCapped = true;
+					child.kill("SIGKILL");
+				}
+			}
 		});
 		child.stderr.on("data", (chunk) => {
 			stderr += chunk.toString("utf8");
@@ -333,7 +368,7 @@ function runGit(cwd, args, timeoutMs = 3e4) {
 		});
 		child.on("close", (code) => {
 			clearTimeout(timer);
-			if (code === 0) resolvePromise(stdout);
+			if (fieldCapped || code === 0) resolvePromise(stdout);
 			else reject(new GitCommandError(stderr.trim() || `git exited with ${String(code)}`, "git-error", args.join(" ")));
 		});
 	});
@@ -514,6 +549,15 @@ async function currentBranch(cwd) {
 *  freeze the browser main thread on JSON parse or list render (#369). */
 const GIT_STATUS_LIMIT = 2e3;
 /**
+* NUL-field budget of the status read (the row cap enforced while git is
+* producing, not after parsing a megabyte of untracked paths). Porcelain
+* frames one field per row and TWO per rename/copy record, so the budget is
+* twice the row cap: at least `GIT_STATUS_LIMIT + 1` ROWS always fit, which is
+* what keeps the truncation flag honest for a rename-heavy tree, while a
+* 59k-entry untracked walk is still stopped after ~200 KB instead of 9 MB.
+*/
+const GIT_STATUS_MAX_FIELDS = 4002;
+/**
 * Fold one path's counts from both numstat sides into a running map. A file
 * changed in the index AND in the worktree is measured on each side against
 * HEAD, so the two readings ADD UP; a binary reading on either side wins,
@@ -536,6 +580,56 @@ function addLineCounts(into, from) {
 		});
 	}
 }
+/** Byte budget one numstat pathspec may carry (well under every platform's
+*  command-line cap, so a repository with thousands of tracked modifications
+*  falls back to the whole-repo diff instead of failing to spawn). */
+const NUMSTAT_PATHSPEC_MAX_BYTES = 8e3;
+/**
+* The paths the two `--numstat` diffs of {@link status} actually have to look
+* at, read from the SAME porcelain output:
+*
+*  - every reported path EXCEPT untracked ones (`??`): a file absent from the
+*    index exists on neither diff side, so git can never print a numstat row
+*    for it — and in the pathological case (an unignored nested
+*    `node_modules`) those are 59k of the 59k paths, i.e. all of the argv;
+*  - the ORIGIN path of every rename/copy record (the next NUL field): a
+*    pathspec that keeps only the new name hides the pair from git's rename
+*    detection, and the counts silently degrade from `0 0` to a full-file add.
+*
+* `[]` means "no tracked change at all": both diffs are guaranteed empty and
+* the caller skips the two processes entirely. `undefined` means the set is
+* too large to spell out on a command line (Windows caps one at ~32k chars) —
+* the caller falls back to the unpathspec'd whole-repo diff, which is the old
+* behaviour, not a wrong answer.
+*/
+function numstatPathsof(porcelainZ) {
+	const fields = porcelainZ.split("\0");
+	const paths = [];
+	let bytes = 0;
+	const add = (path) => {
+		if (path === "") return true;
+		bytes += Buffer.byteLength(path) + 1;
+		if (bytes > NUMSTAT_PATHSPEC_MAX_BYTES) return false;
+		paths.push(path);
+		return true;
+	};
+	let index = 0;
+	while (index < fields.length) {
+		const field = fields[index];
+		index += 1;
+		if (field === "") continue;
+		const xy = field.slice(0, 2);
+		const path = field.slice(3);
+		if (path === "" || xy === "??") continue;
+		if (!add(path)) return void 0;
+		if (xy[0] === "R" || xy[0] === "C") {
+			const origin = fields[index];
+			index += 1;
+			if (origin !== void 0 && !add(origin)) return void 0;
+		}
+	}
+	return paths;
+}
 /**
 * Working-tree status (untracked included). `--untracked-files=all` lists
 * the contents of new directories as individual entries, while preserving
@@ -546,6 +640,14 @@ function addLineCounts(into, from) {
 * per file, and callers keep their existing refresh cadence. A numstat failure
 * costs only the counts (the rows fall back to their count-less rendering) —
 * the status answer itself must never fail because of it.
+*
+* The porcelain read now comes FIRST, because its paths become the pathspec of
+* both numstat diffs: the counts only ever ride rows the status read itself
+* reports, and limiting the diffs to those paths is what keeps an unignored
+* nested `node_modules` (59 631 entries / 9.24 MB of numstat) out of the two
+* whole-repo walks. `--literal-pathspecs` is required: porcelain paths are
+* literal file names, and without it a name like `:colon.txt` is parsed as
+* pathspec magic and silently loses its counts.
 */
 async function status(cwd, selected) {
 	const repositories = await repoRoots(cwd);
@@ -555,27 +657,38 @@ async function status(cwd, selected) {
 		repositories: []
 	};
 	const root = await repoRoot(cwd, selected);
-	const [branch, raw, unstagedNumstat, stagedNumstat] = await Promise.all([
-		currentBranch(root).catch(() => "HEAD"),
-		runGit(root, [
-			"status",
-			"--porcelain=v1",
-			"-z",
-			"--untracked-files=all"
-		]),
-		runGit(root, [
+	const branchPromise = currentBranch(root).catch(() => "HEAD");
+	const raw = await runGit(root, [
+		"status",
+		"--porcelain=v1",
+		"-z",
+		"--untracked-files=all"
+	], void 0, { maxNulFields: GIT_STATUS_MAX_FIELDS });
+	const parsed = parsePorcelainZ(raw);
+	const pathspec = numstatPathsof(raw);
+	let unstagedNumstat = "";
+	let stagedNumstat = "";
+	if (pathspec === void 0 || pathspec.length > 0) {
+		const literal = pathspec === void 0 ? [] : ["--literal-pathspecs"];
+		const paths = pathspec === void 0 ? [] : ["--", ...pathspec];
+		const [unstaged, staged] = await Promise.all([runGit(root, [
+			...literal,
 			"diff",
 			"--numstat",
-			"-z"
-		]).catch(() => ""),
-		runGit(root, [
+			"-z",
+			...paths
+		]).catch(() => ""), runGit(root, [
+			...literal,
 			"diff",
 			"--cached",
 			"--numstat",
-			"-z"
-		]).catch(() => "")
-	]);
-	const parsed = parsePorcelainZ(raw);
+			"-z",
+			...paths
+		]).catch(() => "")]);
+		unstagedNumstat = unstaged;
+		stagedNumstat = staged;
+	}
+	const branch = await branchPromise;
 	const lineCounts = /* @__PURE__ */ new Map();
 	addLineCounts(lineCounts, parseNumstat(stagedNumstat));
 	addLineCounts(lineCounts, parseNumstat(unstagedNumstat));
@@ -1118,7 +1231,7 @@ async function readDirectory(path, maxEntries, exclude, gate) {
 		};
 	}
 	await probeSymlinkTargets(rows, gate);
-	await probeCompactRows(rows, exclude, gate);
+	if (!truncated) await probeCompactRows(rows, exclude, gate);
 	rows.sort(compareEntries);
 	return {
 		path,
@@ -1201,19 +1314,33 @@ async function probeSymlinkTargets(rows, gate, concurrency = SYMLINK_PROBE_CONCU
 /** How many compact probes run in flight during one level listing. */
 const COMPACT_PROBE_CONCURRENCY = 32;
 /**
+* How many children of ONE level are probed for the singleton fold mark.
+*
+* Folding is decorative — it decides whether a row renders as `a/b/c` instead
+* of three rows — so a wide level must not pay one `opendir` per directory row:
+* a cold listing of a 100-directory level issued 100 syscalls to decorate rows
+* the user may never look at. Past this many ELIGIBLE directory rows the
+* remaining rows are simply left unmarked (an un-folded listing), in row order.
+*/
+const COMPACT_PROBE_MAX = 32;
+/**
 * Mark each directory row whose contents are EXACTLY one non-symlink child
 * (`compact`), so the explorer can fold singleton chains into one breadcrumb
 * row. The terminal link (sole FILE child) is marked too: the client
 * preloads marked levels to stabilize the fold label before expansion.
 * Bounded concurrency like the symlink probe: each probe is one opendir + up
 * to two dirent reads, so a directory-heavy level stays responsive. A shared
-* {@link ProbeGate} also keeps a whole batch's levels within one probe budget.
+* {@link ProbeGate} also keeps a whole batch's levels within one probe budget,
+* and at most {@link COMPACT_PROBE_MAX} rows of one level are probed at all.
 * Probe failures (unreadable child level) leave the row unmarked — it simply
 * does not fold.
 */
 async function probeCompactRows(rows, exclude, gate, concurrency = COMPACT_PROBE_CONCURRENCY) {
+	let probed = 0;
 	await forEachRow(rows, concurrency, async (row) => {
 		if (!row.isDir || row.broken) return;
+		if (probed >= COMPACT_PROBE_MAX) return;
+		probed += 1;
 		if (await runProbe(gate, () => hasSingletonChild(row.path, exclude))) row.compact = true;
 	});
 }
@@ -4373,6 +4500,14 @@ function createArchiveTasks(options = {}) {
 *   C10 — no UI/transport vocabulary in the canonical value.
 */
 /**
+* Cap on one session's queue of un-delivered opens. A session whose sidebar is
+* never shown (a long unattended run that keeps opening files) would otherwise
+* grow this array for the lifetime of the host process; past the cap the OLDEST
+* queued opens are dropped, so the newest intent survives and the order of what
+* remains is still FIFO.
+*/
+const AGENT_OPEN_QUEUE_MAX = 64;
+/**
 * Per-session queue of open requests plus the connected sidebar views.
 *
 * Lifecycle: `enqueue` adds a request and — when at least one view for the
@@ -4398,6 +4533,7 @@ var AgentOpenRegistry = class {
 		};
 		const list = this.pending.get(sessionId) ?? [];
 		list.push(request);
+		if (list.length > AGENT_OPEN_QUEUE_MAX) list.splice(0, list.length - AGENT_OPEN_QUEUE_MAX);
 		this.pending.set(sessionId, list);
 		const views = this.subscribers.get(sessionId);
 		if (views !== void 0 && views.size > 0) {
@@ -5899,6 +6035,62 @@ function liveThreadAgent(ctx, childId) {
 	return ctx.get("agents")?.get(childId);
 }
 /**
+* Cold-thread log memo: how many THREADS keep their decoded log. The
+* transcript polls `sidechat.events` per open thread (15 s fallback, plus one
+* pull per push frame), so a handful of threads is the whole working set.
+*/
+const COLD_LOG_MEMO_MAX = 16;
+const coldLogMemo = /* @__PURE__ */ new Map();
+/**
+* Read one COLD thread's persisted log, memoized by the stored artifact's
+* IDENTITY: `childId` plus the host's change token (dev/ino/size/mtimeNs/
+* ctimeNs) and the physical size.
+*
+* Why: a cold thread is re-read on every poll, and each read opens the handle,
+* decodes the ENTIRE persisted log and scans it back to `session/end-seed` —
+* O(thread history) per tick for an answer that only changes when the artifact
+* does. With the memo a repeat poll costs one `stat`.
+*
+* Only the RESULT is memoized, never the handle:
+* {@link readPersistedSession} still opens and closes it (its `finally`), so a
+* concurrent writer is unaffected. A host without `stat`, or a session whose
+* stat is unreadable, reads uncached — the read itself then reports the real
+* error (404 for a gone thread) exactly as before.
+*/
+async function readColdThreadLog(persistence, childId) {
+	const identity = await storedIdentityOf(persistence, childId);
+	if (identity === void 0) return (await readPersistedSession(persistence, childId)).events;
+	const key = `${childId}\0${identity}`;
+	const hit = coldLogMemo.get(key);
+	if (hit !== void 0) {
+		coldLogMemo.delete(key);
+		coldLogMemo.set(key, hit);
+		return hit;
+	}
+	const events = (await readPersistedSession(persistence, childId)).events;
+	const prefix = `${childId}\0`;
+	for (const existing of coldLogMemo.keys()) if (existing.startsWith(prefix)) coldLogMemo.delete(existing);
+	coldLogMemo.set(key, events);
+	while (coldLogMemo.size > COLD_LOG_MEMO_MAX) {
+		const oldest = coldLogMemo.keys().next().value;
+		if (oldest === void 0) break;
+		coldLogMemo.delete(oldest);
+	}
+	return events;
+}
+/** The stored artifact's change identity, or undefined when unavailable. */
+async function storedIdentityOf(persistence, childId) {
+	const stat = persistence.stat;
+	if (typeof stat !== "function") return void 0;
+	try {
+		const snapshot = await stat.call(persistence, childId);
+		if (snapshot === void 0) return void 0;
+		return `${String(snapshot.revision ?? "")}\0${String(snapshot.sizeBytes ?? "")}`;
+	} catch {
+		return;
+	}
+}
+/**
 * The thread's event log (seed + its own events, already expanded): the live
 * agent's in-memory log while the thread is attached — the freshest read,
 * including events not yet flushed — else the persisted logical log. Both
@@ -5916,7 +6108,7 @@ async function threadLogEvents(ctx, childId) {
 	const persistence = ctx.get("sessionPersistence");
 	if (persistence === void 0) throw new SidebarError("sidechat-error", "the session persistence service is unavailable", 503);
 	try {
-		return (await readPersistedSession(persistence, childId)).events;
+		return await readColdThreadLog(persistence, childId);
 	} catch (error) {
 		throw new SidebarError("not-found", `thread "${childId}" is not available: ${error instanceof Error ? error.message : String(error)}`, 404);
 	}
@@ -6646,15 +6838,33 @@ const FS_TREES_MAX_PATHS = 64;
 * newest event that has one wins; when there is no evidence the session cwd is
 * kept (lifted to the repository top level for subdirectory sessions).
 *
-* Resolutions are cached process-wide, so the client's periodic re-ask is
-* cheap after the first scan.
+* Resolutions are cached process-wide ({@link ACTIVE_ROOT_TTL_MS}), concurrent
+* callers share one in-flight resolution AND one in-flight base probe, and
+* every cache is bounded — so the client's periodic re-ask, the debounced
+* fs-watch frames and the twelve route handlers that funnel through
+* `cwdOf()` are answered without a process spawn after the first scan.
 */
-/** How long one computed root is reused before the event log is scanned again. */
-const ACTIVE_ROOT_TTL_MS = 3e3;
+/**
+* How long one computed root is reused before the event log is scanned again.
+*
+* 15 s, deliberately longer than the client's per-tab 5 s poll: at 3 s every
+* poll was a cache miss (one `git rev-parse --show-toplevel` spawn plus up to
+* 4 000 events of backlog scanning per ask, measured 9.6–44.7 ms), which is
+* the opposite of what this cache is for. The semantic cost of the longer TTL
+* is that a session which MOVES into a linked worktree is followed within at
+* most 15 s of the move (was 3 s) — every event-driven re-ask (fs-watch
+* frames, route calls, editor opens) is served from the cache in the meantime
+* and no refresh path is turned off.
+*/
+const ACTIVE_ROOT_TTL_MS = 15e3;
 /** Only the newest slice of the event log is considered. */
 const ACTIVE_ROOT_MAX_EVENTS = 4e3;
 /** Upper bound on git probes per scan (cache misses are what cost). */
 const ACTIVE_ROOT_MAX_PROBES = 24;
+/** Bounds of the three process-wide caches below (LRU, oldest evicted first). */
+const PATH_TOP_CACHE_MAX = 512;
+const LINKED_WORKTREE_CACHE_MAX = 512;
+const ACTIVE_ROOT_CACHE_MAX = 256;
 /** Explicit override, mainly for tests and manual pinning. */
 const ACTIVE_ROOT_OVERRIDE_ENV = "DSH_SIDEBAR_WORKTREE_ROOT";
 /** Keys whose string values describe where a tool actually ran. */
@@ -6668,10 +6878,44 @@ const ACTIVE_ROOT_PATH_PATTERN = /[A-Za-z]:(?:\\|\/)[^\\/\s"'\x60,;|)<>*?]+(?:[\
 * (measured ~7 ms), and the repeated asks  every debounced watch frame, every
 * route call, the client's 5 s poll  are exactly what the TTL exists to keep
 * free.
+*
+* All three maps are BOUNDED: a long-lived host (and a `keepMounted` right
+* sidebar that keeps asking about every session it has ever shown) would
+* otherwise grow them forever. `pathTopCache` caches negative answers too
+* (`undefined` = "no git top level here"), which is what keeps a non-repo
+* session cheap; those entries are evictable like any other.
 */
 const activeWorktreeRootCache = /* @__PURE__ */ new Map();
 const pathTopCache = /* @__PURE__ */ new Map();
 const linkedWorktreeCache = /* @__PURE__ */ new Map();
+/**
+* In-flight de-duplication, mirroring `git.ts`'s `repoRootsInFlight`.
+*
+* `activeRootInFlight` collapses a burst of asks for the SAME (session, base)
+* into one resolution (one base spawn, one event scan); `topLevelInFlight`
+* collapses the base probe across DIFFERENT sessions that share a base (N tabs
+* of one workspace would otherwise spawn N `git rev-parse` processes at once).
+* Both delete their entry on the resolved AND the rejected path, so a failure
+* never poisons the map.
+*/
+const activeRootInFlight = /* @__PURE__ */ new Map();
+const topLevelInFlight = /* @__PURE__ */ new Map();
+/**
+* Insert or refresh one cache entry, evicting the least recently used entry
+* once the cache holds more than `max`. Map iteration order is insertion
+* order, so deleting before setting moves the key to the young end — which is
+* what makes a HIT refresh recency (this is the repo's bounded-cache style
+* from `fs-tree.ts`'s `directoryCache`, with the recency touch added).
+*/
+function cachePut(map, key, value, max) {
+	map.delete(key);
+	map.set(key, value);
+	while (map.size > max) {
+		const oldest = map.keys().next().value;
+		if (oldest === void 0) break;
+		map.delete(oldest);
+	}
+}
 /**
 * Normalized IDENTITY of a path (case- and separator-insensitive), for
 * comparisons and cache keys only: it lowercases, so it must never be handed
@@ -6698,6 +6942,25 @@ async function gitTopLevelOf(cwd) {
 	} catch {
 		return;
 	}
+}
+/**
+* {@link gitTopLevelOf} with in-flight sharing per path identity: concurrent
+* asks for one directory (a route burst, or several sessions rooted in the
+* same repository) spawn ONE git process between them.
+*/
+function topLevelOf(cwd) {
+	const key = pathKeyOf(cwd);
+	const pending = topLevelInFlight.get(key);
+	if (pending !== void 0) return pending;
+	const promise = gitTopLevelOf(cwd).then((top) => {
+		topLevelInFlight.delete(key);
+		return top;
+	}, (error) => {
+		topLevelInFlight.delete(key);
+		throw error;
+	});
+	topLevelInFlight.set(key, promise);
+	return promise;
 }
 /** Collapse duplicated separators without destroying a UNC prefix. */
 function normalizeActivePath(value) {
@@ -6748,11 +7011,15 @@ function collectActivePaths(value, map, structured) {
 /** git top level for one path (its directory when the path names a file). */
 async function topOfActivePath(value) {
 	const key = pathKeyOf(value);
-	if (pathTopCache.has(key)) return pathTopCache.get(key);
-	let top = await gitTopLevelOf(value);
-	if (top === void 0) top = await gitTopLevelOf(dirname(value));
+	if (pathTopCache.has(key)) {
+		const cached = pathTopCache.get(key);
+		cachePut(pathTopCache, key, cached, PATH_TOP_CACHE_MAX);
+		return cached;
+	}
+	let top = await topLevelOf(value);
+	if (top === void 0) top = await topLevelOf(dirname(value));
 	const result = top === void 0 ? void 0 : requireAbsolute(top);
-	pathTopCache.set(key, result);
+	cachePut(pathTopCache, key, result, PATH_TOP_CACHE_MAX);
 	return result;
 }
 /**
@@ -6763,7 +7030,10 @@ async function topOfActivePath(value) {
 async function isLinkedWorktree(top) {
 	const key = pathKeyOf(top);
 	const cached = linkedWorktreeCache.get(key);
-	if (cached !== void 0) return cached;
+	if (cached !== void 0) {
+		cachePut(linkedWorktreeCache, key, cached, LINKED_WORKTREE_CACHE_MAX);
+		return cached;
+	}
 	let linked = false;
 	try {
 		const out = (await runGit(top, [
@@ -6780,7 +7050,7 @@ async function isLinkedWorktree(top) {
 	} catch {
 		linked = false;
 	}
-	linkedWorktreeCache.set(key, linked);
+	cachePut(linkedWorktreeCache, key, linked, LINKED_WORKTREE_CACHE_MAX);
 	return linked;
 }
 /** The newest linked worktree the session's tool/call paths resolve to. */
@@ -6833,6 +7103,11 @@ async function sessionEventsOf(ctx, sessionId) {
 }
 /**
 * The directory the sidebar should treat as the session's root.
+*
+* The cache is consulted BEFORE the probe, and concurrent asks for the same
+* (session, base) share ONE in-flight resolution: twelve route handlers funnel
+* through `cwdOf()`, so a burst of parallel `/sidebar/*` calls used to spawn a
+* `git rev-parse` process per call.
 * @param ctx - host plugin context.
 * @param sessionId - session whose tool calls are inspected.
 * @param base - the authoritative session cwd (already resolved by the caller).
@@ -6843,24 +7118,42 @@ async function activeWorktreeRootOf(ctx, sessionId, base) {
 	const override = (process.env[ACTIVE_ROOT_OVERRIDE_ENV] ?? "").trim();
 	if (override !== "" && isAbsolute(override)) return requireAbsolute(override);
 	const cached = activeWorktreeRootCache.get(sessionId);
-	if (cached !== void 0 && cached.expires > Date.now() && cached.base === base) return cached.root;
-	const top = await gitTopLevelOf(base);
+	if (cached !== void 0 && cached.expires > Date.now() && cached.base === base) {
+		cachePut(activeWorktreeRootCache, sessionId, cached, ACTIVE_ROOT_CACHE_MAX);
+		return cached.root;
+	}
+	const flightKey = `${sessionId}\0${base}`;
+	const pending = activeRootInFlight.get(flightKey);
+	if (pending !== void 0) return pending;
+	const promise = resolveActiveWorktreeRoot(ctx, sessionId, base).then((root) => {
+		activeRootInFlight.delete(flightKey);
+		return root;
+	}, (error) => {
+		activeRootInFlight.delete(flightKey);
+		throw error;
+	});
+	activeRootInFlight.set(flightKey, promise);
+	return promise;
+}
+/** One uncached resolution (see {@link activeWorktreeRootOf}). */
+async function resolveActiveWorktreeRoot(ctx, sessionId, base) {
+	const top = await topLevelOf(base);
 	if (top === void 0) {
-		activeWorktreeRootCache.set(sessionId, {
+		cachePut(activeWorktreeRootCache, sessionId, {
 			root: base,
 			base,
 			expires: Date.now() + ACTIVE_ROOT_TTL_MS
-		});
+		}, ACTIVE_ROOT_CACHE_MAX);
 		return base;
 	}
 	const canonicalTop = requireAbsolute(top);
 	const effectiveBase = pathUnderOf(base, canonicalTop) ? base : canonicalTop;
 	const root = await activeRootFromEvents(await sessionEventsOf(ctx, sessionId), effectiveBase) ?? effectiveBase;
-	activeWorktreeRootCache.set(sessionId, {
+	cachePut(activeWorktreeRootCache, sessionId, {
 		root,
 		base,
 		expires: Date.now() + ACTIVE_ROOT_TTL_MS
-	});
+	}, ACTIVE_ROOT_CACHE_MAX);
 	return root;
 }
 //#endregion
@@ -7354,7 +7647,7 @@ function buildApi(ctx, resolved, getSettings, assistantLive, archiveTasks) {
 			const record = payload;
 			const target = record.path === void 0 ? cwd : await ensureWorkspacePath(cwd, requireString(payload, "path"));
 			const exclude = compileExcludePatterns(record.exclude, cwd);
-			return listDirectory(target, resolved.listLimit, exclude);
+			return listDirectory(target, resolved.listLimit, exclude, createProbeGate());
 		},
 		"fs.trees": async (payload) => {
 			const { cwd } = await cwdOf(payload);
@@ -8135,9 +8428,14 @@ function apply(ctx, config) {
 	ctx.effect(() => () => {
 		openToolsDisposers?.();
 		agentOpenRegistry.dispose();
-		agentOpenWss.close();
-		fsWatchWss.close();
-		sidechatWss.close();
+		for (const wss of [
+			agentOpenWss,
+			fsWatchWss,
+			sidechatWss
+		]) {
+			for (const client of wss.clients) client.close();
+			wss.close();
+		}
 	}, "dsh-better-sidebar: teardown");
 }
 /**

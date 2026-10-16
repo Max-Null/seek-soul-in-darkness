@@ -5,6 +5,10 @@
  * 这里把同一个开关以 `position: fixed` 放到宿主「Open right sidebar」按钮的**左侧紧邻**
  * （按该按钮的 rect 对齐，随窗口 resize 与 500ms 周期重对齐）。
  *
+ * **重对齐的周期表只在入口真的渲染时存在**（v0.25 的稳态开销治理）：正常会话里本组件
+ * 返回 `null`，而 `measure()` 的让位走查要做命中测试——表挂在早退之前时，一个看不见的
+ * 入口会一直烧着这些测量。窗口 resize 监听则是常驻的（见下面的两个 effect）。
+ *
  * **相位不足以判定互斥**：相位是每 1s 轮询来的，而会话头的入口由宿主在它认为合适的
  * 时机渲染，两者之间必然有窗口；相位读取失败时还会按「非 blank」降级，一个从未成功
  * 读到的会话可能一直停在 blank。而两套入口在版面上是**同一个位置**——真同时在场就是
@@ -26,6 +30,12 @@ const GAP = 8
 
 /** 让位时的搜索步长（像素）：够细以免跨过窄芯片，够粗以免几百次命中测试。 */
 const STEP_PX = 4
+
+/** 周期重对齐间隔：与宿主角落控件出现的时机无关，500ms 足够跟上版面漂移。 */
+const REALIGN_MS = 500
+
+/** 让位走查的步数上限：100 步 × 4px = 400px。 */
+const MAX_RETREAT_STEPS = 100
 
 /**
  * 整个槽位是否空着——**必须采样多个点**。
@@ -121,8 +131,11 @@ function slotOccupiedByRect(cx: number, cy: number): boolean {
  * 3. **占位与否要真的去问页面**——见 {@link slotOccupied}：页签芯片会把那一排填满，
  *    按角色筛元素是筛不干净的。
  *
- * 因此这里从锚点左侧起逐像素左移，取**最近的一个真的空着**的槽位；一直退到视口
- * 左缘仍被占时停在最左（宁可贴边，也不叠在宿主控件上）。
+ * 因此这里从锚点左侧起逐像素左移，取**最近的一个真的空着**的槽位。走查是**有界**的：
+ * 最多 {@link MAX_RETREAT_STEPS} 步（400px）——真实的宿主编簇只有几个 28px 按钮，退过
+ * 400px 说明整排都被占着，而每一步都要采样 5 个点做命中测试，不封顶的走查（旧值 400 步）
+ * 会把一次 tick 变成上千次命中测试。到达上限仍未找到空位就接受当前槽位；一直退到
+ * 视口左缘（`left <= 4`）仍被占时停在最左（宁可贴边，也不叠在宿主控件上）。
  * @returns 视口坐标下的 top/left。
  */
 function measure(): { top: number; left: number } {
@@ -131,7 +144,7 @@ function measure(): { top: number; left: number } {
   const rect = anchor.getBoundingClientRect()
   const top = Math.max(4, rect.top + (rect.height - BUTTON_SIZE) / 2)
   let left = Math.max(4, rect.left - GAP - BUTTON_SIZE)
-  for (let step = 0; step < 400; step++) {
+  for (let step = 0; step < MAX_RETREAT_STEPS; step++) {
     if (slotFree(left, top)) break
     left -= STEP_PX
     if (left <= 4) { left = 4; break }
@@ -148,20 +161,37 @@ export function DockFallback({ store }: { store: SidebarStore }): ReactNode {
   const rightOpen = useRightPanelOpen()
   const [pos, setPos] = useState(measure)
   const [headerEntry, setHeaderEntry] = useState(headerEntryPresent)
-  useEffect(() => {
-    const onResize = (): void => {
-      // 坐标没变就不换 state 对象：500ms 的周期重测在版面静止时不该引起重渲染。
-      const next = measure()
-      setPos(prev => (prev.top === next.top && prev.left === next.left ? prev : next))
-      setHeaderEntry(headerEntryPresent())
-    }
-    window.addEventListener('resize', onResize)
-    const timer = setInterval(onResize, 500)
-    return () => {
-      window.removeEventListener('resize', onResize)
-      clearInterval(timer)
-    }
+  // 渲染条件（顺序即下面早退的顺序）：相位已读到 blank、会话头那套入口不在场、右侧面板收起。
+  const rendered = phase !== undefined && phase.blank && !headerEntry && !rightOpen
+  const onResize = useCallback((): void => {
+    // 页面不可见时什么都不做：看不到的版面不值得测量，state 也不需要写。
+    if (document.hidden) return
+    // 坐标没变就不换 state 对象：周期重测在版面静止时不该引起重渲染。
+    const next = measure()
+    setPos(prev => (prev.top === next.top && prev.left === next.left ? prev : next))
+    setHeaderEntry(headerEntryPresent())
   }, [])
+  // 窗口 resize 常驻（不随渲染门控）：入口此刻没渲染（非 blank 会话 / 面板展开）时的一次
+  // 尺寸变化也必须落到 state 里，等它重新出现时坐标才是对的。
+  useEffect(() => {
+    window.addEventListener('resize', onResize)
+    return () => { window.removeEventListener('resize', onResize) }
+  }, [onResize])
+  // 500ms 周期重对齐只在入口**真的渲染**时建表：正常会话里本组件返回 null，那条表
+  // （连同 measure() 里最多 100 步的命中测试走查）绝不能还在跑。
+  useEffect(() => {
+    if (!rendered) return
+    // 进入可见的那一刻先补一次：让位/展开态的切换不一定伴随 resize 事件。
+    onResize()
+    const timer = setInterval(onResize, REALIGN_MS)
+    // 回到前台立刻补测一次（onResize 自身在隐藏期间是空转的）。
+    const onVisibilityChange = (): void => { if (!document.hidden) onResize() }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [rendered, onResize])
   // 相位判定在组件内部完成：非 blank（或尚未读到）时整个不渲染 ——
   // 会话头里的入口此时是唯一一套。
   if (phase === undefined || !phase.blank) return null

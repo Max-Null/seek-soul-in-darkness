@@ -41,6 +41,24 @@
  * Bumping the version on every tick re-rendered every consumer — the file
  * tree's rows included — once per cadence for no reason, which is what the
  * snapshot identity check above exists to prevent.
+ *
+ * Retention: remembering a key is not a lease on memory. The last consumer of
+ * a slot going away (unmount, a parked tab, a scope change) DROPS the slot —
+ * snapshot, index and listeners and all — so a long session that walks through
+ * files, worktrees and cwds cannot grow the map for the page's lifetime. Since
+ * v0.25 every visited native tab body stays mounted, so there is no host-side
+ * teardown that would have bounded this for us.
+ *
+ * Dropping is invisible to a consumer that still carries the slot object: its
+ * next render re-mints the key (`slotOf`) and `retain` re-registers that same
+ * object, so the next retain performs a FRESH fetch rather than serving a
+ * stale answer (and never mints a second slot for one key — two slots would
+ * mean two pollers). A slot with a fetch in flight is never dropped mid-flight
+ * (the answer has to land somewhere); it goes when that fetch settles. As a
+ * second bound the registry is capped at {@link SLOT_CAP} keys, because a
+ * consumer that mounts while invisible mints a slot it never retains and never
+ * releases — eviction only ever takes a slot with no retained consumer and no
+ * fetch in flight.
  */
 import { useCallback, useEffect, useSyncExternalStore } from 'react'
 import { api, type GitLineCounts, type GitStatusResult, type SessionScope } from '../api.ts'
@@ -224,6 +242,38 @@ const TIER_FACTORS: readonly (number | null)[] = [1, 2, 6, null]
 
 const slots = new Map<string, Slot>()
 
+/**
+ * The registry's hard ceiling. The primary rule is release-driven (see
+ * {@link release}); this cap is the backstop for keys nobody ever released —
+ * a consumer that mounts while invisible mints its slot without retaining it,
+ * and only the cap bounds that path. Eviction never touches a slot a consumer
+ * holds or one with a fetch in flight, so the cap is soft while many slots are
+ * genuinely live.
+ */
+const SLOT_CAP = 256
+
+/** Whether nothing depends on this slot: no consumer holds the answer and no
+ *  fetch is in flight. */
+function evictable(slot: Slot): boolean {
+  return slot.visible === 0 && !slot.running
+}
+
+/** Drop one slot from the registry. Identity-checked, so a key that was
+ *  re-minted meanwhile keeps its live entry. */
+function forget(slot: Slot): void {
+  if (slots.get(slot.key) === slot) slots.delete(slot.key)
+}
+
+/** Make room for one key about to be minted: evict the oldest slots nobody
+ *  holds while the registry is at {@link SLOT_CAP}. Map order is mint order. */
+function trimSlots(): void {
+  if (slots.size < SLOT_CAP) return
+  for (const slot of slots.values()) {
+    if (slots.size < SLOT_CAP) break
+    if (evictable(slot)) forget(slot)
+  }
+}
+
 /** The automatic cadence of one slot; `null` = no timer (tier 3). */
 function intervalOf(slot: Slot): number | null {
   const factor = TIER_FACTORS[slot.tier] ?? null
@@ -235,6 +285,9 @@ function slotOf(scope: SessionScope, worktree: string | undefined): Slot {
   const key = `${sessionId}\u0000${cwd ?? ''}\u0000${repoRoot ?? ''}\u0000${worktree ?? ''}`
   const existing = slots.get(key)
   if (existing !== undefined) return existing
+  // Bounded before minting: a key no consumer ever released must not push the
+  // registry past the cap (see SLOT_CAP).
+  trimSlots()
   const slot: Slot = {
     key, sessionId, cwd, repoRoot, worktree,
     snapshot: null, loading: false, error: false, version: 0, generation: 0,
@@ -315,6 +368,9 @@ function fetchSlot(slot: Slot): void {
         slot.pending = false
         fetchSlot(slot)
       }
+      // The last consumer may have left while this fetch was in flight: the
+      // slot is dropped now that nothing is pending on it any more.
+      if (evictable(slot)) forget(slot)
     })
 }
 
@@ -343,6 +399,10 @@ function reschedule(slot: Slot): void {
 }
 
 function retain(slot: Slot, poll: boolean): void {
+  // Re-register a slot the store forgot while nobody held it: the consumer
+  // that still carries this object must keep its key (minting a second slot
+  // for it would mean a second poller on the same scope).
+  if (!slots.has(slot.key)) slots.set(slot.key, slot)
   slot.visible += 1
   if (poll) slot.pollers += 1
   // The answer is fetched for the FIRST consumer whatever kind it is — a
@@ -366,6 +426,11 @@ function release(slot: Slot, poll: boolean): void {
     slot.index = null
     slot.indexSource = null
     notify(slot)
+    // …and drop the slot itself: nobody holds the answer, so the key must not
+    // be remembered for the rest of the page's life. A fetch in flight keeps
+    // the slot (its answer has to land somewhere) and the settle path drops it
+    // then.
+    if (!slot.running) forget(slot)
   }
 }
 

@@ -105,6 +105,18 @@ export declare function rewriteLocalMarkdownLinks(text: string, docPath: string 
  */
 export declare function jumpToFragment(container: HTMLElement, fragment: string): boolean;
 /**
+ * Drop every parked fragment whose TTL ran out.
+ *
+ * The TTL is already honoured when a fragment is TAKEN, but a fragment parked
+ * for a document the reader never opens is never taken — it would sit in the
+ * map for the page's lifetime (since v0.25 every visited native tab body stays
+ * mounted, and every cross-file link click parks one entry). Sweeping on WRITE
+ * is what bounds it: a write is the only event that can add an entry.
+ *
+ * @returns how many expired entries were dropped.
+ */
+export declare function sweepPendingAnchors(): number;
+/**
  * Park the fragment a cross-file link wants to land on, for the target
  * document's own surface to take once it mounts.
  * @param sessionId - the session both documents live in.

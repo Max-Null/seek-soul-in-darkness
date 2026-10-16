@@ -63,6 +63,39 @@ type ViewMode = 'preview' | 'edit'
 const previewScrollMemory = new Map<string, number>()
 const previewScrollKey = (scope: { sessionId: string }, path: string): string => `${scope.sessionId}::${path}`
 
+/**
+ * How many documents' preview positions are remembered. Since v0.25 every
+ * visited native tab body stays mounted (the host has no LRU), so this map
+ * would otherwise grow with every file the session ever previewed; past the
+ * cap the least recently written document is forgotten and its preview opens
+ * at the top again — a cosmetic loss, never a wrong document.
+ */
+export const PREVIEW_SCROLL_CAP = 64
+
+/**
+ * Remember one document's preview offset. The write moves the key to the back
+ * of the eviction order, so the document forgotten past the cap is the one
+ * that has gone longest without a scroll.
+ *
+ * @param scope - the viewer's scope (its session id is part of the key).
+ * @param path - the document's absolute path.
+ * @param top - the preview container's `scrollTop`.
+ */
+export function rememberPreviewScroll(scope: { sessionId: string }, path: string, top: number): void {
+  const key = previewScrollKey(scope, path)
+  previewScrollMemory.delete(key)
+  previewScrollMemory.set(key, top)
+  for (const stale of previewScrollMemory.keys()) {
+    if (previewScrollMemory.size <= PREVIEW_SCROLL_CAP) break
+    previewScrollMemory.delete(stale)
+  }
+}
+
+/** The remembered offset of one document (0 = none: open it at the top). */
+export function previewScrollOf(scope: { sessionId: string }, path: string): number {
+  return previewScrollMemory.get(previewScrollKey(scope, path)) ?? 0
+}
+
 /** Whether two spellings are the SAME document — byte-equal, or equal once
  *  line endings are normalized CRLF/CR → LF. Line endings are not content:
  *  CodeMirror keeps every document with `\n` endings whatever the file used,
@@ -169,7 +202,7 @@ export function TextEditor(props: FileViewerProps) {
    *  element, so capture it on scroll and restore after each remount. Seeded
    *  from the module-level per-file memory so a full viewer rebuild
    *  (save-then-switch-to-preview reload) also keeps the position. */
-  const previewScrollRef = useRef(previewScrollMemory.get(previewScrollKey(scope, path)) ?? 0)
+  const previewScrollRef = useRef(previewScrollOf(scope, path))
   /** True while a programmatic restore is in flight; raw scroll events caused
    *  by the restore (or by the browser clamping a collapsed reload container
    *  to 0) must not overwrite the remembered position. */
@@ -235,7 +268,7 @@ export function TextEditor(props: FileViewerProps) {
   // A different file switches the remembered preview scroll position to that
   // file's own entry (first open: none, so the preview starts at the top).
   useEffect(() => {
-    previewScrollRef.current = previewScrollMemory.get(previewScrollKey(scope, path)) ?? 0
+    previewScrollRef.current = previewScrollOf(scope, path)
   }, [scope, path])
 
   // Create the CodeMirror editor once the content is loaded. The view owns
@@ -879,7 +912,7 @@ export function TextEditor(props: FileViewerProps) {
             const el = event.currentTarget
             if (!restoringRef.current && el.scrollHeight > el.clientHeight) {
               previewScrollRef.current = el.scrollTop
-              previewScrollMemory.set(previewScrollKey(scope, path), el.scrollTop)
+              rememberPreviewScroll(scope, path, el.scrollTop)
             }
             if (!anchorThrottleRef.current) {
               anchorThrottleRef.current = true

@@ -268,6 +268,94 @@ function liveThreadAgent(ctx: Context, childId: string): Agent | undefined {
 }
 
 /**
+ * The host's lightweight stored-session observation (`sessionPersistence.stat`),
+ * read structurally: the plugin's own mirror of the service only models the
+ * handle API, and a host without `stat` must degrade to an uncached read rather
+ * than fail.
+ */
+interface SidebarStoredSessionStat {
+  /** Opaque change token; the JSONL backend composes it from the file's
+   *  dev/ino/size/mtimeNs/ctimeNs, i.e. it changes iff the artifact does. */
+  readonly revision?: unknown
+  /** Physical artifact size in bytes, when the backend can provide it. */
+  readonly sizeBytes?: number
+}
+
+/**
+ * Cold-thread log memo: how many THREADS keep their decoded log. The
+ * transcript polls `sidechat.events` per open thread (15 s fallback, plus one
+ * pull per push frame), so a handful of threads is the whole working set.
+ */
+const COLD_LOG_MEMO_MAX = 16
+const coldLogMemo = new Map<string, readonly SidechatLogEvent[]>()
+
+/**
+ * Read one COLD thread's persisted log, memoized by the stored artifact's
+ * IDENTITY: `childId` plus the host's change token (dev/ino/size/mtimeNs/
+ * ctimeNs) and the physical size.
+ *
+ * Why: a cold thread is re-read on every poll, and each read opens the handle,
+ * decodes the ENTIRE persisted log and scans it back to `session/end-seed` —
+ * O(thread history) per tick for an answer that only changes when the artifact
+ * does. With the memo a repeat poll costs one `stat`.
+ *
+ * Only the RESULT is memoized, never the handle:
+ * {@link readPersistedSession} still opens and closes it (its `finally`), so a
+ * concurrent writer is unaffected. A host without `stat`, or a session whose
+ * stat is unreadable, reads uncached — the read itself then reports the real
+ * error (404 for a gone thread) exactly as before.
+ */
+async function readColdThreadLog(
+  persistence: SidebarSessionPersistenceService,
+  childId: string,
+): Promise<readonly SidechatLogEvent[]> {
+  const identity = await storedIdentityOf(persistence, childId)
+  if (identity === undefined) {
+    return (await readPersistedSession(persistence, childId)).events as unknown as readonly SidechatLogEvent[]
+  }
+  const key = `${childId}\0${identity}`
+  const hit = coldLogMemo.get(key)
+  if (hit !== undefined) {
+    // Refresh recency (the memo is a bounded LRU).
+    coldLogMemo.delete(key)
+    coldLogMemo.set(key, hit)
+    return hit
+  }
+  const events = (await readPersistedSession(persistence, childId)).events as unknown as readonly SidechatLogEvent[]
+  // One thread owns at most one entry: a changed artifact replaces the old
+  // version instead of pinning a second copy of a potentially huge log.
+  const prefix = `${childId}\0`
+  for (const existing of coldLogMemo.keys()) {
+    if (existing.startsWith(prefix)) coldLogMemo.delete(existing)
+  }
+  coldLogMemo.set(key, events)
+  while (coldLogMemo.size > COLD_LOG_MEMO_MAX) {
+    const oldest = coldLogMemo.keys().next().value
+    if (oldest === undefined) break
+    coldLogMemo.delete(oldest)
+  }
+  return events
+}
+
+/** The stored artifact's change identity, or undefined when unavailable. */
+async function storedIdentityOf(
+  persistence: SidebarSessionPersistenceService,
+  childId: string,
+): Promise<string | undefined> {
+  const stat = (persistence as { stat?: (id: string) => Promise<SidebarStoredSessionStat | undefined> }).stat
+  if (typeof stat !== 'function') return undefined
+  try {
+    const snapshot = await stat.call(persistence, childId)
+    if (snapshot === undefined) return undefined
+    return `${String(snapshot.revision ?? '')}\0${String(snapshot.sizeBytes ?? '')}`
+  } catch {
+    // Unreadable stat (an unknown session, a permission race): fall back to
+    // the plain read, which reports the failure in the route's own shape.
+    return undefined
+  }
+}
+
+/**
  * The thread's event log (seed + its own events, already expanded): the live
  * agent's in-memory log while the thread is attached — the freshest read,
  * including events not yet flushed — else the persisted logical log. Both
@@ -289,8 +377,7 @@ async function threadLogEvents(ctx: Context, childId: string): Promise<readonly 
     throw new SidebarError('sidechat-error', 'the session persistence service is unavailable', 503)
   }
   try {
-    const inspected = await readPersistedSession(persistence, childId)
-    return inspected.events as unknown as readonly SidechatLogEvent[]
+    return await readColdThreadLog(persistence, childId)
   } catch (error: unknown) {
     throw new SidebarError(
       'not-found',

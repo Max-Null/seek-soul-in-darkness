@@ -140,11 +140,41 @@ const inFlightStarts = new Set<string>()
  *  client store's own key space, like the diff pane's redaction flag). */
 const LAST_THREAD_KEY = 'dsh-sidebar:v1:sidechat-thread'
 
+/**
+ * How many sessions keep their remembered thread. The map lives for the life
+ * of the page and is serialised WHOLE, so it needs both a bound (LRU: the
+ * least recently bound session is forgotten) and — below — a write that is
+ * coalesced instead of re-serialising the map on every bind.
+ */
+const LAST_THREAD_MAX = 32
+
 /** The in-memory mirror of {@link LAST_THREAD_KEY}. */
 const lastThreadBySession = new Map<string, string>()
 
 /** Whether the localStorage mirror has been read into the map yet. */
 let lastThreadsLoaded = false
+
+/** Pending coalesced write of {@link LAST_THREAD_KEY} (undefined = none). */
+let lastThreadsWrite: number | undefined
+
+/**
+ * Write the whole map once the binds stop coming. A thread switch binds two
+ * or three ids in a row (mint, switch, reattach); serialising per bind was
+ * pure churn for a value nothing reads back mid-page. Best-effort like the
+ * rest of this storage: a denied or full write keeps the in-memory binding.
+ */
+function scheduleLastThreadsWrite(): void {
+  if (lastThreadsWrite !== undefined) window.clearTimeout(lastThreadsWrite)
+  lastThreadsWrite = window.setTimeout(() => {
+    lastThreadsWrite = undefined
+    try {
+      localStorage.setItem(LAST_THREAD_KEY, JSON.stringify(Object.fromEntries(lastThreadBySession)))
+    } catch {
+      // A full or denied storage keeps the in-memory binding: reattaching
+      // within this page still works, only a reload loses it.
+    }
+  }, 200)
+}
 
 /**
  * A native tab's record and its navigation params live in the host's memory
@@ -181,13 +211,16 @@ function lastSidechatThread(sessionId: string): string | undefined {
 function rememberSidechatThread(sessionId: string, threadId: string): void {
   loadLastThreads()
   if (lastThreadBySession.get(sessionId) === threadId) return
+  // delete + set: a Map keeps an existing key's position otherwise, and the
+  // cap below drops from the front.
+  lastThreadBySession.delete(sessionId)
   lastThreadBySession.set(sessionId, threadId)
-  try {
-    localStorage.setItem(LAST_THREAD_KEY, JSON.stringify(Object.fromEntries(lastThreadBySession)))
-  } catch {
-    // A full or denied storage keeps the in-memory binding: reattaching
-    // within this page still works, only a reload loses it.
+  while (lastThreadBySession.size > LAST_THREAD_MAX) {
+    const oldest = lastThreadBySession.keys().next()
+    if (oldest.done === true) break
+    lastThreadBySession.delete(oldest.value)
   }
+  scheduleLastThreadsWrite()
 }
 
 /** Per-thread transcript cache: thread-own events merged by seq (polls ride
@@ -816,7 +849,7 @@ export function SideChatView(props: {
     () => (threadId === undefined ? [] : [threadId]),
     [threadId],
   )
-  useSidechatPush({ threadIds: watchedThreads, onInvalidate: handleInvalidate })
+  useSidechatPush({ threadIds: watchedThreads, visible, onInvalidate: handleInvalidate })
 
   // The model catalog is deployment-scoped, so one read per mount serves every
   // switch; a failed read leaves the picker on the inheritance fallback.

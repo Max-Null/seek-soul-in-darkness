@@ -18,7 +18,7 @@
  * Every control is a host primitive (Button / Tag / Switch / StateDot /
  * TerminalBlock).
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   Button, IconChevronUpOutlineRegular, IconCopyOutlineRegular, IconStopFillRegular, StateDot, Switch, Tag,
   TerminalBlock, type TagTone,
@@ -41,6 +41,63 @@ import css from './tasks-graph.module.css'
 const JOB_KILL_ARM_MS = 3000
 /** The agent count at which the drawer starts collapsed. */
 export const JOBS_DRAWER_COLLAPSE_AT = 8
+/** The cadence of a live row's elapsed text. */
+const ELAPSED_TICK_MS = 1_000
+
+/**
+ * Whether the PAGE is hidden (a background browser tab). The drawer's clock
+ * must not tick for a document nobody is looking at, and it must show the
+ * truth the moment the page comes back — hence a subscription rather than a
+ * one-shot read.
+ */
+function usePageHidden(): boolean {
+  const [hidden, setHidden] = useState(() => typeof document !== 'undefined' && document.hidden === true)
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined
+    const sync = (): void => { setHidden(document.hidden === true) }
+    document.addEventListener('visibilitychange', sync)
+    return () => { document.removeEventListener('visibilitychange', sync) }
+  }, [])
+  return hidden
+}
+
+/**
+ * One live row's elapsed text. The clock lives HERE — in the span it prints —
+ * and not in the drawer: `setNow(Date.now())` in the drawer handed React a new
+ * value every second, so the whole row list was rebuilt once per tick (and a
+ * parked Tasks tab kept doing it). A memoized span that owns its own second
+ * re-renders one text node per tick instead, and creates no timer at all while
+ * the row is settled, the drawer is collapsed (nothing renders it) or the page
+ * is not really on screen. Leaving and re-entering visibility re-reads the
+ * clock, so the elapsed time shown on return is current, not the value frozen
+ * when the tab was parked.
+ */
+const LiveElapsed = memo(function LiveElapsed(props: {
+  /** Epoch ms the job started. */
+  startedAt: number
+  /** Settlement time; the duration is final once it is present. */
+  finishedAt: number | undefined
+  /** Whether the registry still holds the job open (drives the clock). */
+  live: boolean
+  /** Whether the page is on screen (a parked tab runs no timer). */
+  visible: boolean
+}): ReactNode {
+  const { startedAt, finishedAt, live, visible } = props
+  const running = live && visible
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!running) return undefined
+    // The pause may have been long: read the clock before the first tick.
+    setNow(Date.now())
+    const timer = window.setInterval(() => { setNow(Date.now()) }, ELAPSED_TICK_MS)
+    return () => { window.clearInterval(timer) }
+  }, [running])
+  // The settled expression mirrors the drawer's own: a live row measures from
+  // now, a settled one from its settlement time (its start when it never
+  // settled), so a stopped job's duration never keeps growing.
+  const elapsed = (live ? now : finishedAt ?? startedAt) - startedAt
+  return <>{formatJobDuration(elapsed, t)}</>
+})
 
 /** The Tag tone of one job status. */
 function jobTone(job: SidebarJobView): TagTone {
@@ -62,10 +119,14 @@ export interface JobsDrawerProps {
   onOpenOutput(row: TreeJob, anchor: HTMLElement): void
   /** The job whose output popover is currently open (row highlight). */
   openJobId?: string
+  /** Whether the page hosting the drawer is really on screen (the native tab's
+   *  own `visible`). Omitted = assume it is: a parked Tasks tab must not keep a
+   *  per-second clock running. */
+  visible?: boolean
 }
 
 export function JobsDrawer(props: JobsDrawerProps): ReactNode {
-  const { rows, agentCount, jobs, onOpenOutput, openJobId } = props
+  const { rows, agentCount, jobs, onOpenOutput, openJobId, visible = true } = props
   const autoOpen = agentCount < JOBS_DRAWER_COLLAPSE_AT
   /** Manual override; undefined = follow the auto rule. */
   const [manualOpen, setManualOpen] = useState<boolean | undefined>(undefined)
@@ -76,7 +137,9 @@ export function JobsDrawer(props: JobsDrawerProps): ReactNode {
   const [armedId, setArmedId] = useState<string | undefined>(undefined)
   const [killingId, setKillingId] = useState<string | undefined>(undefined)
   const [killErrorId, setKillErrorId] = useState<string | undefined>(undefined)
-  const [now, setNow] = useState(() => Date.now())
+  /** The page's own visibility: the elapsed clocks below are gated on it. */
+  const pageHidden = usePageHidden()
+  const ticking = visible && !pageHidden
 
   const liveCount = useMemo(
     () => rows.reduce((count, row) => count + (isJobLive(row.job) ? 1 : 0), 0),
@@ -93,13 +156,6 @@ export function JobsDrawer(props: JobsDrawerProps): ReactNode {
     const timer = window.setTimeout(() => { setArmedId(undefined) }, JOB_KILL_ARM_MS)
     return () => { window.clearTimeout(timer) }
   }, [armedId])
-
-  useEffect(() => {
-    if (liveCount === 0) return
-    setNow(Date.now())
-    const timer = window.setInterval(() => { setNow(Date.now()) }, 1_000)
-    return () => { window.clearInterval(timer) }
-  }, [liveCount])
 
   const kill = useCallback(async (row: TreeJob): Promise<void> => {
     if (jobs === undefined) return
@@ -145,13 +201,15 @@ export function JobsDrawer(props: JobsDrawerProps): ReactNode {
             const armed = armedId === job.id
             const killing = killingId === job.id
             const killFailed = killErrorId === job.id
-            const elapsed = live
-              ? now - job.startedAt
-              : (job.finishedAt ?? job.startedAt) - job.startedAt
-            const secondary = [
+            // Everything here is row-stable: the ticking duration is the
+            // elapsed SPAN's own state (see LiveElapsed), so a clock tick never
+            // rebuilds this list. The accessible name deliberately carries the
+            // stable half only — a name that changes every second is noise for
+            // a screen reader, and keeping it here would drag the whole row
+            // back into the per-second render.
+            const meta = [
               ...(multiOwner ? [row.ownerTitle] : []),
               ...(job.detail !== undefined && job.detail !== '' ? [job.detail] : []),
-              formatJobDuration(elapsed, t),
             ].filter(Boolean).join(' · ')
             return (
               <div
@@ -164,7 +222,7 @@ export function JobsDrawer(props: JobsDrawerProps): ReactNode {
                   variant="ghost"
                   size="sm"
                   className={css.jobsRowMain}
-                  aria-label={`${job.label} ${jobStatusLabel(job.status, t)} ${secondary}`}
+                  aria-label={`${job.label} ${jobStatusLabel(job.status, t)}${meta === '' ? '' : ` ${meta}`}`}
                   title={t('jobViewOutput')}
                   onClick={(event) => { onOpenOutput(row, event.currentTarget) }}
                 >
@@ -172,7 +230,15 @@ export function JobsDrawer(props: JobsDrawerProps): ReactNode {
                   <Tag tone="quiet">{job.kind}</Tag>
                   <span className={css.jobsLabel} title={job.label}>{job.label}</span>
                   <Tag tone={jobTone(job)}>{jobStatusLabel(job.status, t)}</Tag>
-                  <span className={css.jobsMeta}>{secondary}</span>
+                  <span className={css.jobsMeta}>
+                    {meta === '' ? '' : `${meta} · `}
+                    <LiveElapsed
+                      startedAt={job.startedAt}
+                      finishedAt={job.finishedAt}
+                      live={live}
+                      visible={ticking}
+                    />
+                  </span>
                 </Button>
                 {/*
                   The terminate column is reserved by EVERY row (settled ones

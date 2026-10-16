@@ -689,6 +689,16 @@ window.__ModuleLoader__.load({
 				};
 			}
 		}
+		/**
+		* How many session states stay in memory at once. `bySession` used to grow for
+		* the life of the page — nothing deleted an entry — which under the host's
+		* `keepMounted` tab bodies means one permanent entry per conversation ever
+		* visited. The CURRENT session is always kept; everything else is an LRU of
+		* the most recently touched sessions. Eviction is transparent: the state also
+		* lives in localStorage (a pending debounced write is flushed first), so
+		* switching back to an evicted session reloads exactly what was there.
+		*/
+		const SESSION_STATE_CAP = 32;
 		/** The session-scoped store: one state per conversation, localStorage-backed. */
 		var SidebarStore = class {
 			bySession = /* @__PURE__ */ new Map();
@@ -701,6 +711,12 @@ window.__ModuleLoader__.load({
 			/** Per-session persist debounce timers (v0.12.0+: one per session, so a
 			*  targeted open never cancels another session's pending write). */
 			persistTimers = /* @__PURE__ */ new Map();
+			/**
+			* The `getSessionStates()` answer, rebuilt on the next read after a write.
+			* Callers use the map as a memo input / `useSyncExternalStore` value, so a
+			* fresh copy per call invalidated every downstream memo on each render.
+			*/
+			sessionStatesCache;
 			/** User-facing side card prefs seeding brand-new session states (defaults until the settings RPC resolves). */
 			prefs = { ...SIDEBAR_PREFS_DEFAULTS };
 			/**
@@ -748,16 +764,15 @@ window.__ModuleLoader__.load({
 					prefs: this.prefs
 				};
 				else {
-					let state = this.bySession.get(sessionId);
-					if (state === void 0) {
-						state = loadState(sessionId);
-						this.bySession.set(sessionId, state);
-					} else nextIdCounter = maxCounterId(state);
+					const cached = this.bySession.get(sessionId);
+					const state = cached ?? loadState(sessionId);
+					if (cached !== void 0) nextIdCounter = maxCounterId(state);
 					this.snapshot = {
 						sessionId,
 						state,
 						prefs: this.prefs
 					};
+					this.putSession(sessionId, state);
 				}
 				this.notify();
 			}
@@ -809,7 +824,7 @@ window.__ModuleLoader__.load({
 				}
 				const stored = this.bySession.get(target);
 				if (stored === void 0 || !stored.unread.includes(type)) return false;
-				this.bySession.set(target, clearUnread(stored, type));
+				this.putSession(target, clearUnread(stored, type));
 				return true;
 			}
 			getSnapshot() {
@@ -822,12 +837,12 @@ window.__ModuleLoader__.load({
 				if (sessionId === void 0 || state === void 0) return;
 				const draft = structuredClone(state);
 				mutator(draft);
-				this.bySession.set(sessionId, draft);
 				this.snapshot = {
 					sessionId,
 					state: draft,
 					prefs: this.prefs
 				};
+				this.putSession(sessionId, draft);
 				this.schedulePersist(sessionId, draft);
 				this.notify();
 			}
@@ -845,16 +860,31 @@ window.__ModuleLoader__.load({
 				return state !== void 0 && tabOpenIn(state, tabId);
 			}
 			/**
-			* Read-only view of EVERY cached session's state (v0.17.0+). The
-			* PinnedRail uses this to collect pinned terminals across sessions
-			* without each render reading private fields. The map is the live
-			* `bySession` reference — callers MUST treat it as read-only (mutations
-			* go through {@link reduce} / {@link reduceFor}). A session that has
-			* never been visited in this run is absent (its pinned tabs are not
-			* visible until first load — accepted as YAGNI by the design).
+			* One session's cached state, or `undefined` when it has never been loaded
+			* in this run (see {@link getSessionStates} for the whole map). The
+			* reference is STABLE while nothing writes that session — the store's state
+			* objects are immutable and replaced wholesale — so a hot reader may use it
+			* as a memo input instead of copying the whole map per render.
+			*/
+			getSessionState(sessionId) {
+				return this.bySession.get(sessionId);
+			}
+			/**
+			* Read-only view of EVERY cached session's state (v0.17.0+): the whole-map
+			* read, for a caller that needs several sessions at once (a per-session
+			* question should use {@link getSessionState} — it does not allocate).
+			* Callers MUST treat the returned map as read-only (mutations go through
+			* {@link reduce} / {@link reduceFor}); it is a cached SNAPSHOT, invalidated
+			* by the next write, so two reads with no write between them return the same
+			* object — a fresh copy per call invalidated every consumer's memo on every
+			* render. A session that has never been visited in this run is absent (its
+			* pinned tabs are not visible until first load — accepted as YAGNI by the
+			* design), and the same is true of a session evicted by the retention cap
+			* ({@link SESSION_STATE_CAP}) until it is loaded again.
 			*/
 			getSessionStates() {
-				return new Map(this.bySession);
+				if (this.sessionStatesCache === void 0) this.sessionStatesCache = new Map(this.bySession);
+				return this.sessionStatesCache;
 			}
 			/** Apply a pure reducer (returns the next state). */
 			reduce(reducer) {
@@ -863,12 +893,12 @@ window.__ModuleLoader__.load({
 				if (sessionId === void 0 || state === void 0) return;
 				const next = reducer(state);
 				if (next === state) return;
-				this.bySession.set(sessionId, next);
 				this.snapshot = {
 					sessionId,
 					state: next,
 					prefs: this.prefs
 				};
+				this.putSession(sessionId, next);
 				this.schedulePersist(sessionId, next);
 				this.notify();
 			}
@@ -881,25 +911,66 @@ window.__ModuleLoader__.load({
 			*/
 			reduceFor(sessionId, reducer) {
 				const counterBefore = nextIdCounter;
-				let state = this.bySession.get(sessionId);
-				if (state === void 0) {
-					state = loadState(sessionId);
-					this.bySession.set(sessionId, state);
-				} else nextIdCounter = maxCounterId(state);
+				const cached = this.bySession.get(sessionId);
+				const state = cached ?? loadState(sessionId);
+				if (cached !== void 0) nextIdCounter = maxCounterId(state);
 				const next = reducer(state);
 				nextIdCounter = Math.max(nextIdCounter, counterBefore);
+				if (next === state && cached !== void 0) return;
+				this.putSession(sessionId, next);
 				if (next === state) return;
-				this.bySession.set(sessionId, next);
 				this.schedulePersist(sessionId, next);
+			}
+			/**
+			* Record one session's state: refresh its recency and bound the map.
+			* Every write to `bySession` goes through here, so the LRU order and the
+			* `getSessionStates()` snapshot stay in step with the entries.
+			*/
+			putSession(sessionId, state) {
+				this.bySession.delete(sessionId);
+				this.bySession.set(sessionId, state);
+				this.sessionStatesCache = void 0;
+				this.evictSessions();
+			}
+			/**
+			* Drop the least recently touched sessions beyond {@link SESSION_STATE_CAP}.
+			* The current session is never dropped, and an evicted session's state is
+			* not lost: it lives in localStorage, so the next `setSession` reloads it.
+			*/
+			evictSessions() {
+				if (this.bySession.size <= SESSION_STATE_CAP) return;
+				for (const id of [...this.bySession.keys()]) {
+					if (this.bySession.size <= SESSION_STATE_CAP) return;
+					if (id === this.snapshot.sessionId) continue;
+					this.flushPersist(id);
+					this.bySession.delete(id);
+				}
+			}
+			/**
+			* Write one session's state NOW instead of waiting for its debounce timer.
+			* Eviction flushes before dropping an entry: the in-memory copy is what the
+			* reader sees until they switch back, and a pending write that landed after
+			* a switch-back would leave the reloaded state behind the storage one.
+			*/
+			flushPersist(sessionId) {
+				const timer = this.persistTimers.get(sessionId);
+				if (timer === void 0) return;
+				window.clearTimeout(timer);
+				this.persistTimers.delete(sessionId);
+				const state = this.bySession.get(sessionId);
+				if (state !== void 0) this.writePersisted(sessionId, state);
+			}
+			writePersisted(sessionId, state) {
+				try {
+					localStorage.setItem(`${STORAGE_PREFIX}:${sessionId}`, JSON.stringify(state));
+				} catch {}
 			}
 			schedulePersist(sessionId, state) {
 				const existing = this.persistTimers.get(sessionId);
 				if (existing !== void 0) window.clearTimeout(existing);
 				const timer = window.setTimeout(() => {
 					this.persistTimers.delete(sessionId);
-					try {
-						localStorage.setItem(`${STORAGE_PREFIX}:${sessionId}`, JSON.stringify(state));
-					} catch {}
+					this.writePersisted(sessionId, state);
 				}, 200);
 				this.persistTimers.set(sessionId, timer);
 			}
@@ -1256,7 +1327,7 @@ window.__ModuleLoader__.load({
 		* The plugin version this service instance reports. Keep in lockstep with
 		* `package.json`'s version — `tests/service.spec.ts` asserts the pair.
 		*/
-		const SIDEBAR_SERVICE_VERSION = "0.26.0";
+		const SIDEBAR_SERVICE_VERSION = "0.26.1";
 		/**
 		* Monotonic capability list consumers use to gate new API usage (features
 		* are never removed). Each string names a v0.12.0+ capability:
@@ -1959,12 +2030,12 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var tab_icons_module_css_default = {
-			"changes": "SyUHSa_changes",
+			"sidechat": "SyUHSa_sidechat",
 			"tasks": "SyUHSa_tasks",
-			"files": "SyUHSa_files",
-			"terminal": "SyUHSa_terminal",
 			"browser": "SyUHSa_browser",
-			"sidechat": "SyUHSa_sidechat"
+			"changes": "SyUHSa_changes",
+			"files": "SyUHSa_files",
+			"terminal": "SyUHSa_terminal"
 		};
 		//#endregion
 		//#region node_modules/.pnpm/react-icons@5.7.0_react@18.2.0/node_modules/react-icons/lib/iconContext.mjs
@@ -4323,229 +4394,229 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var sidebar_module_css_default = {
-			"largeFile": "nArs4W_largeFile",
-			"selectionPopup": "nArs4W_selectionPopup",
-			"editorPdf": "nArs4W_editorPdf",
-			"largeFileRecordRaw": "nArs4W_largeFileRecordRaw",
-			"uploadDropMask": "nArs4W_uploadDropMask",
-			"bottomPanelHidden": "nArs4W_bottomPanelHidden",
-			"explorerGitName": "nArs4W_explorerGitName",
-			"uploadOverlayStatus": "nArs4W_uploadOverlayStatus",
-			"editorStatus": "nArs4W_editorStatus",
-			"largeFileRecordExpanded": "nArs4W_largeFileRecordExpanded",
-			"tabTitle": "nArs4W_tabTitle",
-			"editorBody": "nArs4W_editorBody",
-			"bottomClose": "nArs4W_bottomClose",
-			"tabActive": "nArs4W_tabActive",
-			"explorerSelectionText": "nArs4W_explorerSelectionText",
-			"paneDrop": "nArs4W_paneDrop",
-			"dirtyDot": "nArs4W_dirtyDot",
-			"editorBlameHead": "nArs4W_editorBlameHead",
-			"chipIcon": "nArs4W_chipIcon",
-			"uploadDropZoneText": "nArs4W_uploadDropZoneText",
-			"uploadOverlayCancel": "nArs4W_uploadOverlayCancel",
-			"sandboxStatus": "nArs4W_sandboxStatus",
-			"explorerRenameInput": "nArs4W_explorerRenameInput",
-			"browserStart": "nArs4W_browserStart",
+			"browserInput": "nArs4W_browserInput",
+			"editorTreeDock": "nArs4W_editorTreeDock",
+			"editorError": "nArs4W_editorError",
+			"editorGitAdd": "nArs4W_editorGitAdd",
+			"boundaryError": "nArs4W_boundaryError",
+			"uploadOverlay": "nArs4W_uploadOverlay",
+			"editorBanner": "nArs4W_editorBanner",
 			"editorSearchResultLabel": "nArs4W_editorSearchResultLabel",
 			"gitDiffTabHeader": "nArs4W_gitDiffTabHeader",
-			"mermaidInfo": "nArs4W_mermaidInfo",
-			"editorGitBar": "nArs4W_editorGitBar",
-			"explorerSymlink": "nArs4W_explorerSymlink",
-			"editorBannerAction": "nArs4W_editorBannerAction",
-			"mermaidCopy": "nArs4W_mermaidCopy",
-			"uploadOverlayCard": "nArs4W_uploadOverlayCard",
-			"browserBlockedActions": "nArs4W_browserBlockedActions",
-			"largeFileRecordNo": "nArs4W_largeFileRecordNo",
-			"editorPathInput": "nArs4W_editorPathInput",
-			"editorSearchHint": "nArs4W_editorSearchHint",
-			"editorGitDel": "nArs4W_editorGitDel",
-			"editorGitBarAdd": "nArs4W_editorGitBarAdd",
-			"panel": "nArs4W_panel",
-			"editorBinaryNotice": "nArs4W_editorBinaryNotice",
-			"tabBar": "nArs4W_tabBar",
-			"editorPdfStage": "nArs4W_editorPdfStage",
-			"uploadOverlay": "nArs4W_uploadOverlay",
-			"nativeTabHost": "nArs4W_nativeTabHost",
-			"paneEmptyCards": "nArs4W_paneEmptyCards",
-			"iconButton": "nArs4W_iconButton",
-			"openWithPinActive": "nArs4W_openWithPinActive",
-			"paneTabHidden": "nArs4W_paneTabHidden",
-			"uploadDropHero": "nArs4W_uploadDropHero",
-			"dropLeft": "nArs4W_dropLeft",
-			"openWithPin": "nArs4W_openWithPin",
-			"mermaidModal": "nArs4W_mermaidModal",
-			"explorerRoot": "nArs4W_explorerRoot",
-			"explorerRow": "nArs4W_explorerRow",
-			"sandboxStatusText": "nArs4W_sandboxStatusText",
-			"dropOverlay": "nArs4W_dropOverlay",
-			"editorBanner": "nArs4W_editorBanner",
-			"editorGitBarDel": "nArs4W_editorGitBarDel",
-			"browserInput": "nArs4W_browserInput",
-			"editorModeToggle": "nArs4W_editorModeToggle",
-			"editorModeActive": "nArs4W_editorModeActive",
-			"explorerHeader": "nArs4W_explorerHeader",
-			"splitCol": "nArs4W_splitCol",
-			"mermaidModalHint": "nArs4W_mermaidModalHint",
-			"dsh-toc-flash": "nArs4W_dsh-toc-flash",
-			"mermaidCode": "nArs4W_mermaidCode",
-			"panelBody": "nArs4W_panelBody",
-			"explorerDirChanged": "nArs4W_explorerDirChanged",
-			"editorGitMod": "nArs4W_editorGitMod",
-			"dropRight": "nArs4W_dropRight",
-			"editorPdfFrameBlocked": "nArs4W_editorPdfFrameBlocked",
-			"gitPlaceholder": "nArs4W_gitPlaceholder",
-			"browser": "nArs4W_browser",
-			"gitDiffTab": "nArs4W_gitDiffTab",
-			"toggleButton": "nArs4W_toggleButton",
-			"editorGitBarMod": "nArs4W_editorGitBarMod",
-			"openWithName": "nArs4W_openWithName",
-			"largeFileLines": "nArs4W_largeFileLines",
-			"openWithLabel": "nArs4W_openWithLabel",
-			"editorPlaceholder": "nArs4W_editorPlaceholder",
-			"mermaidHeader": "nArs4W_mermaidHeader",
-			"splitRow": "nArs4W_splitRow",
-			"browserBar": "nArs4W_browserBar",
-			"dividerCol": "nArs4W_dividerCol",
-			"tabBadge": "nArs4W_tabBadge",
-			"explorerCopied": "nArs4W_explorerCopied",
-			"explorerError": "nArs4W_explorerError",
-			"editorPdfDragShield": "nArs4W_editorPdfDragShield",
-			"pane": "nArs4W_pane",
-			"explorerHiddenPane": "nArs4W_explorerHiddenPane",
-			"editorTreeSearch": "nArs4W_editorTreeSearch",
-			"editorModeButton": "nArs4W_editorModeButton",
-			"editorPptxButton": "nArs4W_editorPptxButton",
-			"editorTreePanelFull": "nArs4W_editorTreePanelFull",
-			"tabUnreadDot": "nArs4W_tabUnreadDot",
-			"orphanedType": "nArs4W_orphanedType",
-			"openWithChevron": "nArs4W_openWithChevron",
-			"explorerSelectionBar": "nArs4W_explorerSelectionBar",
-			"tocBar": "nArs4W_tocBar",
-			"tocPanel": "nArs4W_tocPanel",
-			"tocItem": "nArs4W_tocItem",
-			"editorTreeToggleActive": "nArs4W_editorTreeToggleActive",
-			"explorerRowRevealed": "nArs4W_explorerRowRevealed",
-			"tabBarPlus": "nArs4W_tabBarPlus",
-			"paneCard": "nArs4W_paneCard",
-			"tabList": "nArs4W_tabList",
-			"editorGitAdd": "nArs4W_editorGitAdd",
-			"explorerBody": "nArs4W_explorerBody",
-			"editorTreeResize": "nArs4W_editorTreeResize",
-			"dropUp": "nArs4W_dropUp",
-			"largeFileRecordTree": "nArs4W_largeFileRecordTree",
-			"editorStatusError": "nArs4W_editorStatusError",
-			"uploadDropChatCard": "nArs4W_uploadDropChatCard",
-			"sandboxAction": "nArs4W_sandboxAction",
-			"dockFallback": "nArs4W_dockFallback",
-			"editorSearchInput": "nArs4W_editorSearchInput",
-			"editorBlame": "nArs4W_editorBlame",
-			"dropCenter": "nArs4W_dropCenter",
-			"browserBlockedButton": "nArs4W_browserBlockedButton",
-			"editorMd": "nArs4W_editorMd",
-			"tocFlash": "nArs4W_tocFlash",
-			"explorerAppIcon": "nArs4W_explorerAppIcon",
-			"largeFileDownload": "nArs4W_largeFileDownload",
-			"largeFileBody": "nArs4W_largeFileBody",
-			"largeFileRecords": "nArs4W_largeFileRecords",
-			"dsh-row-in": "nArs4W_dsh-row-in",
-			"editorTreePanel": "nArs4W_editorTreePanel",
-			"explorerDir": "nArs4W_explorerDir",
-			"explorerRef": "nArs4W_explorerRef",
-			"explorerSelectionActions": "nArs4W_explorerSelectionActions",
-			"sandboxStatusOn": "nArs4W_sandboxStatusOn",
-			"explorerBroken": "nArs4W_explorerBroken",
-			"sandboxStatusOff": "nArs4W_sandboxStatusOff",
-			"divider": "nArs4W_divider",
-			"editorPdfToolbar": "nArs4W_editorPdfToolbar",
-			"gitError": "nArs4W_gitError",
-			"editorGitBarGutter": "nArs4W_editorGitBarGutter",
-			"uploadDropChatHint": "nArs4W_uploadDropChatHint",
-			"explorerActionErrorText": "nArs4W_explorerActionErrorText",
-			"uploadOverlayTitle": "nArs4W_uploadOverlayTitle",
-			"editorSearchResult": "nArs4W_editorSearchResult",
-			"tocButton": "nArs4W_tocButton",
-			"tocItemLevel": "nArs4W_tocItemLevel",
-			"mermaidError": "nArs4W_mermaidError",
-			"editorHtmlBlock": "nArs4W_editorHtmlBlock",
-			"editorCm": "nArs4W_editorCm",
-			"editorTitle": "nArs4W_editorTitle",
-			"browserBlocked": "nArs4W_browserBlocked",
-			"editorBlameSummary": "nArs4W_editorBlameSummary",
-			"dividerRow": "nArs4W_dividerRow",
-			"tocItemText": "nArs4W_tocItemText",
-			"uploadDropZonePill": "nArs4W_uploadDropZonePill",
-			"paneContent": "nArs4W_paneContent",
-			"editorMain": "nArs4W_editorMain",
-			"uploadDropArtPrimary": "nArs4W_uploadDropArtPrimary",
-			"tabBoundaryError": "nArs4W_tabBoundaryError",
-			"uploadOverlayProgressFill": "nArs4W_uploadOverlayProgressFill",
-			"chipUnread": "nArs4W_chipUnread",
-			"browserFrame": "nArs4W_browserFrame",
-			"largeFileNotice": "nArs4W_largeFileNotice",
-			"editorDownloadLink": "nArs4W_editorDownloadLink",
-			"mermaidModalButton": "nArs4W_mermaidModalButton",
-			"largeFileNoticeAction": "nArs4W_largeFileNoticeAction",
-			"sandboxDot": "nArs4W_sandboxDot",
-			"largeFileRecordInvalid": "nArs4W_largeFileRecordInvalid",
-			"dropDown": "nArs4W_dropDown",
-			"bottomResizeActive": "nArs4W_bottomResizeActive",
-			"uploadDropZone": "nArs4W_uploadDropZone",
-			"editorBinary": "nArs4W_editorBinary",
-			"browserMessage": "nArs4W_browserMessage",
-			"browserBlockedTitle": "nArs4W_browserBlockedTitle",
-			"mermaidBody": "nArs4W_mermaidBody",
-			"largeFileList": "nArs4W_largeFileList",
-			"splitChild": "nArs4W_splitChild",
-			"tabBarRightActions": "nArs4W_tabBarRightActions",
-			"explorerRowSelected": "nArs4W_explorerRowSelected",
-			"browserBlockedDesc": "nArs4W_browserBlockedDesc",
-			"explorerActionError": "nArs4W_explorerActionError",
-			"editorHtml": "nArs4W_editorHtml",
-			"editorCmHidden": "nArs4W_editorCmHidden",
-			"terminalRetry": "nArs4W_terminalRetry",
-			"gitEmpty": "nArs4W_gitEmpty",
-			"dividerActive": "nArs4W_dividerActive",
-			"editorSearchResultDir": "nArs4W_editorSearchResultDir",
-			"explorerRenaming": "nArs4W_explorerRenaming",
-			"tabClose": "nArs4W_tabClose",
-			"uploadDropArtAccent": "nArs4W_uploadDropArtAccent",
-			"mermaidMarkdown": "nArs4W_mermaidMarkdown",
-			"editorDocxZoomRange": "nArs4W_editorDocxZoomRange",
-			"explorerRowDropTarget": "nArs4W_explorerRowDropTarget",
-			"editorTreeDock": "nArs4W_editorTreeDock",
-			"bottomPanel": "nArs4W_bottomPanel",
-			"uploadDropArtCut": "nArs4W_uploadDropArtCut",
 			"bottomResize": "nArs4W_bottomResize",
-			"mermaidWrap": "nArs4W_mermaidWrap",
-			"editorHeader": "nArs4W_editorHeader",
-			"editorGitBarSpacer": "nArs4W_editorGitBarSpacer",
-			"explorer": "nArs4W_explorer",
-			"boundaryError": "nArs4W_boundaryError",
-			"gitDiffTabTitle": "nArs4W_gitDiffTabTitle",
-			"largeFileRecordSummary": "nArs4W_largeFileRecordSummary",
-			"mermaidModalStage": "nArs4W_mermaidModalStage",
-			"largeFileRecord": "nArs4W_largeFileRecord",
-			"tabBarDrop": "nArs4W_tabBarDrop",
-			"editorPdfFrame": "nArs4W_editorPdfFrame",
-			"tab": "nArs4W_tab",
-			"largeFilePager": "nArs4W_largeFilePager",
-			"editorPdfDragShieldActive": "nArs4W_editorPdfDragShieldActive",
-			"largeFileRecordBody": "nArs4W_largeFileRecordBody",
-			"largeFilePageLabel": "nArs4W_largeFilePageLabel",
-			"workbench": "nArs4W_workbench",
-			"mermaidModalToolbar": "nArs4W_mermaidModalToolbar",
-			"explorerName": "nArs4W_explorerName",
-			"explorerEmpty": "nArs4W_explorerEmpty",
-			"editorError": "nArs4W_editorError",
-			"largeFileLine": "nArs4W_largeFileLine",
-			"uploadOverlayProgress": "nArs4W_uploadOverlayProgress",
-			"paneTab": "nArs4W_paneTab",
-			"editor": "nArs4W_editor",
-			"split": "nArs4W_split",
-			"largeFileLineNo": "nArs4W_largeFileLineNo",
+			"editorTreeToggleActive": "nArs4W_editorTreeToggleActive",
 			"explorerHidden": "nArs4W_explorerHidden",
-			"largeFileLineText": "nArs4W_largeFileLineText"
+			"uploadOverlayTitle": "nArs4W_uploadOverlayTitle",
+			"uploadOverlayProgress": "nArs4W_uploadOverlayProgress",
+			"dividerRow": "nArs4W_dividerRow",
+			"editorPlaceholder": "nArs4W_editorPlaceholder",
+			"editorDocxZoomRange": "nArs4W_editorDocxZoomRange",
+			"bottomPanel": "nArs4W_bottomPanel",
+			"uploadOverlayCancel": "nArs4W_uploadOverlayCancel",
+			"openWithLabel": "nArs4W_openWithLabel",
+			"explorerEmpty": "nArs4W_explorerEmpty",
+			"explorerHeader": "nArs4W_explorerHeader",
+			"openWithName": "nArs4W_openWithName",
+			"editorModeToggle": "nArs4W_editorModeToggle",
+			"panel": "nArs4W_panel",
+			"editorHeader": "nArs4W_editorHeader",
+			"openWithPin": "nArs4W_openWithPin",
+			"split": "nArs4W_split",
+			"editorHtmlBlock": "nArs4W_editorHtmlBlock",
+			"mermaidModalStage": "nArs4W_mermaidModalStage",
+			"nativeTabHost": "nArs4W_nativeTabHost",
+			"openWithChevron": "nArs4W_openWithChevron",
+			"explorerBody": "nArs4W_explorerBody",
+			"editorBody": "nArs4W_editorBody",
+			"browserBar": "nArs4W_browserBar",
+			"editorPdf": "nArs4W_editorPdf",
+			"gitError": "nArs4W_gitError",
+			"iconButton": "nArs4W_iconButton",
+			"tocItemText": "nArs4W_tocItemText",
+			"editorModeActive": "nArs4W_editorModeActive",
+			"dirtyDot": "nArs4W_dirtyDot",
+			"tab": "nArs4W_tab",
+			"explorerName": "nArs4W_explorerName",
+			"dsh-row-in": "nArs4W_dsh-row-in",
+			"paneTabHidden": "nArs4W_paneTabHidden",
+			"editorSearchInput": "nArs4W_editorSearchInput",
+			"sandboxStatus": "nArs4W_sandboxStatus",
+			"panelBody": "nArs4W_panelBody",
+			"explorerSymlink": "nArs4W_explorerSymlink",
+			"sandboxStatusText": "nArs4W_sandboxStatusText",
+			"mermaidCode": "nArs4W_mermaidCode",
+			"gitEmpty": "nArs4W_gitEmpty",
+			"uploadDropZonePill": "nArs4W_uploadDropZonePill",
+			"editorBinaryNotice": "nArs4W_editorBinaryNotice",
+			"mermaidError": "nArs4W_mermaidError",
+			"tocPanel": "nArs4W_tocPanel",
+			"tocItemLevel": "nArs4W_tocItemLevel",
+			"tocButton": "nArs4W_tocButton",
+			"editorSearchHint": "nArs4W_editorSearchHint",
+			"editorTitle": "nArs4W_editorTitle",
+			"largeFile": "nArs4W_largeFile",
+			"largeFileDownload": "nArs4W_largeFileDownload",
+			"largeFileRecordExpanded": "nArs4W_largeFileRecordExpanded",
+			"editorGitBarMod": "nArs4W_editorGitBarMod",
+			"tocBar": "nArs4W_tocBar",
+			"browser": "nArs4W_browser",
+			"largeFileRecordNo": "nArs4W_largeFileRecordNo",
+			"largeFileRecordSummary": "nArs4W_largeFileRecordSummary",
+			"largeFileBody": "nArs4W_largeFileBody",
+			"explorerCopied": "nArs4W_explorerCopied",
+			"chipIcon": "nArs4W_chipIcon",
+			"editorGitBarSpacer": "nArs4W_editorGitBarSpacer",
+			"explorerBroken": "nArs4W_explorerBroken",
+			"editorGitBar": "nArs4W_editorGitBar",
+			"mermaidModal": "nArs4W_mermaidModal",
+			"dropOverlay": "nArs4W_dropOverlay",
+			"tocFlash": "nArs4W_tocFlash",
+			"tabBarDrop": "nArs4W_tabBarDrop",
+			"largeFileLineNo": "nArs4W_largeFileLineNo",
+			"gitDiffTab": "nArs4W_gitDiffTab",
+			"uploadDropChatHint": "nArs4W_uploadDropChatHint",
+			"toggleButton": "nArs4W_toggleButton",
+			"browserFrame": "nArs4W_browserFrame",
+			"editorPdfFrame": "nArs4W_editorPdfFrame",
+			"uploadDropZone": "nArs4W_uploadDropZone",
+			"largeFileRecord": "nArs4W_largeFileRecord",
+			"largeFileRecordInvalid": "nArs4W_largeFileRecordInvalid",
+			"dropCenter": "nArs4W_dropCenter",
+			"explorerDirChanged": "nArs4W_explorerDirChanged",
+			"editorMain": "nArs4W_editorMain",
+			"browserBlocked": "nArs4W_browserBlocked",
+			"largeFileLine": "nArs4W_largeFileLine",
+			"sandboxDot": "nArs4W_sandboxDot",
+			"largeFilePager": "nArs4W_largeFilePager",
+			"editor": "nArs4W_editor",
+			"uploadOverlayStatus": "nArs4W_uploadOverlayStatus",
+			"editorPdfToolbar": "nArs4W_editorPdfToolbar",
+			"largeFileRecordTree": "nArs4W_largeFileRecordTree",
+			"editorPptxButton": "nArs4W_editorPptxButton",
+			"editorPdfStage": "nArs4W_editorPdfStage",
+			"largeFileLines": "nArs4W_largeFileLines",
+			"dropRight": "nArs4W_dropRight",
+			"uploadOverlayCard": "nArs4W_uploadOverlayCard",
+			"explorerDir": "nArs4W_explorerDir",
+			"largeFileRecordRaw": "nArs4W_largeFileRecordRaw",
+			"explorerAppIcon": "nArs4W_explorerAppIcon",
+			"paneCard": "nArs4W_paneCard",
+			"sandboxStatusOn": "nArs4W_sandboxStatusOn",
+			"explorerRowSelected": "nArs4W_explorerRowSelected",
+			"gitDiffTabTitle": "nArs4W_gitDiffTabTitle",
+			"terminalRetry": "nArs4W_terminalRetry",
+			"explorerActionErrorText": "nArs4W_explorerActionErrorText",
+			"dsh-toc-flash": "nArs4W_dsh-toc-flash",
+			"explorerRef": "nArs4W_explorerRef",
+			"selectionPopup": "nArs4W_selectionPopup",
+			"divider": "nArs4W_divider",
+			"uploadDropChatCard": "nArs4W_uploadDropChatCard",
+			"paneContent": "nArs4W_paneContent",
+			"editorGitMod": "nArs4W_editorGitMod",
+			"editorStatus": "nArs4W_editorStatus",
+			"largeFilePageLabel": "nArs4W_largeFilePageLabel",
+			"editorHtml": "nArs4W_editorHtml",
+			"paneDrop": "nArs4W_paneDrop",
+			"editorGitBarGutter": "nArs4W_editorGitBarGutter",
+			"mermaidWrap": "nArs4W_mermaidWrap",
+			"explorerSelectionText": "nArs4W_explorerSelectionText",
+			"editorCm": "nArs4W_editorCm",
+			"explorerRowDropTarget": "nArs4W_explorerRowDropTarget",
+			"editorBlameHead": "nArs4W_editorBlameHead",
+			"explorerSelectionBar": "nArs4W_explorerSelectionBar",
+			"mermaidMarkdown": "nArs4W_mermaidMarkdown",
+			"tabList": "nArs4W_tabList",
+			"bottomClose": "nArs4W_bottomClose",
+			"largeFileList": "nArs4W_largeFileList",
+			"splitRow": "nArs4W_splitRow",
+			"tabUnreadDot": "nArs4W_tabUnreadDot",
+			"editorGitBarDel": "nArs4W_editorGitBarDel",
+			"explorerRowRevealed": "nArs4W_explorerRowRevealed",
+			"tabActive": "nArs4W_tabActive",
+			"explorerRoot": "nArs4W_explorerRoot",
+			"dockFallback": "nArs4W_dockFallback",
+			"sandboxAction": "nArs4W_sandboxAction",
+			"editorPathInput": "nArs4W_editorPathInput",
+			"editorDownloadLink": "nArs4W_editorDownloadLink",
+			"editorPdfFrameBlocked": "nArs4W_editorPdfFrameBlocked",
+			"uploadOverlayProgressFill": "nArs4W_uploadOverlayProgressFill",
+			"uploadDropMask": "nArs4W_uploadDropMask",
+			"tabBar": "nArs4W_tabBar",
+			"mermaidHeader": "nArs4W_mermaidHeader",
+			"gitPlaceholder": "nArs4W_gitPlaceholder",
+			"dropDown": "nArs4W_dropDown",
+			"editorTreePanelFull": "nArs4W_editorTreePanelFull",
+			"openWithPinActive": "nArs4W_openWithPinActive",
+			"largeFileNotice": "nArs4W_largeFileNotice",
+			"explorerSelectionActions": "nArs4W_explorerSelectionActions",
+			"explorerGitName": "nArs4W_explorerGitName",
+			"editorPdfDragShieldActive": "nArs4W_editorPdfDragShieldActive",
+			"editorTreeSearch": "nArs4W_editorTreeSearch",
+			"uploadDropArtCut": "nArs4W_uploadDropArtCut",
+			"largeFileRecordBody": "nArs4W_largeFileRecordBody",
+			"editorMd": "nArs4W_editorMd",
+			"browserBlockedActions": "nArs4W_browserBlockedActions",
+			"browserBlockedButton": "nArs4W_browserBlockedButton",
+			"dividerCol": "nArs4W_dividerCol",
+			"explorerActionError": "nArs4W_explorerActionError",
+			"splitChild": "nArs4W_splitChild",
+			"explorerError": "nArs4W_explorerError",
+			"bottomPanelHidden": "nArs4W_bottomPanelHidden",
+			"mermaidBody": "nArs4W_mermaidBody",
+			"tocItem": "nArs4W_tocItem",
+			"largeFileNoticeAction": "nArs4W_largeFileNoticeAction",
+			"explorerRow": "nArs4W_explorerRow",
+			"largeFileRecords": "nArs4W_largeFileRecords",
+			"paneTab": "nArs4W_paneTab",
+			"editorBinary": "nArs4W_editorBinary",
+			"largeFileLineText": "nArs4W_largeFileLineText",
+			"tabBarRightActions": "nArs4W_tabBarRightActions",
+			"editorSearchResult": "nArs4W_editorSearchResult",
+			"orphanedType": "nArs4W_orphanedType",
+			"explorer": "nArs4W_explorer",
+			"paneEmptyCards": "nArs4W_paneEmptyCards",
+			"uploadDropHero": "nArs4W_uploadDropHero",
+			"pane": "nArs4W_pane",
+			"explorerRenaming": "nArs4W_explorerRenaming",
+			"uploadDropZoneText": "nArs4W_uploadDropZoneText",
+			"editorTreePanel": "nArs4W_editorTreePanel",
+			"editorBlame": "nArs4W_editorBlame",
+			"editorTreeResize": "nArs4W_editorTreeResize",
+			"sandboxStatusOff": "nArs4W_sandboxStatusOff",
+			"browserStart": "nArs4W_browserStart",
+			"mermaidModalToolbar": "nArs4W_mermaidModalToolbar",
+			"bottomResizeActive": "nArs4W_bottomResizeActive",
+			"dropLeft": "nArs4W_dropLeft",
+			"mermaidModalButton": "nArs4W_mermaidModalButton",
+			"uploadDropArtAccent": "nArs4W_uploadDropArtAccent",
+			"editorSearchResultDir": "nArs4W_editorSearchResultDir",
+			"splitCol": "nArs4W_splitCol",
+			"explorerRenameInput": "nArs4W_explorerRenameInput",
+			"browserBlockedTitle": "nArs4W_browserBlockedTitle",
+			"editorPdfDragShield": "nArs4W_editorPdfDragShield",
+			"editorGitDel": "nArs4W_editorGitDel",
+			"editorBlameSummary": "nArs4W_editorBlameSummary",
+			"uploadDropArtPrimary": "nArs4W_uploadDropArtPrimary",
+			"editorModeButton": "nArs4W_editorModeButton",
+			"tabBoundaryError": "nArs4W_tabBoundaryError",
+			"explorerHiddenPane": "nArs4W_explorerHiddenPane",
+			"editorStatusError": "nArs4W_editorStatusError",
+			"tabTitle": "nArs4W_tabTitle",
+			"tabBarPlus": "nArs4W_tabBarPlus",
+			"editorBannerAction": "nArs4W_editorBannerAction",
+			"tabBadge": "nArs4W_tabBadge",
+			"workbench": "nArs4W_workbench",
+			"tabClose": "nArs4W_tabClose",
+			"browserMessage": "nArs4W_browserMessage",
+			"dividerActive": "nArs4W_dividerActive",
+			"dropUp": "nArs4W_dropUp",
+			"editorCmHidden": "nArs4W_editorCmHidden",
+			"editorGitBarAdd": "nArs4W_editorGitBarAdd",
+			"mermaidInfo": "nArs4W_mermaidInfo",
+			"mermaidCopy": "nArs4W_mermaidCopy",
+			"chipUnread": "nArs4W_chipUnread",
+			"browserBlockedDesc": "nArs4W_browserBlockedDesc",
+			"mermaidModalHint": "nArs4W_mermaidModalHint"
 		};
 		//#endregion
 		//#region src/client/binary-download.tsx
@@ -4642,7 +4713,7 @@ window.__ModuleLoader__.load({
 		//#endregion
 		//#region src/client/editor-dirty.ts
 		const dirtyTabs = /* @__PURE__ */ new Map();
-		const listeners = /* @__PURE__ */ new Set();
+		const listeners$1 = /* @__PURE__ */ new Set();
 		/** Monotonic change counter: a stable `useSyncExternalStore` snapshot. */
 		let revision = 0;
 		/** The map key of one tab: ids only identify a tab inside their session. */
@@ -4650,9 +4721,9 @@ window.__ModuleLoader__.load({
 			return `${sessionId}::${tabId}`;
 		}
 		/** Notify every subscriber (the `beforeunload` guard). */
-		function notify$1() {
+		function notify$2() {
 			revision += 1;
-			for (const listener of [...listeners]) listener();
+			for (const listener of [...listeners$1]) listener();
 		}
 		/**
 		* Publish one tab's dirty state: `true` registers the draft (session + path
@@ -4661,7 +4732,7 @@ window.__ModuleLoader__.load({
 		function setEditorDirty(tabId, dirty, sessionId, path) {
 			const key = keyOf(sessionId, tabId);
 			if (!dirty) {
-				if (dirtyTabs.delete(key)) notify$1();
+				if (dirtyTabs.delete(key)) notify$2();
 				return;
 			}
 			const previous = dirtyTabs.get(key);
@@ -4670,7 +4741,7 @@ window.__ModuleLoader__.load({
 				tabId,
 				path
 			});
-			notify$1();
+			notify$2();
 		}
 		/**
 		* Drop a tab's entry (its editor host unmounted). Idempotent.
@@ -4680,7 +4751,7 @@ window.__ModuleLoader__.load({
 		*/
 		function clearEditorDirty(tabId, sessionId) {
 			if (sessionId !== void 0) {
-				if (dirtyTabs.delete(keyOf(sessionId, tabId))) notify$1();
+				if (dirtyTabs.delete(keyOf(sessionId, tabId))) notify$2();
 				return;
 			}
 			let removed = false;
@@ -4689,7 +4760,7 @@ window.__ModuleLoader__.load({
 				dirtyTabs.delete(key);
 				removed = true;
 			}
-			if (removed) notify$1();
+			if (removed) notify$2();
 		}
 		/**
 		* Whether one tab holds an unsaved draft.
@@ -4708,9 +4779,9 @@ window.__ModuleLoader__.load({
 		}
 		/** Subscribe to dirty-set changes; returns the disposer. */
 		function subscribeEditorDirty(listener) {
-			listeners.add(listener);
+			listeners$1.add(listener);
 			return () => {
-				listeners.delete(listener);
+				listeners$1.delete(listener);
 			};
 		}
 		/** The change counter (a stable `useSyncExternalStore` snapshot). */
@@ -5241,28 +5312,28 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var kit_module_css_default = {
-			"sectionLabel": "U62vHa_sectionLabel",
-			"noticeError": "U62vHa_noticeError",
-			"iconButtonMd": "U62vHa_iconButtonMd",
-			"sectionHeader": "U62vHa_sectionHeader",
-			"iconButton": "U62vHa_iconButton",
-			"notice": "U62vHa_notice",
 			"iconButtonSm": "U62vHa_iconButtonSm",
-			"noticeHint": "U62vHa_noticeHint",
-			"sectionCount": "U62vHa_sectionCount",
-			"noticeWell": "U62vHa_noticeWell",
-			"noticePage": "U62vHa_noticePage",
-			"noticeWarn": "U62vHa_noticeWarn",
-			"statusBadge": "U62vHa_statusBadge",
-			"chip": "U62vHa_chip",
-			"chipCount": "U62vHa_chipCount",
-			"iconButtonDanger": "U62vHa_iconButtonDanger",
-			"sectionAction": "U62vHa_sectionAction",
-			"noticeInline": "U62vHa_noticeInline",
-			"confirmDesc": "U62vHa_confirmDesc",
-			"iconButtonActive": "U62vHa_iconButtonActive",
 			"chipLabel": "U62vHa_chipLabel",
-			"chipActive": "U62vHa_chipActive"
+			"iconButton": "U62vHa_iconButton",
+			"chipCount": "U62vHa_chipCount",
+			"iconButtonActive": "U62vHa_iconButtonActive",
+			"sectionLabel": "U62vHa_sectionLabel",
+			"chip": "U62vHa_chip",
+			"chipActive": "U62vHa_chipActive",
+			"notice": "U62vHa_notice",
+			"noticeInline": "U62vHa_noticeInline",
+			"noticeError": "U62vHa_noticeError",
+			"noticeHint": "U62vHa_noticeHint",
+			"sectionAction": "U62vHa_sectionAction",
+			"noticeWell": "U62vHa_noticeWell",
+			"sectionCount": "U62vHa_sectionCount",
+			"iconButtonDanger": "U62vHa_iconButtonDanger",
+			"statusBadge": "U62vHa_statusBadge",
+			"noticeWarn": "U62vHa_noticeWarn",
+			"confirmDesc": "U62vHa_confirmDesc",
+			"noticePage": "U62vHa_noticePage",
+			"iconButtonMd": "U62vHa_iconButtonMd",
+			"sectionHeader": "U62vHa_sectionHeader"
 		};
 		//#endregion
 		//#region src/client/ui/kit.tsx
@@ -5449,6 +5520,24 @@ window.__ModuleLoader__.load({
 		* Bumping the version on every tick re-rendered every consumer — the file
 		* tree's rows included — once per cadence for no reason, which is what the
 		* snapshot identity check above exists to prevent.
+		*
+		* Retention: remembering a key is not a lease on memory. The last consumer of
+		* a slot going away (unmount, a parked tab, a scope change) DROPS the slot —
+		* snapshot, index and listeners and all — so a long session that walks through
+		* files, worktrees and cwds cannot grow the map for the page's lifetime. Since
+		* v0.25 every visited native tab body stays mounted, so there is no host-side
+		* teardown that would have bounded this for us.
+		*
+		* Dropping is invisible to a consumer that still carries the slot object: its
+		* next render re-mints the key (`slotOf`) and `retain` re-registers that same
+		* object, so the next retain performs a FRESH fetch rather than serving a
+		* stale answer (and never mints a second slot for one key — two slots would
+		* mean two pollers). A slot with a fetch in flight is never dropped mid-flight
+		* (the answer has to land somewhere); it goes when that fetch settles. As a
+		* second bound the registry is capped at {@link SLOT_CAP} keys, because a
+		* consumer that mounts while invisible mints a slot it never retains and never
+		* releases — eviction only ever takes a slot with no retained consumer and no
+		* fetch in flight.
 		*/
 		/** The porcelain letter → tone rule (both sides share one vocabulary). */
 		function toneOfLetter(letter) {
@@ -5576,17 +5665,46 @@ window.__ModuleLoader__.load({
 			6,
 			null
 		];
-		const slots = /* @__PURE__ */ new Map();
+		const slots$1 = /* @__PURE__ */ new Map();
+		/**
+		* The registry's hard ceiling. The primary rule is release-driven (see
+		* {@link release}); this cap is the backstop for keys nobody ever released —
+		* a consumer that mounts while invisible mints its slot without retaining it,
+		* and only the cap bounds that path. Eviction never touches a slot a consumer
+		* holds or one with a fetch in flight, so the cap is soft while many slots are
+		* genuinely live.
+		*/
+		const SLOT_CAP = 256;
+		/** Whether nothing depends on this slot: no consumer holds the answer and no
+		*  fetch is in flight. */
+		function evictable(slot) {
+			return slot.visible === 0 && !slot.running;
+		}
+		/** Drop one slot from the registry. Identity-checked, so a key that was
+		*  re-minted meanwhile keeps its live entry. */
+		function forget(slot) {
+			if (slots$1.get(slot.key) === slot) slots$1.delete(slot.key);
+		}
+		/** Make room for one key about to be minted: evict the oldest slots nobody
+		*  holds while the registry is at {@link SLOT_CAP}. Map order is mint order. */
+		function trimSlots() {
+			if (slots$1.size < SLOT_CAP) return;
+			for (const slot of slots$1.values()) {
+				if (slots$1.size < SLOT_CAP) break;
+				if (evictable(slot)) forget(slot);
+			}
+		}
 		/** The automatic cadence of one slot; `null` = no timer (tier 3). */
 		function intervalOf(slot) {
 			const factor = TIER_FACTORS[slot.tier] ?? null;
 			return factor === null ? null : slot.pollMs * factor;
 		}
-		function slotOf(scope, worktree) {
+		function slotOf$1(scope, worktree) {
 			const { sessionId, cwd, repoRoot } = scope;
 			const key = `${sessionId}\u0000${cwd ?? ""}\u0000${repoRoot ?? ""}\u0000${worktree ?? ""}`;
-			const existing = slots.get(key);
+			const existing = slots$1.get(key);
 			if (existing !== void 0) return existing;
+			trimSlots();
 			const slot = {
 				key,
 				sessionId,
@@ -5609,10 +5727,10 @@ window.__ModuleLoader__.load({
 				index: null,
 				indexSource: null
 			};
-			slots.set(key, slot);
+			slots$1.set(key, slot);
 			return slot;
 		}
-		function notify(slot) {
+		function notify$1(slot) {
 			slot.version += 1;
 			for (const listener of slot.listeners) listener();
 		}
@@ -5629,7 +5747,7 @@ window.__ModuleLoader__.load({
 			reschedule(slot);
 		}
 		/** Fetch one snapshot; a concurrent call just marks the slot dirty. */
-		function fetchSlot(slot) {
+		function fetchSlot$1(slot) {
 			if (slot.running) {
 				slot.pending = true;
 				return;
@@ -5638,7 +5756,7 @@ window.__ModuleLoader__.load({
 			const generation = ++slot.generation;
 			const wasLoading = slot.loading;
 			slot.loading = slot.snapshot === null;
-			if (slot.loading !== wasLoading) notify(slot);
+			if (slot.loading !== wasLoading) notify$1(slot);
 			let changed = false;
 			const startedAt = Date.now();
 			const scope = {
@@ -5669,23 +5787,24 @@ window.__ModuleLoader__.load({
 				slot.running = false;
 				const stillLoading = slot.loading;
 				slot.loading = false;
-				if (changed || stillLoading) notify(slot);
+				if (changed || stillLoading) notify$1(slot);
 				noteFetchDuration(slot, Date.now() - startedAt);
 				if (slot.pending) {
 					slot.pending = false;
-					fetchSlot(slot);
+					fetchSlot$1(slot);
 				}
+				if (evictable(slot)) forget(slot);
 			});
 		}
-		function startTimer(slot) {
+		function startTimer$2(slot) {
 			if (slot.timer !== void 0) return;
 			const interval = intervalOf(slot);
 			if (interval === null) return;
 			slot.timer = window.setInterval(() => {
-				fetchSlot(slot);
+				fetchSlot$1(slot);
 			}, interval);
 		}
-		function stopTimer(slot) {
+		function stopTimer$2(slot) {
 			if (slot.timer === void 0) return;
 			window.clearInterval(slot.timer);
 			slot.timer = void 0;
@@ -5697,28 +5816,30 @@ window.__ModuleLoader__.load({
 		*/
 		function reschedule(slot) {
 			if (slot.pollers === 0) return;
-			stopTimer(slot);
-			startTimer(slot);
+			stopTimer$2(slot);
+			startTimer$2(slot);
 		}
-		function retain(slot, poll) {
+		function retain$1(slot, poll) {
+			if (!slots$1.has(slot.key)) slots$1.set(slot.key, slot);
 			slot.visible += 1;
 			if (poll) slot.pollers += 1;
-			if (slot.visible === 1 && slot.snapshot === null) fetchSlot(slot);
-			if (poll && slot.pollers === 1) startTimer(slot);
+			if (slot.visible === 1 && slot.snapshot === null) fetchSlot$1(slot);
+			if (poll && slot.pollers === 1) startTimer$2(slot);
 		}
-		function release(slot, poll) {
+		function release$1(slot, poll) {
 			slot.visible = Math.max(0, slot.visible - 1);
 			if (poll) {
 				slot.pollers = Math.max(0, slot.pollers - 1);
-				if (slot.pollers === 0) stopTimer(slot);
+				if (slot.pollers === 0) stopTimer$2(slot);
 			}
 			if (slot.visible === 0) {
-				stopTimer(slot);
+				stopTimer$2(slot);
 				slot.pollers = 0;
 				slot.snapshot = null;
 				slot.index = null;
 				slot.indexSource = null;
-				notify(slot);
+				notify$1(slot);
+				if (!slot.running) forget(slot);
 			}
 		}
 		/** The index for the current snapshot, rebuilt only when the snapshot changed. */
@@ -5739,7 +5860,7 @@ window.__ModuleLoader__.load({
 		* page never disagree.
 		*/
 		function invalidateGitStatus(sessionId) {
-			for (const slot of slots.values()) if (slot.sessionId === sessionId) fetchSlot(slot);
+			for (const slot of slots$1.values()) if (slot.sessionId === sessionId) fetchSlot$1(slot);
 		}
 		/**
 		* Subscribe to the shared git status of one session (optionally of one linked
@@ -5751,7 +5872,7 @@ window.__ModuleLoader__.load({
 		*/
 		function useGitStatus(scope, options = {}) {
 			const { worktree, visible = true, pollMs = POLL_BASE_MS, poll = true } = options;
-			const slot = slotOf(scope, worktree);
+			const slot = slotOf$1(scope, worktree);
 			const subscribe = (0, react.useCallback)((listener) => {
 				slot.listeners.add(listener);
 				return () => {
@@ -5762,9 +5883,9 @@ window.__ModuleLoader__.load({
 			(0, react.useEffect)(() => {
 				if (poll) slot.pollMs = pollMs;
 				if (!visible) return void 0;
-				retain(slot, poll);
+				retain$1(slot, poll);
 				return () => {
-					release(slot, poll);
+					release$1(slot, poll);
 				};
 			}, [
 				slot,
@@ -5773,7 +5894,7 @@ window.__ModuleLoader__.load({
 				poll
 			]);
 			const refresh = (0, react.useCallback)(() => {
-				fetchSlot(slot);
+				fetchSlot$1(slot);
 			}, [slot]);
 			const statusOf = (0, react.useCallback)((absolutePath) => indexOf(slot).files.get(normPath(absolutePath)), [slot]);
 			const dirHasChanges = (0, react.useCallback)((absoluteDir) => indexOf(slot).dirs.has(normPath(absoluteDir)), [slot]);
@@ -5935,21 +6056,31 @@ window.__ModuleLoader__.load({
 		* tree per-directory watching; this plugin owns its tree (it took the `files`
 		* kind over), so it carries its own.
 		*
-		* One socket per session, open for as long as the tree is mounted. The client
-		* announces the folders it has expanded and the host watches exactly those;
-		* every notice names a directory whose listing is stale, and the tree drops
-		* that one cached level and re-lists it. Folders the reader collapsed are
-		* un-watched, so a long session does not accumulate handles.
+		* One socket per session, open for as long as the tree is mounted AND visible.
+		* The client announces the folders it has expanded and the host watches
+		* exactly those; every notice names a directory whose listing is stale, and
+		* the tree drops that one cached level and re-lists it. Folders the reader
+		* collapsed are un-watched, so a long session does not accumulate handles.
+		*
+		* The host keeps every visited tab body mounted, so an un-gated watcher would
+		* keep one socket (and its own set of up to 64 `fs.watch` handles on the host)
+		* open per tree the reader ever opened, re-listing parked trees for nobody.
+		* A parked tree (`visible: false`) therefore closes its socket outright — the
+		* host releases that connection's handles when it goes — rather than sending
+		* `unwatch` per path, and a tree with nothing to watch (no session, no root)
+		* never opens one. Coming back reconnects and force-refreshes every watched
+		* directory once, because whatever changed while it was parked was noticed by
+		* nobody.
 		*/
 		/** How long to wait before re-opening a dropped socket; failures back off to the cap. */
 		const RETRY_BASE_MS$1 = 1e3;
 		const RETRY_MAX_MS$1 = 15e3;
 		/**
 		* Keep the file tree's expanded folders watched for the component's lifetime.
-		* @param options - session, root, expanded directories, and the staleness callback.
+		* @param options - session, root, expanded directories, visibility, and the staleness callback.
 		*/
 		function useDirectoryWatch(options) {
-			const { sessionId, root, dirs, onStale } = options;
+			const { sessionId, root, dirs, visible = true, onStale } = options;
 			const dirsKey = dirs.join("\0");
 			const wanted = (0, react.useMemo)(() => {
 				const listed = dirsKey === "" ? [] : dirsKey.split("\0");
@@ -5962,8 +6093,14 @@ window.__ModuleLoader__.load({
 			/** Set by the socket effect; reconciles the host's watch set with the tree's. */
 			const reconcileRef = (0, react.useRef)(() => {});
 			const wantedKey = (0, react.useMemo)(() => wanted.join("\0"), [wanted]);
+			/**
+			* Whether a socket should exist at all: a parked tree and a tree with an
+			* empty watch set (no session, or no root and nothing expanded) hold none.
+			*/
+			const armed = visible && sessionId !== void 0 && wanted.length > 0;
 			(0, react.useEffect)(() => {
-				if (sessionId === void 0) return;
+				if (!armed || sessionId === void 0) return;
+				const session = sessionId;
 				let socket = null;
 				let retry;
 				let closed = false;
@@ -5994,7 +6131,7 @@ window.__ModuleLoader__.load({
 				const connect = () => {
 					if (closed) return;
 					const url = hostWebSocketUrl("sidebar/ws/fs-watch");
-					url.search = new URLSearchParams({ sessionId }).toString();
+					url.search = new URLSearchParams({ sessionId: session }).toString();
 					socket = new WebSocket(url.toString());
 					socket.onopen = () => {
 						failures = 0;
@@ -6002,6 +6139,7 @@ window.__ModuleLoader__.load({
 						reconcile();
 					};
 					socket.onmessage = (event) => {
+						if (closed) return;
 						if (typeof event.data !== "string") return;
 						let frame;
 						try {
@@ -6029,10 +6167,23 @@ window.__ModuleLoader__.load({
 					if (retry !== void 0) window.clearTimeout(retry);
 					socket?.close();
 				};
-			}, [sessionId]);
+			}, [sessionId, armed]);
 			(0, react.useEffect)(() => {
 				reconcileRef.current();
 			}, [wantedKey]);
+			/**
+			* Re-armed after being parked: the socket is brand new (the old one's
+			* notices are gone with it), so nothing the host saw while the tree was
+			* hidden was delivered. Re-list every watched directory once instead of
+			* showing a listing that may be minutes old.
+			*/
+			const wasArmedRef = (0, react.useRef)(armed);
+			(0, react.useEffect)(() => {
+				const previous = wasArmedRef.current;
+				wasArmedRef.current = armed;
+				if (!armed || previous) return;
+				for (const dir of wantedRef.current) staleRef.current(dir);
+			}, [armed]);
 		}
 		//#endregion
 		//#region src/client/use-polling.ts
@@ -6181,6 +6332,13 @@ window.__ModuleLoader__.load({
 		}
 		/** How long the row's "copied" label stays after a successful write. */
 		const COPIED_MS = 1200;
+		/**
+		* How many per-path open-with listings one tree keeps. The host answers from
+		* the machine's own application registry, so a handful covers any realistic
+		* menu session; the cap is what keeps the map from growing for the life of the
+		* page (the host keeps every visited tab body mounted).
+		*/
+		const APPS_CACHE_MAX = 32;
 		/** One changed row's tooltip word (the badge's status vocabulary). */
 		function gitToneLabel(tone) {
 			switch (tone) {
@@ -6885,6 +7043,7 @@ window.__ModuleLoader__.load({
 				sessionId,
 				root: cwd,
 				dirs: expanded,
+				visible: visible !== false,
 				onStale: retryDir
 			});
 			(0, react.useEffect)(() => {
@@ -7260,7 +7419,9 @@ window.__ModuleLoader__.load({
 			* the machine + the path, so reopening the same row's menu is instant: no
 			* request, no disabled "Loading…" frame. A newly installed application shows
 			* up on the next tree mount — the alternative (re-probing per open) is the
-			* churn the menu was reported for.
+			* churn the menu was reported for. The cache is bounded (LRU): the host
+			* keeps every visited tab body mounted, so an unbounded per-tree map of
+			* paths would live for the life of the page.
 			*/
 			const appsCacheRef = (0, react.useRef)(/* @__PURE__ */ new Map());
 			(0, react.useEffect)(() => {
@@ -7269,6 +7430,8 @@ window.__ModuleLoader__.load({
 				const key = `${isDir ? "d" : "f"}\u0000${path}`;
 				const cached = appsCacheRef.current.get(key);
 				if (cached !== void 0) {
+					appsCacheRef.current.delete(key);
+					appsCacheRef.current.set(key, cached);
 					setApps({
 						path,
 						entries: cached
@@ -7278,7 +7441,13 @@ window.__ModuleLoader__.load({
 				let cancelled = false;
 				(isDir ? openInApp.directoryApps() : openInApp.fileApps(path)).then((entries) => {
 					if (cancelled) return;
-					if (entries !== null) appsCacheRef.current.set(key, entries);
+					if (entries !== null) {
+						appsCacheRef.current.set(key, entries);
+						if (appsCacheRef.current.size > APPS_CACHE_MAX) for (const oldest of appsCacheRef.current.keys()) {
+							appsCacheRef.current.delete(oldest);
+							break;
+						}
+					}
 					setApps({
 						path,
 						entries
@@ -8661,7 +8830,12 @@ window.__ModuleLoader__.load({
 		* The stream record outlives its members (only the poller stops): a tab that
 		* becomes visible again re-joins, the leader resumes from the persisted `seq`
 		* cursor, and the missed delta is folded then — so a file the model rewrote
-		* while the tab was parked is still seen as touched.
+		* while the tab was parked is still seen as touched. What it does NOT do is
+		* live for the page: the record map is bounded and least-recently-joined
+		* first (see {@link STREAM_CAP}). A session evicted after that many newer ones
+		* re-joins as a FRESH stream, which re-baselines exactly like a page reload
+		* (see {@link pullStream}) — the only state a returner can lose, and only
+		* after the bound was actually reached.
 		*/
 		/** The delta cadence: the changes tab's session-lens poll of the same route. */
 		const FILE_OPS_INTERVAL_MS = 2500;
@@ -8681,6 +8855,16 @@ window.__ModuleLoader__.load({
 		const IDLE_EVENT_WINDOW = 32;
 		/** Touched paths remembered per session (oldest insertion evicted past this). */
 		const TOUCH_WINDOW = 256;
+		/**
+		* How many session records the store holds. The record already shrinks to what
+		* a re-join needs once its last member goes ({@link IDLE_EVENT_WINDOW} events
+		* plus the published touches), but the MAP itself was "alive for the page":
+		* every session an editor tab had ever watched kept its cursor, baseline and
+		* touch table forever. A session still inside this window resumes from its
+		* cursor and folds the delta it missed; the oldest record that nobody is
+		* watching is what a new mint evicts.
+		*/
+		const STREAM_CAP = 32;
 		/** The state every session starts from (a stable identity: the store contract). */
 		const EMPTY_STATE = {
 			revision: 0,
@@ -8711,29 +8895,39 @@ window.__ModuleLoader__.load({
 			const key = `${unified.startsWith("/") ? "/" : ""}${segments.join("/")}`;
 			return windows ? key.toLowerCase() : key;
 		}
-		/** Every session's stream, alive for the page (only its poller stops). */
+		/** Every session's stream, bounded by {@link STREAM_CAP} (see `streamOf`). */
 		const streams = /* @__PURE__ */ new Map();
 		/** The stream record of one session, created on first use. */
 		function streamOf(sessionId) {
-			let stream = streams.get(sessionId);
-			if (stream === void 0) {
-				stream = {
-					state: EMPTY_STATE,
-					listeners: /* @__PURE__ */ new Set(),
-					members: /* @__PURE__ */ new Set(),
-					leader: void 0,
-					seq: 0,
-					primed: false,
-					events: [],
-					published: /* @__PURE__ */ new Set(),
-					cwd: void 0
-				};
-				streams.set(sessionId, stream);
+			const existing = streams.get(sessionId);
+			if (existing !== void 0) return existing;
+			if (streams.size >= STREAM_CAP) for (const [key, candidate] of streams) {
+				if (candidate.members.size > 0) continue;
+				streams.delete(key);
+				if (streams.size < STREAM_CAP) break;
 			}
+			const stream = {
+				state: EMPTY_STATE,
+				listeners: /* @__PURE__ */ new Set(),
+				members: /* @__PURE__ */ new Set(),
+				leader: void 0,
+				seq: 0,
+				primed: false,
+				events: [],
+				published: /* @__PURE__ */ new Set(),
+				cwd: void 0
+			};
+			streams.set(sessionId, stream);
 			return stream;
 		}
+		/** Move one session's record to the back of the eviction order (LRU). */
+		function touchStream(sessionId, stream) {
+			if (streams.get(sessionId) !== stream) return;
+			streams.delete(sessionId);
+			streams.set(sessionId, stream);
+		}
 		/** Publish one delta's settled write/edit ops to every member of the stream. */
-		function publish(stream, ops) {
+		function publish$1(stream, ops) {
 			const revision = stream.state.revision + 1;
 			const touched = new Map(stream.state.touched);
 			for (const op of [...ops].reverse()) {
@@ -8767,7 +8961,7 @@ window.__ModuleLoader__.load({
 			if (baseline) for (const op of ops) stream.published.add(op.callId);
 			else {
 				const settled = ops.filter((op) => (op.kind === "write" || op.kind === "edit") && !op.running && !op.isError && !stream.published.has(op.callId));
-				if (settled.length > 0) publish(stream, settled);
+				if (settled.length > 0) publish$1(stream, settled);
 			}
 			const present = new Set(ops.map((op) => op.callId));
 			for (const callId of stream.published) if (!present.has(callId)) stream.published.delete(callId);
@@ -8801,6 +8995,7 @@ window.__ModuleLoader__.load({
 					return;
 				}
 				const stream = streamOf(sessionId);
+				touchStream(sessionId, stream);
 				const member = { lead: (value) => {
 					setLeading(value);
 				} };
@@ -10293,80 +10488,80 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var SideCardSection_module_css_default = {
-			"title": "_2vuxea_title",
-			"switchTrack": "_2vuxea_switchTrack",
-			"versionBadgeTag": "_2vuxea_versionBadgeTag",
-			"pluginJumpBtn": "_2vuxea_pluginJumpBtn",
-			"pluginGroupHeading": "_2vuxea_pluginGroupHeading",
-			"pluginTopicBtn": "_2vuxea_pluginTopicBtn",
-			"patternsRow": "_2vuxea_patternsRow",
-			"addCard": "_2vuxea_addCard",
-			"cardSwitch": "_2vuxea_cardSwitch",
-			"cardMain": "_2vuxea_cardMain",
-			"pluginModal": "_2vuxea_pluginModal",
 			"pluginInstall": "_2vuxea_pluginInstall",
-			"selectAnchorIcon": "_2vuxea_selectAnchorIcon",
-			"patternsInput": "_2vuxea_patternsInput",
-			"done": "_2vuxea_done",
-			"selectOptionIcon": "_2vuxea_selectOptionIcon",
-			"patternsAdd": "_2vuxea_patternsAdd",
-			"cardSettings": "_2vuxea_cardSettings",
-			"typedInput": "_2vuxea_typedInput",
-			"cssTextArea": "_2vuxea_cssTextArea",
-			"cardSwitchThumb": "_2vuxea_cardSwitchThumb",
-			"popupRows": "_2vuxea_popupRows",
-			"pluginName": "_2vuxea_pluginName",
-			"groupHeading": "_2vuxea_groupHeading",
-			"versionBadge": "_2vuxea_versionBadge",
-			"openWithHint": "_2vuxea_openWithHint",
-			"versionBadgeName": "_2vuxea_versionBadgeName",
-			"popupRow": "_2vuxea_popupRow",
-			"pluginList": "_2vuxea_pluginList",
-			"card": "_2vuxea_card",
-			"typedInputNumber": "_2vuxea_typedInputNumber",
-			"switchInput": "_2vuxea_switchInput",
-			"suffix": "_2vuxea_suffix",
+			"addCard": "_2vuxea_addCard",
 			"intro": "_2vuxea_intro",
-			"selectOption": "_2vuxea_selectOption",
-			"count": "_2vuxea_count",
-			"group": "_2vuxea_group",
-			"pluginEntryHead": "_2vuxea_pluginEntryHead",
-			"patternsChip": "_2vuxea_patternsChip",
-			"switch": "_2vuxea_switch",
-			"selectOptionText": "_2vuxea_selectOptionText",
-			"selectAnchor": "_2vuxea_selectAnchor",
-			"pluginDesc": "_2vuxea_pluginDesc",
-			"control": "_2vuxea_control",
-			"pluginEntry": "_2vuxea_pluginEntry",
-			"pluginCopyBtn": "_2vuxea_pluginCopyBtn",
-			"pluginEntryActions": "_2vuxea_pluginEntryActions",
-			"openWithEditorTemplate": "_2vuxea_openWithEditorTemplate",
-			"openWithFamily": "_2vuxea_openWithFamily",
-			"grid": "_2vuxea_grid",
-			"cardOn": "_2vuxea_cardOn",
+			"cardSwitchThumb": "_2vuxea_cardSwitchThumb",
+			"cssTextArea": "_2vuxea_cssTextArea",
 			"cardTitle": "_2vuxea_cardTitle",
-			"pluginGroup": "_2vuxea_pluginGroup",
-			"section": "_2vuxea_section",
-			"patternsChips": "_2vuxea_patternsChips",
-			"rowText": "_2vuxea_rowText",
-			"percentInput": "_2vuxea_percentInput",
-			"pluginEntries": "_2vuxea_pluginEntries",
-			"selectAnchorText": "_2vuxea_selectAnchorText",
-			"openWithEditorInput": "_2vuxea_openWithEditorInput",
-			"pluginEmpty": "_2vuxea_pluginEmpty",
-			"cardSwitchTrack": "_2vuxea_cardSwitchTrack",
-			"openWithEditorRow": "_2vuxea_openWithEditorRow",
-			"cardDesc": "_2vuxea_cardDesc",
-			"openWithRemove": "_2vuxea_openWithRemove",
-			"popupDialog": "_2vuxea_popupDialog",
-			"desc": "_2vuxea_desc",
+			"grid": "_2vuxea_grid",
 			"cardTop": "_2vuxea_cardTop",
-			"switchThumb": "_2vuxea_switchThumb",
+			"selectOptionIcon": "_2vuxea_selectOptionIcon",
+			"pluginDesc": "_2vuxea_pluginDesc",
 			"patternsChipRemove": "_2vuxea_patternsChipRemove",
-			"error": "_2vuxea_error",
+			"pluginTopicBtn": "_2vuxea_pluginTopicBtn",
+			"desc": "_2vuxea_desc",
+			"openWithEditorRow": "_2vuxea_openWithEditorRow",
+			"switchThumb": "_2vuxea_switchThumb",
+			"popupRows": "_2vuxea_popupRows",
+			"selectOption": "_2vuxea_selectOption",
+			"card": "_2vuxea_card",
+			"cardOn": "_2vuxea_cardOn",
+			"pluginName": "_2vuxea_pluginName",
+			"openWithEditorTemplate": "_2vuxea_openWithEditorTemplate",
+			"pluginEntryActions": "_2vuxea_pluginEntryActions",
+			"popupRow": "_2vuxea_popupRow",
+			"versionBadge": "_2vuxea_versionBadge",
+			"patternsRow": "_2vuxea_patternsRow",
+			"cardSwitchTrack": "_2vuxea_cardSwitchTrack",
+			"openWithEditorInput": "_2vuxea_openWithEditorInput",
+			"cardSettings": "_2vuxea_cardSettings",
+			"selectAnchor": "_2vuxea_selectAnchor",
+			"switch": "_2vuxea_switch",
+			"group": "_2vuxea_group",
+			"rowText": "_2vuxea_rowText",
+			"pluginEntries": "_2vuxea_pluginEntries",
+			"pluginList": "_2vuxea_pluginList",
+			"control": "_2vuxea_control",
+			"count": "_2vuxea_count",
 			"cardIconChip": "_2vuxea_cardIconChip",
+			"openWithHint": "_2vuxea_openWithHint",
+			"switchInput": "_2vuxea_switchInput",
+			"selectOptionText": "_2vuxea_selectOptionText",
+			"cardMain": "_2vuxea_cardMain",
+			"patternsChips": "_2vuxea_patternsChips",
+			"pluginJumpBtn": "_2vuxea_pluginJumpBtn",
 			"pluginSearch": "_2vuxea_pluginSearch",
-			"row": "_2vuxea_row"
+			"patternsInput": "_2vuxea_patternsInput",
+			"pluginEntryHead": "_2vuxea_pluginEntryHead",
+			"switchTrack": "_2vuxea_switchTrack",
+			"pluginGroup": "_2vuxea_pluginGroup",
+			"groupHeading": "_2vuxea_groupHeading",
+			"pluginModal": "_2vuxea_pluginModal",
+			"section": "_2vuxea_section",
+			"pluginEmpty": "_2vuxea_pluginEmpty",
+			"pluginCopyBtn": "_2vuxea_pluginCopyBtn",
+			"row": "_2vuxea_row",
+			"patternsAdd": "_2vuxea_patternsAdd",
+			"done": "_2vuxea_done",
+			"suffix": "_2vuxea_suffix",
+			"cardSwitch": "_2vuxea_cardSwitch",
+			"versionBadgeName": "_2vuxea_versionBadgeName",
+			"openWithFamily": "_2vuxea_openWithFamily",
+			"error": "_2vuxea_error",
+			"openWithRemove": "_2vuxea_openWithRemove",
+			"cardDesc": "_2vuxea_cardDesc",
+			"typedInput": "_2vuxea_typedInput",
+			"selectAnchorIcon": "_2vuxea_selectAnchorIcon",
+			"percentInput": "_2vuxea_percentInput",
+			"patternsChip": "_2vuxea_patternsChip",
+			"typedInputNumber": "_2vuxea_typedInputNumber",
+			"popupDialog": "_2vuxea_popupDialog",
+			"title": "_2vuxea_title",
+			"selectAnchorText": "_2vuxea_selectAnchorText",
+			"pluginEntry": "_2vuxea_pluginEntry",
+			"pluginGroupHeading": "_2vuxea_pluginGroupHeading",
+			"versionBadgeTag": "_2vuxea_versionBadgeTag"
 		};
 		//#endregion
 		//#region src/client/open-with-settings.tsx
@@ -10529,84 +10724,84 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var changes_module_css_default = {
-			"commitModelSwitch": "bdiHEa_commitModelSwitch",
-			"opFlagError": "bdiHEa_opFlagError",
-			"suggestButton": "bdiHEa_suggestButton",
-			"commitModelDesc": "bdiHEa_commitModelDesc",
-			"commitInput": "bdiHEa_commitInput",
-			"filterRow": "bdiHEa_filterRow",
-			"dirName": "bdiHEa_dirName",
-			"group": "bdiHEa_group",
-			"commitModelRow": "bdiHEa_commitModelRow",
-			"commitModelOption": "bdiHEa_commitModelOption",
 			"suggestBusy": "bdiHEa_suggestBusy",
-			"commitModelOptionText": "bdiHEa_commitModelOptionText",
-			"dsh-row-in": "bdiHEa_dsh-row-in",
-			"select": "bdiHEa_select",
-			"logMore": "bdiHEa_logMore",
-			"groupHeader": "bdiHEa_groupHeader",
-			"commitModelMenuRoot": "bdiHEa_commitModelMenuRoot",
-			"logSubject": "bdiHEa_logSubject",
-			"session": "bdiHEa_session",
-			"paneGone": "bdiHEa_paneGone",
-			"opMeta": "bdiHEa_opMeta",
-			"tree": "bdiHEa_tree",
-			"git": "bdiHEa_git",
-			"commitInputWrap": "bdiHEa_commitInputWrap",
-			"filePath": "bdiHEa_filePath",
-			"logLine2": "bdiHEa_logLine2",
-			"root": "bdiHEa_root",
-			"redactBanner": "bdiHEa_redactBanner",
-			"mdBody": "bdiHEa_mdBody",
-			"opRow": "bdiHEa_opRow",
-			"branchLabel": "bdiHEa_branchLabel",
-			"rowName": "bdiHEa_rowName",
-			"headAction": "bdiHEa_headAction",
-			"sessionList": "bdiHEa_sessionList",
-			"commitModelOptionNote": "bdiHEa_commitModelOptionNote",
-			"diffStats": "bdiHEa_diffStats",
-			"commitRow": "bdiHEa_commitRow",
-			"commitSweep": "bdiHEa_commitSweep",
-			"commitBar": "bdiHEa_commitBar",
-			"paneBody": "bdiHEa_paneBody",
-			"rowIcon": "bdiHEa_rowIcon",
-			"dirRow": "bdiHEa_dirRow",
-			"commitModelBox": "bdiHEa_commitModelBox",
-			"commitModelCurrent": "bdiHEa_commitModelCurrent",
-			"diffHead": "bdiHEa_diffHead",
-			"logRow": "bdiHEa_logRow",
-			"fileGroup": "bdiHEa_fileGroup",
-			"chevron": "bdiHEa_chevron",
-			"commitModel": "bdiHEa_commitModel",
-			"logHash": "bdiHEa_logHash",
-			"htmlFrame": "bdiHEa_htmlFrame",
-			"headerAction": "bdiHEa_headerAction",
-			"commitModelTitle": "bdiHEa_commitModelTitle",
-			"treeChildren": "bdiHEa_treeChildren",
-			"commitBusyText": "bdiHEa_commitBusyText",
-			"commitSuggestPulse": "bdiHEa_commitSuggestPulse",
-			"commitModelInput": "bdiHEa_commitModelInput",
-			"logMeta": "bdiHEa_logMeta",
-			"opSize": "bdiHEa_opSize",
-			"logRef": "bdiHEa_logRef",
-			"diffPane": "bdiHEa_diffPane",
-			"selectors": "bdiHEa_selectors",
-			"lineNote": "bdiHEa_lineNote",
-			"head": "bdiHEa_head",
-			"rowAction": "bdiHEa_rowAction",
-			"logLine1": "bdiHEa_logLine1",
-			"row": "bdiHEa_row",
 			"opTime": "bdiHEa_opTime",
-			"opFlag": "bdiHEa_opFlag",
-			"dragHandle": "bdiHEa_dragHandle",
-			"htmlPane": "bdiHEa_htmlPane",
-			"readError": "bdiHEa_readError",
-			"rowMain": "bdiHEa_rowMain",
-			"lineCounts": "bdiHEa_lineCounts",
-			"gitScroll": "bdiHEa_gitScroll",
+			"group": "bdiHEa_group",
+			"diffStats": "bdiHEa_diffStats",
 			"countPill": "bdiHEa_countPill",
+			"commitBusyText": "bdiHEa_commitBusyText",
+			"treeChildren": "bdiHEa_treeChildren",
+			"logLine2": "bdiHEa_logLine2",
+			"suggestButton": "bdiHEa_suggestButton",
+			"filePath": "bdiHEa_filePath",
+			"rowIcon": "bdiHEa_rowIcon",
+			"logRef": "bdiHEa_logRef",
+			"rowMain": "bdiHEa_rowMain",
+			"commitRow": "bdiHEa_commitRow",
+			"commitInputWrap": "bdiHEa_commitInputWrap",
+			"sessionList": "bdiHEa_sessionList",
+			"commitModel": "bdiHEa_commitModel",
+			"head": "bdiHEa_head",
+			"commitSweep": "bdiHEa_commitSweep",
+			"headerAction": "bdiHEa_headerAction",
+			"rowAction": "bdiHEa_rowAction",
+			"commitModelSwitch": "bdiHEa_commitModelSwitch",
+			"commitModelMenuRoot": "bdiHEa_commitModelMenuRoot",
+			"chevron": "bdiHEa_chevron",
+			"opFlag": "bdiHEa_opFlag",
+			"opSize": "bdiHEa_opSize",
+			"readError": "bdiHEa_readError",
+			"lineNote": "bdiHEa_lineNote",
+			"commitModelTitle": "bdiHEa_commitModelTitle",
+			"logLine1": "bdiHEa_logLine1",
+			"logSubject": "bdiHEa_logSubject",
+			"paneGone": "bdiHEa_paneGone",
+			"opRow": "bdiHEa_opRow",
+			"selectors": "bdiHEa_selectors",
+			"groupHeader": "bdiHEa_groupHeader",
+			"dirName": "bdiHEa_dirName",
+			"commitSuggestPulse": "bdiHEa_commitSuggestPulse",
+			"row": "bdiHEa_row",
+			"commitModelCurrent": "bdiHEa_commitModelCurrent",
+			"opMeta": "bdiHEa_opMeta",
+			"session": "bdiHEa_session",
+			"logHash": "bdiHEa_logHash",
+			"commitModelOptionText": "bdiHEa_commitModelOptionText",
+			"commitModelInput": "bdiHEa_commitModelInput",
+			"diffPane": "bdiHEa_diffPane",
+			"commitModelOption": "bdiHEa_commitModelOption",
+			"git": "bdiHEa_git",
+			"mdBody": "bdiHEa_mdBody",
+			"lineCounts": "bdiHEa_lineCounts",
+			"dsh-row-in": "bdiHEa_dsh-row-in",
+			"logRow": "bdiHEa_logRow",
+			"commitModelRow": "bdiHEa_commitModelRow",
+			"logMore": "bdiHEa_logMore",
+			"logMeta": "bdiHEa_logMeta",
+			"gitScroll": "bdiHEa_gitScroll",
+			"commitInput": "bdiHEa_commitInput",
+			"htmlPane": "bdiHEa_htmlPane",
+			"dragHandle": "bdiHEa_dragHandle",
+			"rowName": "bdiHEa_rowName",
+			"root": "bdiHEa_root",
+			"paneBody": "bdiHEa_paneBody",
+			"tree": "bdiHEa_tree",
 			"diffPath": "bdiHEa_diffPath",
-			"commitModelHint": "bdiHEa_commitModelHint"
+			"dirRow": "bdiHEa_dirRow",
+			"commitBar": "bdiHEa_commitBar",
+			"commitModelOptionNote": "bdiHEa_commitModelOptionNote",
+			"commitModelHint": "bdiHEa_commitModelHint",
+			"branchLabel": "bdiHEa_branchLabel",
+			"commitModelBox": "bdiHEa_commitModelBox",
+			"select": "bdiHEa_select",
+			"diffHead": "bdiHEa_diffHead",
+			"htmlFrame": "bdiHEa_htmlFrame",
+			"commitModelDesc": "bdiHEa_commitModelDesc",
+			"opFlagError": "bdiHEa_opFlagError",
+			"filterRow": "bdiHEa_filterRow",
+			"redactBanner": "bdiHEa_redactBanner",
+			"fileGroup": "bdiHEa_fileGroup",
+			"headAction": "bdiHEa_headAction"
 		};
 		//#endregion
 		//#region src/client/changes/CommitModelSettings.tsx
@@ -10986,34 +11181,34 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var diff_module_css_default = {
-			"tokFunction": "sstWLa_tokFunction",
+			"fileChevronExpanded": "sstWLa_fileChevronExpanded",
+			"fileOld": "sstWLa_fileOld",
 			"inlineChange": "sstWLa_inlineChange",
-			"tokMacro": "sstWLa_tokMacro",
-			"foldMarker": "sstWLa_foldMarker",
-			"sign": "sstWLa_sign",
 			"lineNo": "sstWLa_lineNo",
-			"tokString": "sstWLa_tokString",
-			"rows": "sstWLa_rows",
-			"tokComment": "sstWLa_tokComment",
-			"foldRow": "sstWLa_foldRow",
-			"fileTag": "sstWLa_fileTag",
-			"fileStats": "sstWLa_fileStats",
-			"tokKeyword": "sstWLa_tokKeyword",
-			"statAdd": "sstWLa_statAdd",
 			"row": "sstWLa_row",
-			"text": "sstWLa_text",
-			"fileBlock": "sstWLa_fileBlock",
+			"rows": "sstWLa_rows",
+			"sign": "sstWLa_sign",
 			"tokNumber": "sstWLa_tokNumber",
 			"metaText": "sstWLa_metaText",
-			"expand": "sstWLa_expand",
+			"text": "sstWLa_text",
+			"fileBlock": "sstWLa_fileBlock",
+			"file": "sstWLa_file",
+			"fileTag": "sstWLa_fileTag",
+			"statAdd": "sstWLa_statAdd",
 			"filePath": "sstWLa_filePath",
 			"statDel": "sstWLa_statDel",
-			"tokType": "sstWLa_tokType",
-			"files": "sstWLa_files",
-			"file": "sstWLa_file",
+			"tokFunction": "sstWLa_tokFunction",
+			"expand": "sstWLa_expand",
 			"fileChevron": "sstWLa_fileChevron",
-			"fileChevronExpanded": "sstWLa_fileChevronExpanded",
-			"fileOld": "sstWLa_fileOld"
+			"tokString": "sstWLa_tokString",
+			"foldRow": "sstWLa_foldRow",
+			"foldMarker": "sstWLa_foldMarker",
+			"files": "sstWLa_files",
+			"fileStats": "sstWLa_fileStats",
+			"tokMacro": "sstWLa_tokMacro",
+			"tokComment": "sstWLa_tokComment",
+			"tokKeyword": "sstWLa_tokKeyword",
+			"tokType": "sstWLa_tokType"
 		};
 		//#endregion
 		//#region src/client/changes/GitLens.tsx
@@ -11078,6 +11273,41 @@ window.__ModuleLoader__.load({
 		*  this so non-Error rejections never render as '[object Object]'). */
 		function errorMessage(reason) {
 			return reason instanceof Error ? reason.message : String(reason);
+		}
+		/**
+		* Whether two inventory listings say the same thing. Every listing pass answers
+		* with a fresh array of fresh rows, so identity alone would republish on each
+		* poll; a field-by-field compare is what lets an unchanged silent tick stay
+		* silent (see `runOnce`).
+		*/
+		function sameWorktrees(left, right) {
+			if (left === right) return true;
+			if (left.length !== right.length) return false;
+			return left.every((entry, index) => {
+				const other = right[index];
+				return entry.path === other.path && entry.branch === other.branch && entry.current === other.current && entry.changes === other.changes;
+			});
+		}
+		/**
+		* Write one scope's draft into the record, remembering at most
+		* {@link COMMIT_DRAFT_CAP} scopes. Re-writing a key moves it to the back, so
+		* the draft evicted past the cap is the scope typed into longest ago — a typed
+		* message for another project is never what a commit here submits (the record
+		* is keyed by scope, and `commit()` reads only its own key).
+		*
+		* @param prev - the current record (never mutated).
+		* @param key - the scope key (session + cwd).
+		* @param text - the draft (`''` = cleared; the key stays, so it reads back as
+		*  an empty box rather than as a missing one).
+		* @returns the next record.
+		*/
+		function withCommitDraft(prev, key, text) {
+			const next = { ...prev };
+			delete next[key];
+			next[key] = text;
+			const keys = Object.keys(next);
+			for (const stale of keys.slice(0, Math.max(0, keys.length - 32))) delete next[stale];
+			return next;
 		}
 		/** History batch size: the log loads lazily in pages so a long history never
 		*  floods the panel at once (the end of the log is reached by paging). */
@@ -11303,15 +11533,13 @@ window.__ModuleLoader__.load({
 			*  and a staged row, so a draft typed against another project would submit
 			*  verbatim under this one. Keyed rather than cleared on a scope swap, so a
 			*  kept-mounted tab shows a conversation its own message when it comes back
-			*  (#712). */
+			*  (#712) — bounded to the newest {@link COMMIT_DRAFT_CAP} scopes, because
+			*  that tab lives for the whole page. */
 			const [commitDrafts, setCommitDrafts] = (0, react.useState)({});
 			const draftKey = `${scope.sessionId}\u0000${scope.cwd ?? ""}`;
 			const commitMsg = commitDrafts[draftKey] ?? "";
 			const writeDraft = (text) => {
-				setCommitDrafts((prev) => ({
-					...prev,
-					[draftKey]: text
-				}));
+				setCommitDrafts((prev) => withCommitDraft(prev, draftKey, text));
 			};
 			const [busy, setBusy] = (0, react.useState)(false);
 			/** Whether a commit-message suggestion is being generated host-side (the
@@ -11472,7 +11700,7 @@ window.__ModuleLoader__.load({
 					return;
 				}
 				if (signal?.aborted === true || generation !== scopeGen.current) return;
-				setWorktrees(listed);
+				setWorktrees((previous) => sameWorktrees(previous, listed) ? previous : listed);
 				const current = listed.find((entry) => entry.current);
 				let target = chosenPathRef.current !== void 0 && listed.some((entry) => entry.path === chosenPathRef.current) ? chosenPathRef.current : current?.path;
 				if (!autoSelectDone.current) {
@@ -14920,6 +15148,27 @@ window.__ModuleLoader__.load({
 			return `${sessionId}::${normalizeLocalPath(isAbsolutePath$1(path) ? path : joinPath(cwd ?? "", path)).replace(/\\/g, "/")}`;
 		}
 		/**
+		* Drop every parked fragment whose TTL ran out.
+		*
+		* The TTL is already honoured when a fragment is TAKEN, but a fragment parked
+		* for a document the reader never opens is never taken — it would sit in the
+		* map for the page's lifetime (since v0.25 every visited native tab body stays
+		* mounted, and every cross-file link click parks one entry). Sweeping on WRITE
+		* is what bounds it: a write is the only event that can add an entry.
+		*
+		* @returns how many expired entries were dropped.
+		*/
+		function sweepPendingAnchors() {
+			const now = Date.now();
+			let dropped = 0;
+			for (const [key, entry] of pendingAnchors) {
+				if (now - entry.at <= PENDING_TTL_MS) continue;
+				pendingAnchors.delete(key);
+				dropped += 1;
+			}
+			return dropped;
+		}
+		/**
 		* Park the fragment a cross-file link wants to land on, for the target
 		* document's own surface to take once it mounts.
 		* @param sessionId - the session both documents live in.
@@ -14929,6 +15178,7 @@ window.__ModuleLoader__.load({
 		*/
 		function rememberMarkdownAnchor(sessionId, cwd, path, fragment) {
 			if (fragment === "") return;
+			sweepPendingAnchors();
 			pendingAnchors.set(anchorKey(sessionId, cwd, path), {
 				fragment,
 				at: Date.now()
@@ -17380,159 +17630,159 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			document.head.appendChild(tag);
 		}
 		var tasks_graph_module_css_default = {
-			"jobPopTitle": "d2hvtW_jobPopTitle",
-			"barActivity": "d2hvtW_barActivity",
-			"depth3": "d2hvtW_depth3",
-			"taskState": "d2hvtW_taskState",
-			"edge": "d2hvtW_edge",
-			"popHead": "d2hvtW_popHead",
-			"treeChip": "d2hvtW_treeChip",
-			"popValue": "d2hvtW_popValue",
-			"teamActions": "d2hvtW_teamActions",
-			"treeFoldRow": "d2hvtW_treeFoldRow",
-			"cardName": "d2hvtW_cardName",
-			"popHint": "d2hvtW_popHint",
-			"dsh-tasks-bar-sweep": "d2hvtW_dsh-tasks-bar-sweep",
-			"liveGlyph": "d2hvtW_liveGlyph",
-			"jobsKillSlot": "d2hvtW_jobsKillSlot",
-			"teamBoard": "d2hvtW_teamBoard",
-			"edges": "d2hvtW_edges",
-			"edgeWorkflow": "d2hvtW_edgeWorkflow",
-			"jobPopValue": "d2hvtW_jobPopValue",
-			"popList": "d2hvtW_popList",
-			"teamTask": "d2hvtW_teamTask",
-			"barDot": "d2hvtW_barDot",
-			"graphView": "d2hvtW_graphView",
-			"kindBadge": "d2hvtW_kindBadge",
-			"liveArgs": "d2hvtW_liveArgs",
-			"edgeTeam": "d2hvtW_edgeTeam",
-			"treeDisclosure": "d2hvtW_treeDisclosure",
-			"treeContent": "d2hvtW_treeContent",
-			"treeTitle": "d2hvtW_treeTitle",
-			"teamBoardBar": "d2hvtW_teamBoardBar",
-			"treeView": "d2hvtW_treeView",
-			"taskDangerArmed": "d2hvtW_taskDangerArmed",
-			"teamTaskRow": "d2hvtW_teamTaskRow",
-			"barFold": "d2hvtW_barFold",
-			"nodeMeta": "d2hvtW_nodeMeta",
-			"taskMore": "d2hvtW_taskMore",
-			"taskMarkdown": "d2hvtW_taskMarkdown",
-			"popListRow": "d2hvtW_popListRow",
-			"nodeFold": "d2hvtW_nodeFold",
-			"treeRowActive": "d2hvtW_treeRowActive",
-			"teamTaskSubject": "d2hvtW_teamTaskSubject",
-			"popListLabel": "d2hvtW_popListLabel",
-			"treeChild": "d2hvtW_treeChild",
-			"treeRow": "d2hvtW_treeRow",
-			"taskOwnerPill": "d2hvtW_taskOwnerPill",
-			"nodeCurrent": "d2hvtW_nodeCurrent",
-			"teamMembers": "d2hvtW_teamMembers",
-			"dsh-pop-in": "d2hvtW_dsh-pop-in",
-			"canvasInner": "d2hvtW_canvasInner",
-			"nodeGlyph": "d2hvtW_nodeGlyph",
-			"cardNamePlain": "d2hvtW_cardNamePlain",
-			"jobsDrawer": "d2hvtW_jobsDrawer",
-			"jobsDrawerChev": "d2hvtW_jobsDrawerChev",
-			"barError": "d2hvtW_barError",
+			"popGlyph": "d2hvtW_popGlyph",
 			"phase2": "d2hvtW_phase2",
-			"cardBar": "d2hvtW_cardBar",
-			"nodeTeam": "d2hvtW_nodeTeam",
-			"teamNote": "d2hvtW_teamNote",
-			"jobsAutoNote": "d2hvtW_jobsAutoNote",
-			"taskHeadRow": "d2hvtW_taskHeadRow",
-			"depth0": "d2hvtW_depth0",
-			"jobsDrawerBar": "d2hvtW_jobsDrawerBar",
-			"taskLine": "d2hvtW_taskLine",
-			"liveTool": "d2hvtW_liveTool",
-			"edgeFold": "d2hvtW_edgeFold",
-			"nodeDot": "d2hvtW_nodeDot",
-			"dsh-card-in": "d2hvtW_dsh-card-in",
-			"phaseFrame": "d2hvtW_phaseFrame",
-			"controlBtnActive": "d2hvtW_controlBtnActive",
-			"jobPopKillArmed": "d2hvtW_jobPopKillArmed",
-			"barState": "d2hvtW_barState",
-			"taskDanger": "d2hvtW_taskDanger",
-			"treeDot": "d2hvtW_treeDot",
-			"phaseBadge": "d2hvtW_phaseBadge",
-			"taskTextarea": "d2hvtW_taskTextarea",
-			"popRows": "d2hvtW_popRows",
-			"phaseLabel": "d2hvtW_phaseLabel",
-			"popTitleRow": "d2hvtW_popTitleRow",
-			"teamTasks": "d2hvtW_teamTasks",
-			"controlText": "d2hvtW_controlText",
-			"jumpMenu": "d2hvtW_jumpMenu",
-			"taskSubject": "d2hvtW_taskSubject",
-			"controls": "d2hvtW_controls",
-			"canvasDragging": "d2hvtW_canvasDragging",
-			"popCard": "d2hvtW_popCard",
-			"jobsBigNum": "d2hvtW_jobsBigNum",
-			"jobsKillError": "d2hvtW_jobsKillError",
-			"barAction": "d2hvtW_barAction",
-			"jobPopFollow": "d2hvtW_jobPopFollow",
-			"treeMeta": "d2hvtW_treeMeta",
-			"depth1": "d2hvtW_depth1",
-			"treeChildLast": "d2hvtW_treeChildLast",
-			"taskField": "d2hvtW_taskField",
-			"jumpMoreButton": "d2hvtW_jumpMoreButton",
-			"jobsMeta": "d2hvtW_jobsMeta",
-			"taskOwnerRow": "d2hvtW_taskOwnerRow",
-			"popTitle": "d2hvtW_popTitle",
-			"taskInput": "d2hvtW_taskInput",
-			"taskOwnerPillActive": "d2hvtW_taskOwnerPillActive",
-			"popSection": "d2hvtW_popSection",
-			"phase1": "d2hvtW_phase1",
-			"barFoldGlyph": "d2hvtW_barFoldGlyph",
-			"jumpMenuItem": "d2hvtW_jumpMenuItem",
-			"jobPopActions": "d2hvtW_jobPopActions",
-			"popGroup": "d2hvtW_popGroup",
-			"controlZoomLevel": "d2hvtW_controlZoomLevel",
-			"jobsLabel": "d2hvtW_jobsLabel",
-			"cardTop": "d2hvtW_cardTop",
-			"nodeSettled": "d2hvtW_nodeSettled",
-			"teamBoardIcon": "d2hvtW_teamBoardIcon",
-			"jumpMore": "d2hvtW_jumpMore",
-			"teamBoardCount": "d2hvtW_teamBoardCount",
-			"cardText": "d2hvtW_cardText",
-			"canvas": "d2hvtW_canvas",
-			"controlBtn": "d2hvtW_controlBtn",
-			"phase0": "d2hvtW_phase0",
-			"jobPopFollowLabel": "d2hvtW_jobPopFollowLabel",
+			"treeChip": "d2hvtW_treeChip",
 			"phase3": "d2hvtW_phase3",
-			"node": "d2hvtW_node",
-			"teamTaskOwner": "d2hvtW_teamTaskOwner",
-			"teamEmpty": "d2hvtW_teamEmpty",
-			"live": "d2hvtW_live",
-			"popValueMono": "d2hvtW_popValueMono",
-			"taskGlyph": "d2hvtW_taskGlyph",
-			"taskForm": "d2hvtW_taskForm",
-			"liveText": "d2hvtW_liveText",
-			"jobsDrawerCount": "d2hvtW_jobsDrawerCount",
+			"jobsRowMain": "d2hvtW_jobsRowMain",
+			"taskState": "d2hvtW_taskState",
+			"teamNote": "d2hvtW_teamNote",
+			"treeChildLast": "d2hvtW_treeChildLast",
+			"nodeCurrent": "d2hvtW_nodeCurrent",
+			"popValue": "d2hvtW_popValue",
+			"cardTop": "d2hvtW_cardTop",
+			"jobPopValue": "d2hvtW_jobPopValue",
+			"edgeTeam": "d2hvtW_edgeTeam",
+			"teamBoardBar": "d2hvtW_teamBoardBar",
+			"jumpMenuItem": "d2hvtW_jumpMenuItem",
+			"treeContent": "d2hvtW_treeContent",
+			"jobPopFollowLabel": "d2hvtW_jobPopFollowLabel",
+			"barFoldGlyph": "d2hvtW_barFoldGlyph",
+			"treeRowSettled": "d2hvtW_treeRowSettled",
+			"treeKids": "d2hvtW_treeKids",
+			"cardName": "d2hvtW_cardName",
+			"taskField": "d2hvtW_taskField",
+			"graphView": "d2hvtW_graphView",
+			"taskHeadRow": "d2hvtW_taskHeadRow",
+			"taskInput": "d2hvtW_taskInput",
+			"edgeFold": "d2hvtW_edgeFold",
+			"taskOwnerPillActive": "d2hvtW_taskOwnerPillActive",
 			"cardBadges": "d2hvtW_cardBadges",
 			"teamBoardChev": "d2hvtW_teamBoardChev",
-			"depth2": "d2hvtW_depth2",
-			"jobsKill": "d2hvtW_jobsKill",
-			"treeKids": "d2hvtW_treeKids",
-			"popGlyph": "d2hvtW_popGlyph",
+			"popCard": "d2hvtW_popCard",
+			"jobPopKillArmed": "d2hvtW_jobPopKillArmed",
+			"controlZoomLevel": "d2hvtW_controlZoomLevel",
 			"kindChip": "d2hvtW_kindChip",
-			"jobsDrawerBody": "d2hvtW_jobsDrawerBody",
-			"jobPopMeta": "d2hvtW_jobPopMeta",
-			"nodeWorkflow": "d2hvtW_nodeWorkflow",
-			"popKey": "d2hvtW_popKey",
-			"nodeError": "d2hvtW_nodeError",
-			"jobsRow": "d2hvtW_jobsRow",
-			"jobsRowMain": "d2hvtW_jobsRowMain",
-			"cardMeta": "d2hvtW_cardMeta",
-			"teamMemberName": "d2hvtW_teamMemberName",
+			"controlBtn": "d2hvtW_controlBtn",
+			"popTitleRow": "d2hvtW_popTitleRow",
+			"phase0": "d2hvtW_phase0",
 			"viewEmptyHint": "d2hvtW_viewEmptyHint",
+			"barActivity": "d2hvtW_barActivity",
+			"taskLine": "d2hvtW_taskLine",
+			"barAction": "d2hvtW_barAction",
+			"controlText": "d2hvtW_controlText",
+			"popHint": "d2hvtW_popHint",
+			"jobPopMeta": "d2hvtW_jobPopMeta",
+			"jobsDrawerChev": "d2hvtW_jobsDrawerChev",
+			"cardBar": "d2hvtW_cardBar",
+			"live": "d2hvtW_live",
+			"canvas": "d2hvtW_canvas",
+			"treeFoldRow": "d2hvtW_treeFoldRow",
+			"nodeWorkflow": "d2hvtW_nodeWorkflow",
+			"teamMembers": "d2hvtW_teamMembers",
+			"taskForm": "d2hvtW_taskForm",
+			"nodeError": "d2hvtW_nodeError",
+			"treeChild": "d2hvtW_treeChild",
+			"jumpMoreButton": "d2hvtW_jumpMoreButton",
+			"phaseFrame": "d2hvtW_phaseFrame",
+			"taskDanger": "d2hvtW_taskDanger",
+			"edges": "d2hvtW_edges",
+			"dsh-card-in": "d2hvtW_dsh-card-in",
+			"liveGlyph": "d2hvtW_liveGlyph",
+			"jobsDrawerBar": "d2hvtW_jobsDrawerBar",
+			"taskDangerArmed": "d2hvtW_taskDangerArmed",
+			"teamTaskOwner": "d2hvtW_teamTaskOwner",
+			"phaseBadge": "d2hvtW_phaseBadge",
+			"phase1": "d2hvtW_phase1",
+			"treeDisclosure": "d2hvtW_treeDisclosure",
+			"jobsAutoNote": "d2hvtW_jobsAutoNote",
+			"treeRow": "d2hvtW_treeRow",
+			"jobsDrawerBody": "d2hvtW_jobsDrawerBody",
+			"depth2": "d2hvtW_depth2",
+			"nodeDot": "d2hvtW_nodeDot",
+			"jobsLabel": "d2hvtW_jobsLabel",
+			"teamTaskSubject": "d2hvtW_teamTaskSubject",
+			"popValueMono": "d2hvtW_popValueMono",
+			"taskLabel": "d2hvtW_taskLabel",
+			"nodeSettled": "d2hvtW_nodeSettled",
 			"nodeHeader": "d2hvtW_nodeHeader",
-			"taskBody": "d2hvtW_taskBody",
-			"treeGlyph": "d2hvtW_treeGlyph",
-			"popActivity": "d2hvtW_popActivity",
+			"popListRow": "d2hvtW_popListRow",
+			"taskMarkdown": "d2hvtW_taskMarkdown",
+			"controlBtnActive": "d2hvtW_controlBtnActive",
+			"jobsMeta": "d2hvtW_jobsMeta",
+			"popList": "d2hvtW_popList",
+			"liveTool": "d2hvtW_liveTool",
+			"jobsBigNum": "d2hvtW_jobsBigNum",
+			"phaseLabel": "d2hvtW_phaseLabel",
+			"cardText": "d2hvtW_cardText",
+			"jumpMenu": "d2hvtW_jumpMenu",
+			"taskOwnerRow": "d2hvtW_taskOwnerRow",
+			"nodeMeta": "d2hvtW_nodeMeta",
+			"edgeWorkflow": "d2hvtW_edgeWorkflow",
+			"popGroup": "d2hvtW_popGroup",
+			"jumpMore": "d2hvtW_jumpMore",
+			"nodeTeam": "d2hvtW_nodeTeam",
+			"teamEmpty": "d2hvtW_teamEmpty",
 			"popActivityBlock": "d2hvtW_popActivityBlock",
+			"jobsRow": "d2hvtW_jobsRow",
+			"teamTasks": "d2hvtW_teamTasks",
+			"canvasInner": "d2hvtW_canvasInner",
+			"node": "d2hvtW_node",
+			"barState": "d2hvtW_barState",
+			"teamBoardCount": "d2hvtW_teamBoardCount",
+			"popActivity": "d2hvtW_popActivity",
+			"popTitle": "d2hvtW_popTitle",
+			"teamBoardIcon": "d2hvtW_teamBoardIcon",
+			"kindBadge": "d2hvtW_kindBadge",
 			"popFoot": "d2hvtW_popFoot",
-			"treeRowSettled": "d2hvtW_treeRowSettled",
+			"teamActions": "d2hvtW_teamActions",
+			"dsh-pop-in": "d2hvtW_dsh-pop-in",
+			"barError": "d2hvtW_barError",
+			"teamTaskRow": "d2hvtW_teamTaskRow",
+			"popListLabel": "d2hvtW_popListLabel",
+			"depth3": "d2hvtW_depth3",
+			"taskMore": "d2hvtW_taskMore",
+			"popKey": "d2hvtW_popKey",
+			"popSection": "d2hvtW_popSection",
+			"liveArgs": "d2hvtW_liveArgs",
+			"teamBoard": "d2hvtW_teamBoard",
+			"jobsDrawer": "d2hvtW_jobsDrawer",
+			"popRows": "d2hvtW_popRows",
+			"teamTask": "d2hvtW_teamTask",
+			"jobsDrawerCount": "d2hvtW_jobsDrawerCount",
+			"depth0": "d2hvtW_depth0",
+			"taskBody": "d2hvtW_taskBody",
+			"nodeFold": "d2hvtW_nodeFold",
+			"controls": "d2hvtW_controls",
+			"jobsKillError": "d2hvtW_jobsKillError",
+			"treeView": "d2hvtW_treeView",
+			"taskTextarea": "d2hvtW_taskTextarea",
+			"barDot": "d2hvtW_barDot",
+			"nodeGlyph": "d2hvtW_nodeGlyph",
+			"liveText": "d2hvtW_liveText",
+			"popHead": "d2hvtW_popHead",
+			"jobPopFollow": "d2hvtW_jobPopFollow",
+			"cardNamePlain": "d2hvtW_cardNamePlain",
+			"treeDot": "d2hvtW_treeDot",
+			"canvasDragging": "d2hvtW_canvasDragging",
+			"taskSubject": "d2hvtW_taskSubject",
+			"taskOwnerPill": "d2hvtW_taskOwnerPill",
+			"teamMemberName": "d2hvtW_teamMemberName",
+			"jobsKillSlot": "d2hvtW_jobsKillSlot",
 			"popError": "d2hvtW_popError",
-			"taskLabel": "d2hvtW_taskLabel"
+			"dsh-tasks-bar-sweep": "d2hvtW_dsh-tasks-bar-sweep",
+			"treeRowActive": "d2hvtW_treeRowActive",
+			"jobsKill": "d2hvtW_jobsKill",
+			"treeGlyph": "d2hvtW_treeGlyph",
+			"treeTitle": "d2hvtW_treeTitle",
+			"treeMeta": "d2hvtW_treeMeta",
+			"taskGlyph": "d2hvtW_taskGlyph",
+			"jobPopActions": "d2hvtW_jobPopActions",
+			"cardMeta": "d2hvtW_cardMeta",
+			"barFold": "d2hvtW_barFold",
+			"edge": "d2hvtW_edge",
+			"depth1": "d2hvtW_depth1",
+			"jobPopTitle": "d2hvtW_jobPopTitle"
 		};
 		//#endregion
 		//#region src/client/tasks-shared.tsx
@@ -17994,8 +18244,8 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			document.head.appendChild(tag);
 		}
 		var tasks_canvas_module_css_default = {
-			"loading": "ck4neW_loading",
 			"nodeTitle": "ck4neW_nodeTitle",
+			"loading": "ck4neW_loading",
 			"nodeTitlePlain": "ck4neW_nodeTitlePlain",
 			"loadingGlyph": "ck4neW_loadingGlyph"
 		};
@@ -19791,18 +20041,18 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			document.head.appendChild(tag);
 		}
 		var FloatingWindow_module_css_default = {
-			"window": "ao083W_window",
+			"close": "ao083W_close",
+			"footer": "ao083W_footer",
+			"titleActions": "ao083W_titleActions",
+			"handle": "ao083W_handle",
+			"body": "ao083W_body",
+			"handleBottom": "ao083W_handleBottom",
+			"handleCorner": "ao083W_handleCorner",
 			"bodyFill": "ao083W_bodyFill",
 			"handleRight": "ao083W_handleRight",
-			"handle": "ao083W_handle",
-			"footer": "ao083W_footer",
-			"handleCorner": "ao083W_handleCorner",
-			"titleActions": "ao083W_titleActions",
-			"body": "ao083W_body",
-			"close": "ao083W_close",
-			"handleBottom": "ao083W_handleBottom",
+			"title": "ao083W_title",
 			"titleBar": "ao083W_titleBar",
-			"title": "ao083W_title"
+			"window": "ao083W_window"
 		};
 		//#endregion
 		//#region src/client/FloatingWindow.tsx
@@ -20111,6 +20361,56 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		*/
 		/** How long the kill button stays armed before it needs re-confirming. */
 		const JOB_KILL_ARM_MS = 3e3;
+		/** The cadence of a live row's elapsed text. */
+		const ELAPSED_TICK_MS = 1e3;
+		/**
+		* Whether the PAGE is hidden (a background browser tab). The drawer's clock
+		* must not tick for a document nobody is looking at, and it must show the
+		* truth the moment the page comes back — hence a subscription rather than a
+		* one-shot read.
+		*/
+		function usePageHidden() {
+			const [hidden, setHidden] = (0, react.useState)(() => typeof document !== "undefined" && document.hidden === true);
+			(0, react.useEffect)(() => {
+				if (typeof document === "undefined") return void 0;
+				const sync = () => {
+					setHidden(document.hidden === true);
+				};
+				document.addEventListener("visibilitychange", sync);
+				return () => {
+					document.removeEventListener("visibilitychange", sync);
+				};
+			}, []);
+			return hidden;
+		}
+		/**
+		* One live row's elapsed text. The clock lives HERE — in the span it prints —
+		* and not in the drawer: `setNow(Date.now())` in the drawer handed React a new
+		* value every second, so the whole row list was rebuilt once per tick (and a
+		* parked Tasks tab kept doing it). A memoized span that owns its own second
+		* re-renders one text node per tick instead, and creates no timer at all while
+		* the row is settled, the drawer is collapsed (nothing renders it) or the page
+		* is not really on screen. Leaving and re-entering visibility re-reads the
+		* clock, so the elapsed time shown on return is current, not the value frozen
+		* when the tab was parked.
+		*/
+		const LiveElapsed = (0, react.memo)(function LiveElapsed(props) {
+			const { startedAt, finishedAt, live, visible } = props;
+			const running = live && visible;
+			const [now, setNow] = (0, react.useState)(() => Date.now());
+			(0, react.useEffect)(() => {
+				if (!running) return void 0;
+				setNow(Date.now());
+				const timer = window.setInterval(() => {
+					setNow(Date.now());
+				}, ELAPSED_TICK_MS);
+				return () => {
+					window.clearInterval(timer);
+				};
+			}, [running]);
+			const elapsed = (live ? now : finishedAt ?? startedAt) - startedAt;
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(react_jsx_runtime.Fragment, { children: formatJobDuration(elapsed, t) });
+		});
 		/** The Tag tone of one job status. */
 		function jobTone(job) {
 			if (job.status === "running") return "info";
@@ -20119,7 +20419,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			return "neutral";
 		}
 		function JobsDrawer(props) {
-			const { rows, agentCount, jobs, onOpenOutput, openJobId } = props;
+			const { rows, agentCount, jobs, onOpenOutput, openJobId, visible = true } = props;
 			const autoOpen = agentCount < 8;
 			/** Manual override; undefined = follow the auto rule. */
 			const [manualOpen, setManualOpen] = (0, react.useState)(void 0);
@@ -20130,7 +20430,9 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			const [armedId, setArmedId] = (0, react.useState)(void 0);
 			const [killingId, setKillingId] = (0, react.useState)(void 0);
 			const [killErrorId, setKillErrorId] = (0, react.useState)(void 0);
-			const [now, setNow] = (0, react.useState)(() => Date.now());
+			/** The page's own visibility: the elapsed clocks below are gated on it. */
+			const pageHidden = usePageHidden();
+			const ticking = visible && !pageHidden;
 			const liveCount = (0, react.useMemo)(() => rows.reduce((count, row) => count + (isJobLive(row.job) ? 1 : 0), 0), [rows]);
 			const multiOwner = (0, react.useMemo)(() => new Set(rows.map((row) => row.ownerSessionId)).size > 1, [rows]);
 			(0, react.useEffect)(() => {
@@ -20142,16 +20444,6 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					window.clearTimeout(timer);
 				};
 			}, [armedId]);
-			(0, react.useEffect)(() => {
-				if (liveCount === 0) return;
-				setNow(Date.now());
-				const timer = window.setInterval(() => {
-					setNow(Date.now());
-				}, 1e3);
-				return () => {
-					window.clearInterval(timer);
-				};
-			}, [liveCount]);
 			const kill = (0, react.useCallback)(async (row) => {
 				if (jobs === void 0) return;
 				setKillingId(row.job.id);
@@ -20212,12 +20504,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 							const armed = armedId === job.id;
 							const killing = killingId === job.id;
 							const killFailed = killErrorId === job.id;
-							const elapsed = live ? now - job.startedAt : (job.finishedAt ?? job.startedAt) - job.startedAt;
-							const secondary = [
-								...multiOwner ? [row.ownerTitle] : [],
-								...job.detail !== void 0 && job.detail !== "" ? [job.detail] : [],
-								formatJobDuration(elapsed, t)
-							].filter(Boolean).join(" · ");
+							const meta = [...multiOwner ? [row.ownerTitle] : [], ...job.detail !== void 0 && job.detail !== "" ? [job.detail] : []].filter(Boolean).join(" · ");
 							return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 								className: tasks_graph_module_css_default.jobsRow,
 								"data-settled": live ? "false" : "true",
@@ -20226,7 +20513,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 									variant: "ghost",
 									size: "sm",
 									className: tasks_graph_module_css_default.jobsRowMain,
-									"aria-label": `${job.label} ${jobStatusLabel(job.status, t)} ${secondary}`,
+									"aria-label": `${job.label} ${jobStatusLabel(job.status, t)}${meta === "" ? "" : ` ${meta}`}`,
 									title: t("jobViewOutput"),
 									onClick: (event) => {
 										onOpenOutput(row, event.currentTarget);
@@ -20249,9 +20536,14 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 											tone: jobTone(job),
 											children: jobStatusLabel(job.status, t)
 										}),
-										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+										/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
 											className: tasks_graph_module_css_default.jobsMeta,
-											children: secondary
+											children: [meta === "" ? "" : `${meta} · `, /* @__PURE__ */ (0, react_jsx_runtime.jsx)(LiveElapsed, {
+												startedAt: job.startedAt,
+												finishedAt: job.finishedAt,
+												live,
+												visible: ticking
+											})]
 										})
 									]
 								}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
@@ -22205,18 +22497,18 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			document.head.appendChild(tag);
 		}
 		var SubagentView_module_css_default = {
-			"subagentRefresh": "wxwsGW_subagentRefresh",
-			"subagentErrorRetry": "wxwsGW_subagentErrorRetry",
-			"subagentError": "wxwsGW_subagentError",
-			"subagentEmpty": "wxwsGW_subagentEmpty",
-			"subagent": "wxwsGW_subagent",
-			"subagentHeader": "wxwsGW_subagentHeader",
-			"subagentTitle": "wxwsGW_subagentTitle",
+			"subagentEmptyHint": "wxwsGW_subagentEmptyHint",
 			"subagentSubject": "wxwsGW_subagentSubject",
 			"subagentSep": "wxwsGW_subagentSep",
-			"subagentHeading": "wxwsGW_subagentHeading",
+			"subagentRefresh": "wxwsGW_subagentRefresh",
+			"subagent": "wxwsGW_subagent",
 			"subagentCount": "wxwsGW_subagentCount",
-			"subagentEmptyHint": "wxwsGW_subagentEmptyHint"
+			"subagentEmpty": "wxwsGW_subagentEmpty",
+			"subagentError": "wxwsGW_subagentError",
+			"subagentErrorRetry": "wxwsGW_subagentErrorRetry",
+			"subagentHeading": "wxwsGW_subagentHeading",
+			"subagentTitle": "wxwsGW_subagentTitle",
+			"subagentHeader": "wxwsGW_subagentHeader"
 		};
 		//#endregion
 		//#region src/client/SubagentView.tsx
@@ -22255,20 +22547,88 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		const POLL_MS$3 = 3e3;
 		/** Poll cadence of the workflow-run and team views while the page is visible. */
 		const TELEMETRY_POLL_MS = 5e3;
+		/** The empty live map / run list: ONE identity, so a reset that changes
+		*  nothing (or a poll that returns nothing) never re-renders the page. */
+		const NO_LIVE = {};
+		const NO_RUNS = [];
+		/**
+		* Whether two activity summaries say the same thing. Every field the cards
+		* read is compared — the activity line (`running`, `preparing`,
+		* `runningDetail`) and the settled tally (`counts`) — and nothing else, so a
+		* re-serialized but equal summary is not a change.
+		*/
+		function sameSummary(left, right) {
+			if (left === right) return true;
+			if (left === void 0 || right === void 0) return false;
+			if (left.running !== right.running || left.preparing !== right.preparing || left.runningDetail !== right.runningDetail || left.counts.length !== right.counts.length) return false;
+			return left.counts.every((entry, index) => {
+				const other = right.counts[index];
+				return entry.kind === other.kind && entry.count === other.count;
+			});
+		}
+		/** Whether two children's live views say the same thing (see the card render
+		*  sites for the fields: the running flag, the detail text, the summary). */
+		function sameLiveView(left, right) {
+			if (left === right) return true;
+			if (left === void 0 || right === void 0) return false;
+			return left.running === right.running && left.text === right.text && left.lastEventTime === right.lastEventTime && sameSummary(left.summary, right.summary);
+		}
+		/**
+		* Whether two `subagents.live` answers are the same map. The route answers with
+		* a FRESH object graph on every tick; publishing it unconditionally re-derived
+		* the whole agent tree and the graph layout every 3 s although nothing had
+		* changed.
+		*/
+		function sameLive(left, right) {
+			if (left === right) return true;
+			const keys = Object.keys(left);
+			if (keys.length !== Object.keys(right).length) return false;
+			return keys.every((key) => Object.prototype.hasOwnProperty.call(right, key) && sameLiveView(left[key], right[key]));
+		}
+		/** Whether two workflow-run answers are the same list (runs → phases →
+		*  members, field by field). */
+		function sameRuns(left, right) {
+			if (left === right) return true;
+			if (left.length !== right.length) return false;
+			return left.every((run, index) => {
+				const other = right[index];
+				if (run.runId !== other.runId || run.name !== other.name || run.originSessionId !== other.originSessionId || run.status !== other.status || run.stopReason !== other.stopReason || run.startedSeq !== other.startedSeq || run.startedAt !== other.startedAt || run.finishedAt !== other.finishedAt || run.phases.length !== other.phases.length) return false;
+				return run.phases.every((phase, phaseIndex) => {
+					const peer = other.phases[phaseIndex];
+					if (phase.title !== peer.title || phase.members.length !== peer.members.length) return false;
+					return phase.members.every((member, memberIndex) => {
+						const mate = peer.members[memberIndex];
+						return member.seq === mate.seq && member.label === mate.label && member.phase === mate.phase && member.childId === mate.childId && member.outcome === mate.outcome;
+					});
+				});
+			});
+		}
 		/**
 		* One shared live-preview poller for the whole tree. At most ONE
 		* `subagents.live` request in flight (self-scheduling); a response settling
 		* after the poller stopped is dropped via the aborted signal.
 		*/
 		function useSubagentLive(rootId, active) {
-			const [live, setLive] = (0, react.useState)({});
+			const [live, setLive] = (0, react.useState)(NO_LIVE);
+			/**
+			* What has been PUBLISHED. An equal answer must not reach React at all: even
+			* handing `setLive` an updater that returns the previous state lets React
+			* render the component once ("React may still need to render that specific
+			* component again before bailing out"), and one render re-derives the whole
+			* tasks model and the graph layout hanging off it.
+			*/
+			const published = (0, react.useRef)(NO_LIVE);
 			(0, react.useEffect)(() => {
-				setLive({});
+				published.current = NO_LIVE;
+				setLive((current) => Object.keys(current).length === 0 ? current : NO_LIVE);
 			}, [rootId]);
 			const poll = (0, react.useCallback)(async (signal) => {
 				if (rootId === void 0) return;
 				const result = await api.subagentsLive(rootId, signal);
-				if (!signal.aborted) setLive(result.live);
+				if (signal.aborted) return;
+				if (sameLive(published.current, result.live)) return;
+				published.current = result.live;
+				setLive((current) => sameLive(current, result.live) ? current : result.live);
 			}, [rootId]);
 			usePolling(rootId !== void 0 && active, poll, {
 				intervalMs: POLL_MS$3,
@@ -22279,14 +22639,19 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		}
 		/** The folded workflow runs of the tree (poll-driven; empty when none). */
 		function useWorkflowRuns(rootId, active) {
-			const [runs, setRuns] = (0, react.useState)([]);
+			const [runs, setRuns] = (0, react.useState)(NO_RUNS);
+			const published = (0, react.useRef)(NO_RUNS);
 			(0, react.useEffect)(() => {
-				setRuns([]);
+				published.current = NO_RUNS;
+				setRuns((current) => current.length === 0 ? current : NO_RUNS);
 			}, [rootId]);
 			const poll = (0, react.useCallback)(async (signal) => {
 				if (rootId === void 0) return;
 				const result = await api.workflowsList(rootId, signal);
-				if (!signal.aborted) setRuns(result.runs);
+				if (signal.aborted) return;
+				if (sameRuns(published.current, result.runs)) return;
+				published.current = result.runs;
+				setRuns((current) => sameRuns(current, result.runs) ? current : result.runs);
 			}, [rootId]);
 			usePolling(rootId !== void 0 && active, poll, {
 				intervalMs: TELEMETRY_POLL_MS,
@@ -22744,6 +23109,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 						jobs: treeJobs.jobs,
 						observed: observedJob,
 						openJobId: popover?.kind === "job" ? popover.jobId : void 0,
+						visible: active,
 						onOpenOutput: (row, anchor) => {
 							setPopover(popover?.kind === "job" && popover.jobId === row.job.id ? null : {
 								kind: "job",
@@ -22779,20 +23145,25 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		* pull stays the single source of transcript data and a dropped socket
 		* self-heals through the same pull (plus the slow fallback poll).
 		*
-		* Lifecycle mirrors use-dir-watch: one socket for the component's lifetime,
-		* a full `watch` frame re-announcing the subscription set whenever the id
-		* list changes, exponential backoff (1s → 15s) on a drop, and no socket at
-		* all while the list is empty.
+		* Lifecycle mirrors use-dir-watch: one socket for the component's lifetime
+		* while the tab is VISIBLE, a full `watch` frame re-announcing the
+		* subscription set whenever the id list changes, exponential backoff
+		* (1s → 15s) on a drop, and no socket at all while the list is empty or the
+		* tab is parked. The host keeps every visited tab body mounted, so an un-gated
+		* subscription would leave one socket per side-chat tab the reader ever
+		* opened — and a notice delivered to a parked tab re-pulled a transcript
+		* nobody could see. A parked tab therefore closes its socket, and a late frame
+		* from that dead socket is dropped (`closed`) instead of triggering a pull.
 		*/
 		/** How long to wait before re-opening a dropped socket; failures back off to the cap. */
 		const RETRY_BASE_MS = 1e3;
 		const RETRY_MAX_MS = 15e3;
 		/**
 		* Follow the host's staleness notices for the given side-chat threads.
-		* @param options - the watched ids and the invalidation callback.
+		* @param options - the watched ids, the tab's visibility, and the invalidation callback.
 		*/
 		function useSidechatPush(options) {
-			const { threadIds, onInvalidate } = options;
+			const { threadIds, visible = true, onInvalidate } = options;
 			const idsKey = threadIds.join("\0");
 			const wanted = (0, react.useMemo)(() => idsKey === "" ? [] : idsKey.split("\0"), [idsKey]);
 			const wantedRef = (0, react.useRef)(wanted);
@@ -22801,8 +23172,12 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			invalidateRef.current = onInvalidate;
 			/** Set by the socket effect; re-announces the current subscription set. */
 			const reconcileRef = (0, react.useRef)(() => {});
-			/** Stable dependency: re-open the socket only when it gains or loses every id. */
-			const subscribed = idsKey !== "";
+			/**
+			* Stable dependency: re-open the socket only when it gains or loses every
+			* id — or when the tab is parked/shown. Visibility is an INPUT here rather
+			* than a second mechanism, so a parked tab is simply "not subscribed".
+			*/
+			const subscribed = visible && idsKey !== "";
 			(0, react.useEffect)(() => {
 				if (!subscribed) return;
 				let socket = null;
@@ -22825,6 +23200,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 						reconcile();
 					};
 					socket.onmessage = (event) => {
+						if (closed) return;
 						if (typeof event.data !== "string") return;
 						let frame;
 						try {
@@ -22853,6 +23229,18 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			(0, react.useEffect)(() => {
 				reconcileRef.current();
 			}, [idsKey]);
+			/**
+			* Shown again after being parked: the socket is new (nothing the host
+			* noticed in between was delivered), so the transcript may have moved. Pull
+			* once through the same invalidation path the host's own frames use.
+			*/
+			const wasSubscribedRef = (0, react.useRef)(subscribed);
+			(0, react.useEffect)(() => {
+				const previous = wasSubscribedRef.current;
+				wasSubscribedRef.current = subscribed;
+				if (!subscribed || previous) return;
+				for (const id of wantedRef.current) invalidateRef.current(id);
+			}, [subscribed]);
 		}
 		//#endregion
 		//#region \0dsh-css:/home/runner/work/DSH-better-sidebar/DSH-better-sidebar/src/client/SideChatView.module.css.mjs
@@ -22866,53 +23254,53 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			document.head.appendChild(tag);
 		}
 		var SideChatView_module_css_default = {
-			"sidechatErrorRow": "_4BEzFa_sidechatErrorRow",
-			"sidechatRowLine": "_4BEzFa_sidechatRowLine",
-			"sidechatRowProse": "_4BEzFa_sidechatRowProse",
-			"sidechatError": "_4BEzFa_sidechatError",
-			"sidechatScroll": "_4BEzFa_sidechatScroll",
-			"sidechatAssistant": "_4BEzFa_sidechatAssistant",
-			"sidechatBtnIn": "_4BEzFa_sidechatBtnIn",
-			"sidechatIconBtn": "_4BEzFa_sidechatIconBtn",
-			"sidechatPrimaryBtn": "_4BEzFa_sidechatPrimaryBtn",
-			"sidechatRowStatic": "_4BEzFa_sidechatRowStatic",
-			"sidechatRowFailed": "_4BEzFa_sidechatRowFailed",
+			"sidechatFadeIn": "_4BEzFa_sidechatFadeIn",
+			"sidechatRowMeta": "_4BEzFa_sidechatRowMeta",
 			"sidechatRowIn": "_4BEzFa_sidechatRowIn",
-			"sidechatRowChevron": "_4BEzFa_sidechatRowChevron",
-			"sidechatComposerTools": "_4BEzFa_sidechatComposerTools",
-			"sidechatPendingMeta": "_4BEzFa_sidechatPendingMeta",
-			"sidechatPendingText": "_4BEzFa_sidechatPendingText",
-			"sidechatRowCode": "_4BEzFa_sidechatRowCode",
-			"sidechatTurnSummary": "_4BEzFa_sidechatTurnSummary",
-			"sidechatComposerInput": "_4BEzFa_sidechatComposerInput",
-			"sidechatRowLabel": "_4BEzFa_sidechatRowLabel",
-			"sidechatRow": "_4BEzFa_sidechatRow",
-			"sidechatRowSummary": "_4BEzFa_sidechatRowSummary",
-			"sidechatRowIcon": "_4BEzFa_sidechatRowIcon",
-			"sidechatSweep": "_4BEzFa_sidechatSweep",
-			"sidechatComposerBar": "_4BEzFa_sidechatComposerBar",
-			"sidechatHint": "_4BEzFa_sidechatHint",
 			"sidechatHeroTitle": "_4BEzFa_sidechatHeroTitle",
-			"sidechatPending": "_4BEzFa_sidechatPending",
-			"sidechatDequeueBtn": "_4BEzFa_sidechatDequeueBtn",
-			"sidechatStatus": "_4BEzFa_sidechatStatus",
-			"sidechatComposerSpacer": "_4BEzFa_sidechatComposerSpacer",
+			"sidechatComposerTools": "_4BEzFa_sidechatComposerTools",
 			"sidechatTipAnchor": "_4BEzFa_sidechatTipAnchor",
 			"sidechatHeroDesc": "_4BEzFa_sidechatHeroDesc",
-			"sidechatFadeIn": "_4BEzFa_sidechatFadeIn",
-			"sidechatComposer": "_4BEzFa_sidechatComposer",
-			"sidechatModelName": "_4BEzFa_sidechatModelName",
-			"sidechatUser": "_4BEzFa_sidechatUser",
-			"sidechatTipShrink": "_4BEzFa_sidechatTipShrink",
-			"sidechatSendBtn": "_4BEzFa_sidechatSendBtn",
-			"sidechatRowBody": "_4BEzFa_sidechatRowBody",
-			"sidechatRowMono": "_4BEzFa_sidechatRowMono",
-			"sidechat": "_4BEzFa_sidechat",
-			"sidechatModelBtn": "_4BEzFa_sidechatModelBtn",
-			"sidechatStatusText": "_4BEzFa_sidechatStatusText",
-			"sidechatHero": "_4BEzFa_sidechatHero",
+			"sidechatIconBtn": "_4BEzFa_sidechatIconBtn",
+			"sidechatError": "_4BEzFa_sidechatError",
+			"sidechatDequeueBtn": "_4BEzFa_sidechatDequeueBtn",
+			"sidechatPending": "_4BEzFa_sidechatPending",
+			"sidechatStatus": "_4BEzFa_sidechatStatus",
+			"sidechatRowLabel": "_4BEzFa_sidechatRowLabel",
+			"sidechatComposerBar": "_4BEzFa_sidechatComposerBar",
+			"sidechatPrimaryBtn": "_4BEzFa_sidechatPrimaryBtn",
+			"sidechatErrorRow": "_4BEzFa_sidechatErrorRow",
+			"sidechatRow": "_4BEzFa_sidechatRow",
+			"sidechatRowFailed": "_4BEzFa_sidechatRowFailed",
+			"sidechatTurnSummary": "_4BEzFa_sidechatTurnSummary",
 			"sidechatShimmerText": "_4BEzFa_sidechatShimmerText",
-			"sidechatRowMeta": "_4BEzFa_sidechatRowMeta"
+			"sidechat": "_4BEzFa_sidechat",
+			"sidechatTipShrink": "_4BEzFa_sidechatTipShrink",
+			"sidechatUser": "_4BEzFa_sidechatUser",
+			"sidechatRowSummary": "_4BEzFa_sidechatRowSummary",
+			"sidechatHint": "_4BEzFa_sidechatHint",
+			"sidechatAssistant": "_4BEzFa_sidechatAssistant",
+			"sidechatRowCode": "_4BEzFa_sidechatRowCode",
+			"sidechatHero": "_4BEzFa_sidechatHero",
+			"sidechatRowStatic": "_4BEzFa_sidechatRowStatic",
+			"sidechatRowProse": "_4BEzFa_sidechatRowProse",
+			"sidechatStatusText": "_4BEzFa_sidechatStatusText",
+			"sidechatComposerInput": "_4BEzFa_sidechatComposerInput",
+			"sidechatRowBody": "_4BEzFa_sidechatRowBody",
+			"sidechatComposer": "_4BEzFa_sidechatComposer",
+			"sidechatScroll": "_4BEzFa_sidechatScroll",
+			"sidechatModelBtn": "_4BEzFa_sidechatModelBtn",
+			"sidechatPendingText": "_4BEzFa_sidechatPendingText",
+			"sidechatPendingMeta": "_4BEzFa_sidechatPendingMeta",
+			"sidechatSweep": "_4BEzFa_sidechatSweep",
+			"sidechatRowChevron": "_4BEzFa_sidechatRowChevron",
+			"sidechatComposerSpacer": "_4BEzFa_sidechatComposerSpacer",
+			"sidechatRowMono": "_4BEzFa_sidechatRowMono",
+			"sidechatSendBtn": "_4BEzFa_sidechatSendBtn",
+			"sidechatBtnIn": "_4BEzFa_sidechatBtnIn",
+			"sidechatRowIcon": "_4BEzFa_sidechatRowIcon",
+			"sidechatRowLine": "_4BEzFa_sidechatRowLine",
+			"sidechatModelName": "_4BEzFa_sidechatModelName"
 		};
 		//#endregion
 		//#region src/client/SideChatView.tsx
@@ -22988,10 +23376,34 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		/** Where the last side-chat thread of each main session is remembered (the
 		*  client store's own key space, like the diff pane's redaction flag). */
 		const LAST_THREAD_KEY = "dsh-sidebar:v1:sidechat-thread";
+		/**
+		* How many sessions keep their remembered thread. The map lives for the life
+		* of the page and is serialised WHOLE, so it needs both a bound (LRU: the
+		* least recently bound session is forgotten) and — below — a write that is
+		* coalesced instead of re-serialising the map on every bind.
+		*/
+		const LAST_THREAD_MAX = 32;
 		/** The in-memory mirror of {@link LAST_THREAD_KEY}. */
 		const lastThreadBySession = /* @__PURE__ */ new Map();
 		/** Whether the localStorage mirror has been read into the map yet. */
 		let lastThreadsLoaded = false;
+		/** Pending coalesced write of {@link LAST_THREAD_KEY} (undefined = none). */
+		let lastThreadsWrite;
+		/**
+		* Write the whole map once the binds stop coming. A thread switch binds two
+		* or three ids in a row (mint, switch, reattach); serialising per bind was
+		* pure churn for a value nothing reads back mid-page. Best-effort like the
+		* rest of this storage: a denied or full write keeps the in-memory binding.
+		*/
+		function scheduleLastThreadsWrite() {
+			if (lastThreadsWrite !== void 0) window.clearTimeout(lastThreadsWrite);
+			lastThreadsWrite = window.setTimeout(() => {
+				lastThreadsWrite = void 0;
+				try {
+					localStorage.setItem(LAST_THREAD_KEY, JSON.stringify(Object.fromEntries(lastThreadBySession)));
+				} catch {}
+			}, 200);
+		}
 		/**
 		* A native tab's record and its navigation params live in the host's memory
 		* only, so collapsing the sidebar (or restarting DSH) remounts the tab with
@@ -23021,10 +23433,14 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		function rememberSidechatThread(sessionId, threadId) {
 			loadLastThreads();
 			if (lastThreadBySession.get(sessionId) === threadId) return;
+			lastThreadBySession.delete(sessionId);
 			lastThreadBySession.set(sessionId, threadId);
-			try {
-				localStorage.setItem(LAST_THREAD_KEY, JSON.stringify(Object.fromEntries(lastThreadBySession)));
-			} catch {}
+			while (lastThreadBySession.size > LAST_THREAD_MAX) {
+				const oldest = lastThreadBySession.keys().next();
+				if (oldest.done === true) break;
+				lastThreadBySession.delete(oldest.value);
+			}
+			scheduleLastThreadsWrite();
 		}
 		/** The catalog row of one route: the model picker reads its reasoning efforts
 		*  and its default effort. Undefined when the route is not in the catalog
@@ -23518,6 +23934,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			}, [fetchThread, fetchInfo]);
 			useSidechatPush({
 				threadIds: (0, react.useMemo)(() => threadId === void 0 ? [] : [threadId], [threadId]),
+				visible,
 				onInvalidate: handleInvalidate
 			});
 			(0, react.useEffect)(() => {
@@ -24772,6 +25189,12 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		* 判定来自插件 host 半区的只读路由（与会话对象同源），**不做任何 DOM 探测**。
 		* 轮询策略：仅在 blank 期间每 1s 重取一次；翻转为非 blank（发出第一条消息）即停止；
 		* 路由/宿主不支持时按非 blank 降级（入口留在会话头，行为与今天一致）。
+		*
+		* 两条稳态约束（v0.25 的稳态开销治理）：
+		* - **页面不可见时不发请求**（隐藏的标签页没有要服务的相位），回到可见时由
+		*   `visibilitychange` 立刻补一次；
+		* - **值没变就不写 state**：相位对象每次都是新的 JSON，无条件 `setPhase(next)` 会让
+		*   一个开着不管的 blank 会话每秒重渲染一次。只有 `blank` 真的翻转才提交。
 		*/
 		/** 轮询间隔：blank 是一次性状态（发一条消息即翻转），无需更快。 */
 		const POLL_MS$1 = 1e3;
@@ -24782,8 +25205,10 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		*/
 		function useSessionPhase(sessionId) {
 			const [phase, setPhase] = (0, react.useState)(void 0);
+			const pushedRef = (0, react.useRef)(void 0);
 			(0, react.useEffect)(() => {
 				if (sessionId === void 0) {
+					pushedRef.current = void 0;
 					setPhase(void 0);
 					return;
 				}
@@ -24794,22 +25219,35 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					clearInterval(timer);
 					timer = void 0;
 				};
+				/** 只有 `blank` 真的翻转才提交（见 pushedRef 的注释）。 */
+				const push = (next) => {
+					const previous = pushedRef.current;
+					if (previous !== void 0 && previous.blank === next.blank) return;
+					pushedRef.current = next;
+					setPhase(next);
+				};
 				const tick = () => {
+					if (document.hidden) return;
 					sessionPhase(sessionId).then((next) => {
 						if (!alive) return;
-						setPhase(next);
+						push(next);
 						if (!next.blank) stop();
 					}).catch(() => {
 						if (!alive) return;
-						setPhase({ blank: false });
+						push({ blank: false });
 						stop();
 					});
 				};
+				const onVisibilityChange = () => {
+					if (!document.hidden && timer !== void 0) tick();
+				};
 				tick();
 				timer = setInterval(tick, POLL_MS$1);
+				document.addEventListener("visibilitychange", onVisibilityChange);
 				return () => {
 					alive = false;
 					stop();
+					document.removeEventListener("visibilitychange", onVisibilityChange);
 				};
 			}, [sessionId]);
 			return phase;
@@ -24829,9 +25267,39 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		* 两个条件都要求，是为了让**失败方向安全**：宿主哪天改了命名，这里读成 `false`
 		* （= 不隐藏），按钮照旧出现、位置由 {@link ./dock-fallback.tsx} 的让位逻辑兜住；
 		* 而不是读成「永远展开」把按钮永久藏掉。
+		*
+		* **全模块只有一份答案、一条表**（v0.25 的稳态开销治理）：早先每个消费者各建一条
+		* 500ms 的表、各做两趟全文档 `querySelectorAll`（本文件 + `dock-fallback.tsx` 共两条），
+		* 与挂载了多少个消费者成正比。现在订阅者只是引用计数——0 → 1 才起表并立刻读一次，
+		* 1 → 0 就停表；消费者再多也只有一条表。
+		*
+		* **页面不可见时表本身不存在**（不是「tick 进来再早退」）：隐藏的页面没有要服务的
+		* 版面，`visibilitychange` 回到可见时才立刻读一次并重新起表。
 		*/
 		/** 复核间隔：与备用入口的位置对齐同一节拍（500ms）。 */
 		const POLL_MS = 500;
+		/** 共享的展开态答案；所有消费者读同一份。 */
+		let open = false;
+		/** 当前订阅者；0 → 1 起表（并立刻读一次），1 → 0 停表。 */
+		const listeners = /* @__PURE__ */ new Set();
+		/** 全模块**唯一**的定时器：消费者再多也只有这一条。 */
+		let timer;
+		/** 真实浏览器里的 document；SSR / 极端环境缺席。 */
+		function pageDocument() {
+			return typeof document === "undefined" ? void 0 : document;
+		}
+		/** 页面是否可见（document 缺席时按可见处理，与旧行为一致）。 */
+		function pageVisible() {
+			const doc = pageDocument();
+			return doc === void 0 || doc.visibilityState !== "hidden";
+		}
+		/** 读一次宿主角落控件：这个元素**可见**才算数（见 {@link readRightPanelOpen}）。 */
+		function isVisible(element) {
+			const rect = element.getBoundingClientRect();
+			if (rect.width <= 0 || rect.height <= 0) return false;
+			const style = getComputedStyle(element);
+			return style.visibility !== "hidden" && style.display !== "none";
+		}
 		/**
 		* 读取一次宿主右侧面板的展开态。
 		*
@@ -24840,33 +25308,81 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		* 各 1 个、面板明明已经展开），只有**可见性**才区分得开——展开时可见的是
 		* Collapse（`data-sidebar-right-toggle`），收起时可见的是 Open（`data-sidebar-right-expand`）。
 		* 早先按「属性在不在」判定会一直读成「没展开」，按钮于是照旧出现在宿主编簇旁边。
+		*
+		* **先问「收起态」再问「展开态」**：收起时可见的是 Open 控件（`expand`），一旦量到它
+		* 就能立刻返回 `false` —— 展开态那批 toggle 一次都不用碰，而它们在 DOM 里始终存在，
+		* 量它们纯属白做。只有当 expand 全都不可见时才轮到 toggle（`true` = 至少一个可见）。
+		* 两趟各是一趟循环，不建临时数组，也不对没参与判定的元素读布局。
 		* @returns 展开时为 true；`document` 缺席（SSR/极端环境）时为 false。
 		*/
 		function readRightPanelOpen() {
-			if (typeof document === "undefined") return false;
-			const visible = (element) => {
-				const rect = element.getBoundingClientRect();
-				if (rect.width <= 0 || rect.height <= 0) return false;
-				const style = getComputedStyle(element);
-				return style.visibility !== "hidden" && style.display !== "none";
+			const doc = pageDocument();
+			if (doc === void 0) return false;
+			for (const element of doc.querySelectorAll("[data-sidebar-right-expand]")) if (isVisible(element)) return false;
+			for (const element of doc.querySelectorAll("[data-sidebar-right-toggle]")) if (isVisible(element)) return true;
+			return false;
+		}
+		/** 读一次并广播——答案没变时连 `open` 都不动（订阅者的 setState 会自然 bail out）。 */
+		function publish() {
+			const next = readRightPanelOpen();
+			if (next === open) return;
+			open = next;
+			for (const listener of listeners) listener(next);
+		}
+		function stopTimer$1() {
+			if (timer === void 0) return;
+			clearInterval(timer);
+			timer = void 0;
+		}
+		/** 起表；页面不可见时**不建表**（不是建了再早退）。 */
+		function startTimer$1() {
+			if (timer !== void 0) return;
+			if (!pageVisible()) return;
+			timer = setInterval(publish, POLL_MS);
+		}
+		function onVisibilityChange() {
+			if (!pageVisible()) {
+				stopTimer$1();
+				return;
+			}
+			if (listeners.size === 0) return;
+			publish();
+			startTimer$1();
+		}
+		function subscribe(listener) {
+			const first = listeners.size === 0;
+			listeners.add(listener);
+			if (first) {
+				pageDocument()?.addEventListener("visibilitychange", onVisibilityChange);
+				if (pageVisible()) publish();
+				startTimer$1();
+			}
+			return () => {
+				listeners.delete(listener);
+				if (listeners.size > 0) return;
+				stopTimer$1();
+				pageDocument()?.removeEventListener("visibilitychange", onVisibilityChange);
 			};
-			return [...document.querySelectorAll("[data-sidebar-right-toggle]")].some(visible) && ![...document.querySelectorAll("[data-sidebar-right-expand]")].some(visible);
+		}
+		/**
+		* 首帧同步读取（与旧实现同为渲染期读一次）：可见时读一次并更新共享缓存，但不广播——
+		* 渲染期不能触发别人的更新，其他消费者各自的 state 会在下一次 tick 或订阅时对齐。
+		* 页面不可见时直接用缓存，一次版都不量。
+		*/
+		function primeOpen() {
+			if (!pageVisible()) return open;
+			open = readRightPanelOpen();
+			return open;
 		}
 		/**
 		* 跟踪宿主右侧面板的展开态。
-		* @returns 展开时为 true（首帧同步读取，之后每 500ms 复核一次）。
+		* @returns 展开时为 true（首帧同步读取，之后由模块级共享 poller 每 500ms 复核；
+		*  订阅者归零即停表，页面隐藏期间不起表）。
 		*/
 		function useRightPanelOpen() {
-			const [open, setOpen] = (0, react.useState)(readRightPanelOpen);
-			(0, react.useEffect)(() => {
-				const timer = setInterval(() => {
-					setOpen(readRightPanelOpen());
-				}, POLL_MS);
-				return () => {
-					clearInterval(timer);
-				};
-			}, []);
-			return open;
+			const [isOpen, setIsOpen] = (0, react.useState)(primeOpen);
+			(0, react.useEffect)(() => subscribe(setIsOpen), []);
+			return isOpen;
 		}
 		//#endregion
 		//#region src/client/sidebar/dock-fallback.tsx
@@ -24876,6 +25392,10 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		* blank 会话里宿主不渲染会话头，本插件挂在 `header.utilities` 的入口随之不可达；
 		* 这里把同一个开关以 `position: fixed` 放到宿主「Open right sidebar」按钮的**左侧紧邻**
 		* （按该按钮的 rect 对齐，随窗口 resize 与 500ms 周期重对齐）。
+		*
+		* **重对齐的周期表只在入口真的渲染时存在**（v0.25 的稳态开销治理）：正常会话里本组件
+		* 返回 `null`，而 `measure()` 的让位走查要做命中测试——表挂在早退之前时，一个看不见的
+		* 入口会一直烧着这些测量。窗口 resize 监听则是常驻的（见下面的两个 effect）。
 		*
 		* **相位不足以判定互斥**：相位是每 1s 轮询来的，而会话头的入口由宿主在它认为合适的
 		* 时机渲染，两者之间必然有窗口；相位读取失败时还会按「非 blank」降级，一个从未成功
@@ -24889,6 +25409,10 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		const GAP = 8;
 		/** 让位时的搜索步长（像素）：够细以免跨过窄芯片，够粗以免几百次命中测试。 */
 		const STEP_PX = 4;
+		/** 周期重对齐间隔：与宿主角落控件出现的时机无关，500ms 足够跟上版面漂移。 */
+		const REALIGN_MS = 500;
+		/** 让位走查的步数上限：100 步 × 4px = 400px。 */
+		const MAX_RETREAT_STEPS = 100;
 		/**
 		* 整个槽位是否空着——**必须采样多个点**。
 		*
@@ -24970,8 +25494,11 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		* 3. **占位与否要真的去问页面**——见 {@link slotOccupied}：页签芯片会把那一排填满，
 		*    按角色筛元素是筛不干净的。
 		*
-		* 因此这里从锚点左侧起逐像素左移，取**最近的一个真的空着**的槽位；一直退到视口
-		* 左缘仍被占时停在最左（宁可贴边，也不叠在宿主控件上）。
+		* 因此这里从锚点左侧起逐像素左移，取**最近的一个真的空着**的槽位。走查是**有界**的：
+		* 最多 {@link MAX_RETREAT_STEPS} 步（400px）——真实的宿主编簇只有几个 28px 按钮，退过
+		* 400px 说明整排都被占着，而每一步都要采样 5 个点做命中测试，不封顶的走查（旧值 400 步）
+		* 会把一次 tick 变成上千次命中测试。到达上限仍未找到空位就接受当前槽位；一直退到
+		* 视口左缘（`left <= 4`）仍被占时停在最左（宁可贴边，也不叠在宿主控件上）。
 		* @returns 视口坐标下的 top/left。
 		*/
 		function measure() {
@@ -24983,7 +25510,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			const rect = anchor.getBoundingClientRect();
 			const top = Math.max(4, rect.top + (rect.height - BUTTON_SIZE) / 2);
 			let left = Math.max(4, rect.left - GAP - BUTTON_SIZE);
-			for (let step = 0; step < 400; step++) {
+			for (let step = 0; step < MAX_RETREAT_STEPS; step++) {
 				if (slotFree(left, top)) break;
 				left -= STEP_PX;
 				if (left <= 4) {
@@ -25001,19 +25528,32 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			const rightOpen = useRightPanelOpen();
 			const [pos, setPos] = (0, react.useState)(measure);
 			const [headerEntry, setHeaderEntry] = (0, react.useState)(headerEntryPresent);
+			const rendered = phase !== void 0 && phase.blank && !headerEntry && !rightOpen;
+			const onResize = (0, react.useCallback)(() => {
+				if (document.hidden) return;
+				const next = measure();
+				setPos((prev) => prev.top === next.top && prev.left === next.left ? prev : next);
+				setHeaderEntry(headerEntryPresent());
+			}, []);
 			(0, react.useEffect)(() => {
-				const onResize = () => {
-					const next = measure();
-					setPos((prev) => prev.top === next.top && prev.left === next.left ? prev : next);
-					setHeaderEntry(headerEntryPresent());
-				};
 				window.addEventListener("resize", onResize);
-				const timer = setInterval(onResize, 500);
 				return () => {
 					window.removeEventListener("resize", onResize);
-					clearInterval(timer);
 				};
-			}, []);
+			}, [onResize]);
+			(0, react.useEffect)(() => {
+				if (!rendered) return;
+				onResize();
+				const timer = setInterval(onResize, REALIGN_MS);
+				const onVisibilityChange = () => {
+					if (!document.hidden) onResize();
+				};
+				document.addEventListener("visibilitychange", onVisibilityChange);
+				return () => {
+					clearInterval(timer);
+					document.removeEventListener("visibilitychange", onVisibilityChange);
+				};
+			}, [rendered, onResize]);
 			if (phase === void 0 || !phase.blank) return null;
 			if (headerEntry) return null;
 			if (rightOpen) return null;
@@ -25841,8 +26381,10 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 							observer?.disconnect();
 							observer = void 0;
 						}
+						startRetry();
 						return;
 					}
+					stopRetry();
 					if (centerColRef.current !== col) {
 						centerColRef.current?.removeAttribute("data-dsh-center-col");
 						centerColRef.current = col;
@@ -25852,6 +26394,16 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 						observer.observe(col);
 						measureCenter();
 					}
+				};
+				let retry;
+				const stopRetry = () => {
+					if (retry === void 0) return;
+					window.clearInterval(retry);
+					retry = void 0;
+				};
+				const startRetry = () => {
+					if (retry !== void 0) return;
+					retry = window.setInterval(locate, 1500);
 				};
 				locate();
 				let locateFrame = null;
@@ -25874,11 +26426,10 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					attributes: true,
 					attributeFilter: ["style"]
 				});
-				const retry = window.setInterval(locate, 1500);
 				return () => {
 					disposed = true;
 					if (locateFrame !== null) cancelAnimationFrame(locateFrame);
-					window.clearInterval(retry);
+					stopRetry();
 					observer?.disconnect();
 					watcher.disconnect();
 					htmlStyleWatcher.disconnect();
@@ -26428,52 +26979,154 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		* The client session list carries the session HEADER cwd, captured once when
 		* the session started. The HOST is the authority on where the session is
 		* actually working, because it can follow the agent into a linked git worktree
-		*  including one belonging to a different repository. Ask the host, prefer
-		* its answer, and re-ask when the window regains focus, when a file refresh is
-		* requested, and on a slow timer so a mid-session worktree move is picked up.
+		* including one belonging to a different repository. Ask the host, prefer
+		* its answer, and re-ask when the window regains focus, when the document
+		* becomes visible again, when a file refresh is requested, and on a slow timer
+		* so a mid-session worktree move is picked up.
+		*
+		* ONE store per `sessionId` (the `ui/git-status.ts` shape: a module-level Map
+		* of slots with `retain()` / `release()` and `useSyncExternalStore`). The host
+		* keeps every visited native tab body mounted, so a per-hook poller meant one
+		* 5 s `session.cwd` POST per live body — three visited tabs on one session
+		* were three requests per tick, and each of those lands in the host's
+		* `activeWorktreeRootOf` (up to four real `git` spawns on a cache miss, whose
+		* TTL is shorter than this cadence). The store therefore runs EXACTLY ONE
+		* timer per session, and only while at least one subscriber reports itself
+		* visible (`visible: false` is what the host hands a parked tab body, and the
+		* sidebar shell passes its own panel-open state). A parked body holds no timer
+		* and issues no request; `document.hidden` pauses the timers the same way.
+		*
+		* A parked body keeps its last answer — releasing the last visible subscriber
+		* stops the timer but does not drop the resolved root, so re-showing a tab
+		* paints the worktree the session was in instead of falling back to the frozen
+		* list cwd. Becoming visible again (a subscriber turning visible, the document
+		* turning visible, or the window regaining focus) refreshes immediately once
+		* instead of waiting for the next tick. Both listeners belong to the store:
+		* the old per-instance `window.focus` listener was added once per mounted hook
+		* and never removed for the life of the page.
 		*
 		* Shared by both client surfaces: the plugin's own sidebar shell
 		* (`Sidebar.tsx`) and the native DSH right-sidebar tab body
-		* (`native/tab-adapter.tsx`). They used to disagree  the native body read the
+		* (`native/tab-adapter.tsx`). They used to disagree — the native body read the
 		* frozen list summary directly, so a host-side worktree change never reached
 		* the file list drawn in the host's own right Sidebar.
 		*/
 		/** How often the host is re-asked while the document is visible. */
 		const SESSION_ROOT_POLL_MS = 5e3;
+		const slots = /* @__PURE__ */ new Map();
+		/** Whether the store's one-shot window/document listeners are attached. */
+		let listening = false;
+		/** The slot of one session, created on first use. */
+		function slotOf(sessionId) {
+			const existing = slots.get(sessionId);
+			if (existing !== void 0) return existing;
+			const slot = {
+				sessionId,
+				cwd: void 0,
+				version: 0,
+				visible: 0,
+				timer: void 0,
+				generation: 0,
+				listeners: /* @__PURE__ */ new Set()
+			};
+			slots.set(sessionId, slot);
+			attachListeners();
+			return slot;
+		}
+		function notify(slot) {
+			slot.version += 1;
+			for (const listener of slot.listeners) listener();
+		}
+		/**
+		* Ask the host where the session is working now. A hidden document issues
+		* nothing: the answer would only drive panels nobody can see.
+		*/
+		function fetchSlot(slot) {
+			if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+			const generation = ++slot.generation;
+			api.sessionCwd({ sessionId: slot.sessionId }).then((result) => {
+				if (generation !== slot.generation) return;
+				if (slot.cwd === result.cwd) return;
+				slot.cwd = result.cwd;
+				notify(slot);
+			}).catch(() => {});
+		}
+		function startTimer(slot) {
+			if (slot.timer !== void 0) return;
+			slot.timer = window.setInterval(() => {
+				fetchSlot(slot);
+			}, SESSION_ROOT_POLL_MS);
+		}
+		function stopTimer(slot) {
+			if (slot.timer === void 0) return;
+			window.clearInterval(slot.timer);
+			slot.timer = void 0;
+		}
+		/** Re-read every session that has at least one visible subscriber. */
+		function refreshVisible() {
+			for (const slot of slots.values()) if (slot.visible > 0) fetchSlot(slot);
+		}
+		/**
+		* Attach the store's listeners once, on the first slot: `focus` and the file
+		* refresh are window events, so per-hook listeners accumulated for the life of
+		* the page (a body that remounts on every session switch added another).
+		*/
+		function attachListeners() {
+			if (listening) return;
+			listening = true;
+			window.addEventListener("focus", refreshVisible);
+			window.addEventListener("dsh-sidebar:refresh-files", refreshVisible);
+			document.addEventListener("visibilitychange", () => {
+				if (document.visibilityState === "hidden") {
+					for (const slot of slots.values()) stopTimer(slot);
+					return;
+				}
+				for (const slot of slots.values()) {
+					if (slot.visible === 0) continue;
+					startTimer(slot);
+					fetchSlot(slot);
+				}
+			});
+		}
+		/** One more visible subscriber: the first one owns the timer and re-reads now. */
+		function retain(slot) {
+			slot.visible += 1;
+			if (slot.visible > 1) return;
+			startTimer(slot);
+			fetchSlot(slot);
+		}
+		/** One fewer visible subscriber: the last one takes the timer with it. */
+		function release(slot) {
+			slot.visible = Math.max(0, slot.visible - 1);
+			if (slot.visible === 0) stopTimer(slot);
+		}
 		/**
 		* Resolve the live workspace root for one session.
 		* @param ctx - client plugin context (owns the session list feed + API).
 		* @param sessionId - the session to resolve; `undefined` resolves to `undefined`.
+		* @param options - `visible: false` parks this caller (no polling).
 		* @returns the host's active root, falling back to the list summary cwd.
 		*/
-		function useSessionRoot(ctx, sessionId) {
+		function useSessionRoot(ctx, sessionId, options = {}) {
+			const { visible = true } = options;
 			const summaryCwd = (0, react.useSyncExternalStore)((0, react.useMemo)(() => (listener) => ctx.sessions.list.subscribe(listener), [ctx]), () => sessionId === void 0 ? void 0 : ctx.sessions.list.getSnapshot().byId[sessionId]?.cwd);
-			const [fetched, setFetched] = (0, react.useState)(void 0);
-			(0, react.useEffect)(() => {
-				if (sessionId === void 0) return;
-				let cancelled = false;
-				const load = () => {
-					if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-					api.sessionCwd({ sessionId }).then((result) => {
-						if (cancelled) return;
-						setFetched((previous) => previous !== void 0 && previous.sessionId === sessionId && previous.cwd === result.cwd ? previous : {
-							sessionId,
-							cwd: result.cwd
-						});
-					}).catch(() => {});
-				};
-				load();
-				window.addEventListener("focus", load);
-				window.addEventListener("dsh-sidebar:refresh-files", load);
-				const timer = window.setInterval(load, SESSION_ROOT_POLL_MS);
+			const slot = sessionId === void 0 ? void 0 : slotOf(sessionId);
+			const subscribe = (0, react.useCallback)((listener) => {
+				if (slot === void 0) return () => {};
+				slot.listeners.add(listener);
 				return () => {
-					cancelled = true;
-					window.removeEventListener("focus", load);
-					window.removeEventListener("dsh-sidebar:refresh-files", load);
-					window.clearInterval(timer);
+					slot.listeners.delete(listener);
 				};
-			}, [sessionId]);
-			return fetched !== void 0 && fetched.sessionId === sessionId ? fetched.cwd : summaryCwd;
+			}, [slot]);
+			(0, react.useSyncExternalStore)(subscribe, () => slot?.version ?? 0, () => slot?.version ?? 0);
+			(0, react.useEffect)(() => {
+				if (slot === void 0 || !visible) return void 0;
+				retain(slot);
+				return () => {
+					release(slot);
+				};
+			}, [slot, visible]);
+			return slot?.cwd ?? summaryCwd;
 		}
 		//#endregion
 		//#region src/client/Sidebar.tsx
@@ -26615,7 +27268,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					for (const tag of tags) tag.remove();
 				};
 			}, [customCss]);
-			const cwd = useSessionRoot(ctx, sessionId);
+			const cwd = useSessionRoot(ctx, sessionId, { visible: state?.bottomOpen === true });
 			const newTabOptions = (0, react.useMemo)(() => state === void 0 || sessionId === void 0 ? [] : buildNewTabOptions(state, ctx, {
 				sessionId,
 				cwd
@@ -27167,7 +27820,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			/** The session-state authority (bound through {@link NativeTabRecords.attachStore}). */
 			let store;
 			/** The session's expansion set (absent session = nothing expanded yet). */
-			const expandedOf = (sessionId) => store?.getSessionStates().get(sessionId)?.expanded ?? [];
+			const expandedOf = (sessionId) => store?.getSessionState(sessionId)?.expanded ?? [];
 			/**
 			* Re-read every view's expansion projection from the session state. Views
 			* that changed get a version bump (which is what re-renders their bodies);
@@ -27176,10 +27829,9 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			*/
 			const syncExpanded = () => {
 				if (store === void 0) return;
-				const states = store.getSessionStates();
 				let changed = false;
 				for (const [id, entry] of views) {
-					const next = states.get(entry.scope.sessionId)?.expanded ?? [];
+					const next = store.getSessionState(entry.scope.sessionId)?.expanded ?? [];
 					if (samePaths(entry.expanded, next)) continue;
 					views.set(id, {
 						...entry,
@@ -27361,7 +28013,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			const seatSessionId = props.sessionId;
 			const scopeSessionId = props.sessionIdOf?.(info) ?? seatSessionId;
 			useRecordVersion(records, seatSessionId, nativeTab.id);
-			const cwd = useSessionRoot(ctx, scopeSessionId);
+			const cwd = useSessionRoot(ctx, scopeSessionId, { visible: nativeTab.visible });
 			const scope = (0, react.useMemo)(() => ({
 				sessionId: scopeSessionId,
 				cwd
@@ -28000,6 +28652,10 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		* an icon field, the plugin identifies only its own localized row after the
 		* dialog mounts. The marker owns no shell structure and is removed on fiber
 		* disposal, so the adaptation remains HMR-safe.
+		*
+		* Mutation bursts are coalesced into one sync per animation frame: the
+		* observer watches the whole body, so chat streaming would otherwise run the
+		* document-wide row query at microtask cadence.
 		*/
 		const SETTINGS_NAV_MARKER = "data-dsh-better-sidebar-settings-nav";
 		/**
@@ -28010,6 +28666,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		*/
 		function registerSettingsNavIcon(label) {
 			let disposed = false;
+			let frame = null;
 			const sync = () => {
 				if (disposed) return;
 				const currentLabel = label().trim();
@@ -28017,16 +28674,27 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				for (const button of buttons) if (currentLabel.length > 0 && button.textContent?.trim() === currentLabel) button.setAttribute(SETTINGS_NAV_MARKER, "");
 				else button.removeAttribute(SETTINGS_NAV_MARKER);
 			};
+			/** One sync per frame at most: the first mutation of a burst schedules it. */
+			const schedule = () => {
+				if (disposed || frame !== null) return;
+				frame = requestAnimationFrame(() => {
+					frame = null;
+					sync();
+				});
+			};
 			sync();
-			const observer = new MutationObserver(sync);
+			const observer = new MutationObserver(schedule);
 			observer.observe(document.body, {
 				childList: true,
-				subtree: true,
-				characterData: true
+				subtree: true
 			});
 			return () => {
 				disposed = true;
 				observer.disconnect();
+				if (frame !== null) {
+					cancelAnimationFrame(frame);
+					frame = null;
+				}
 				document.querySelectorAll(`[${SETTINGS_NAV_MARKER}]`).forEach((element) => {
 					element.removeAttribute(SETTINGS_NAV_MARKER);
 				});

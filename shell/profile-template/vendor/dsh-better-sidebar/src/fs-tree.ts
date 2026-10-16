@@ -204,8 +204,10 @@ async function readDirectory(path: string, maxEntries: number, exclude?: Exclude
   await probeSymlinkTargets(rows, gate)
   // Mark singleton-directory rows AFTER the symlink probe (it finalizes
   // isDir/broken), so the client can fold compact chains without an extra
-  // round trip per collapsed level.
-  await probeCompactRows(rows, exclude, gate)
+  // round trip per collapsed level. A TRUNCATED level is skipped entirely: the
+  // rows on screen are a slice of a level too wide to be worth folding, and
+  // the fold mark would be decided by the cap rather than by the directory.
+  if (!truncated) await probeCompactRows(rows, exclude, gate)
   rows.sort(compareEntries)
   return { path, entries: rows, truncated }
 }
@@ -313,19 +315,37 @@ async function probeSymlinkTargets(rows: SidebarFsEntry[], gate?: ProbeGate, con
 const COMPACT_PROBE_CONCURRENCY = 32
 
 /**
+ * How many children of ONE level are probed for the singleton fold mark.
+ *
+ * Folding is decorative — it decides whether a row renders as `a/b/c` instead
+ * of three rows — so a wide level must not pay one `opendir` per directory row:
+ * a cold listing of a 100-directory level issued 100 syscalls to decorate rows
+ * the user may never look at. Past this many ELIGIBLE directory rows the
+ * remaining rows are simply left unmarked (an un-folded listing), in row order.
+ */
+const COMPACT_PROBE_MAX = 32
+
+/**
  * Mark each directory row whose contents are EXACTLY one non-symlink child
  * (`compact`), so the explorer can fold singleton chains into one breadcrumb
  * row. The terminal link (sole FILE child) is marked too: the client
  * preloads marked levels to stabilize the fold label before expansion.
  * Bounded concurrency like the symlink probe: each probe is one opendir + up
  * to two dirent reads, so a directory-heavy level stays responsive. A shared
- * {@link ProbeGate} also keeps a whole batch's levels within one probe budget.
+ * {@link ProbeGate} also keeps a whole batch's levels within one probe budget,
+ * and at most {@link COMPACT_PROBE_MAX} rows of one level are probed at all.
  * Probe failures (unreadable child level) leave the row unmarked — it simply
  * does not fold.
  */
 async function probeCompactRows(rows: SidebarFsEntry[], exclude?: ExcludeMatcher, gate?: ProbeGate, concurrency = COMPACT_PROBE_CONCURRENCY): Promise<void> {
+  let probed = 0
   await forEachRow(rows, concurrency, async (row) => {
     if (!row.isDir || row.broken) return
+    // The cap counts PROBES, not rows visited: rows the visitor skips (files,
+    // broken links) cost nothing, and the increment happens before the await
+    // so concurrent workers cannot overshoot it.
+    if (probed >= COMPACT_PROBE_MAX) return
+    probed += 1
     if (await runProbe(gate, () => hasSingletonChild(row.path, exclude))) row.compact = true
   })
 }
