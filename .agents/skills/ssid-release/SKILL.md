@@ -156,7 +156,8 @@ mac 侧只在真机上暴露的四个坑（2026-09-29 实测，逐层剥出来�
 | 打包一开始就报读不到 `apps/desktop/.env.macos` | `package-target.ts` 无条件加载该文件 | workflow 在打包前生成它（App ID、强更策略、并发）。`--unsigned` 跳过的是 Apple 凭据校验，不是这个文件 |
 | `prepare:dsh` 报 `DSH_DESKTOP_MACOS_SIGNING_IDENTITY must be set` | `prepare-dsh.ts` 在 `darwin` 下无条件解析签名身份 | `DSH_DESKTOP_UNSIGNED` 会传进子进程，未签名时跳过内核与 primary-runtime 的原生 Mach-O 预签名 |
 | `EMFILE: too many open files` | 随包插件集有 43099 个文件，而 mac runner 的 `kern.maxfilesperproc` 只有 10240；只抬 `ulimit` 无用 | 打包步骤内 `sudo sysctl -w kern.maxfiles=400000 kern.maxfilesperproc=200000`，再 `ulimit -n 200000`（必须同一步骤的同一 shell） |
-| `codesign --verify --deep` 失败，事后重跑同一条命令却必过 | `@electron/osx-sign` 签完固定跑该验证且关不掉（`mac.strictVerify` 只管 `--strict`，`mac.timestamp` 被 `customSignOptions.timestamp \|\| undefined` 吞回默认） | 未签名通道让 electron-builder 整个跳过签名（`identity: null` + `forceCodeSigning: false`），由 `afterPack` 用 ad-hoc 身份自签 |
+| `codesign --verify --deep --strict` 失败（2026-09-29 曾记为「事后重跑必过」；**2026-10-19 在 v1.1.8 上复现两次、判定为确定性失败**） | `@electron/osx-sign` 签完会固定跑这步验证且关不掉（`mac.strictVerify` 只管 `--strict`，`mac.timestamp` 被 `customSignOptions.timestamp \|\| undefined` 吞回默认），而错因被吞成一句 `Command failed` | 未签名通道让 electron-builder 整个跳过签名：`identity: null` + `forceCodeSigning: false`（`forceCodeSigning` 在 unsigned 时本就为 false），改由 `afterPack` 自签 |
+    | 上一条的**真正根因**：`mac.signIgnore` 排除了 `runtime/primary-runtime` 与 `ssid-plugins`，而里面的 python `.so`、pnpm 的 `@reflink` 共 **8 个 Mach-O 本来就没有签名**（`--deep --verify` 的普查输出：`Mach-O 总数=141 未签名=8`） | 那两处「不在这里签」是有意的（保留原生签名），但固定的那次 verify 仍会递归检查它们，于是必败 | `afterPack` 里对整个 `.app` 跑一次 `codesign --sign - --force --deep --options runtime --entitlements <macos-entitlements.plist>`，把被 `signIgnore` 排除的文件一并签上。**v1.1.8 实测通过**（mac run `39149877010`，19 分 17 秒，产出 `ssid-1.1.8-mac-arm64-unsigned.dmg` 397.3 MB） |
 
 ## 6. 冒烟
 
