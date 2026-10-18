@@ -15,10 +15,10 @@
 | 插件 | 从 | 到 |
 |---|---|---|
 | `@changfenhuang/dsh-genui` | 0.11.3 | 0.13.0 |
-| `ds-harness-remote` | 0.4.27 | 0.5.11 |
-| `dsh-context` | 0.65.0 | 0.73.0 |
+| `ds-harness-remote` | 0.4.27 | 0.5.12 |
+| `dsh-context` | 0.65.0 | 0.73.2 |
 | `dsh-pocket` | 2.10.6 | 2.12.0 |
-| `dsh-session-manager` | 0.6.2 | 0.7.2 |
+| `dsh-session-manager` | 0.6.2 | 0.7.3 |
 | `dsh-better-sidebar`（vendor） | 0.26.1 | 0.28.0 |
 | `@max-null/dsh-memory` | 0.15.1 | 0.16.0 |
 | `@max-null/dsh-achievements` | 0.1.3 | 0.1.4 |
@@ -51,6 +51,6 @@
 
 SHA256（`certutil -hashfile <文件> SHA256`）—— **以本页与 Release 页为准**：
 
-- `ssid-1.1.8-win-x64-unsigned.exe`：`1F406A6F85EEEE29BE7A49EF3DD9D9AB9B1BD2EB01E5A4B2676B3E4F070D36CB`（457,083,585 字节）
+- `ssid-1.1.8-win-x64-unsigned.exe`：`11E8F677D516077470184AAB040D8FE855262BB2C20D2EA5D9FB193FABE1F72A`（457100473 字节）
 
 说明：包内那份「更新日志」（关于 SSiD）不著录校验和 —— 把最终哈希写进包内会再次改变哈希。
