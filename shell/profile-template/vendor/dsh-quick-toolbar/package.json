@@ -50,5 +50,9 @@
   },
   "dependencies": {
     "zod": "^4.5.4"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Max-Null/dsh-quick-toolbar.git"
   }
 }

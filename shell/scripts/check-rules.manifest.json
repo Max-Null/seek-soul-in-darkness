@@ -87,7 +87,7 @@
       ]
     },
     "dsh-quick-toolbar": {
-      "mode": "vendor-only",
+      "mode": "full",
       "$sourceNote": "源头在 max-null-plugins/dsh-quick-toolbar（SSiD 仓库之外），本门只做三处 vendor 互比",
       "include": [
         "lib/**",
@@ -97,10 +97,11 @@
       "exclude": [
         "node_modules/**",
         ".git/**"
-      ]
+      ],
+      "source": "../max-null-plugins/dsh-quick-toolbar"
     },
     "dsh-capture": {
-      "mode": "vendor-only",
+      "mode": "full",
       "$sourceNote": "源头同样在仓库之外（max-null-plugins/dsh-capture）",
       "include": [
         "lib/**",
@@ -110,7 +111,8 @@
       "exclude": [
         "node_modules/**",
         ".git/**"
-      ]
+      ],
+      "source": "../max-null-plugins/dsh-capture"
     },
     "dsh-dream-skin": {
       "$unmanaged": true,
