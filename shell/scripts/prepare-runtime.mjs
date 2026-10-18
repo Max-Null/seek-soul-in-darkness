@@ -80,7 +80,6 @@ const MISSING_PEERS = [
   `@deepseek-ai/dsh-session-title-llm@${DSH_VERSION}`,
   `@deepseek-ai/dsh-spill@${DSH_VERSION}`,
   `@deepseek-ai/dsh-output-retention@${DSH_VERSION}`,
-  `@deepseek-ai/dsh-subagent-in-process-driver@${DSH_VERSION}`,
   `@deepseek-ai/dsh-subprocess@${DSH_VERSION}`,
   `@deepseek-ai/dsh-compaction@${DSH_VERSION}`,
   `@deepseek-ai/dsh-workflow@${DSH_VERSION}`,
