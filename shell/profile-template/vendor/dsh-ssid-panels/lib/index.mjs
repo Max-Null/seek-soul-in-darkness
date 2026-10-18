@@ -533,7 +533,7 @@ function pluginMeta(name) {
 /** Plugin identity for cordis.yml rows. */
 const name = "@max-null/dsh-ssid-panels";
 /** Services required before mounting: the webserver routes and the web runtime's trusted hosts. */
-const inject = ["webServer", "webRuntime"];
+const inject = ["webServer", "webStartup"];
 /** SSiD 壳版本（main.mjs 启动时从 shell/package.json 注入环境变量）。 */
 const SHELL_VERSION = process.env.SSID_SHELL_VERSION ?? "0.0.0";
 /** SSiD 仓库（更新检查与更新日志来源）。 */
@@ -727,15 +727,29 @@ function readSessionRootState() {
 			applied: parsed?.applied === true
 		};
 	} catch {
+		const envIsolated = ISOLATED_ROOT !== void 0 && ISOLATED_ROOT !== "";
 		return {
-			isolated: false,
-			applied: false
+			isolated: envIsolated,
+			applied: envIsolated
 		};
 	}
 }
 function writeSessionRootState(next) {
 	mkdirSync(dirname(SESSION_ROOT_CONFIG_PATH), { recursive: true });
 	writeFileSync(SESSION_ROOT_CONFIG_PATH, JSON.stringify(next, null, 2) + "\n");
+}
+/**
+* 会话目录里是否已有日志。0.2.1 起会话格式升到 v4，日志文件名从
+* `session.jsonl.zstd` 变成 `session.v4.jsonl.zstd`；按模式匹配而不是写死文件名，
+* 否则每升一次格式这里都会悄悄数成 0（2026-10-18 面板显示「独立根 0 个会话」而
+* 实际有 5 个，就是这一处）。
+*/
+function sessionLogExists(dir) {
+	try {
+		return readdirSync(dir).some((name) => /^session(?:\.[a-z0-9]+)*\.jsonl\.zstd$/u.test(name));
+	} catch {
+		return false;
+	}
 }
 /** 一个根目录下携带会话目录的计数（只列目录，不解析日志）。 */
 function countSessionRoot(root) {
@@ -748,7 +762,7 @@ function countSessionRoot(root) {
 	}
 	let count = 0;
 	for (const project of projects) try {
-		count += readdirSync(join(root, project), { withFileTypes: true }).filter((entry) => entry.isDirectory() && existsSync(join(root, project, entry.name, "session.jsonl.zstd"))).length;
+		count += readdirSync(join(root, project), { withFileTypes: true }).filter((entry) => entry.isDirectory() && sessionLogExists(join(root, project, entry.name))).length;
 	} catch {}
 	return count;
 }
@@ -896,7 +910,7 @@ function required(service, label) {
 }
 /**
 * Plugin body: mount the fenced /ssid/api route.
-* @param ctx - host plugin context (webServer, webRuntime).
+* @param ctx - host plugin context (webServer, webStartup).
 */
 function apply(ctx) {
 	try {
@@ -1201,7 +1215,7 @@ function apply(ctx) {
 			};
 		}
 	};
-	const fence = (req) => isTrusted(req, ctx.webRuntime.trustedHosts);
+	const fence = (req) => isTrusted(req, ctx.webStartup.trustedHosts);
 	ctx.effect(() => ctx.webServer.register({
 		kind: "prefix",
 		path: "/ssid/api",

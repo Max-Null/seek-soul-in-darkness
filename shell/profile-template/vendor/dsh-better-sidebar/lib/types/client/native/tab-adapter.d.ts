@@ -1,6 +1,7 @@
 import type { ComponentType, ReactNode } from 'react';
 import type { Context } from '../../context-types.ts';
 import type { SessionScope } from '../api.ts';
+import type { ContextDiagnostics } from '../context-diagnostics.ts';
 import type { BetterSidebarService, NativePathTab } from '../service.ts';
 import type { SidebarStore, SidebarTab } from '../state.ts';
 /**
@@ -174,6 +175,13 @@ export interface NativeBodyInjected {
      * the session the slot is scoped to.
      */
     readonly sessionIdOf?: (info: NativeTabInfo) => string | undefined;
+    /**
+     * The activation's optional diagnostics controller (thin wrapper over
+     * ./index.ts's deps): the body below turns it into the provider, because a
+     * native body renders in the HOST's tree and the plugin shell's provider
+     * cannot reach it. Absent = the body renders without diagnostics.
+     */
+    readonly diagnostics?: ContextDiagnostics;
 }
 /** The props the slot framework adds to every tab body and title. */
 export interface NativeBodyFrameworkProps {

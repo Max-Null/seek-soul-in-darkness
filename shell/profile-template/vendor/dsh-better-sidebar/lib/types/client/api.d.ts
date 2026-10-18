@@ -1,6 +1,8 @@
 import type { SidechatLiveEvent, SidechatLogEvent, SidechatModelCatalog, SidechatModelSelection, SidechatPendingInput, SidechatThreadInfo } from '../sidechat-core.ts';
 import type { SidebarCreateTeamTaskRequest, SidebarChildLiveView, SidebarSessionEvent, SidebarTeamTaskView, SidebarUpdateTeamTaskRequest } from '../context-types.ts';
 import type { WorkflowRunView } from '../workflow-runs.ts';
+import type { GitGraphOptions, GitGraphResult } from '../git-graph.ts';
+export type { GitGraphOptions, GitGraphResult, GitGraphEntry, GitGraphBranch } from '../git-graph.ts';
 /** One wire failure. */
 export declare class SidebarApiError extends Error {
     readonly code: string;
@@ -41,15 +43,26 @@ export type GitLineCounts = {
 export interface GitStatusEntry {
     path: string;
     xy: string;
-    /** Lines gained/lost, index and worktree sides summed. ABSENT when git has
-     *  no numstat row for the path — untracked files never have one — so the row
-     *  must not read that absence as `0`. */
-    counts?: GitLineCounts;
+    /** Lines gained/lost on the INDEX side (index vs HEAD). ABSENT when git has
+     *  no numstat row for the path on that side — an untracked file has none — so
+     *  the row must not read that absence as `0`. */
+    staged?: GitLineCounts;
+    /** Lines gained/lost on the WORKTREE side (worktree vs index) — a separate
+     *  reading, never one summed number. */
+    unstaged?: GitLineCounts;
 }
 /** Git status snapshot. */
 export interface GitStatusResult {
     isRepo: boolean;
+    /** Absent when HEAD is detached; unborn branches keep their real name. */
     branch?: string;
+    /** Native tracking ref (e.g. origin/main); never inferred from a remote. */
+    upstream?: string;
+    /** Present only when Git can compare HEAD with the tracking ref. */
+    ahead?: number;
+    behind?: number;
+    detached?: boolean;
+    operation?: 'merge' | 'rebase';
     entries: GitStatusEntry[];
     /** True when the host capped `entries` (huge untracked set); the panel
      *  shows a truncation notice instead of freezing (#369). */
@@ -102,6 +115,8 @@ export interface GitLogEntry {
     hash: string;
     /** Full 40-char hash (advanced operations). */
     hashFull: string;
+    /** Full parent hashes in Git's order; root commits have none. */
+    parents: string[];
     subject: string;
     author: string;
     /** ISO 8601 author date (`%ai`). */
@@ -355,6 +370,8 @@ export declare const api: {
     gitCheckout: (scope: SessionScope, branch: string, worktree?: string) => Promise<{
         ok: true;
     }>;
+    /** Read-only topological history; stale cursors require a fresh first page. */
+    gitGraph: (scope: SessionScope, options?: GitGraphOptions, worktree?: string, signal?: AbortSignal) => Promise<GitGraphResult>;
     /** Recent commit history, lazily pageable (skip/count; defaults 0/30). */
     gitLog: (scope: SessionScope, count?: number, skip?: number, worktree?: string, signal?: AbortSignal) => Promise<GitLogEntry[]>;
     /** Full patch text of one commit (diff display for the history rows). */
@@ -380,11 +397,11 @@ export declare const api: {
     gitBlame: (scope: SessionScope, path: string, startLine: number, endLine: number, worktree?: string, signal?: AbortSignal) => Promise<{
         lines: GitBlameLine[];
     }>;
-    /** The session's file-tool events for the changes tab's session lens: the
-     *  `tool/call` + `tool/result` rows past `afterSeq` (0 = whole window),
-     *  capped to the recent window host-side. The client runtime exposes no
-     *  event-log face, so the lens polls this delta route. */
-    changesOps: (scope: SessionScope, afterSeq?: number, signal?: AbortSignal) => Promise<{
+    /** The session's file-tool events past `afterSeq` (absent = whole window,
+     *  floored at -1 host-side so a log opening on seq 0 is not dropped). With
+     *  `wait` the host parks the request until the next tool event (or 25 s)
+     *  instead of re-reading an unchanged window. */
+    changesOps: (scope: SessionScope, afterSeq?: number, signal?: AbortSignal, wait?: boolean) => Promise<{
         events: SidebarSessionEvent[];
         lastSeq: number;
     }>;
@@ -547,4 +564,3 @@ export interface SessionPhase {
  * @returns the phase (`blank: false` when the session does not exist).
  */
 export declare function sessionPhase(sessionId: string, signal?: AbortSignal): Promise<SessionPhase>;
-export {};

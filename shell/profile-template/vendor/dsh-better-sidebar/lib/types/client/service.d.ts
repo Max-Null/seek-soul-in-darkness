@@ -788,7 +788,7 @@ export declare function matchUrlTarget(tabs: readonly TabDescriptor[], url: URL)
  * The plugin version this service instance reports. Keep in lockstep with
  * `package.json`'s version — `tests/service.spec.ts` asserts the pair.
  */
-export declare const SIDEBAR_SERVICE_VERSION = "0.26.0";
+export declare const SIDEBAR_SERVICE_VERSION = "0.28.0";
 /**
  * Monotonic capability list consumers use to gate new API usage (features
  * are never removed). Each string names a v0.12.0+ capability:

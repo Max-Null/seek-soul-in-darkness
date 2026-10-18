@@ -6,7 +6,7 @@
  */
 import type { SidebarHttpRequest, SidebarHttpResponse } from './context-types.ts';
 /** Machine-readable error codes of the sidebar API. */
-export type SidebarErrorCode = 'bad-request' | 'not-found' | 'forbidden' | 'method-error' | 'too-large' | 'unavailable' | 'fs-error' | 'fs-conflict' | 'git-error' | 'git-suggest-empty' | 'git-suggest-error' | 'job-error' | 'team-error' | 'team-conflict' | 'sidechat-error' | 'subagents-unavailable' | 'settings-rejected' | 'settings-conflict' | 'internal';
+export type SidebarErrorCode = 'bad-request' | 'not-found' | 'forbidden' | 'method-error' | 'too-large' | 'unavailable' | 'fs-error' | 'fs-conflict' | 'git-error' | 'graph-stale' | 'graph-limit' | 'git-suggest-empty' | 'git-suggest-error' | 'job-error' | 'team-error' | 'team-conflict' | 'sidechat-error' | 'subagents-unavailable' | 'settings-rejected' | 'settings-conflict' | 'internal';
 /** One API failure with its wire code and HTTP status. */
 export declare class SidebarError extends Error {
     readonly code: SidebarErrorCode;

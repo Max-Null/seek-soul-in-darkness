@@ -48,6 +48,7 @@ export declare function AgentNodePopover(props: {
     onJump(node: TasksAgentNode, place: 'side' | 'main'): void;
     /** Open the shared task window for one of the node's tasks. */
     onOpenTask(taskId: string, anchor: HTMLElement): void;
+    onClose(): void;
 }): ReactNode;
 /** The workflow run detail popover (phases with clickable member rows). */
 export declare function WorkflowNodePopover(props: {

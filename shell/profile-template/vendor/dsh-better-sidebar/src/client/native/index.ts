@@ -27,6 +27,7 @@ import { t } from '../locales.ts'
 import { splitTrailingLineSpec } from '../path-line.ts'
 import { baseName } from '../paths.ts'
 import { parseFileAddress } from '../resource-address.ts'
+import type { ContextDiagnostics } from '../context-diagnostics.ts'
 import type { BetterSidebarService, TabDescriptor } from '../service.ts'
 import type { SidebarStore } from '../state.ts'
 import {
@@ -219,6 +220,14 @@ export interface NativeSurfaceDeps {
   /** The shared native tab record registry (the surface writes it too). */
   readonly records: NativeTabRecords
   /**
+   * The activation's optional dsh-context diagnostics controller (see
+   * ../context-diagnostics.ts). Forwarded into the tab bodies' injected bag,
+   * because a native body renders in the HOST's React tree and cannot read the
+   * plugin shell's provider. Omitted = the bodies render without the
+   * diagnostics entry points.
+   */
+  readonly diagnostics?: ContextDiagnostics
+  /**
    * Report a tab-type registration failure (phase label + cause).
    *
    * `ctx.inject`'s callback body and the registry's own subscriber callbacks
@@ -239,7 +248,7 @@ export interface NativeSurfaceDeps {
  * @returns a disposer unregistering everything.
  */
 export function registerNativeSurface(deps: NativeSurfaceDeps): () => void {
-  const { ctx, store, service, records, reportFailure } = deps
+  const { ctx, store, service, records, reportFailure, diagnostics } = deps
   // Bind the store BEFORE any body can render: the per-session state is the
   // authority for the explorer's expansion set, so the native surface and the
   // workbench share one set per session and a closed tab cannot drop it.
@@ -293,7 +302,11 @@ export function registerNativeSurface(deps: NativeSurfaceDeps): () => void {
         disposers.push(ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({
           name: 'sidebar.right.pane.tab',
           key: id,
-          inject: (sessionId: string) => ({ ...injected, ...params, sessionId }),
+          // The diagnostics controller rides the SAME injected bag every body
+          // already receives (a native body renders in the host's tree, so the
+          // plugin shell's provider is out of reach); the adapter turns it into
+          // the provider around the body it draws.
+          inject: (sessionId: string) => ({ ...injected, ...params, sessionId, ...(diagnostics === undefined ? {} : { diagnostics }) }),
         }, NativeTabBody)))
         disposers.push(ctx.slots.inject('sidebar.right.pane.tab.title', () => ctx.slots.register({
           name: 'sidebar.right.pane.tab.title',

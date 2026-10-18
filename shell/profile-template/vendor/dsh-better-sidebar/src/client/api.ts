@@ -26,6 +26,8 @@ import type {
   SidebarUpdateTeamTaskRequest,
 } from '../context-types.ts'
 import type { WorkflowRunView } from '../workflow-runs.ts'
+import type { GitGraphOptions, GitGraphResult } from '../git-graph.ts'
+export type { GitGraphOptions, GitGraphResult, GitGraphEntry, GitGraphBranch } from '../git-graph.ts'
 
 /** One wire failure. */
 export class SidebarApiError extends Error {
@@ -70,16 +72,27 @@ export type GitLineCounts = { additions: number; deletions: number } | { binary:
 export interface GitStatusEntry {
   path: string
   xy: string
-  /** Lines gained/lost, index and worktree sides summed. ABSENT when git has
-   *  no numstat row for the path — untracked files never have one — so the row
-   *  must not read that absence as `0`. */
-  counts?: GitLineCounts
+  /** Lines gained/lost on the INDEX side (index vs HEAD). ABSENT when git has
+   *  no numstat row for the path on that side — an untracked file has none — so
+   *  the row must not read that absence as `0`. */
+  staged?: GitLineCounts
+  /** Lines gained/lost on the WORKTREE side (worktree vs index) — a separate
+   *  reading, never one summed number. */
+  unstaged?: GitLineCounts
 }
 
 /** Git status snapshot. */
 export interface GitStatusResult {
   isRepo: boolean
+  /** Absent when HEAD is detached; unborn branches keep their real name. */
   branch?: string
+  /** Native tracking ref (e.g. origin/main); never inferred from a remote. */
+  upstream?: string
+  /** Present only when Git can compare HEAD with the tracking ref. */
+  ahead?: number
+  behind?: number
+  detached?: boolean
+  operation?: 'merge' | 'rebase'
   entries: GitStatusEntry[]
   /** True when the host capped `entries` (huge untracked set); the panel
    *  shows a truncation notice instead of freezing (#369). */
@@ -138,6 +151,8 @@ export interface GitLogEntry {
   hash: string
   /** Full 40-char hash (advanced operations). */
   hashFull: string
+  /** Full parent hashes in Git's order; root commits have none. */
+  parents: string[]
   subject: string
   author: string
   /** ISO 8601 author date (`%ai`). */
@@ -517,6 +532,9 @@ export const api = {
     call<{ current: string; names: string[] }>('git.branch', gitPayload(scope, worktree, {}), signal),
   gitCheckout: (scope: SessionScope, branch: string, worktree?: string) =>
     call<{ ok: true }>('git.checkout', gitPayload(scope, worktree, { branch })),
+  /** Read-only topological history; stale cursors require a fresh first page. */
+  gitGraph: (scope: SessionScope, options: GitGraphOptions = {}, worktree?: string, signal?: AbortSignal) =>
+    call<GitGraphResult>('git.graph', gitPayload(scope, worktree, { ...options }), signal),
   /** Recent commit history, lazily pageable (skip/count; defaults 0/30). */
   gitLog: (scope: SessionScope, count?: number, skip?: number, worktree?: string, signal?: AbortSignal) =>
     call<GitLogEntry[]>('git.log', gitPayload(scope, worktree, {
@@ -542,13 +560,14 @@ export const api = {
    *  an empty list. Called on hover only — a file is never prefetched. */
   gitBlame: (scope: SessionScope, path: string, startLine: number, endLine: number, worktree?: string, signal?: AbortSignal) =>
     call<{ lines: GitBlameLine[] }>('git.blame', gitPayload(scope, worktree, { path, startLine, endLine }), signal),
-  /** The session's file-tool events for the changes tab's session lens: the
-   *  `tool/call` + `tool/result` rows past `afterSeq` (0 = whole window),
-   *  capped to the recent window host-side. The client runtime exposes no
-   *  event-log face, so the lens polls this delta route. */
-  changesOps: (scope: SessionScope, afterSeq?: number, signal?: AbortSignal) =>
+  /** The session's file-tool events past `afterSeq` (absent = whole window,
+   *  floored at -1 host-side so a log opening on seq 0 is not dropped). With
+   *  `wait` the host parks the request until the next tool event (or 25 s)
+   *  instead of re-reading an unchanged window. */
+  changesOps: (scope: SessionScope, afterSeq?: number, signal?: AbortSignal, wait = false) =>
     call<{ events: SidebarSessionEvent[]; lastSeq: number }>('changes.ops', scopePayload(scope, {
-      ...(afterSeq !== undefined && afterSeq > 0 ? { afterSeq } : {}),
+      ...(afterSeq !== undefined ? { afterSeq } : {}),
+      ...(wait ? { wait: true } : {}),
     }), signal),
   /** Discard the worktree changes of one file (the index is untouched). */
   gitDiscard: (scope: SessionScope, path: string, worktree?: string) =>

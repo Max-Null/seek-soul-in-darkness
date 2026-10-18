@@ -1,5 +1,6 @@
 import type { Context } from '../../context-types.ts';
 import type { SessionScope } from '../api.ts';
+import { type GraphDetailsSelection } from './GitGraphSection.tsx';
 import type { SidebarDiffRef, SidebarStore } from '../state.ts';
 /**
  * How many scopes' commit drafts are remembered. The lens is a kept-mounted tab
@@ -31,10 +32,22 @@ export interface GitLensProps {
     onPreview: (ref: SidebarDiffRef) => void;
     /** The ref currently previewed (row highlight); null when the pane is closed. */
     selectedRef: SidebarDiffRef | null;
-    /** Poll the inventory only while the tab is actually visible. */
+    /** Preview one commit the GRAPH selected. Unlike a change-row preview this
+     *  does not move the bottom pane to `diff`: the FIRST graph selection lands
+     *  on `details` (the tab decides when the entry arrives). Defaults to
+     *  {@link GitLensProps.onPreview}. */
+    onGraphPreview?: (ref: SidebarDiffRef) => void;
+    /** Drop a preview whose commit left the graph (a refresh that lost the row). */
+    onClearPreview?: () => void;
+    /** The graph's selected commit, reported upward for the tab's bottom pane
+     *  (`details` tab, see {@link CommitDetails}). Null when nothing is selected
+     *  there; a HIDDEN graph keeps its report, the pane below is shared. */
+    onDetailsChange?: (selection: GraphDetailsSelection | null) => void;
+    /** The tab is on screen: the lens retains its store slot. */
     visible: boolean;
-    /** Bumped by the tab header's refresh action (0 = never asked). */
-    refreshTick?: number;
+    /** THIS lens is the one on screen inside the tab. A hidden (retained) lens
+     *  neither polls nor keeps fetching — only its state is kept. */
+    active?: boolean;
     /** The tab's context, for the registered file/folder icon chain (absent →
      *  the host's built-in artwork, exactly like the file tree falls back). */
     ctx?: Context;

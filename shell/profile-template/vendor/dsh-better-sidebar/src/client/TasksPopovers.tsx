@@ -32,6 +32,8 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SidebarSubagentAddress, SidebarTokenUsage } from '../context-types.ts'
 import type { TasksAgentNode, TasksWorkflowNode } from './tasks-model.ts'
+import type { ContextDiagnosticTarget } from './context-diagnostics.ts'
+import { ContextDiagnosticsButton, diagnosticAddressOf } from './context-diagnostics-ui.tsx'
 import {
   activityLine, AgentGlyph, WorkflowGlyph, flatten, modeLabel, nodeDotState, taskDotState,
   taskStatusLabel, taskTone, workflowStatusKey,
@@ -104,11 +106,16 @@ function PopTitleRow(props: { glyph: ReactNode; title: string }): ReactNode {
  * The ROOT node has no child to embed — it IS the main session — and a host
  * without the `subagentchat` type has no sidebar to open into, so both keep the
  * single button.
+ *
+ * The optional `children` slot carries the card's OTHER footer control (the
+ * diagnostics jump): the two live in one row so the card still has exactly one
+ * action band, and the split's own box stays fixed-width beside it.
  */
 function JumpActions(props: {
   node: TasksAgentNode
   asideAvailable: boolean
   onJump(node: TasksAgentNode, place: 'side' | 'main'): void
+  children?: ReactNode
 }): ReactNode {
   const { node, asideAvailable, onJump } = props
   const [open, setOpen] = useState(false)
@@ -163,6 +170,7 @@ function JumpActions(props: {
           )}
         </span>
       )}
+      {props.children}
     </>
   )
 }
@@ -188,6 +196,7 @@ export function AgentNodePopover(props: {
   onJump(node: TasksAgentNode, place: 'side' | 'main'): void
   /** Open the shared task window for one of the node's tasks. */
   onOpenTask(taskId: string, anchor: HTMLElement): void
+  onClose(): void
 }): ReactNode {
   const { node, onJump, onOpenTask } = props
   /** The row's mode word; `unknown` claims no mode and this row is omitted. */
@@ -206,6 +215,21 @@ export function AgentNodePopover(props: {
   // newest range — the host's own wording, in its running or settled form
   // (see activityLine).
   const activity = activityLine(node)
+  /**
+   * The diagnostics jump's address: a child node carries the durable
+   * parent/child address its catalog row built, and the ROOT node has none —
+   * it IS the tree's main session — so it is addressed by its own session id.
+   * A node whose address is incomplete (a stale parent, a synthesized member)
+   * yields no diagnostics control; the transcript's original footer gate is
+   * independent of this optional integration.
+   */
+  const diagnosticsAddress = node.parentId === undefined
+    ? undefined
+    : diagnosticAddressOf(node.id, node.childAddress)
+  const diagnosticsUsable = node.parentId === undefined ? true : diagnosticsAddress !== undefined
+  const diagnosticsTarget: ContextDiagnosticTarget | undefined = diagnosticsUsable
+    ? { sessionId: node.id, label: node.label, ...(diagnosticsAddress === undefined ? {} : { address: diagnosticsAddress }) }
+    : undefined
   return (
     <div className={css.popCard}>
       <div className={css.popHead}>
@@ -280,7 +304,9 @@ export function AgentNodePopover(props: {
             node={node}
             asideAvailable={props.asideAvailable}
             onJump={onJump}
-          />
+          >
+            <ContextDiagnosticsButton kind="agent" target={diagnosticsTarget} iconSize={14} className={css.popActionIcon} onNavigate={props.onClose} />
+          </JumpActions>
         </div>
       )}
     </div>

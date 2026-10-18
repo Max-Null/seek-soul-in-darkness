@@ -616,6 +616,8 @@ export function buildSidechatApi(ctx: Context, live?: AssistantLiveBuffer): Side
         throw new SidebarError('sidechat-error', `parent session "${sessionId}" is not running`, 409)
       }
       const parentSession = parent.session
+      const workingDirectory = ctx.get('workingDirectory')
+      const parentCwd = workingDirectory?.get(parentSession) ?? parentSession.header.cwd
       // The parent's CURRENT model route. agent.options freezes the
       // creation-time deployment default — a composer model switch rides
       // `model/selection` events + the session-local selection and never
@@ -651,13 +653,24 @@ export function buildSidechatApi(ctx: Context, live?: AssistantLiveBuffer): Side
         ...(routeProvider === undefined ? {} : { agentProvider: routeProvider }),
         ...(routeModel === undefined ? {} : { agentModel: routeModel }),
       })
+      // A truncated inheritance can end before the parent's last directory
+      // change. Header cwd alone cannot win: the host projection replays seed
+      // working-directory/change events over it. Stamp the committed directory
+      // at the seed boundary, using the host-owned event rather than refolding
+      // its history or asking set() to enqueue a synthetic user notice.
+      const directorySeed: SeedEvent[] = workingDirectory === undefined ? [] : [{
+        type: 'working-directory/change',
+        seq: inheritance.seed.length,
+        time: Date.now(),
+        data: { cwd: parentCwd },
+      }]
       const descriptorEvent: SeedEvent = {
         type: 'subagent/descriptor',
-        seq: inheritance.seed.length,
+        seq: inheritance.seed.length + directorySeed.length,
         time: Date.now(),
         data: descriptor as unknown as Record<string, unknown>,
       }
-      const seed = [...inheritance.seed, descriptorEvent]
+      const seed = [...inheritance.seed, ...directorySeed, descriptorEvent]
       // Fork-marker fields (the exact shape the host's own session.fork uses,
       // api-session-controller): without `isSeeded` + `inheritedEventCount` the
       // session treats the whole seed as the child's OWN events, so the child's
@@ -684,7 +697,7 @@ export function buildSidechatApi(ctx: Context, live?: AssistantLiveBuffer): Side
       const options: CreateAgentOptions = {
         sessionId: childId,
         meta: {
-          ...(parentSession.header.cwd === undefined ? {} : { cwd: parentSession.header.cwd }),
+          ...(parentCwd === undefined ? {} : { cwd: parentCwd }),
           parentSession: parentSession.id,
           isSeeded: true,
           origin: 'subagent',

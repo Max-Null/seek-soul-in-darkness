@@ -21,6 +21,8 @@ export type SidebarErrorCode =
   | 'fs-error'
   | 'fs-conflict'
   | 'git-error'
+  | 'graph-stale'
+  | 'graph-limit'
   | 'git-suggest-empty'
   | 'git-suggest-error'
   | 'job-error'

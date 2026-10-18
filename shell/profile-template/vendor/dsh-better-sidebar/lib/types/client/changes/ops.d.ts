@@ -1,20 +1,15 @@
 /**
- * File-operation extraction for the changes tab's session lens: folds the
- * session's append-only event log (`tool/call` + `tool/result` pairs) into
- * one op per file-touching call — the same semantics as the standalone
- * dsh-file-trace plugin's Chat-view extraction, reading the authoritative
- * event log instead (the repo's stated preference for cross-feature session
- * data). Pure — no React, no DOM.
+ * 将会话日志中的直接调用与 PTC 子调用整理为文件操作，供本轮文件视角使用。
  */
 import type { SidebarSessionEvent } from '../../context-types.ts';
 /** The file-touching operation kinds the tracer distinguishes. */
 export type FileOpKind = 'read' | 'write' | 'edit';
 /** One extracted file operation. */
 export interface FileOp {
-    /** Stable identity: the originating tool-call id. */
+    /** 直接调用使用 callId，PTC 子调用使用 subCallId。 */
     readonly callId: string;
     readonly kind: FileOpKind;
-    /** Workspace-relative or absolute path exactly as the model spelled it. */
+    /** Path resolved against the session cwd when available. */
     readonly path: string;
     /** Unix epoch ms of the call; the result time when only that is known. */
     readonly time: number;
@@ -38,17 +33,17 @@ export interface FileOp {
  * Fold a session event log into the file operations it contains, newest
  * first. A `tool/call` seeds a running op (payload from the model's
  * arguments); its `tool/result` settles it (read content, error text).
- * Calls dispatched through a host tool such as run_code appear as their own
- * `tool/call` rows in the log, so nested file calls fold in naturally.
+ *
+ * A `<code>` block's file tools never surface as `tool/call`: they arrive as
+ * a PTC pair — `tool/ptc-dispatch-start` (arguments as a parsed OBJECT, keyed
+ * by `subCallId`) and `tool/ptc-dispatch` (the same payload plus the result).
+ * The dispatch row is self-contained, so a missing start still yields a row,
+ * and the pair inherits the start's time to order as ONE operation.
  * @param events - the session's append-only event log (oldest → newest).
+ * @param cwd - the session working directory used to resolve relative paths.
  * @returns the ordered operation list.
  */
-export declare function extractFileOps(events: readonly SidebarSessionEvent[]): FileOp[];
-/**
- * Group operations by path, newest op first per file, files ordered by their
- * most recent operation.
- */
-export declare function groupByFile(ops: readonly FileOp[]): Map<string, FileOp[]>;
+export declare function extractFileOps(events: readonly SidebarSessionEvent[], cwd?: string): FileOp[];
 /**
  * The last content known for a path before the given operation, synthesized
  * from earlier ops: a write's payload is authoritative, an edit implies its

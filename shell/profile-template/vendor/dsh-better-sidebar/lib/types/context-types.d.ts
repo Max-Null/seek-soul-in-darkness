@@ -1,3 +1,4 @@
+/// <reference lib="esnext.disposable" preserve="true" />
 /**
  * Structural types for the cordis services this plugin consumes, plus the
  * Context face both halves share.
@@ -82,7 +83,7 @@ export interface SidebarWebServer {
     register(route: SidebarWebRoute): () => void;
     registerUpgrade(route: SidebarWebUpgradeRoute): () => void;
 }
-/** A published session's header slice the sidebar reads (authoritative cwd). */
+/** A published session's immutable original-project metadata. */
 export interface SidebarSessionHeader {
     cwd?: string;
 }
@@ -90,6 +91,9 @@ export interface SidebarSessionHeader {
 export interface SidebarSessionStore {
     get(id: string): {
         header: SidebarSessionHeader;
+        /** Live cursor and indexed reads avoid copying the whole log for cache identity. */
+        readonly seq?: number;
+        eventAt?(seq: number): SidebarSessionEvent | undefined;
         /**
          * The live session's append-only event log as an immutable snapshot.
          * Read-only access — the jobs.output route replays `job_output`
@@ -100,13 +104,18 @@ export interface SidebarSessionStore {
     } | undefined;
 }
 /**
- * The web runtime service face (mirror of @deepseek-ai/dsh-web-app's
- * WebRuntimeValues): the bind-derived trust list the /api gateway's fence
- * accepts — LAN IP literals sampled when the server binds all interfaces,
- * plus explicit `--trusted-host` authorities.
+ * Host request admission plus the client transport recovery face.
  */
-export interface SidebarWebRuntime {
-    trustedHosts: readonly string[];
+export interface SidebarConnectionService {
+    /** Public Host/Origin and authentication policy (DSH 0.2.0-rc.2+). */
+    requestRejection(request: {
+        headers: Record<string, string | string[] | undefined>;
+    }): 401 | 403 | undefined;
+    state: {
+        getSnapshot(): 'connected' | 'disconnected' | 'connecting' | undefined;
+        subscribe(listener: () => void): () => void;
+    };
+    reconnect(): void;
 }
 /** Registration options the sidebar passes to `ctx.slots.register` (subset of the real options). */
 export interface SidebarSlotRegisterOptions {
@@ -663,16 +672,6 @@ export interface SidebarWorkspacesService {
     };
 }
 /**
- * The invariant service face (mirror of @deepseek-ai/dsh-invariants'
- * InvariantRegistry). The upstream augmentation does not reach this Context
- * (dual-cordis-instance resolution), so the register signature is restated
- * structurally, exactly like the other service faces above.
- */
-export interface SidebarInvariantsService {
-    /** Reserve one package's checks and install them in the service's child fiber. */
-    register(packageName: string, installer: (ctx: Context, fail: (message: string) => never) => void | Promise<void>): () => void;
-}
-/**
  * The settings service face (mirror of `@deepseek-ai/dsh-settings`'
  * `SettingsForms`).
  *
@@ -773,14 +772,33 @@ export interface SidebarContextShape {
     webServer: SidebarWebServer;
     /** The session store (host `.get`) and the client list feed (`.list`) faces. */
     sessions: SidebarSessionStore & SidebarSessionsService;
-    /** The web runtime trust list (bind-derived). */
-    webRuntime: SidebarWebRuntime;
+    /** Committed current execution directory; the header keeps the original project. */
+    workingDirectory: {
+        readonly defaultDirectory?: string;
+        get(session: {
+            header: SidebarSessionHeader;
+        }): string;
+    };
+    /** Host-owned live/prepared observation, including cold-session projections. */
+    sessionQuery: {
+        observeSession(id: string, options: {
+            projectionMode: 'all';
+        }): Promise<{
+            header: SidebarSessionHeader;
+            projections?: {
+                values: {
+                    workingDirectory?: string | null;
+                };
+            };
+            [Symbol.dispose](): void;
+        }>;
+    };
+    /** Native host request admission and client transport recovery. */
+    connection: SidebarConnectionService;
     /** The client slot registry (register/inject). */
     slots: SidebarSlotsService;
     /** The settings service face (prefs persistence + namespace reads). */
     settings: SidebarSettingsService;
-    /** The invariant registry face. */
-    invariants: SidebarInvariantsService;
     /** The tool registry face. */
     tools: SidebarToolsService;
     /** The client locale service face. */
@@ -817,19 +835,6 @@ export interface SidebarContextShape {
     sessionTitle: SidebarSessionTitleService;
     /** The host session-persistence service (optional; side chat cold resume). */
     sessionPersistence: SidebarSessionPersistenceService;
-    /**
-     * The client connection lifecycle (DSH 0.1.2-alpha.2+; optional so older
-     * hosts and test fakes simply hide the disconnect banner): the observable
-     * recovery state of the Remote transport (`undefined` before the first
-     * connection outcome) and an immediate-reconnect request.
-     */
-    connection?: {
-        state: {
-            getSnapshot(): 'connected' | 'disconnected' | 'connecting' | undefined;
-            subscribe(listener: () => void): () => void;
-        };
-        reconnect(): void;
-    };
     /** The composer draft face (client ui-conversation, lazy `ctx.get` probe). */
     conversation: SidebarConversation;
     /** Host-authoritative workspace membership; resolved lazily at reference insertion. */

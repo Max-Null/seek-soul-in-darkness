@@ -2,12 +2,9 @@
  * dsh-better-sidebar host half: the /sidebar JSON API (explorer listing, file
  * read/write, git), the /sidebar/file media route (images), the /sidebar/html
  * preview route, the /sidebar/bundle lazy-chunk route (client code splits),
- * and the two WebSocket upgrades (sidebar_open pushes). Every route passes the same
- * browser-trust fence as the /api gateway — Host-header loopback or the
- * web runtime's `trustedHosts` (LAN IP literals sampled at boot plus
- * `--trusted-host` authorities), read per request from the live service
- * value so the fence tracks the same trust source the /api gateway derives
- * its list from.
+ * and the WebSocket upgrades. Every route delegates admission to the same
+ * public Connection service as the /api gateway (Host/Origin and browser
+ * authentication), read per request.
  *
  * All operations are conversation-scoped: requests carry a sessionId and the
  * session's authoritative cwd comes from the session store.
@@ -15,11 +12,11 @@
 import { open, readFile, stat } from 'node:fs/promises'
 import { basename, extname, isAbsolute, join, sep } from 'node:path'
 import type { Stats } from 'node:fs'
-import type { IncomingMessage } from 'node:http'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { WebSocket, WebSocketServer } from 'ws'
 import { parse as parseYaml } from 'yaml'
-import type { Context, SidebarHttpRequest, SidebarSessionEvent, SidebarSettingsService } from './context-types.ts'
+import type { Context, SidebarHttpRequest, SidebarSettingsService } from './context-types.ts'
 import {
   Config,
   resolveSidebarConfig,
@@ -36,13 +33,13 @@ import { ensureWorkspacePath } from './path-security.ts'
 import { searchFiles } from './fs-search.ts'
 import { compileExcludePatterns } from './exclude-patterns.ts'
 import { decodeHtmlUrl } from './html-route.ts'
-import { isTrustedApiRequest } from './trust-fence.ts'
 import { registerBundleRoute } from './bundle-route.ts'
 import { createDirectoryWatchers, type DirectoryWatchers } from './fs-watch.ts'
 import { createSidechatPushHub } from './sidechat-push.ts'
 import { launchExternal } from './open-external.ts'
 import { createArchiveTasks, respondArchiveDownload, type ArchiveTasks } from './archive-route.ts'
 import * as git from './git.ts'
+import { gitGraph, type GitGraphOptions } from './git-graph.ts'
 import { SettingsConflictError } from '@deepseek-ai/dsh-settings'
 import { AgentOpenRegistry, registerOpenTool, type AgentOpenRequest } from './agent-opens.ts'
 import { buildSubagentLiveApi, type SidebarSubagentLiveRoutes } from './subagent-live-route.ts'
@@ -53,6 +50,7 @@ import { createAssistantLiveBuffer, type AssistantLiveBuffer } from './assistant
 import { readJsonBody, readTextBody, requireString, SidebarError, writeError, writeJson, writeOk } from './wire.ts'
 import { streamFileToResponse } from './file-stream.ts'
 import { readPersistedSession } from './session-store.ts'
+import { createChangesOpsApi } from './changes-ops.ts'
 import { BlockAssembler, createUserMessage, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import {
   buildCommitPrompt,
@@ -110,8 +108,8 @@ export interface SidebarFsLevel {
   error?: string
 }
 
-/** Services required before mounting: the webserver routes, the session store, the web runtime's trusted hosts, and the tool registry. */
-export const inject = ['webServer', 'sessions', 'webRuntime', 'tools']
+/** Services required before mounting: routes, sessions, native request admission, and tools. */
+export const inject = ['webServer', 'sessions', 'connection', 'tools']
 
 /** Content types for the media route, by extension. */
 const MEDIA_TYPES: Record<string, string> = {
@@ -135,24 +133,31 @@ export function mediaTypeForPath(path: string): string {
 }
 
 /**
- * Resolve a session's authoritative working directory. The attached session
- * header wins; while the session is still hydrating from persistence (the
- * web client attaches the current conversation a moment after page load, so
- * the very first sidebar requests can arrive detached) the caller's own
- * list-summary cwd is used; the session-persistence index is queried as a
- * last resort for cold (not-yet-attached) sessions so a detached first
- * request still resolves the correct project instead of the host process
- * cwd (which on Windows is the DSH source root after `dsh.cmd`'s `pushd`,
- * causing every user-project path to be misclassified as "outside
- * workspace"). The host process cwd is the FINAL fallback for deployments
- * without persistence (tests / stripped-down hosts); production always
- * provides persistence, so the bug-fix path (header → client → persistence)
- * always resolves the real session cwd before reaching it.
+ * Resolve the committed execution directory before client or original-header
+ * hints. Live reads are synchronous; detached reads use the host observation
+ * lease and its revision-keyed projection cache, never a plugin-owned log fold
+ * or TTL that could hide a working_directory change.
  */
 async function sessionCwdOf(ctx: Context, sessionId: string, clientCwd?: string): Promise<string> {
   const session = ctx.sessions.get(sessionId)
-  const headerCwd = session?.header.cwd
-  if (headerCwd !== undefined && headerCwd !== '') return headerCwd
+  // The immutable header is the original project, not the current execution
+  // directory. Read the host's committed value on every request (no TTL).
+  if (session !== undefined) {
+    const cwd = ctx.get('workingDirectory')?.get(session) ?? session.header.cwd
+    if (cwd !== undefined && cwd !== '') return cwd
+  }
+  const query = ctx.get('sessionQuery')
+  if (query !== undefined) {
+    const observation = await query.observeSession(sessionId, { projectionMode: 'all' })
+    try {
+      const cwd = observation.projections?.values.workingDirectory
+        ?? observation.header.cwd
+        ?? ctx.get('workingDirectory')?.defaultDirectory
+      if (cwd !== undefined && cwd !== '') return requireAbsolute(cwd)
+    } finally {
+      observation[Symbol.dispose]()
+    }
+  }
   if (clientCwd !== undefined && clientCwd !== '') {
     try {
       return requireAbsolute(clientCwd)
@@ -599,7 +604,7 @@ async function readPage(path: string, offset: number): Promise<ReadPageResult> {
 }
 
 /** One API method dispatch table entry. */
-type ApiMethod = (payload: unknown) => Promise<unknown> | unknown
+type ApiMethod = (payload: unknown, signal?: AbortSignal) => Promise<unknown> | unknown
 
 /**
  * The live face of the side card settings namespace, bound to the settings
@@ -653,6 +658,7 @@ function buildApi(
   // `subagents.history` calls. The route degrades to a 503 when the host
   // subagent runtime is absent (the page has no topology to show anyway).
   const subagentLiveApi: SidebarSubagentLiveRoutes = buildSubagentLiveApi(ctx)
+  const changesOps = createChangesOpsApi(ctx)
   // Workflow runs: no service registry exists in DSH (runs are
   // holder-owned), so the route folds the `tool-workflow/*` session events
   // the tool's recorder appends — the same four types the official panel
@@ -889,6 +895,19 @@ function buildApi(
       await git.checkout(cwd, requireString(payload, 'branch'), selectedRepoOf(payload))
       return { ok: true }
     },
+    'git.graph': async (payload) => {
+      const { cwd } = await gitCwdOf(payload)
+      try {
+        return await gitGraph(cwd, payload as GitGraphOptions, selectedRepoOf(payload))
+      } catch (error) {
+        // The shared Git mapper collapses legacy command codes. Preserve the
+        // graph cursor's refresh signal rather than reporting a generic error.
+        if (error instanceof git.GitCommandError && (error.code === 'graph-stale' || error.code === 'graph-limit' || error.code === 'bad-request')) {
+          throw new SidebarError(error.code, error.message, error.code === 'graph-stale' ? 409 : 400)
+        }
+        throw error
+      }
+    },
     'git.log': async (payload) => {
       const { cwd } = await gitCwdOf(payload)
       const record = payload as { count?: unknown; skip?: unknown }
@@ -1047,41 +1066,13 @@ function buildApi(
     // The session's file-tool events for the changes tab's session lens
     // (and its badge): the CLIENT runtime's sessions face has no event-log
     // access, so the events cross the wire here — live session log first,
-    // the persisted logical log for not-yet-hydrated sessions. Only the
-    // two event types the lens folds are sent, narrowed to `seq > afterSeq`
-    // so polling is a small delta, with the same recent-window cap the
-    // client accumulator applies.
-    'changes.ops': async (payload) => {
-      const sessionId = requireString(payload, 'sessionId')
-      const rawAfter = (payload as { afterSeq?: unknown } | null)?.afterSeq
-      if (rawAfter !== undefined
-        && (typeof rawAfter !== 'number' || !Number.isSafeInteger(rawAfter) || rawAfter < 0)) {
-        throw new SidebarError('bad-request', 'afterSeq must be a non-negative integer')
-      }
-      // An absent cursor means "from the very first event" — a session whose
-      // log opens on a tool event (subagent seeds do) carries seq 0, which a
-      // literal `> 0` comparison would drop, so the absent case floors at -1.
-      const afterSeq = rawAfter ?? -1
-      let events: readonly SidebarSessionEvent[] | undefined = ctx.sessions.get(sessionId)?.snapshotEvents()
-      if (events === undefined) {
-        const persistence = ctx.get('sessionPersistence')
-        if (persistence !== undefined) {
-          try {
-            events = (await readPersistedSession(persistence, sessionId)).events
-          } catch {
-            // Cold read unavailable (session never persisted): an empty
-            // window is the honest answer, not a wire error.
-          }
-        }
-      }
-      if (events === undefined) return { events: [], lastSeq: Math.max(afterSeq, 0) }
-      const CHANGES_EVENTS_CAP = 4000
-      const filtered = events.filter(
-        event => (event.type === 'tool/call' || event.type === 'tool/result') && event.seq > afterSeq,
-      )
-      const window = filtered.length > CHANGES_EVENTS_CAP ? filtered.slice(filtered.length - CHANGES_EVENTS_CAP) : filtered
-      return { events: window, lastSeq: window.at(-1)?.seq ?? afterSeq }
-    },
+    // the persisted logical log for not-yet-hydrated sessions. Only the event
+    // types the lens folds are sent (a plain `tool/call` + `tool/result` pair,
+    // or a PTC `tool/ptc-dispatch-start` / `tool/ptc-dispatch` pair), narrowed
+    // to `seq > afterSeq` so polling is a small delta. A primed client asks the
+    // host to WAIT for the next tool event instead of re-reading an unchanged
+    // window (see `src/changes-ops.ts`).
+    'changes.ops': changesOps,
     // Subagent live previews: one batch request per refresh; the route folds
     // the newest text/tool activity of every running child in the tree.
     'subagents.live': (payload) => subagentLiveApi.live(payload),
@@ -1313,18 +1304,16 @@ async function importLegacyPrefs(
 
 /**
  * Plugin body: mount the fenced routes and the sidebar_open push socket.
- * @param ctx - host plugin context (webServer, sessions, webRuntime).
+ * @param ctx - host plugin context (webServer, sessions, connection).
  * @param config - deployment-provided limits; the Loader validates against
  * {@link Config} and fills defaults, direct callers get them from
  * {@link resolveSidebarConfig}.
  */
 export function apply(ctx: Context, config?: SidebarConfig): void {
   const resolved = resolveSidebarConfig(config)
-  // The web runtime's bind-derived trust list (boot-sampled LAN literals
-  // plus --trusted-host authorities) — the authoritative source the /api
-  // gateway fence derives its list from. Read per request from the live
-  // service value; a replaced list takes effect without a plugin restart.
-  const fence = (req: SidebarHttpRequest): boolean => isTrustedApiRequest(req, ctx.webRuntime.trustedHosts)
+  // Connection owns both deployment trust and authentication; never infer or
+  // bypass its policy from invocation flags or a copied trust list.
+  const fence = (req: SidebarHttpRequest): boolean => ctx.connection.requestRejection(req) === undefined
   // The model-facing open-request registry: queues `sidebar_open` requests
   // per session and pushes them to connected sidebar views over the
   // `/sidebar/ws/agent-opens` socket.
@@ -1473,6 +1462,10 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
         writeError(res, new SidebarError('not-found', 'unknown sidebar API method', 404))
         return
       }
+      const controller = method === 'changes.ops' ? new AbortController() : undefined
+      const response = controller === undefined ? undefined : res as ServerResponse
+      const abort = (): void => { controller?.abort() }
+      response?.once('close', abort)
       try {
         const payload = await readJsonBody(req)
         // Own properties only. The dispatch table is an object literal, so a
@@ -1484,9 +1477,12 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
         if (typeof handler !== 'function') {
           throw new SidebarError('not-found', `unknown sidebar API method "${method}"`, 404)
         }
-        writeOk(res, await handler(payload))
+        const result = await handler(payload, controller?.signal)
+        if (controller?.signal.aborted !== true) writeOk(res, result)
       } catch (error) {
-        writeError(res, error)
+        if (controller?.signal.aborted !== true) writeError(res, error)
+      } finally {
+        response?.off('close', abort)
       }
     },
   }), 'dsh-better-sidebar: /sidebar/api routes')

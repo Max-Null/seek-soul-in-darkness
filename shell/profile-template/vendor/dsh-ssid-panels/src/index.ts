@@ -80,7 +80,7 @@ function pluginMeta(name: string): { version?: string, descriptionZh?: string, d
 export const name = '@max-null/dsh-ssid-panels'
 
 /** Services required before mounting: the webserver routes and the web runtime's trusted hosts. */
-export const inject = ['webServer', 'webRuntime']
+export const inject = ['webServer', 'webStartup']
 
 /** SSiD 壳版本（main.mjs 启动时从 shell/package.json 注入环境变量）。 */
 const SHELL_VERSION = process.env.SSID_SHELL_VERSION ?? '0.0.0'
@@ -468,7 +468,7 @@ function required<T>(service: T | undefined, label: string): T {
 
 /**
  * Plugin body: mount the fenced /ssid/api route.
- * @param ctx - host plugin context (webServer, webRuntime).
+ * @param ctx - host plugin context (webServer, webStartup).
  */
 export function apply(ctx: Context): void {
   // 首启模板库种子（0.1.6）：全局 prompt-library 为空时写入内置模板；幂等、失败不阻断。
@@ -754,7 +754,7 @@ export function apply(ctx: Context): void {
   }
 
   const fence = (req: { headers: Record<string, string | string[] | undefined> }): boolean =>
-    isTrusted(req, ctx.webRuntime.trustedHosts)
+    isTrusted(req, ctx.webStartup.trustedHosts)
 
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',

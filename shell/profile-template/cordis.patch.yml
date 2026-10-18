@@ -111,14 +111,17 @@
 # 恢复。**这是配置层适配**：不改 DSH 源码（工作区铁律 2.0），也不必逐个改插件。
 #
 # 与 bundle 原始值保持一致（web-app/cordis.patch.yml 的 connection 行是
-# `inject: [webRuntime]`）：webRuntime 不能丢，它那行的 config 里
-# `trustedHosts: !!js ctx.webRuntime.trustedHosts` 依赖它。
+# `inject: [webStartup]`）：**webStartup 不能丢**，它那行的 config 里
+# `trustedHosts: !!js ctx.webStartup.trustedHosts` 依赖它。自 0.2.1-alpha.2 起
+# `webRuntime` 服务被删除，connection 改为直接读 webStartup 的调用期权威值。
 #
 # 已实机验证（2026-09-14）：connection 的 inject 变为
 # `[credentials|webRuntime|webServer]`，`pluginCenterRpc` 由 false 变 true，
 # 插件中心恢复正常。诊断全文见 docs/决策/2026-09-14-插件中心405诊断记录.md 第十节。
+# （2026-10-17 内核升到 0.2.1-rc.2：上面记录里的 `webRuntime` 已不存在，现为
+# `[webStartup, webServer]`；405 的修法本身不变 —— 仍要把 webServer 加回 inject。）
 - id: connection
-  inject: [webRuntime, webServer]
+  inject: [webStartup, webServer]
 
 # ── session-persistence-jsonl 行：会话根覆盖（SSiD 隔离根）─────────────────
 #

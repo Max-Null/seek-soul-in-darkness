@@ -4,17 +4,21 @@
  * node test environment can import it.
  *
  * A side thread is a child session the plugin creates ITSELF with a custom
- * seed — the parent session's FULL event log up to the click moment
- * (completed turns, the unanswered user message, and — when the parent is
- * mid-turn — the in-progress assistant output and tool activity). The log
- * model forbids open-turn seeds, so an in-flight parent turn is copied
- * verbatim and CLOSED with synthetic `step/end` + `turn/end{reason:
- * 'interrupted'}` events: the child sees the partial turn as honestly
- * frozen ("cut off"), never as a completed answer. The one case that cannot
- * be closed honestly — a tool call still executing (no `tool/result` yet;
- * providers reject dangling assistant calls) — falls back to cutting before
- * the open turn and carrying the partial content as a structured text
- * snapshot inside the boundary prompt.
+ * seed — the parent's model-visible history up to the click moment. When the
+ * parent has summarized (its last compaction checkpoint replaces the
+ * shadowed span on the surface), the seed is REBASED onto that checkpoint:
+ * surviving pre-cut surface nodes, the checkpoint, and the post-compaction
+ * tail — proven equivalent to a full-log fork by folding both (compactionTail)
+ * — instead of physically duplicating the whole log. Without a compaction,
+ * or whenever the rebasing cannot be proven, the seed is the parent's FULL
+ * event log verbatim. The log model forbids open-turn seeds, so an
+ * in-flight parent turn is copied verbatim and CLOSED with synthetic
+ * `step/end` + `turn/end{reason: 'interrupted'}` events: the child sees the
+ * partial turn as honestly frozen ("cut off"), never as a completed answer.
+ * The one case that cannot be closed honestly — a tool call still executing
+ * (no `tool/result` yet; providers reject dangling assistant calls) — falls
+ * back to cutting before the open turn and carrying the partial content as
+ * a structured text snapshot inside the boundary prompt.
  */
 import type { SidebarHistoryEntry, SidebarSessionSummary } from './context-types.ts';
 import type { AssistantLiveChunk } from './assistant-live.ts';
@@ -126,6 +130,9 @@ export declare function hasDanglingToolCall(events: readonly SidechatLogEvent[],
 /**
  * Build the side-thread inheritance for one parent log: the full event log
  * up to the click moment, honestly closed when it ends inside an open turn.
+ * When the parent has compacted, the log is first rebased onto its last
+ * summarizing compaction (`compactionTail`) — same model-visible surface, a
+ * fraction of the durable copy.
  * @param events - the parent's log (live or persisted).
  * @param live - the parent's in-flight stream chunks (DSH 0.1.5+ publishes
  *   them outside the log); used only by the snapshot fallback.

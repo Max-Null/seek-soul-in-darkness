@@ -585,6 +585,7 @@ export function SideChatView(props: {
       injectionLabel: t('sideChatInjection'),
       terminal: {
         ...shared,
+        commandLine: (line: number) => t('sideChatBlockCommandLine', { line }),
         signal: (signal: string) => t('sideChatBlockSignal', { signal }),
         exitCode: (exitCode: number) => t('sideChatBlockExitCode', { code: exitCode }),
         // DSH 0.1.6-alpha.2 added this pill text: a settle the view cannot

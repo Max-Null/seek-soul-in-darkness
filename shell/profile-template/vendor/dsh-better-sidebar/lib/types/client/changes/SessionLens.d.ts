@@ -1,4 +1,4 @@
-import { type FileOp } from './ops.ts';
+import type { FileOp } from './ops.ts';
 export interface SessionLensProps {
     /** The folded file operations, newest first (the tab's poll owns them). */
     ops: readonly FileOp[];

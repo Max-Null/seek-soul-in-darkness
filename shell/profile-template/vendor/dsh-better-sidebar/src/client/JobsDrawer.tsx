@@ -24,6 +24,8 @@ import {
   TerminalBlock, type TagTone,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SidebarClientJobsService, SidebarJobView, SidebarObservedJob } from '../context-types.ts'
+import type { ContextDiagnosticTarget } from './context-diagnostics.ts'
+import { ContextDiagnosticsButton } from './context-diagnostics-ui.tsx'
 import { terminalBlockLabels } from './block-labels.ts'
 import {
   formatJobDuration,
@@ -291,12 +293,20 @@ export function JobOutputWindow(props: {
   ownerSessionId: string
   /** The host's streamed observation of THIS job (undefined until it arrives). */
   observed: SidebarObservedJob | undefined
+  /**
+   * The diagnostics target of the conversation that OWNS this job, resolved by
+   * the caller from the tree model (`undefined` = the owner is not in this
+   * tree, or the page has no such capability): the window never derives it
+   * from `ownerSessionId`, which names the session the roster was WATCHED
+   * under, not the session that owns the job.
+   */
+  diagnostics?: ContextDiagnosticTarget | undefined
   /** The row's main button — where the window first appears. */
   anchor?: HTMLElement | null
   /** Close the window (the close button, or Escape). */
   onClose(): void
 }): ReactNode {
-  const { jobs, job, ownerSessionId, observed, anchor, onClose } = props
+  const { jobs, job, ownerSessionId, observed, diagnostics: diagnosticTarget, anchor, onClose } = props
   const [follow, setFollow] = useState(true)
   const [copied, setCopied] = useState(false)
   const [armed, setArmed] = useState(false)
@@ -346,6 +356,12 @@ export function JobOutputWindow(props: {
       bodyRef={bodyRef}
       actions={(
         <>
+          {/*
+            The owning conversation's Context view, beside the copy action: it is
+            offered only when the caller resolved the job's OWNER into the tree
+            (see the `diagnostics` prop) and the deployment has the page at all.
+          */}
+          <ContextDiagnosticsButton kind="job" target={diagnosticTarget} iconSize={12} onNavigate={onClose} />
           <Button
             variant="ghost"
             size="sm"

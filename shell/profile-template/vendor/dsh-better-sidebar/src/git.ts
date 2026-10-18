@@ -11,21 +11,31 @@
  * Commits use the user's git global identity untouched (never sets
  * user.name/user.email).
  */
-import { readdir } from 'node:fs/promises'
+import { readdir, realpath } from 'node:fs/promises'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import { resolve } from 'node:path'
 
-/** A parsed `git status --porcelain=v1 -z` entry. */
+/** A parsed porcelain status entry (v1 XY convention). */
 export interface GitStatusEntry {
   path: string
   /** Two-letter index/worktree status (X Y), e.g. 'M ', ' M', 'A ', '??'. */
   xy: string
-  /** How many lines this path gained and lost, index and worktree sides
-   *  SUMMED (both are measured against HEAD). Absent when git has no numstat
-   *  row for the path — an untracked file never gets one — so "no counts" is
-   *  never rendered as a fabricated `0`. */
-  counts?: GitLineCounts
+  /** How many lines the INDEX side gained and lost (`git diff --cached`, index
+   *  against HEAD). Absent when git has no numstat row for the path on that
+   *  side — an untracked file has none — so "no counts" is never rendered as a
+   *  fabricated `0`. */
+  staged?: GitLineCounts
+  /** How many lines the WORKTREE side gained and lost (`git diff`, worktree
+   *  against the index). Absent for the same reason as {@link staged}.
+   *
+   *  The two sides are kept APART, never added up: a path can hold a change on
+   *  each side ('MM'), and the change panel renders such a path once per band
+   *  with that band's own reading. Summing the two readings would double-count
+   *  every line both diffs see — e.g. stage a line and keep editing the same
+   *  region, and `1 + 1` lines would be reported as a 2-line change on BOTH
+   *  the staged row and the unstaged one. */
+  unstaged?: GitLineCounts
 }
 
 /** One path's line-count summary from `git diff --numstat`. A binary change is
@@ -36,7 +46,15 @@ export type GitLineCounts = { additions: number; deletions: number } | { binary:
 /** The source-control panel snapshot. */
 export interface GitStatusResult {
   isRepo: boolean
+  /** Absent when HEAD is detached; unborn branches keep their real name. */
   branch?: string
+  /** Native tracking ref (e.g. origin/main); never inferred from a remote. */
+  upstream?: string
+  /** Present only when Git can compare HEAD with the tracking ref. */
+  ahead?: number
+  behind?: number
+  detached?: boolean
+  operation?: 'merge' | 'rebase'
   entries: GitStatusEntry[]
   /** True when the working tree had more rows than `GIT_STATUS_LIMIT`; the
    *  panel shows a truncation notice instead of freezing on a huge untracked
@@ -65,6 +83,8 @@ export interface GitLogEntry {
   hash: string
   /** Full 40-char hash (advanced operations: revert / cherry-pick). */
   hashFull: string
+  /** Full parent hashes in Git's order; root commits have none. */
+  parents: string[]
   subject: string
   author: string
   /** ISO 8601 author date (`%ai`), e.g. `2024-01-01 10:00:00 +0800`. */
@@ -103,6 +123,83 @@ export function parsePorcelainZ(output: string): GitStatusEntry[] {
     }
   }
   return entries
+}
+
+/** Native branch metadata and rows from `git status --porcelain=v2 --branch -z`.
+ * Fixed metadata fields are split off; path spaces/newlines remain literal. */
+/** One field of a `status --porcelain=v2 -z` read: a `# …` metadata line, or
+ *  one file record (a rename/copy record carries its origin as the NEXT field). */
+type PorcelainV2Token =
+  | { kind: 'meta'; line: string }
+  | { kind: 'record'; xy: string; path: string; origin?: string }
+
+/**
+ * Walk a `status --porcelain=v2 -z` read into its tokens. The fixed-width
+ * records are counted, never split by name — a path may contain spaces, so the
+ * path is everything after the Nth field. A torn tail (the row cap kills the
+ * child mid-record) yields no token; the walk never throws on it.
+ */
+function porcelainV2Tokens(output: string): PorcelainV2Token[] {
+  const tokens: PorcelainV2Token[] = []
+  const fields = output.split('\0')
+  for (let index = 0; index < fields.length; index += 1) {
+    const field = fields[index]!
+    if (field === '') continue
+    if (field.startsWith('# ')) {
+      tokens.push({ kind: 'meta', line: field })
+      continue
+    }
+    if (field.startsWith('? ')) {
+      tokens.push({ kind: 'record', xy: '??', path: field.slice(2) })
+      continue
+    }
+    if (!field.startsWith('1 ') && !field.startsWith('2 ') && !field.startsWith('u ')) continue
+    // 1 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>              → 8 fixed fields
+    // 2 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <X><score> <path>   → 9, origin next
+    // u <XY> <sub> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <path>    → 10
+    const fixed = field.startsWith('u ') ? 10 : field.startsWith('2 ') ? 9 : 8
+    const path = field.split(' ').slice(fixed).join(' ')
+    if (path === '') continue
+    // v2 uses '.' for the clean side; existing callers consume v1 spaces.
+    const token: PorcelainV2Token = { kind: 'record', xy: field.slice(2, 4).replaceAll('.', ' '), path }
+    if (field.startsWith('2 ')) {
+      const origin = fields[index + 1]
+      index += 1
+      if (origin !== undefined && origin !== '') token.origin = origin
+    }
+    tokens.push(token)
+  }
+  return tokens
+}
+
+/**
+ * Parse a `status --porcelain=v2 --branch -z` read. The metadata lines carry
+ * the branch identity, its tracking ref and the ahead/behind counts; the file
+ * records reuse the v1 XY convention (v2's `.` clean side folded to a space).
+ */
+export function parseStatusPorcelainV2Z(output: string): GitStatusResult {
+  const result: GitStatusResult = { isRepo: true, entries: [] }
+  for (const token of porcelainV2Tokens(output)) {
+    if (token.kind === 'record') {
+      result.entries.push({ xy: token.xy, path: token.path })
+      continue
+    }
+    const line = token.line
+    if (line.startsWith('# branch.head ')) {
+      const head = line.slice('# branch.head '.length)
+      result.detached = head === '(detached)'
+      if (!result.detached) result.branch = head
+    } else if (line.startsWith('# branch.upstream ')) {
+      result.upstream = line.slice('# branch.upstream '.length)
+    } else if (line.startsWith('# branch.ab ')) {
+      const counts = /^# branch\.ab \+(\d+) -(\d+)$/.exec(line)
+      if (counts !== null) {
+        result.ahead = Number(counts[1])
+        result.behind = Number(counts[2])
+      }
+    }
+  }
+  return result
 }
 
 /**
@@ -224,12 +321,12 @@ export function parseWorktreeList(output: string): GitWorktreeRecord[] {
   return rows
 }
 
-/** Parse `git log --pretty=format:%h%x1f%s%x1f%an%x1f%ai%x1f%H%x1f%D` rows. */
+/** Parse `git log --pretty=format:%h%x1f%s%x1f%an%x1f%ai%x1f%H%x1f%D%x1f%P` rows. */
 export function parseLogLines(output: string): GitLogEntry[] {
   const rows: GitLogEntry[] = []
   for (const line of output.split('\n')) {
     if (line === '') continue
-    const [hash, subject, author, date, hashFull, refs] = line.split('\x1f')
+    const [hash, subject, author, date, hashFull, refs, parents] = line.split('\x1f')
     if (hash === undefined || subject === undefined) continue
     rows.push({
       hash,
@@ -238,10 +335,39 @@ export function parseLogLines(output: string): GitLogEntry[] {
       date: date ?? '',
       hashFull: hashFull ?? hash,
       refs: refs ?? '',
+      parents: parents?.split(' ').filter(Boolean) ?? [],
     })
   }
   return rows
 }
+
+/**
+ * git's CVE-2022-24765 guard (git ≥ 2.35.2) refuses to read a repository whose
+ * owner differs from the running user — the shape behind issue #690 is a
+ * root-run DSH over a site directory owned by `www`, where changing the owner
+ * is not an option. The refusal is per command and self-describing: git names
+ * the directory it refused, which is exactly what `safe.directory` takes.
+ * Answering it with `-c safe.directory=<dir>` therefore stays narrow — no
+ * config file is written, `*` is never used, and the next command faces the
+ * guard again.
+ */
+const DUBIOUS_OWNERSHIP = /dubious ownership/i
+/** The directory named by the refusal (`fatal: detected dubious ownership in
+ *  repository at '/srv/site'`). */
+const REFUSED_REPOSITORY = /detected dubious ownership in repository at '([^']*)'/
+
+/** The repository path a dubious-ownership refusal names, or undefined when
+ *  the message carries no path (an older or reworded git) — the caller then
+ *  falls back to the cwd it already ran in. */
+export function refusedRepository(message: string): string | undefined {
+  const path = REFUSED_REPOSITORY.exec(message)?.[1]
+  return path === undefined || path === '' ? undefined : path
+}
+
+/** Child environment for every git call. `GIT_OPTIONAL_LOCKS=0` keeps the
+ *  read-only panel from taking write locks; `LC_ALL=C` keeps stdout AND stderr
+ *  stable, which is what makes the refused path above parseable. */
+const GIT_ENV = { GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'C' } as const
 
 /**
  * Hard ceiling on one git command's stdout. A runaway command — a whole-repo
@@ -276,21 +402,34 @@ function countNulFields(chunk: Buffer): number {
   return count
 }
 
-/** Run one git command; resolves with stdout, rejects with GitCommandError. */
-export function runGit(cwd: string, args: string[], timeoutMs = 30_000, options: RunGitOptions = {}): Promise<string> {
-  // `core.quotePath=false`: emit paths verbatim instead of C-quoting them
-  // (git's default turns a CJK/space path into an octal-escaped, quoted
-  // string, and every diff surface renders that string as the file name).
-  // The `-z`-framed porcelain callers are unaffected: git never quotes
-  // NUL-framed output.
-  const full = ['-C', cwd, '--no-pager', '-c', 'color.ui=false', '-c', 'core.quotePath=false', ...args]
+/** One spawn. `safe` directories ride in as per-invocation `safe.directory`
+ *  overrides (empty on the first attempt, so a healthy repository sees the
+ *  exact same argv it always did). */
+function spawnGit(
+  cwd: string,
+  args: string[],
+  timeoutMs: number,
+  safe: readonly string[],
+  options: RunGitOptions = {},
+): Promise<string> {
+  const full = [
+    '-C', cwd, '--no-pager', '-c', 'color.ui=false',
+    // `core.quotePath=false`: emit paths verbatim instead of C-quoting them
+    // (git's default turns a CJK/space path into an octal-escaped, quoted
+    // string, and every diff surface renders that string as the file name).
+    // The `-z`-framed porcelain callers are unaffected: git never quotes
+    // NUL-framed output.
+    '-c', 'core.quotePath=false',
+    ...safe.flatMap(dir => ['-c', `safe.directory=${dir}`]),
+    ...args,
+  ]
   const maxBytes = options.maxBytes ?? GIT_OUTPUT_MAX_BYTES
   const maxNulFields = options.maxNulFields
   return new Promise<string>((resolvePromise, reject) => {
     const child = spawn('git', full, {
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
-      env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
+      env: { ...process.env, ...GIT_ENV },
     })
     let stdout = ''
     let outBytes = 0
@@ -344,6 +483,24 @@ export function runGit(cwd: string, args: string[], timeoutMs = 30_000, options:
         reject(new GitCommandError(stderr.trim() || `git exited with ${String(code)}`, 'git-error', args.join(' ')))
       }
     })
+  })
+}
+
+/**
+ * Run one git command; resolves with stdout, rejects with GitCommandError.
+ *
+ * A dubious-ownership refusal is retried ONCE with the refused repository
+ * (plus the cwd, which is the answer when the message named no path) trusted
+ * for that invocation only. Anything else — including a second refusal — is
+ * reported as-is, so a repository git cannot be talked into reading still
+ * surfaces its real error instead of a misleading "not a git repository".
+ */
+export function runGit(cwd: string, args: string[], timeoutMs = 30_000, options: RunGitOptions = {}): Promise<string> {
+  return spawnGit(cwd, args, timeoutMs, [], options).catch((error: unknown) => {
+    if (!(error instanceof GitCommandError) || !DUBIOUS_OWNERSHIP.test(error.message)) throw error
+    const refused = refusedRepository(error.message)
+    const trust = refused === undefined || refused === cwd ? [cwd] : [refused, cwd]
+    return spawnGit(cwd, args, timeoutMs, trust, options)
   })
 }
 
@@ -454,6 +611,12 @@ export async function blame(
  *  A home-directory cwd can hold hundreds of visible folders (Library, iCloud
  *  mounts…); probing them all serially is what froze the panel in #369. */
 const DISCOVERY_LIMIT = 200
+/** How many BFS levels the nested-repo discovery descends below cwd; repo
+ *  roots up to depth DISCOVERY_MAX_DEPTH - 1 are detected (level d holds
+ *  depth-(d-1) dirs, whose entries are read for `.git`). 4 is the minimum
+ *  useful value. Cost stays bounded by the depth ≤ 3 directory count; the
+ *  depth-4 frontier is collected but never expanded. */
+const DISCOVERY_MAX_DEPTH = 4
 /** Per-probe and direct-discovery budget. `rev-parse` is millisecond-scale on
  *  a healthy checkout; a probe that needs longer is a stalled mount and is
  *  better abandoned than waited on. */
@@ -484,9 +647,10 @@ async function directRepoRoot(cwd: string): Promise<string> {
   return out.trim()
 }
 
-/** Discover the current repository or direct child repositories. Results are
- *  cached per cwd and concurrent callers share one in-flight scan, so opening
- *  the panel (three parallel git.* requests) costs a single discovery pass. */
+/** Discover the current repository plus child repositories nested up to
+ *  DISCOVERY_MAX_DEPTH - 1 levels below cwd. Results are cached per cwd and
+ *  concurrent callers share one in-flight scan, so opening the panel (three
+ *  parallel git.* requests) costs a single discovery pass. */
 export function repoRoots(cwd: string): Promise<string[]> {
   const cached = repoRootsCache.get(cwd)
   if (cached !== undefined && cached.expires > Date.now()) return Promise.resolve(cached.roots)
@@ -507,25 +671,51 @@ export function repoRoots(cwd: string): Promise<string[]> {
   return promise
 }
 
+/** Breadth-first scan below `cwd`: one `readdir` per visited directory, no
+ *  per-child git process (dirent `.git` presence — directory, worktree file
+ *  or symlink form — decides). Keeps the serial `rev-parse`-per-child storm
+ *  that froze the panel in #369 structurally impossible. The scan descends
+ *  into repositories it finds, so repos embedded inside other repos (vendored
+ *  checkouts that are not submodules) are discovered too. */
 async function discoverRepoRoots(cwd: string): Promise<string[]> {
+  const roots: string[] = []
   try {
-    return [await directRepoRoot(cwd)]
+    roots.push(await directRepoRoot(cwd))
   } catch {
-    const entries = await readdir(cwd, { withFileTypes: true }).catch(() => [])
-    const roots: string[] = []
-    for (const entry of entries
-      .filter(entry => entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules')
-      .sort((left, right) => left.name.localeCompare(right.name))
-      .slice(0, DISCOVERY_LIMIT)) {
-      try {
-        const root = await directRepoRoot(join(cwd, entry.name))
-        if (!roots.some(existing => pathIdentity(existing) === pathIdentity(root))) roots.push(root)
-      } catch {
-        // Ordinary child directory; keep discovering sibling repositories.
-      }
-    }
-    return roots
+    // Current directory is not a Git repository root.
   }
+
+  let level = [cwd]
+  for (let depth = 1; depth <= DISCOVERY_MAX_DEPTH && level.length > 0; depth++) {
+    const next: string[] = []
+    for (const dir of level.slice(0, DISCOVERY_LIMIT)) {
+      const entries = await readdir(dir, { withFileTypes: true }).catch(() => [])
+      let hasGit = false
+      const subdirs: string[] = []
+      for (const entry of entries) {
+        if (entry.name === '.git') {
+          // Worktrees and submodules carry `.git` as a file (or symlink), not a directory.
+          if (entry.isDirectory() || entry.isFile() || entry.isSymbolicLink()) hasGit = true
+        } else if (entry.isDirectory() && !entry.isSymbolicLink() && !entry.name.startsWith('.') && entry.name !== 'node_modules') {
+          subdirs.push(entry.name)
+        }
+      }
+      if (hasGit && dir !== cwd) {
+        // Two normalizations, both about spelling the SAME checkout one way:
+        // realpath resolves symlinks (macOS tmpdirs live under `/var`, a
+        // symlink to `/private/var`) and Windows folds the separators to the
+        // forward slashes `rev-parse --show-toplevel` reports — otherwise the
+        // scanned root and the git-reported root look like two repositories.
+        // Unresolvable names keep the joined path.
+        const resolved = await realpath(dir).catch(() => dir)
+        const root = process.platform === 'win32' ? resolved.replaceAll('\\', '/') : resolved
+        if (!roots.some(existing => pathIdentity(existing) === pathIdentity(root))) roots.push(root)
+      }
+      for (const name of subdirs.sort((left, right) => left.localeCompare(right))) next.push(join(dir, name))
+    }
+    level = next
+  }
+  return roots
 }
 
 /** Resolve the selected repository, defaulting to the first discovered root. */
@@ -542,10 +732,23 @@ export async function repoRoot(cwd: string, selected?: string): Promise<string> 
   return roots[0]!
 }
 
-/** The current branch name (`git rev-parse --abbrev-ref HEAD`; 'HEAD' when detached). */
+/** Symbolic HEAD's real branch, including an unborn branch; rejects when detached. */
 export async function currentBranch(cwd: string): Promise<string> {
-  const out = await runGit(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'])
+  const out = await runGit(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'])
   return out.trim()
+}
+
+/** Operation markers live in THIS checkout's Git directory (not the common
+ * directory shared by linked worktrees). `git am` also uses rebase-apply, but
+ * only a rebase creates its `rebasing` marker. */
+async function currentOperation(cwd: string): Promise<GitStatusResult['operation']> {
+  const gitDir = (await runGit(cwd, ['rev-parse', '--absolute-git-dir'])).trim()
+  const names = await readdir(gitDir)
+  if (names.includes('rebase-merge')
+    || (names.includes('rebase-apply') && (await readdir(join(gitDir, 'rebase-apply')).catch((): string[] => [])).includes('rebasing'))) {
+    return 'rebase'
+  }
+  return names.includes('MERGE_HEAD') ? 'merge' : undefined
 }
 
 /** Upper bound on status rows shipped to the client. Beyond this the result
@@ -564,30 +767,6 @@ const GIT_STATUS_LIMIT = 2_000
  */
 const GIT_STATUS_MAX_FIELDS = (GIT_STATUS_LIMIT + 1) * 2
 
-/**
- * Fold one path's counts from both numstat sides into a running map. A file
- * changed in the index AND in the worktree is measured on each side against
- * HEAD, so the two readings ADD UP; a binary reading on either side wins,
- * because then there is no line count to add.
- */
-function addLineCounts(into: Map<string, GitLineCounts>, from: Map<string, GitLineCounts>): void {
-  for (const [path, counts] of from) {
-    const previous = into.get(path)
-    if (previous === undefined) {
-      into.set(path, counts)
-      continue
-    }
-    if (!('additions' in previous) || !('additions' in counts)) {
-      into.set(path, { binary: true })
-      continue
-    }
-    into.set(path, {
-      additions: previous.additions + counts.additions,
-      deletions: previous.deletions + counts.deletions,
-    })
-  }
-}
-
 /** Byte budget one numstat pathspec may carry (well under every platform's
  *  command-line cap, so a repository with thousands of tracked modifications
  *  falls back to the whole-repo diff instead of failing to spawn). */
@@ -595,7 +774,7 @@ const NUMSTAT_PATHSPEC_MAX_BYTES = 8_000
 
 /**
  * The paths the two `--numstat` diffs of {@link status} actually have to look
- * at, read from the SAME porcelain output:
+ * at, read from the SAME `status --porcelain=v2 -z` output:
  *
  *  - every reported path EXCEPT untracked ones (`??`): a file absent from the
  *    index exists on neither diff side, so git can never print a numstat row
@@ -612,7 +791,6 @@ const NUMSTAT_PATHSPEC_MAX_BYTES = 8_000
  * behaviour, not a wrong answer.
  */
 function numstatPathsof(porcelainZ: string): string[] | undefined {
-  const fields = porcelainZ.split('\0')
   const paths: string[] = []
   let bytes = 0
   const add = (path: string): boolean => {
@@ -622,29 +800,21 @@ function numstatPathsof(porcelainZ: string): string[] | undefined {
     paths.push(path)
     return true
   }
-  let index = 0
-  while (index < fields.length) {
-    const field = fields[index]!
-    index += 1
-    if (field === '') continue
-    const xy = field.slice(0, 2)
-    // A torn tail (the row cap kills the child mid-record) has no path.
-    const path = field.slice(3)
-    if (path === '' || xy === '??') continue
-    if (!add(path)) return undefined
-    if (xy[0] === 'R' || xy[0] === 'C') {
-      const origin = fields[index]
-      index += 1
-      if (origin !== undefined && !add(origin)) return undefined
-    }
+  for (const token of porcelainV2Tokens(porcelainZ)) {
+    if (token.kind !== 'record' || token.xy === '??') continue
+    if (!add(token.path)) return undefined
+    if (token.origin !== undefined && !add(token.origin)) return undefined
   }
   return paths
 }
 
 /**
- * Working-tree status (untracked included). `--untracked-files=all` lists
- * the contents of new directories as individual entries, while preserving
- * repository discovery and explicit repository selection for workspace roots.
+ * Working-tree status (untracked included). The read is
+ * `status --porcelain=v2 --branch -z --untracked-files=all`: one command
+ * answers the rows AND the branch identity (name, tracking ref, ahead/behind,
+ * detached HEAD), while preserving repository discovery and explicit
+ * repository selection for workspace roots. `--untracked-files=all` lists the
+ * contents of new directories as individual entries.
  *
  * The per-path line counts (#131) ride this SAME read: one batch of three git
  * processes answers status and both numstat sides together, never one process
@@ -659,21 +829,27 @@ function numstatPathsof(porcelainZ: string): string[] | undefined {
  * whole-repo walks. `--literal-pathspecs` is required: porcelain paths are
  * literal file names, and without it a name like `:colon.txt` is parsed as
  * pathspec magic and silently loses its counts.
+ *
+ * Each side's reading lands on its own field of the entry
+ * ({@link GitStatusEntry} documents why the two are never summed).
  */
 export async function status(cwd: string, selected?: string): Promise<GitStatusResult> {
   const repositories = await repoRoots(cwd)
   if (repositories.length === 0) return { isRepo: false, entries: [], repositories: [] }
   const root = await repoRoot(cwd, selected)
-  const branchPromise = currentBranch(root).catch(() => 'HEAD')
-  const raw = await runGit(
-    root,
-    ['status', '--porcelain=v1', '-z', '--untracked-files=all'],
-    undefined,
-    // The row cap is enforced while git is still producing, not after parsing
-    // a megabyte of untracked paths: see {@link GIT_STATUS_MAX_FIELDS}.
-    { maxNulFields: GIT_STATUS_MAX_FIELDS },
-  )
-  const parsed = parsePorcelainZ(raw)
+  const [operation, raw] = await Promise.all([
+    currentOperation(root).catch(() => undefined),
+    runGit(
+      root,
+      ['status', '--porcelain=v2', '--branch', '--ahead-behind', '-z', '--untracked-files=all'],
+      undefined,
+      // The row cap is enforced while git is still producing, not after parsing
+      // a megabyte of untracked paths: see {@link GIT_STATUS_MAX_FIELDS}.
+      { maxNulFields: GIT_STATUS_MAX_FIELDS },
+    ),
+  ])
+  const snapshot = parseStatusPorcelainV2Z(raw)
+  const parsed = snapshot.entries
   const pathspec = numstatPathsof(raw)
   let unstagedNumstat = ''
   let stagedNumstat = ''
@@ -693,20 +869,24 @@ export async function status(cwd: string, selected?: string): Promise<GitStatusR
     unstagedNumstat = unstaged
     stagedNumstat = staged
   }
-  const branch = await branchPromise
-  const lineCounts = new Map<string, GitLineCounts>()
-  addLineCounts(lineCounts, parseNumstat(stagedNumstat))
-  addLineCounts(lineCounts, parseNumstat(unstagedNumstat))
+  const stagedCounts = parseNumstat(stagedNumstat)
+  const unstagedCounts = parseNumstat(unstagedNumstat)
   const truncated = parsed.length > GIT_STATUS_LIMIT
   const bounded = truncated ? parsed.slice(0, GIT_STATUS_LIMIT) : parsed
   return {
-    isRepo: true,
-    branch,
-    // Paths git has no numstat row for (untracked files) keep their entry
-    // untouched: the absence IS the information.
+    ...snapshot,
+    operation,
+    // Paths git has no numstat row for on either side (untracked files) keep
+    // their entry untouched: the absence IS the information.
     entries: bounded.map((entry): GitStatusEntry => {
-      const counts = lineCounts.get(entry.path)
-      return counts === undefined ? entry : { ...entry, counts }
+      const staged = stagedCounts.get(entry.path)
+      const unstaged = unstagedCounts.get(entry.path)
+      if (staged === undefined && unstaged === undefined) return entry
+      return {
+        ...entry,
+        ...(staged !== undefined ? { staged } : {}),
+        ...(unstaged !== undefined ? { unstaged } : {}),
+      }
     }),
     truncated,
     root,
@@ -840,11 +1020,11 @@ export async function commit(cwd: string, message: string, selected?: string): P
 export async function branches(cwd: string, selected?: string): Promise<{ current: string; names: string[] }> {
   const root = await repoRoot(cwd, selected)
   const [current, raw] = await Promise.all([
-    currentBranch(root).catch(() => 'HEAD'),
+    currentBranch(root).catch(() => ''),
     runGit(root, ['for-each-ref', '--format=%(refname:short)', 'refs/heads']),
   ])
   const names = raw.split('\n').filter(line => line !== '')
-  return { current, names: names.includes(current) ? names : [current, ...names] }
+  return { current, names: current !== '' && !names.includes(current) ? [current, ...names] : names }
 }
 
 /** Switch to an existing branch.
@@ -856,11 +1036,12 @@ export async function checkout(cwd: string, branch: string, selected?: string): 
   await runGit(await repoRoot(cwd, selected), ['checkout', '--end-of-options', branch])
 }
 
-/** Recent commit history (newest first), lazily pageable via skip/count. */
+/** All refs plus HEAD in child-before-parent order for graph lanes, pageable
+ * via skip/count. `--all` also permits an empty history on an unborn HEAD. */
 export async function log(cwd: string, count = 30, skip = 0, selected?: string): Promise<GitLogEntry[]> {
   const raw = await runGit(await repoRoot(cwd, selected), [
-    'log', '-n', String(count), '--skip', String(skip), '--decorate=short',
-    '--pretty=format:%h%x1f%s%x1f%an%x1f%ai%x1f%H%x1f%D',
+    'log', '--all', '--topo-order', '-n', String(count), '--skip', String(skip), '--decorate=short',
+    '--pretty=format:%h%x1f%s%x1f%an%x1f%ai%x1f%H%x1f%D%x1f%P',
   ])
   return parseLogLines(raw)
 }

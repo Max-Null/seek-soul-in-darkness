@@ -1,10 +1,11 @@
 /**
  * Follow the linked git worktree a session is ACTUALLY working in.
  *
- * The explorer is rooted at the session's stored header cwd, which never
- * changes. A session can move into a linked git worktree (`git worktree add`)
+ * The explorer starts from the host's committed workingDirectory, which can
+ * change independently of the immutable header. It can also follow a linked
+ * git worktree (`git worktree add`)
  * during its life  including a worktree of a repository that is not the one
- * the header cwd points at  and the sidebar should follow it.
+ * the current directory points at  and the sidebar should follow it.
  *
  * The active root is derived from the session's own `tool/call` arguments:
  * absolute paths are collected newest-event-first (structured `cwd` / `workdir`
@@ -14,7 +15,8 @@
  * and only top levels whose `--absolute-git-dir` differs from their
  * `--git-common-dir` (i.e. real LINKED worktrees, not the main checkout and
  * not submodules) are adopted. The highest-scoring linked worktree of the
- * newest event that has one wins; when there is no evidence the session cwd is
+ * newest event that has one wins, but only evidence after the last committed
+ * working-directory/change is eligible. When there is no evidence the cwd is
  * kept (lifted to the repository top level for subdirectory sessions).
  *
  * Resolutions are cached process-wide ({@link ACTIVE_ROOT_TTL_MS}), concurrent
@@ -72,7 +74,7 @@ const ACTIVE_ROOT_PATH_PATTERN = /[A-Za-z]:(?:\\|\/)[^\\/\s"'\x60,;|)<>*?]+(?:[\
  * (`undefined` = "no git top level here"), which is what keeps a non-repo
  * session cheap; those entries are evictable like any other.
  */
-const activeWorktreeRootCache = new Map<string, { root: string; base: string; expires: number }>()
+const activeWorktreeRootCache = new Map<string, { root: string; base: string; directoryEpoch: number | undefined; expires: number }>()
 const pathTopCache = new Map<string, string | undefined>()
 const linkedWorktreeCache = new Map<string, boolean>()
 
@@ -104,6 +106,34 @@ function cachePut<K, V>(map: Map<K, V>, key: K, value: V, max: number): void {
     if (oldest === undefined) break
     map.delete(oldest)
   }
+}
+
+/** Latest committed directory change, observed incrementally per live Session. */
+const directoryEpochs = new WeakMap<object, { through: number; epoch: number }>()
+
+/**
+ * Cache identity must notice explicit cd even when its resulting base equals
+ * the old base (an old tool may have temporarily selected a linked worktree).
+ * Indexed reads inspect only newly appended events, with zero snapshot copies;
+ * unchanged live cursors cost O(1). A first read only needs the same bounded
+ * history window used by the worktree evidence scan.
+ */
+function directoryEpochOf(ctx: Context, sessionId: string): number | undefined {
+  const session = ctx.sessions.get(sessionId)
+  if (session?.seq === undefined || session.eventAt === undefined) return undefined
+  const end = session.seq
+  const previous = directoryEpochs.get(session)
+  if (previous?.through === end) return previous.epoch
+  const start = previous?.through ?? Math.max(0, end - ACTIVE_ROOT_MAX_EVENTS)
+  let epoch = previous?.epoch ?? -1
+  for (let index = end - 1; index >= start; index -= 1) {
+    const event = session.eventAt(index)
+    if (event?.type !== 'working-directory/change') continue
+    epoch = event.seq
+    break
+  }
+  directoryEpochs.set(session, { through: end, epoch })
+  return epoch
 }
 
 /**
@@ -280,6 +310,9 @@ async function activeRootFromEvents(events: readonly SidebarSessionEvent[], base
   let probes = 0
   for (let index = events.length - 1; index >= start; index -= 1) {
     const event = events[index]
+    // An explicit directory transition is the authority boundary. Older tool
+    // paths belong to the previous execution context and must not override it.
+    if (event?.type === 'working-directory/change') break
     if (event === undefined || event.type !== 'tool/call') continue
     const weights = new Map<string, ActivePathEntry>()
     collectActivePaths(event.data, weights, false)
@@ -342,17 +375,18 @@ export async function activeWorktreeRootOf(ctx: Context, sessionId: string, base
   const override = (process.env[ACTIVE_ROOT_OVERRIDE_ENV] ?? '').trim()
   if (override !== '' && isAbsolute(override)) return requireAbsolute(override)
   // The comparison is on the raw base, so a session whose caller switched base
-  // (the `/sidebar/*` routes pass the client's own) never reuses the other
+  // (a committed working_directory change) never reuses the other
   // one's root.
+  const directoryEpoch = directoryEpochOf(ctx, sessionId)
   const cached = activeWorktreeRootCache.get(sessionId)
-  if (cached !== undefined && cached.expires > Date.now() && cached.base === base) {
+  if (cached !== undefined && cached.expires > Date.now() && cached.base === base && cached.directoryEpoch === directoryEpoch) {
     cachePut(activeWorktreeRootCache, sessionId, cached, ACTIVE_ROOT_CACHE_MAX)
     return cached.root
   }
-  const flightKey = `${sessionId}\0${base}`
+  const flightKey = `${sessionId}\0${base}\0${directoryEpoch ?? ''}`
   const pending = activeRootInFlight.get(flightKey)
   if (pending !== undefined) return pending
-  const promise = resolveActiveWorktreeRoot(ctx, sessionId, base).then(
+  const promise = resolveActiveWorktreeRoot(ctx, sessionId, base, directoryEpoch).then(
     (root) => {
       activeRootInFlight.delete(flightKey)
       return root
@@ -367,18 +401,18 @@ export async function activeWorktreeRootOf(ctx: Context, sessionId: string, base
 }
 
 /** One uncached resolution (see {@link activeWorktreeRootOf}). */
-async function resolveActiveWorktreeRoot(ctx: Context, sessionId: string, base: string): Promise<string> {
+async function resolveActiveWorktreeRoot(ctx: Context, sessionId: string, base: string, directoryEpoch: number | undefined): Promise<string> {
   const top = await topLevelOf(base)
   if (top === undefined) {
     // "Not inside a repository" is an answer too (the base itself), and caching
     // it is what keeps a non-repo session from re-probing on every ask.
-    cachePut(activeWorktreeRootCache, sessionId, { root: base, base, expires: Date.now() + ACTIVE_ROOT_TTL_MS }, ACTIVE_ROOT_CACHE_MAX)
+    cachePut(activeWorktreeRootCache, sessionId, { root: base, base, directoryEpoch, expires: Date.now() + ACTIVE_ROOT_TTL_MS }, ACTIVE_ROOT_CACHE_MAX)
     return base
   }
   const canonicalTop = requireAbsolute(top)
   const effectiveBase = pathUnderOf(base, canonicalTop) ? base : canonicalTop
   const active = await activeRootFromEvents(await sessionEventsOf(ctx, sessionId), effectiveBase)
   const root = active ?? effectiveBase
-  cachePut(activeWorktreeRootCache, sessionId, { root, base, expires: Date.now() + ACTIVE_ROOT_TTL_MS }, ACTIVE_ROOT_CACHE_MAX)
+  cachePut(activeWorktreeRootCache, sessionId, { root, base, directoryEpoch, expires: Date.now() + ACTIVE_ROOT_TTL_MS }, ACTIVE_ROOT_CACHE_MAX)
   return root
 }

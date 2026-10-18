@@ -16,9 +16,8 @@ export interface WorkspaceUploadInput {
  * sibling receives the bytes, then is renamed over the target. The parent
  * directory is created on demand (recursive), so folder uploads work before
  * any level exists. The unique temp name keeps concurrent uploads to the same
- * target from crossing each other — each writes its own file, the last rename
- * to land wins — and never blocks later uploads after a crashed process. The
- * renames themselves are not independent (see {@link renameIntoPlace}).
+ * target independent (each writes and renames its own file; the last rename
+ * wins) and never blocks later uploads after a crashed process.
  *
  * There is NO size cap: the bytes flow through a bounded write stream, so a
  * 100 GB upload costs the host the same memory as a 1 KB one. A failed or

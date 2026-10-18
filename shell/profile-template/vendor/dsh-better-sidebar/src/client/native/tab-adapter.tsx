@@ -29,6 +29,8 @@ import type { Context } from '../../context-types.ts'
 import type { SessionScope } from '../api.ts'
 import { RenderBoundary } from '../RenderBoundary.tsx'
 import { OrphanedTab } from '../OrphanedTab.tsx'
+import { ContextDiagnosticsHost } from '../context-diagnostics-ui.tsx'
+import type { ContextDiagnostics } from '../context-diagnostics.ts'
 import { referenceInChat } from '../reference-in-chat.ts'
 import { useSessionRoot } from '../use-session-root.ts'
 import type { BetterSidebarService, NativePathTab } from '../service.ts'
@@ -445,6 +447,13 @@ export interface NativeBodyInjected {
    * the session the slot is scoped to.
    */
   readonly sessionIdOf?: (info: NativeTabInfo) => string | undefined
+  /**
+   * The activation's optional diagnostics controller (thin wrapper over
+   * ./index.ts's deps): the body below turns it into the provider, because a
+   * native body renders in the HOST's tree and the plugin shell's provider
+   * cannot reach it. Absent = the body renders without diagnostics.
+   */
+  readonly diagnostics?: ContextDiagnostics
 }
 
 /** The props the slot framework adds to every tab body and title. */
@@ -528,31 +537,39 @@ export function NativeTabBody(props: NativeBodyInjected & NativeBodyFrameworkPro
     // The full-height host wrapper (see the `.nativeTabHost` rule in
     // sidebar.module.css for the native `.paneBody` contract); its
     // `data-dsh-native-tab-host` attribute lets the e2e lane assert the fill.
+    // The diagnostics provider sits INSIDE the boundary (a body that crashes
+    // must not take the provider's tree with it) and consumes the controller
+    // from this body's own injected bag — the host renders the body, so the
+    // plugin shell's provider is out of reach.
     createElement(
-      'div',
-      { className: css.nativeTabHost, 'data-dsh-native-tab-host': '' },
-      createElement(descriptor.component, {
-        ctx,
-        store,
-        scope,
-        tab: view.tab,
-        visible: nativeTab.visible,
-        expanded: view.expanded,
-        revealed: view.revealed,
-        onToggleDir: (path: string) => { records.toggleExpanded(seatSessionId, nativeTab.id, path) },
-        onReferenceFile: (path: string, isDir: boolean) => { referenceInChat(ctx, scopeSessionId, path, isDir) },
-        onOpenDiff: (tab: SidebarTab) => {
-          service.openTab({
-            type: 'diff',
-            title: tab.title,
-            id: tab.id,
-            ...(tab.diff === undefined ? {} : { diff: tab.diff }),
-          }, scope)
-        },
-        onSubagentJump: (childSessionId: string) => {
-          service.openTab({ type: 'subagent', meta: { childSessionId } }, scope)
-        },
-      }),
+      ContextDiagnosticsHost,
+      { controller: props.diagnostics },
+      createElement(
+        'div',
+        { className: css.nativeTabHost, 'data-dsh-native-tab-host': '' },
+        createElement(descriptor.component, {
+          ctx,
+          store,
+          scope,
+          tab: view.tab,
+          visible: nativeTab.visible,
+          expanded: view.expanded,
+          revealed: view.revealed,
+          onToggleDir: (path: string) => { records.toggleExpanded(seatSessionId, nativeTab.id, path) },
+          onReferenceFile: (path: string, isDir: boolean) => { referenceInChat(ctx, scopeSessionId, path, isDir) },
+          onOpenDiff: (tab: SidebarTab) => {
+            service.openTab({
+              type: 'diff',
+              title: tab.title,
+              id: tab.id,
+              ...(tab.diff === undefined ? {} : { diff: tab.diff }),
+            }, scope)
+          },
+          onSubagentJump: (childSessionId: string) => {
+            service.openTab({ type: 'subagent', meta: { childSessionId } }, scope)
+          },
+        }),
+      ),
     ),
   )
 }

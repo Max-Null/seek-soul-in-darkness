@@ -20,6 +20,7 @@
  */
 import { type ReactNode } from 'react';
 import type { SidebarClientJobsService, SidebarJobView, SidebarObservedJob } from '../context-types.ts';
+import type { ContextDiagnosticTarget } from './context-diagnostics.ts';
 import { type TreeJob } from './subagent-jobs.ts';
 /** The agent count at which the drawer starts collapsed. */
 export declare const JOBS_DRAWER_COLLAPSE_AT = 8;
@@ -56,6 +57,14 @@ export declare function JobOutputWindow(props: {
     ownerSessionId: string;
     /** The host's streamed observation of THIS job (undefined until it arrives). */
     observed: SidebarObservedJob | undefined;
+    /**
+     * The diagnostics target of the conversation that OWNS this job, resolved by
+     * the caller from the tree model (`undefined` = the owner is not in this
+     * tree, or the page has no such capability): the window never derives it
+     * from `ownerSessionId`, which names the session the roster was WATCHED
+     * under, not the session that owns the job.
+     */
+    diagnostics?: ContextDiagnosticTarget | undefined;
     /** The row's main button — where the window first appears. */
     anchor?: HTMLElement | null;
     /** Close the window (the close button, or Escape). */

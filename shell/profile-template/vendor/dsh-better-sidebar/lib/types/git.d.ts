@@ -1,13 +1,23 @@
-/** A parsed `git status --porcelain=v1 -z` entry. */
+/** A parsed porcelain status entry (v1 XY convention). */
 export interface GitStatusEntry {
     path: string;
     /** Two-letter index/worktree status (X Y), e.g. 'M ', ' M', 'A ', '??'. */
     xy: string;
-    /** How many lines this path gained and lost, index and worktree sides
-     *  SUMMED (both are measured against HEAD). Absent when git has no numstat
-     *  row for the path — an untracked file never gets one — so "no counts" is
-     *  never rendered as a fabricated `0`. */
-    counts?: GitLineCounts;
+    /** How many lines the INDEX side gained and lost (`git diff --cached`, index
+     *  against HEAD). Absent when git has no numstat row for the path on that
+     *  side — an untracked file has none — so "no counts" is never rendered as a
+     *  fabricated `0`. */
+    staged?: GitLineCounts;
+    /** How many lines the WORKTREE side gained and lost (`git diff`, worktree
+     *  against the index). Absent for the same reason as {@link staged}.
+     *
+     *  The two sides are kept APART, never added up: a path can hold a change on
+     *  each side ('MM'), and the change panel renders such a path once per band
+     *  with that band's own reading. Summing the two readings would double-count
+     *  every line both diffs see — e.g. stage a line and keep editing the same
+     *  region, and `1 + 1` lines would be reported as a 2-line change on BOTH
+     *  the staged row and the unstaged one. */
+    unstaged?: GitLineCounts;
 }
 /** One path's line-count summary from `git diff --numstat`. A binary change is
  *  its own variant because git reports `-`/`-` for it: there ARE no counts, and
@@ -21,7 +31,15 @@ export type GitLineCounts = {
 /** The source-control panel snapshot. */
 export interface GitStatusResult {
     isRepo: boolean;
+    /** Absent when HEAD is detached; unborn branches keep their real name. */
     branch?: string;
+    /** Native tracking ref (e.g. origin/main); never inferred from a remote. */
+    upstream?: string;
+    /** Present only when Git can compare HEAD with the tracking ref. */
+    ahead?: number;
+    behind?: number;
+    detached?: boolean;
+    operation?: 'merge' | 'rebase';
     entries: GitStatusEntry[];
     /** True when the working tree had more rows than `GIT_STATUS_LIMIT`; the
      *  panel shows a truncation notice instead of freezing on a huge untracked
@@ -48,6 +66,8 @@ export interface GitLogEntry {
     hash: string;
     /** Full 40-char hash (advanced operations: revert / cherry-pick). */
     hashFull: string;
+    /** Full parent hashes in Git's order; root commits have none. */
+    parents: string[];
     subject: string;
     author: string;
     /** ISO 8601 author date (`%ai`), e.g. `2024-01-01 10:00:00 +0800`. */
@@ -63,6 +83,12 @@ export declare class GitCommandError extends Error {
 }
 /** Parse porcelain v1 -z output into entries (rename/copy pairs collapse to one row). */
 export declare function parsePorcelainZ(output: string): GitStatusEntry[];
+/**
+ * Parse a `status --porcelain=v2 --branch -z` read. The metadata lines carry
+ * the branch identity, its tracking ref and the ahead/behind counts; the file
+ * records reuse the v1 XY convention (v2's `.` clean side folded to a space).
+ */
+export declare function parseStatusPorcelainV2Z(output: string): GitStatusResult;
 /**
  * Parse one `git diff --numstat` answer into a path → line-counts map. Both
  * framings are accepted: the production `-z` one (records NUL-framed, so paths
@@ -94,8 +120,12 @@ export interface GitWorktreeRecord {
  * `-z` so even newlines and non-ASCII bytes in checkout paths stay lossless;
  * newline framing remains accepted for small fixtures and older Git output. */
 export declare function parseWorktreeList(output: string): GitWorktreeRecord[];
-/** Parse `git log --pretty=format:%h%x1f%s%x1f%an%x1f%ai%x1f%H%x1f%D` rows. */
+/** Parse `git log --pretty=format:%h%x1f%s%x1f%an%x1f%ai%x1f%H%x1f%D%x1f%P` rows. */
 export declare function parseLogLines(output: string): GitLogEntry[];
+/** The repository path a dubious-ownership refusal names, or undefined when
+ *  the message carries no path (an older or reworded git) — the caller then
+ *  falls back to the cwd it already ran in. */
+export declare function refusedRepository(message: string): string | undefined;
 /** Per-command knobs of {@link runGit}. */
 export interface RunGitOptions {
     /** Stdout ceiling in bytes; exceeding it kills the child and rejects. */
@@ -110,7 +140,15 @@ export interface RunGitOptions {
      */
     maxNulFields?: number;
 }
-/** Run one git command; resolves with stdout, rejects with GitCommandError. */
+/**
+ * Run one git command; resolves with stdout, rejects with GitCommandError.
+ *
+ * A dubious-ownership refusal is retried ONCE with the refused repository
+ * (plus the cwd, which is the answer when the message named no path) trusted
+ * for that invocation only. Anything else — including a second refusal — is
+ * reported as-is, so a repository git cannot be talked into reading still
+ * surfaces its real error instead of a misleading "not a git repository".
+ */
 export declare function runGit(cwd: string, args: string[], timeoutMs?: number, options?: RunGitOptions): Promise<string>;
 /** One parsed `git blame --porcelain` row (the editor's hover blame). */
 export interface GitBlameLine {
@@ -148,18 +186,22 @@ export declare function blame(cwd: string, path: string, startLine: number, endL
  *  Probe timeout is short: a cwd on a stalled mount must not hold the panel
  *  hostage for the full command budget (issue #369). */
 export declare function isGitRepo(cwd: string): Promise<boolean>;
-/** Discover the current repository or direct child repositories. Results are
- *  cached per cwd and concurrent callers share one in-flight scan, so opening
- *  the panel (three parallel git.* requests) costs a single discovery pass. */
+/** Discover the current repository plus child repositories nested up to
+ *  DISCOVERY_MAX_DEPTH - 1 levels below cwd. Results are cached per cwd and
+ *  concurrent callers share one in-flight scan, so opening the panel (three
+ *  parallel git.* requests) costs a single discovery pass. */
 export declare function repoRoots(cwd: string): Promise<string[]>;
 /** Resolve the selected repository, defaulting to the first discovered root. */
 export declare function repoRoot(cwd: string, selected?: string): Promise<string>;
-/** The current branch name (`git rev-parse --abbrev-ref HEAD`; 'HEAD' when detached). */
+/** Symbolic HEAD's real branch, including an unborn branch; rejects when detached. */
 export declare function currentBranch(cwd: string): Promise<string>;
 /**
- * Working-tree status (untracked included). `--untracked-files=all` lists
- * the contents of new directories as individual entries, while preserving
- * repository discovery and explicit repository selection for workspace roots.
+ * Working-tree status (untracked included). The read is
+ * `status --porcelain=v2 --branch -z --untracked-files=all`: one command
+ * answers the rows AND the branch identity (name, tracking ref, ahead/behind,
+ * detached HEAD), while preserving repository discovery and explicit
+ * repository selection for workspace roots. `--untracked-files=all` lists the
+ * contents of new directories as individual entries.
  *
  * The per-path line counts (#131) ride this SAME read: one batch of three git
  * processes answers status and both numstat sides together, never one process
@@ -174,6 +216,9 @@ export declare function currentBranch(cwd: string): Promise<string>;
  * whole-repo walks. `--literal-pathspecs` is required: porcelain paths are
  * literal file names, and without it a name like `:colon.txt` is parsed as
  * pathspec magic and silently loses its counts.
+ *
+ * Each side's reading lands on its own field of the entry
+ * ({@link GitStatusEntry} documents why the two are never summed).
  */
 export declare function status(cwd: string, selected?: string): Promise<GitStatusResult>;
 /** All linked checkouts of the repository containing `cwd`, enriched with a
@@ -214,7 +259,8 @@ export declare function branches(cwd: string, selected?: string): Promise<{
  *  the worktree changes and `--work-tree=…` redirected the checkout. Same
  *  guard as show / commitDiff / revert / cherryPick (4100e16). */
 export declare function checkout(cwd: string, branch: string, selected?: string): Promise<void>;
-/** Recent commit history (newest first), lazily pageable via skip/count. */
+/** All refs plus HEAD in child-before-parent order for graph lanes, pageable
+ * via skip/count. `--all` also permits an empty history on an unborn HEAD. */
 export declare function log(cwd: string, count?: number, skip?: number, selected?: string): Promise<GitLogEntry[]>;
 /**
  * Content of a file at a revision (`git show <rev>:<path>`), or null when the

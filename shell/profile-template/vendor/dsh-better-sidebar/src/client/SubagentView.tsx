@@ -60,6 +60,8 @@ import {
   clientJobs, collectRows, useJobObservation, useJobWatchers, useJobsSnapshot,
 } from './jobs-client.ts'
 import { t } from './locales.ts'
+import { diagnosticAddressOf } from './context-diagnostics-ui.tsx'
+import type { ContextDiagnosticTarget } from './context-diagnostics.ts'
 import { buildTasksModel, type TasksAgentNode, type TasksFoldNode, type TasksWorkflowNode } from './tasks-model.ts'
 import { TasksGraph } from './TasksGraph.tsx'
 import { TasksTree } from './TasksTree.tsx'
@@ -388,6 +390,36 @@ export function SubagentView(props: {
   )
 
   /**
+   * The tree's agent nodes by their session id — the ONLY sanctioned source of
+   * a job's diagnostics target. A jobs row is a roster entry under a WATCHED
+   * session (`row.ownerSessionId`) whose real owner is `job.owner`; a roster
+   * payload without an owner is announced under the watching session, which is
+   * not necessarily the session that owns the job. Resolving through the model
+   * therefore answers both halves at once: whether the owning session is in
+   * this tree at all, and what that node's address is (the root node has none
+   * — it IS the tree's main session — and must be addressed by its own id).
+   */
+  const agentNodeBySession = useMemo((): ReadonlyMap<string, TasksAgentNode> => {
+    const nodes = new Map<string, TasksAgentNode>()
+    for (const node of model) if (node.kind === 'agent') nodes.set(node.id, node)
+    return nodes
+  }, [model])
+
+  /**
+   * The diagnostics target of one conversation, when this tree holds its node.
+   * The label is the NODE's own — the card's durable label, resolved by the
+   * model — never a caller's title: a jobs row only knows the watched
+   * session's display title, which is not the owning agent's name.
+   */
+  const diagnosticsTargetOf = useCallback((ownerId: string): ContextDiagnosticTarget | undefined => {
+    const node = agentNodeBySession.get(ownerId)
+    if (node === undefined) return undefined
+    const address = diagnosticAddressOf(node.id, node.childAddress)
+    if (node.parentId !== undefined && address === undefined) return undefined
+    return { sessionId: node.id, label: node.label, ...(address === undefined ? {} : { address }) }
+  }, [agentNodeBySession])
+
+  /**
    * Show one conversation in the main view. DSH moved child and session
    * navigation OFF `ISessions` (0.1.6's `open` / `openSubagent` are gone from
    * the runtime, and the optional calls this page used were silently dead)
@@ -636,6 +668,7 @@ export function SubagentView(props: {
           observed={treeJobs.observed[row.job.id]}
           anchor={popover.anchor}
           onClose={closePopover}
+          diagnostics={row.job.owner === undefined ? undefined : diagnosticsTargetOf(row.job.owner)}
         />
       )
     }
@@ -656,6 +689,7 @@ export function SubagentView(props: {
           asideAvailable={asideAvailable}
           onJump={jumpToNode}
           onOpenTask={openTaskById}
+          onClose={closePopover}
         />
       )
     }

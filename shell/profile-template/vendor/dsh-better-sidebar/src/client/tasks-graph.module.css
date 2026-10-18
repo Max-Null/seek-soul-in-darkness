@@ -1220,6 +1220,16 @@
   padding: 0;
 }
 
+/* A footer control that is a GLYPH, not a word: it keeps the host Button's own
+   28px box instead of taking a share of the row, so a long jump label and the
+   diagnostics control still fit the 280px card (the footer's `> *` rule hands
+   every other child the row). */
+.popFoot > .popActionIcon {
+  flex: none;
+  width: 28px;
+  padding: 0;
+}
+
 .jumpMenu {
   position: absolute;
   right: 0;

@@ -23,6 +23,7 @@
  * absent from the native guide and `openTab` refuses it.
  */
 import type { Context } from '../../context-types.ts';
+import type { ContextDiagnostics } from '../context-diagnostics.ts';
 import type { BetterSidebarService } from '../service.ts';
 import type { SidebarStore } from '../state.ts';
 import { type NativeTabInfo, type NativeTabParams, type NativeTabRecords } from './tab-adapter.tsx';
@@ -53,6 +54,14 @@ export interface NativeSurfaceDeps {
     readonly service: BetterSidebarService;
     /** The shared native tab record registry (the surface writes it too). */
     readonly records: NativeTabRecords;
+    /**
+     * The activation's optional dsh-context diagnostics controller (see
+     * ../context-diagnostics.ts). Forwarded into the tab bodies' injected bag,
+     * because a native body renders in the HOST's React tree and cannot read the
+     * plugin shell's provider. Omitted = the bodies render without the
+     * diagnostics entry points.
+     */
+    readonly diagnostics?: ContextDiagnostics;
     /**
      * Report a tab-type registration failure (phase label + cause).
      *

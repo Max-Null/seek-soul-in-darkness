@@ -7,7 +7,7 @@
   <a href="https://github.com/omdsh-dev/DSH-better-sidebar/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/omdsh-dev/DSH-better-sidebar/actions/workflows/ci.yml/badge.svg" /></a>
   <a href="https://github.com/omdsh-dev/DSH-better-sidebar/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/omdsh-dev/DSH-better-sidebar" /></a>
   <a href="https://opensource.org/licenses/MIT"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-yellow.svg" /></a>
-  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh?activeTab=versions"><img alt="Supported DSH versions: 0.2.0-rc.2+" src="https://img.shields.io/badge/DSH-0.2.0--rc.2%2B-4d6bfe" /></a>
+  <a href="https://www.npmjs.com/package/@deepseek-ai/dsh?activeTab=versions"><img alt="Supported DSH versions: 0.2.1-rc.1+" src="https://img.shields.io/badge/DSH-0.2.1--rc.1%2B-4d6bfe" /></a>
 </div>
 
 <div align="center">
@@ -22,11 +22,19 @@
 
 | | |
 |---|---|
-| **🗂️ File Management**<br/>Lazy-loading tree, git status colors, live directory watch, global search, drag-and-drop upload, multi-select batch actions, dual-source "Open with" menu.<br/><img alt="File tree with git colors" src="./docs/screenshots/files-tree.png" /><br/><img alt="Context menu: Open with + Zip and download" src="./docs/screenshots/files-menu-openwith.png" /> | **🌿 Changes**<br/>Git lens + this-session AI-changes lens in one: hierarchical tree, stage / commit / history, unified diff rendering (intra-line highlights + syntax coloring).<br/><img alt="Changes: hierarchical tree" src="./docs/screenshots/changes-tree.png" /> |
+| **🗂️ File Management**<br/>Lazy-loading tree, git status colors, live directory watch, global search, drag-and-drop upload, multi-select batch actions, dual-source "Open with" menu.<br/><img alt="File tree with git colors" src="./docs/screenshots/files-tree.png" /><br/><img alt="Context menu: Open with + Zip and download" src="./docs/screenshots/files-menu-openwith.png" /> | **🌿 Git**<br/>Source Control (Merge / Staged / Changes groups, message box with Generate, branch + sync footer) plus a this-session AI-changes lens, with a **read-only commit graph** (lanes, ref badges, branch filter, commit details) in one tab.<br/><img alt="Git: hierarchical tree" src="./docs/screenshots/changes-tree.png" /> |
 | **📝 Editable Editor & Previews**<br/>An editable CodeMirror (the stock preview is read-only), Markdown + Mermaid + floating outline, sandboxed HTML preview, `.jsonl` record cards, paged preview for huge files, streaming transfers with no size caps.<br/><img alt="Markdown + Mermaid preview" src="https://github.com/user-attachments/assets/fe0e5182-55bb-45cc-b98b-a2877c2bdd38" /> | **🧩 Tasks**<br/>Live subagent topology (workflow graph / tree modes) + background task list: exit codes, live output, force-kill.<br/><img alt="Tasks: subagent topology" src="https://github.com/user-attachments/assets/dcd8ed2f-59fa-405b-937b-2d250f5034dd" /> |
 | **💬 Side Chat (beta)**<br/>Codex-style side threads: inherit the full parent context and run independently, realtime push, visible & revocable queue, per-thread model selection, one-click promotion to a top-level session.<br/><img alt="Side Chat" src="https://github.com/user-attachments/assets/3a338c36-f5de-4000-95f3-4b1cd04f60fc" /> | **🖥️ Bottom Workbench**<br/>A self-drawn bottom panel that coexists with the native right sidebar: drag-to-split panes, multiple terminal tabs, per-session persisted layout.<br/><img alt="Dual workbench" src="https://github.com/user-attachments/assets/dfdb875e-a1a8-4d4b-8340-353736b1708f" /> |
 
 **Also**: 📂 the `sidebar_open` tool lets the model open the sidebar itself · ⚡ ~325KB core at startup, heavy chunks load on demand · 🌏 i18n follows DSH · 📱 narrow screens switch to a full-width drawer
+
+### 🌿 Git Graph (read-only commit graph)
+
+Switch to **Git Graph** at the top of the Git panel for commit nodes, forks and merge edges across local branches, remote-tracking branches and HEAD. The branch selector only filters history — it **never checks out or fetches**; each commit is one line (lane edges + ref pills + subject), hover shows the author and short hash, and selecting one opens its full message and diff in the bottom pane. History loads in pages; reference changes during pagination prompt a refresh; reads are bounded (200 commits per page, offset 10,000, 1,000 branches) and report an explicit error past a limit. This first version shows no tags and offers no history-changing actions.
+
+### 🧭 dsh-context diagnostics (optional)
+
+With the `dsh-context` plugin installed, three places offer a one-click jump into that conversation's **Context** view: an agent node's detail card on the Tasks page, a background job's output window (the job's real owner session — never merely the session its row was watched under), and the session header. The entries **appear only** while dsh-context's `Context` page is actually registered: a deployment without it (or with that page hidden) shows no control at all, and while one jump is in flight every entry point is disabled. A failed jump is reported once, in a dismissible alert at the frame's bottom edge; nothing is polled while idle.
 
 ## 🚀 Installation
 
@@ -34,14 +42,19 @@
 dsh plugin --profile web add dsh-better-sidebar@latest
 ```
 
-Then **hard-refresh the browser** (Cmd/Ctrl+Shift+R). Requires DSH **0.2.0-rc.2+**.
+Then **hard-refresh the browser** (Cmd/Ctrl+Shift+R). Requires DSH **0.2.1-rc.1+**.
+
+> **Compatibility warning — v0.28.0 will take over this plugin's npm `latest`.** DSH's own npm `latest` still points to **0.2.0-rc.2**, which is **not compatible** with v0.28.0. On that host, pin `dsh-better-sidebar@0.26.1` instead of using the command above. DSH 0.2.1-alpha.5 users must pin `dsh-better-sidebar@0.28.0-alpha.0`. Upgrade the host explicitly to `0.2.1-rc.1` before installing v0.28.0; the two packages' `latest` tags are independent.
 
 <details>
 <summary><b>Pick the plugin version for your DSH version</b></summary>
 
 | Your DSH version | Install command |
 | --- | --- |
-| **0.2.0-rc.2+** (incl. later stable) | `dsh plugin --profile web add dsh-better-sidebar@latest` |
+| **0.2.1-rc.1+** | `dsh plugin --profile web add dsh-better-sidebar@0.28.0` |
+| **0.2.1-alpha.5** | `dsh plugin --profile web add dsh-better-sidebar@0.28.0-alpha.0` |
+| **0.2.0-rc.2** | `dsh plugin --profile web add dsh-better-sidebar@0.26.1` |
+| **0.2.0-rc.1** | `dsh plugin --profile web add dsh-better-sidebar@0.24.1` |
 | **0.1.7-rc.1 ~ 0.1.7 stable** | `dsh plugin --profile web add dsh-better-sidebar@0.22.1` |
 | 0.1.7-alpha.x | No compatible release — upgrade DSH to rc.1 first |
 | 0.1.6 and earlier (incl. the 0.1.5 line) | `dsh plugin --profile web add dsh-better-sidebar@0.19.1` |
@@ -57,12 +70,12 @@ Always pin **exact versions** for older releases (`latest` moves forward with ea
 
 ```text
 Install the dsh-better-sidebar plugin (a sidebar workbench for DSH):
-1. Run dsh plugin --profile web add dsh-better-sidebar@latest (latest = current stable)
+1. Confirm DSH is 0.2.1-rc.1 or newer, then run dsh plugin --profile web add dsh-better-sidebar@0.28.0
 2. Remind me to hard-refresh the browser (Cmd/Ctrl+Shift+R) afterwards
 If something fails, check the FAQ table in https://github.com/omdsh-dev/DSH-better-sidebar README first.
 ```
 
-**One-line script** — clone this repo and run `bash scripts/install.sh` (macOS / Linux / Windows Git Bash; `install.ps1` for native Windows). It handles installation + bundle registration.
+**One-line script** — clone this repo and run `bash scripts/install.sh 0.28.0` (macOS / Linux / Windows Git Bash; `./scripts/install.ps1 -Version 0.28.0` for native Windows). It handles installation + bundle registration.
 
 **Updating**: just re-run the install command, then hard-refresh the browser.
 
@@ -79,24 +92,39 @@ If something fails, check the FAQ table in https://github.com/omdsh-dev/DSH-bett
 | **Two sidebars** on the page | Double mounting. Remove the legacy manual mount line (`- insert: ... better-sidebar ...`) from `~/.dsh/profiles/web/cordis.patch.yml`; aggregate packages mounting this package under a different id are auto-yielded, no action needed. |
 | Settings values gone after upgrade | Since DSH 0.1.7, preferences live on this plugin's mount row in the profile (default entry id `better-sidebar`). The plugin migrates your old `settings.yaml` values once on first start and never overwrites newer values. |
 | Terminal unavailable | Terminals are provided by **DSH itself** (this plugin ships no PTY) — see DSH docs; "host provides no terminal capability" in the bottom terminal means this deployment has no terminal controller mounted. |
-| `dsh: command not found` | Install DSH first; or use `npx -y --package @deepseek-ai/dsh dsh plugin --profile web add dsh-better-sidebar@latest`. |
+| `dsh: command not found` | Install DSH first; or use `npx -y --package @deepseek-ai/dsh@0.2.1-rc.1 dsh plugin --profile web add dsh-better-sidebar@0.28.0`. |
 
 </details>
 
 ## 🆕 Recent Updates
 
+**v0.28.0 — stable plugin release for DSH 0.2.1-rc.1+**
+
+- Move all 13 DSH peer floors to `^0.2.1-rc.1`; retain the alpha.0 functionality without runtime changes
+- The upstream alpha.5 → rc.1 full-tree diff contains 355 files, all `package.json`; no source changes
+- v0.28.0 will replace this plugin’s npm `latest`, even while DSH’s `latest` remains 0.2.0-rc.2; old hosts must pin the versions in the table above
+- RC validation is pending; see the [RC adaptation record](./docs/plans/2026-10-17-dsh-0.2.1-rc.1-adaptation.md). Earlier alpha test counts are not RC evidence
+
+**v0.28.0-alpha.0 (prerelease)**
+
+- Adapt to DSH **0.2.1-alpha.5+**: use native Connection admission for HTTP/WS and remove the retired invariant companion and dependency
+- Files, Git, terminals and newly created side chats follow the session’s current working directory
+- The commit graph fills the available Git-panel height and adapts to the diff preview and window size
+- Optional dsh-context diagnostic shortcuts in agent details, background-job output windows and the session header appear only when the Context entry is available
+- **DSH 0.2.0-rc.2 users stay on npm-published v0.26.1**; v0.27.0 has not been published. Use the explicit alpha version above, not `latest`
+- Validation history: [DSH alpha.5 adaptation record](./docs/plans/2026-10-16-dsh-0.2.1-alpha.5-adaptation.md) (before the latest dev integration; not the final release test counts)
+
+**v0.27.0** - full release history at [Releases](https://github.com/omdsh-dev/DSH-better-sidebar/releases) · [CHANGELOG](./CHANGELOG_EN.md)
+
+- **Git page rebuilt**: Source Control groups, a read-only commit graph with branch filtering, and a shared Commit details / Content / Diff pane
+- **Accurate change tracking**: separate staged/unstaged counts, nested-repository discovery, session-relative paths, PTC file operations and long polling
+- **Selection stays in place**: fixed the integration regression that displaced selected files and drew stray borders; added real-host layout coverage
+- **Side Chat**: new child sessions seed from the latest summarizing compaction instead of copying the full parent log
+
 **v0.26.1** — full release history at [Releases](https://github.com/omdsh-dev/DSH-better-sidebar/releases) · [CHANGELOG](./CHANGELOG_EN.md)
 
 - ⚡ **Fixed the steady-state cost behind "fine on 0.24, then it got slow"** (community reports: the sidebar turns laggy after being open a long time, DSH turns laggy after many turns, a restart clears it for a while; an artifact-level A/B puts the line at v0.25.0): both 500 ms timers are now visibility-gated (the host right-panel state is one shared module-level poller; the blank-session fallback only runs while it actually renders), the per-tab 5 s session-root poll became **one per session and only while visible**, the file-tree watch and side-chat push stop when parked, `keepMounted` keeps its semantics while every cache/registry is now bounded, and the host cwd resolver gained in-flight dedupe with a 3 s → 15 s TTL
 - 📊 Measured in the real mount lane (4 visited tabs, 15 s idle window): live 500 ms timers **3 → 1**, live 5 s timers **5 → 0**, `session.cwd` requests **15 → 0**, hit tests **1,620 → 0**, forced layouts **5,190 → 30**
-
-**v0.26.0** — full release history at [Releases](https://github.com/omdsh-dev/DSH-better-sidebar/releases) · [CHANGELOG](./CHANGELOG_EN.md)
-
-- 🚀 **Streaming everywhere**: uploads / downloads / HTML preview / archiving have no size caps anymore; huge files open as a read-only paged preview
-- 📄 New **`.jsonl` / `.ndjson` viewer**: collapsible record cards, editable and savable
-- 💬 **Side Chat goes realtime**: pushed message delivery, visible queue with per-message revoke, per-thread model selection
-- 🧩 **Tasks panel rebuilt**: expand by group, token usage & duration, canvas animations
-- 🖥️ **Multiple terminal tabs** in the bottom workbench; ⚡ git status polling no longer stalls the UI (30s baseline, auto-backoff)
 
 ## 🔌 Plugin Ecosystem
 

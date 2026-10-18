@@ -14,6 +14,7 @@ export interface BlockLabels {
 export declare function blockLabels(): BlockLabels;
 /** The `TerminalBlockLabels` shape (structural mirror; the host owns the type). */
 export interface TerminalLabels {
+    commandLine: (line: number) => string;
     signal: (signal: string) => string;
     exitCode: (exitCode: number) => string;
     noExitCode: string;
