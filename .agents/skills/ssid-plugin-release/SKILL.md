@@ -78,22 +78,34 @@ gh release list --repo Max-Null/<repo> --limit 6
 
 用 `gh release create vX.Y.Z --title ... --notes ...`；说明按惯例分组（新增 / 调整 / 修复），**从 `git log --oneline <上个 tag>..HEAD` 提炼，不凭记忆**。
 
-## 8. npm publish（**由用户手动，铁律 9**）
+## 8. 发布（GitHub Actions + OIDC）
 
-开发会话**不执行** publish。把该给的证据备齐再交接：
+**不在本地跑 `npm publish`。** 版本提交与 tag 就绪后，触发仓库里的 publish workflow：
+
+```powershell
+gh workflow run publish.yml -R Max-Null/<repo>
+```
+
+发布前核对本地包内容（产物是这次构建的、`files` 覆盖对）：
 
 ```powershell
 node -e "console.log('local =', require('./package.json').version)"
-npm view <pkg> version      # npm 上的现状
-npm pack --dry-run          # 包内容：files 覆盖、产物是刚构建的、LICENSE/README 由 npm 自动带入
+npm pack --dry-run
 ```
 
-然后给用户确切命令：
+**硬前提：npm 侧的 Trusted Publisher 必须已为该包配好**（2026-10-19 在 `dsh-allostasis` 上实际踩过）。查法：
 
-```sh
-cd <包目录>
-npm publish
+```powershell
+npm trust list @max-null/<pkg>   # 需要 2FA；输出 "No trust configurations found" 就是没配
 ```
+
+**只有网页配得可靠**：`https://www.npmjs.com/package/@max-null/<pkg>/access` → Trusted Publisher 选 **GitHub Actions** → 填 `Repository: Max-Null/<repo>`、`Workflow filename: publish.yml`、`Environment: **留空**`（workflow 里没有定义 environment，填了就匹配不上）。
+
+**别信 CLI**：`npm trust github <pkg> --file publish.yml --repo <repo> --yes` 在 2FA 下会中途弹 OTP，失败时**不报错**，事后 `trust list` 仍是空——看起来像成功。
+
+**怎么判定真发成功**：workflow 日志里必须同时出现 `npm notice Publishing to https://registry.npmjs.org/ ...` 与 `+ @max-null/<pkg>@X.Y.Z`。只有 provenance 签名行而**没有** `Publishing to` 那行 = 授权被拒（E404），是 trust 没配。
+
+**registry 有延迟**：`dist-tags` 更新实测要 **2–4 分钟**（同一个包先后两次分别是 2 分钟和 4 分钟），中间的 404 不代表失败；要绕本地缓存就直接查官方源。
 
 ## 9. SSiD 侧 vendor 同步（**最容易漏的一步**）
 
