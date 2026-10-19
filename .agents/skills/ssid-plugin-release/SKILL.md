@@ -78,6 +78,12 @@ gh release list --repo Max-Null/<repo> --limit 6
 
 用 `gh release create vX.Y.Z --title ... --notes ...`；说明按惯例分组（新增 / 调整 / 修复），**从 `git log --oneline <上个 tag>..HEAD` 提炼，不凭记忆**。
 
+**打 tag 不等于建 Release——这一步不能跳。** 2026-10-19 一晚连打 `v0.5.1`–`v0.5.5` 五个 tag 却只发了 npm，结果 Releases 页的 **Latest 永远停在 v0.5.0**：用户看到的「最新版本」是假的，而 tag 列表里却有一堆没有说明的孤儿。**判据**：`gh release list` 的第一条必须等于刚发的版本；不是就补。
+
+**建完之后把 Latest 指对**：GitHub 把「最后创建的」标为 Latest，所以补旧版本要在最后 `gh release create <最新> --latest` 或用 `gh release edit <最新> --latest` 纠回。
+
+**纯文档的连续补丁可以合并成一个 Release**（如 0.5.3 / 0.5.4 并入 0.5.5），但**行为变更必须各有一个**——否则 release 列表里会出现没有独立说明的版本。
+
 ## 8. 发布（GitHub Actions + OIDC）
 
 **不在本地跑 `npm publish`。** 版本提交与 tag 就绪后，触发仓库里的 publish workflow：
