@@ -1,6 +1,6 @@
 ---
 name: ssid-plugin-release
-description: "`@max-null/*` 单个插件的收尾与发布：README 与实现核对、版本决策、L1 门槛、提交、推送、tag、GitHub Release、npm publish 交接、SSiD 侧 vendor 同步。触发词：用户说『插件收尾/插件发布/发布插件/更新 tag/更新 release』，或一次列出一串收尾动作（『更新 readme+提交+推送+更新 tag+更新 release+发布』）时使用。与 ssid-release 分工：那个管 SSiD 壳发版（安装包），本文管插件发版（npm 包）。"
+description: "`@max-null/*` 单个插件的收尾与发布：README 与实现核对、版本决策、L1 门槛、提交、推送、一次触发完成 npm publish + tag + Release、SSiD 侧 vendor 同步。触发词：用户说『插件收尾/插件发布/发布插件/更新 tag/更新 release』，或一次列出一串收尾动作（『更新 readme+提交+推送+更新 tag+更新 release+发布』）时使用。与 ssid-release 分工：那个管 SSiD 壳发版（安装包），本文管插件发版（npm 包）。"
 ---
 
 # 插件收尾与发布（`@max-null/*`）
@@ -14,6 +14,8 @@ description: "`@max-null/*` 单个插件的收尾与发布：README 与实现核
 ## 0. 这套流程防的是什么
 
 用户往往一次说一串：「更新 readme + 提交 + 推送 + 更新 tag + 更新 release + 发布」。逐条执行**必然**会漏掉 §9——**npm 发了但 vendor 没跟，装版不会变**，而且要等下次发版才暴露。所以逐节过一遍，每节要么做，要么明确报告「不适用」。
+
+2026-10-21 起，tag 与 Release 由 publish workflow 一并完成（§6/§8）：用户这么说时，不要再去手工建 tag/Release，把那一串收敛成「提交 → 推送 → 触发 workflow → 验收三件产物」。
 
 ## 1. 版本决策
 
@@ -56,41 +58,40 @@ pnpm typecheck && pnpm test && pnpm build
 git push origin main
 ```
 
-## 6. tag
+## 6. tag 与 GitHub Release（已并入 workflow，不再手工建）
 
-**先看现状再决定打哪个**——tag 落后于版本是常态（两个 `@max-null` 插件都落后过好几个版本）：
+`vX.Y.Z` 的 tag 与同名 Release 由 publish workflow 的最后一步创建（见 §8），**不要手工再建一遍**。手工只用于**补历史**或排查：
 
 ```powershell
 git tag --sort=-creatordate | Select-Object -First 6
 git ls-remote --tags origin
-```
-
-- 命名 `vX.Y.Z`，与 `package.json` 的 `version` 一致。
-- 补打历史版本要谨慎：那会让 release 列表出现一批没有说明的孤儿。
-
-## 7. GitHub Release
-
-**先看有没有**——可能一个都没有，那就是从无到有，而不是「更新」：
-
-```powershell
 gh release list --repo Max-Null/<repo> --limit 6
 ```
 
-用 `gh release create vX.Y.Z --title ... --notes ...`；说明按惯例分组（新增 / 调整 / 修复），**从 `git log --oneline <上个 tag>..HEAD` 提炼，不凭记忆**。
+- 命名 `vX.Y.Z`，与 `package.json` 的 `version` 一致，指向「发布时刻的 HEAD」。
+- 补打历史版本要谨慎：那会让 release 列表出现一批没有说明的孤儿。
+- **先看现状**：tag 落后于版本是常态（两个 `@max-null` 插件都落后过好几个版本）。
 
-**打 tag 不等于建 Release——这一步不能跳。** 2026-10-19 一晚连打 `v0.5.1`–`v0.5.5` 五个 tag 却只发了 npm，结果 Releases 页的 **Latest 永远停在 v0.5.0**：用户看到的「最新版本」是假的，而 tag 列表里却有一堆没有说明的孤儿。**判据**：`gh release list` 的第一条必须等于刚发的版本；不是就补。
+## 7. Release 的说明从哪来
 
-**建完之后把 Latest 指对**：GitHub 把「最后创建的」标为 Latest，所以补旧版本要在最后 `gh release create <最新> --latest` 或用 `gh release edit <最新> --latest` 纠回。
+workflow 用 `scripts/release-notes.mjs <version>` 从 `CHANGELOG.md` 提取 `## [<version>]` 段；找不到（或该仓没有 CHANGELOG）时退回 GitHub 自动生成的 notes，**不会阻断发布**。所以：
 
-**纯文档的连续补丁可以合并成一个 Release**（如 0.5.3 / 0.5.4 并入 0.5.5），但**行为变更必须各有一个**——否则 release 列表里会出现没有独立说明的版本。
+- **发版前确认 CHANGELOG 有这一版**——缺了不会失败，但 Release 会变成一串 commit 标题。2026-10-21 批量升级时实测：9 个仓没有 CHANGELOG，`dsh-chinese-thinking` 与 `dsh-tone-layer` 的 CHANGELOG 落后一版。
+- 纯文档的连续补丁可以合并成一个 Release（如 0.5.3 / 0.5.4 并入 0.5.5），但**行为变更必须各有一个**——否则 release 列表里会出现没有独立说明的版本。
+- **Release 建完把 Latest 指对**：GitHub 把「最后创建的」标为 Latest，补旧版本后要 `gh release edit <最新> --latest` 纠回。
+- **判据**：`gh release list` 的第一条必须等于刚发的版本；不是就补。
 
-## 8. 发布（GitHub Actions + OIDC）
+## 8. 发布（GitHub Actions + OIDC，一个触发点做三件事）
 
-**不在本地跑 `npm publish`。** 版本提交与 tag 就绪后，触发仓库里的 publish workflow：
+**不在本地跑 `npm publish`。** 版本提交与推送后，触发仓库里的 publish workflow：
 
 ```powershell
-gh workflow run publish.yml -R Max-Null/<repo>
+gh workflow run publish.yml -R Max-Null/<repo> -f dry-run=false
 ```
+
+它依次做：`install --frozen-lockfile → typecheck → test → build → npm publish --provenance → 打 vX.Y.Z tag → 建 GitHub Release`。**publish 失败则后面的步骤不执行**，不会留下「有 tag 没包」的版本；tag 与 Release 各自幂等（已存在就跳过，不覆盖指向）。
+
+**触发权在开发会话**（2026-10-21 用户明示「改成由你来操作就好」）：触发、打 tag、建 Release 都由会话执行，用户只发起一次「发版」指令。控制点仍是「人发起」，不是自动——**不要**加 `push: tags` 触发器。
 
 发布前核对本地包内容（产物是这次构建的、`files` 覆盖对）：
 
@@ -138,7 +139,7 @@ npm trust list @max-null/<pkg>   # 需要 2FA；输出 "No trust configurations 
 | README 里每个 API 名、路径、上限都对得上实现吗？ | §2 |
 | 产物是这次构建的吗？ | §3 |
 | 工作树里有没有混进别人的改动？ | §4 |
-| tag 打了吗？指向这次提交吗？ | §6 |
-| Release 建了吗？说明是提炼的还是凭记忆的？ | §7 |
-| npm 命令交给用户了吗？包内容核对过吗？ | §8 |
+| workflow 跑完了吗？tag 指向这次提交吗？ | §6 |
+| Release 建了吗？notes 来自 CHANGELOG 还是自动生成？Latest 指对了吗？ | §7 |
+| npm / tag / Release 三件都验收了吗？ | §8 |
 | vendor 同步了，还是明确判定不适用？ | §9 |

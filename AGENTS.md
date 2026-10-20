@@ -34,4 +34,4 @@ npm run sync:vendor     # vendor 同步
 ## 文档约定
 
 - 规范修订/新决策 → 先增补手册（含变更记录），配套决策记录进 `docs/决策/`（日期-标题.md）。
-- 发版走 `ssid-release` skill + `docs/发版流程规范.md`；npm 发布由用户手动（F2A）。
+- 发版走 `ssid-release` skill + `docs/发版流程规范.md`；插件发版（npm publish + tag + GitHub Release）由开发会话触发 workflow，用户只发起一次「发版」指令（2026-10-21 用户明示改，见工作区铁律 9）。
