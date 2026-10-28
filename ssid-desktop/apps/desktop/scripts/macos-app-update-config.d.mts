@@ -3,14 +3,18 @@
  *
  * `generic` 分支的 `provider` 可选：`package-macos.ts` 直接把 COS 配置
  * （`DesktopAutoUpdateConfig`，只有 `publicUrl`）传进来，语义上就是 generic 来源。
+ * `channel` 省略时按 `DSH_DESKTOP_UPDATE_CHANNEL` 回落（默认 nightly）。
+ *
+ * `github` 分支是思灵自己的发布通道（GitHub Releases）—— 未签名构建没有 COS 凭据，
+ * 自动更新靠它，不需要自备静态托管与上传密钥。
  */
 export type MacOSAppUpdateFeed =
-  | { readonly provider?: 'generic', readonly publicUrl: string }
+  | { readonly provider?: 'generic', readonly publicUrl: string, readonly channel?: 'nightly' | 'latest' }
   | { readonly provider: 'github', readonly owner: string, readonly repo: string }
 
 /** Packaged electron-updater configuration for macOS. */
 export type MacOSAppUpdateConfig =
-  | { readonly provider: 'generic', readonly url: string, readonly channel: 'nightly', readonly updaterCacheDirName: string }
+  | { readonly provider: 'generic', readonly url: string, readonly channel: 'nightly' | 'latest', readonly updaterCacheDirName: string }
   | { readonly provider: 'github', readonly owner: string, readonly repo: string, readonly updaterCacheDirName: string }
 
 /** Resolve the macOS feed from the final electron-builder configuration (generic COS or GitHub Releases). */

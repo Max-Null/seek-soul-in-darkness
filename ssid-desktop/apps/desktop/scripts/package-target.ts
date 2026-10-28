@@ -1,7 +1,6 @@
 /** Build one release target with matching Electron and dsh architecture. */
 
 import { spawn } from 'node:child_process'
-import { DESKTOP_PRODUCT_NAME } from './electron-builder-config.mjs'
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { parseArgs } from 'node:util'
 import { join, resolve } from 'node:path'
@@ -9,9 +8,9 @@ import {
   desktopBuildRecordFilename,
   resolveDesktopAutoUpdateConfig,
 } from './desktop-auto-update-environment.mjs'
-import { desktopTargetBuildPaths } from './desktop-build-paths.mjs'
+import { desktopArtifactOutput, desktopTargetBuildPaths } from './desktop-build-paths.mjs'
 import { packageMacOSArtifacts, type DesktopPrepackagedArtifact } from './package-macos.ts'
-import { loadDesktopPackageEnvironment, validateDesktopPackageEnvironment } from './desktop-package-environment.mjs'
+import { loadDesktopPackageEnvironment, localMacOSPackageEnvironment, validateDesktopPackageEnvironment } from './desktop-package-environment.mjs'
 import { createPackagingRun, recordPackagingEvent } from './packaging-run.mjs'
 import { withWindowsSigningStage } from './windows-signing-stage.mjs'
 import { prepareWindowsSignatureCacheDirectory, resolveWindowsSignatureCacheDirectory } from './windows-signature-cache-directory.mjs'
@@ -37,22 +36,6 @@ const WINDOWS_SIGNING_ENV_NAMES = [
   'DSH_DESKTOP_WINDOWS_SIGNATURE_CACHE_DIR',
   'DSH_DESKTOP_WINDOWS_SIGNATURE_CACHE_CONCURRENCY',
 ] as const
-// SSiD：未签名构建要连 Apple 的凭据一起撤走。分属两个命名族 —— 壳自己的
-// DSH_DESKTOP_MACOS_* 与 Apple 工具直接读的 APPLE_* —— 所以显式枚举而不按前缀清理：
-// DSH_DESKTOP_MACOS_ 下还挂着并发与代理设置，那些是构建参数，不是凭据。
-// desktop-package-environment.mjs 的公证策略清单同样在调用侧枚举，不从这里取常量。
-const MACOS_SIGNING_ENV_NAMES = new Set([
-  'DSH_DESKTOP_MACOS_SIGNING_IDENTITY',
-  'DSH_DESKTOP_MACOS_TEAM_ID',
-  'APPLE_API_KEY',
-  'APPLE_API_KEY_ID',
-  'APPLE_API_ISSUER',
-  'APPLE_ID',
-  'APPLE_APP_SPECIFIC_PASSWORD',
-  'APPLE_TEAM_ID',
-  'APPLE_KEYCHAIN',
-  'APPLE_KEYCHAIN_PROFILE',
-])
 const DESKTOP_UPLOAD_CREDENTIAL_ENV_NAMES = new Set([
   'DOWNLOAD_TEST_COS_SECRET_ID',
   'DOWNLOAD_TEST_COS_SECRET_KEY',
@@ -99,9 +82,6 @@ const TARGETS: Record<DesktopPackageTargetName, DesktopPackageTarget> = {
   },
 }
 
-/** Targets whose packaging path has an unsigned variant. */
-const UNSIGNED_TARGETS: ReadonlySet<string> = new Set(['mac-arm64', 'mac-x64', 'win-x64'])
-
 /**
  * Remove Windows signing configuration from package preparation subprocesses.
  * @param environment - Packaging command environment.
@@ -113,9 +93,9 @@ export function withoutWindowsSigningEnvironment(environment: NodeJS.ProcessEnv)
 }
 
 /**
- * Select signing and NSIS-compatible archive filters for electron-builder.
+ * Select signing mode and strip unsigned-build credentials for packaging subprocesses.
  * @param environment - Target packaging environment.
- * @param unsigned - Whether to create a local unsigned artifact.
+ * @param unsigned - Whether to create a local artifact without release signing or notarization.
  * @returns Packaging environment without certificate inputs for unsigned builds.
  */
 export function desktopElectronBuilderEnvironment(environment: NodeJS.ProcessEnv, unsigned: boolean): NodeJS.ProcessEnv {
@@ -123,11 +103,9 @@ export function desktopElectronBuilderEnvironment(environment: NodeJS.ProcessEnv
   // The bundled NSIS decoder cannot extract 7-Zip's automatic ARM64-filtered entries.
   if (environment.DSH_DESKTOP_TARGET_PLATFORM === 'win32') selected.ELECTRON_BUILDER_7Z_FILTER = 'BCJ'
   if (!unsigned) return selected
-  // CSC_IDENTITY_AUTO_DISCOVERY also keeps electron-builder from adopting a developer
-  // certificate installed on the build host, leaving the mac target on its ad-hoc identity.
   return {
     ...Object.fromEntries(Object.entries(withoutWindowsSigningEnvironment(selected))
-      .filter(([name]) => !/^(?:WIN_)?CSC_/iu.test(name) && !MACOS_SIGNING_ENV_NAMES.has(name))),
+      .filter(([name]) => !/^(?:(?:WIN_)?CSC_|APPLE_|DSH_DESKTOP_MACOS_(?:SIGNING_|TEAM_ID$))/iu.test(name))),
     CSC_IDENTITY_AUTO_DISCOVERY: 'false',
     DSH_DESKTOP_UNSIGNED: '1',
   }
@@ -173,6 +151,7 @@ function writeReleaseRecord(
     target: target.name,
     version: buildVersion,
     environment: update.environment,
+    channel: update.channel,
     publicUrl: update.publicUrl,
     // Upload reads this to tag the commit a production release was packaged from.
     ...packaged === undefined ? {} : { commit: packaged.commit, dirty: packaged.dirty },
@@ -216,6 +195,7 @@ interface DesktopPackageInvocation {
   readonly directory: boolean
   readonly prepareOnly: boolean
   readonly unsigned: boolean
+  readonly skipNotarization: boolean
   readonly check: boolean
   /** Build identifier to publish under, when this build does not publish the product version. */
   readonly requestedBuildVersion: string | undefined
@@ -248,19 +228,17 @@ export function parseDesktopPackageInvocation(
       dir: { type: 'boolean', default: false },
       'prepare-only': { type: 'boolean', default: false },
       unsigned: { type: 'boolean', default: false },
+      'skip-notarization': { type: 'boolean', default: false },
       check: { type: 'boolean', default: false },
       'build-version': { type: 'string' },
     },
   })
   if (positionals.length > 1) throw new Error('desktop package: expected at most one target')
   const name = positionals[0] ?? hostTargetName(hostPlatform, hostArch)
-  // SSiD：未签名通道 Windows 与 macOS 都有 —— Windows 走未签名 NSIS，macOS 走 ad-hoc 签名
-  // 加跳过公证。两者的宿主限制仍由 resolveDesktopPackageTarget 判定（mac-x64 要 Intel Mac
-  // 或带 Rosetta 的 Apple Silicon）。
-  if (values.unsigned && !UNSIGNED_TARGETS.has(name)) {
-    throw new Error(`desktop package: --unsigned requires ${[...UNSIGNED_TARGETS].join(', ')}`)
-  }
   if (values.unsigned && values['prepare-only']) throw new Error('desktop package: --unsigned cannot use --prepare-only')
+  if (values['skip-notarization'] && (name === 'win-x64' || values.unsigned || values['prepare-only'])) {
+    throw new Error('desktop package: --skip-notarization requires a signed macOS build, without --prepare-only')
+  }
   const requestedBuildVersion = values['build-version']?.trim()
   if (values['build-version'] !== undefined && (requestedBuildVersion === undefined || requestedBuildVersion === '')) {
     throw new Error('desktop package: --build-version requires a value')
@@ -270,6 +248,7 @@ export function parseDesktopPackageInvocation(
     directory: values.dir,
     prepareOnly: values['prepare-only'],
     unsigned: values.unsigned,
+    skipNotarization: values['skip-notarization'],
     check: values.check,
     requestedBuildVersion,
   }
@@ -348,18 +327,27 @@ async function resolveRequestedBuildVersion(
   if (requested !== AUTOMATIC_BUILD_VERSION) return validateDesktopBuildVersion(requested, productVersion)
   const paths = desktopTargetBuildPaths(invocation.target.name)
   return suggestDesktopBuildVersion({
-    productVersion, target: invocation.target.name, environment,
+    productVersion, target: invocation.target.name,
+    // Machine presets own packaging, not upload credentials; local auto numbering uses existing artifacts.
+    environment: environment.DSH_PACKAGING_PRESET === undefined ? environment : {},
     // Unsigned builds land beside the signed output, so numbering has to read the directory this run writes.
-    artifactsRoot: invocation.unsigned ? paths.unsignedArtifacts : paths.artifacts,
+    artifactsRoot: desktopArtifactOutput(paths, invocation).directory,
   })
 }
 
 async function main(): Promise<void> {
   const invocation = parseDesktopPackageInvocation(process.argv.slice(2))
   const { target } = invocation
-  const environment = loadDesktopPackageEnvironment(target.platform)
+  if (invocation.skipNotarization) {
+    process.stdout.write('desktop package: skipping notarization and stapling; internal debugging only, not qualified for distribution or update publishing\n')
+  }
+  const environment = target.platform === 'darwin' && invocation.unsigned
+    ? localMacOSPackageEnvironment()
+    : loadDesktopPackageEnvironment(target.platform, process.env, APP_ROOT, {
+      unsigned: invocation.unsigned, prepareOnly: invocation.prepareOnly,
+    })
   const productVersion = packageVersion(join(APP_ROOT, 'package.json'), 'desktop package')
-  // Release settings come from the target dotenv file alone, so the version this run publishes is an
+  // Release settings come from the selected configuration files, so the version this run publishes is an
   // argument; the environment variable below only carries it to the child processes that build.
   const buildVersion = await resolveRequestedBuildVersion(invocation, productVersion, environment)
   environment[DESKTOP_BUILD_VERSION_ENV] = buildVersion
@@ -374,7 +362,8 @@ async function main(): Promise<void> {
   Object.assign(environment, desktopBuildCommitEnvironment(packaged))
   const secrets = Object.entries(environment).filter(([name]) => /KEY|SECRET|TOKEN|PASSWORD|APPLE_ID/iu.test(name)).map(([, value]) => value ?? '')
   const run = createPackagingRun(join(APP_ROOT, '.desktop-build', 'packaging-runs'), {
-    target: target.name, unsigned: invocation.unsigned, directory: invocation.directory, prepareOnly: invocation.prepareOnly,
+    target: target.name, unsigned: invocation.unsigned, skipNotarization: invocation.skipNotarization,
+    directory: invocation.directory, prepareOnly: invocation.prepareOnly,
     version: buildVersion, productVersion, node: process.version,
     commit: packaged.commit,
     dirty: packaged.dirty,
@@ -391,8 +380,6 @@ async function main(): Promise<void> {
       recordPackagingEvent(run.directory, { type: 'macos-settings', packConcurrency: settings.packConcurrency,
         downloadProxyConfigured: settings.downloadProxy !== undefined,
         notarizationProxyConfigured: settings.notarizationProxy !== undefined })
-      // SSiD：未签名构建没有 p12 可导入，也没有可核对的发布身份，所以不建临时钥匙串；
-      // packageTarget 在 unsigned 下也不碰 Apple 工具。
       await packagingStep(run.directory, 'macos-package', () => invocation.unsigned
         ? packageTarget(invocation, environment, run)
         : withMacOSSigningKeychain(environment, signingEnvironment => packageTarget(invocation, signingEnvironment, run)), secrets)
@@ -408,6 +395,12 @@ async function main(): Promise<void> {
     if (previousDirectory === undefined) delete process.env.DSH_DESKTOP_PACKAGING_RUN_DIR
     else process.env.DSH_DESKTOP_PACKAGING_RUN_DIR = previousDirectory
     run.finish(success)
+  }
+  if (success && target.platform === 'darwin' && !invocation.directory && !invocation.prepareOnly) {
+    const paths = desktopTargetBuildPaths(target.name)
+    const output = desktopArtifactOutput(paths, invocation)
+    const filename = `deepseek-harness-${buildVersion}-mac-${target.arch}${output.suffix}.dmg`
+    console.log(`DMG: ${join(output.directory, filename)}`)
   }
 }
 
@@ -431,17 +424,18 @@ export async function packageTarget(
   const packArguments = mac === undefined ? [] : ['--concurrency', String(mac.packConcurrency)]
   const buildPaths = desktopTargetBuildPaths(target.name)
   const releaseRecordPath = join(buildPaths.artifacts, desktopBuildRecordFilename(target.name))
-  if (!invocation.prepareOnly && !invocation.unsigned) {
+  if (!invocation.prepareOnly && !invocation.unsigned && !invocation.skipNotarization) {
     rmSync(releaseRecordPath, { force: true })
     rmSync(`${releaseRecordPath}.tmp`, { force: true })
   }
-  const buildEnv = withoutWindowsSigningEnvironment(withoutDesktopUploadCredentials(environment))
+  const artifactsRoot = desktopArtifactOutput(buildPaths, invocation).directory
+  const buildEnv = withoutWindowsSigningEnvironment(withoutDesktopUploadCredentials(
+    desktopElectronBuilderEnvironment(environment, invocation.unsigned)))
   const targetEnv: NodeJS.ProcessEnv = {
     ...buildEnv,
+    DSH_DESKTOP_MACOS_SKIP_NOTARIZATION: invocation.skipNotarization ? '1' : '0',
     DSH_DESKTOP_TARGET_PLATFORM: target.platform,
     DSH_DESKTOP_TARGET_ARCH: target.arch,
-    // SSiD：prepare:dsh 据此决定是否对内核与 primary-runtime 的原生 Mach-O 预签名。
-    DSH_DESKTOP_UNSIGNED: invocation.unsigned ? '1' : '0',
   }
   const downloadEnv = macOSDownloadEnvironment(targetEnv, mac?.downloadProxy)
   const electronBuilderEnv = desktopElectronBuilderEnvironment(downloadEnv, invocation.unsigned)
@@ -501,18 +495,15 @@ export async function packageTarget(
   if (signPrimaryRuntime) await execute(['run', 'sign:primary-runtime'], electronBuilderEnv)
   await execute(['run', 'prepare:packages'], targetEnv)
   await execute(['run', 'prepare:dsh', ...(signPrimaryRuntime ? ['--defer-runtime-smoke'] : [])], downloadEnv)
-  // SSiD：随包插件集 —— electron-builder 的 extraResources 里那条 `ssid-plugins` 就从这里来。
-  // 壳（`apps/desktop/src/ssid/profile-seed.ts`）在首启把它接进 profile：建目录链接 + 补 bundles 声明。
-  await execute(['run', 'prepare:ssid-plugins'], downloadEnv)
   if (signPrimaryRuntime) await execute(['run', 'sign:primary-runtime', '--dsh'], electronBuilderEnv)
+  // 插件集（resources/ssid-plugins）不在 prepare:packages 里：模板与 vendor 的改动
+  // 只有这一步会落盘。漏掉它会静默打进上一次生成的插件集——exe 正常、能装能跑，
+  // 只是里面的插件是旧的，从产物表面完全看不出来（2026-10-18 因此白跑了一轮 28 分钟的打包）。
+  // 插件集要从 npm 拉随包插件，所以和 prepare:runtime / prepare:dsh 一样走下载路由
+  // （downloadEnv 在 macOS 配了 downloadProxy 时会带上 HTTP_PROXY，targetEnv 不带）。
+  await execute(['run', 'prepare:ssid-plugins'], downloadEnv)
   if (invocation.prepareOnly) return
-  if (target.platform === 'darwin' && invocation.unsigned) {
-    // SSiD：未签名 mac 构建与 Windows 侧同形 —— 一步出产物，不分解成「先签目录、再各自公证」，
-    // 也不写发布记录（见本函数末尾的 unsigned 守卫）。ad-hoc 身份来自配置里的 identity `-`，
-    // 产物落在 unsigned-artifacts：可运行，分发时会被 Gatekeeper 拦。
-    await execute([...desktopElectronBuilderArguments(target, invocation.directory), '--config.mac.notarize=false'], electronBuilderEnv)
-    await execute(['exec', 'tsx', 'scripts/smoke-packaged-runtime.ts', '--unsigned'], targetEnv)
-  } else if (target.platform === 'darwin' && !invocation.directory) {
+  if (target.platform === 'darwin' && !invocation.unsigned && !invocation.skipNotarization && !invocation.directory) {
     await execute([
       ...desktopElectronBuilderArguments(target, true),
       '--config.mac.notarize=false',
@@ -525,18 +516,21 @@ export async function packageTarget(
       artifactsRoot: buildPaths.artifacts,
       environment: electronBuilderEnv,
     }, artifact => execute(desktopElectronBuilderArguments(target, false, artifact), electronBuilderEnv)), undefined, undefined, proxyEvent)
-  } else if (target.platform === 'darwin') {
+  } else if (target.platform === 'darwin' && !invocation.unsigned && !invocation.skipNotarization) {
     await execute([...desktopElectronBuilderArguments(target, true), '--config.mac.notarize=false'], electronBuilderEnv)
     await execute(['exec', 'tsx', 'scripts/smoke-packaged-runtime.ts'], targetEnv)
-    const appPath = join(buildPaths.artifacts, target.arch === 'arm64' ? 'mac-arm64' : 'mac', `${DESKTOP_PRODUCT_NAME}.app`)
+    const appPath = join(buildPaths.artifacts, target.arch === 'arm64' ? 'mac-arm64' : 'mac', 'DeepSeek Harness.app')
     await withMacOSNotarizationProxy(mac?.notarizationProxy,
       () => notarizeMacOS({ appPath, ...resolveMacOSNotarizationEnvironment(environment) }), undefined, undefined, proxyEvent)
   } else {
     await signedStage('artifacts', () => execute(desktopElectronBuilderArguments(target, invocation.directory), electronBuilderEnv))
-    await execute(['exec', 'tsx', 'scripts/smoke-packaged-runtime.ts', ...(invocation.unsigned ? ['--unsigned'] : [])], targetEnv)
+    await execute(['exec', 'tsx', 'scripts/smoke-packaged-runtime.ts',
+      ...(invocation.unsigned ? ['--unsigned'] : []), ...(invocation.skipNotarization ? ['--skip-notarization'] : [])], targetEnv)
   }
-  if (!invocation.directory && !invocation.unsigned) writeReleaseRecord(target, electronBuilderEnv, buildPaths.artifacts)
-  if (journal) recordPackagingEvent(journal, { type: 'artifacts', directory: buildPaths.artifacts })
+  if (!invocation.directory && !invocation.unsigned && !invocation.skipNotarization) {
+    writeReleaseRecord(target, electronBuilderEnv, buildPaths.artifacts)
+  }
+  if (journal) recordPackagingEvent(journal, { type: 'artifacts', directory: artifactsRoot })
 }
 
 if (process.argv[1] !== undefined && import.meta.filename === resolve(process.argv[1])) await main()

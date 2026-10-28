@@ -1,4 +1,4 @@
-﻿; Compile against the production directory transaction using a private payload and target.
+; Compile against the production directory transaction using a private payload and target.
 Unicode true
 RequestExecutionLevel user
 SilentInstall silent
@@ -21,25 +21,54 @@ LangString decompressionFailed ${LANG_ENGLISH} "Payload extraction failed"
 
 Section
   InitPluginsDir
+  FileOpen $0 "${TARGET_DIR}.plugin-dir.tmp" w
+  FileWriteUTF16LE /BOM $0 "$PLUGINSDIR"
+  FileClose $0
+  Rename "${TARGET_DIR}.plugin-dir.tmp" "${TARGET_DIR}.plugin-dir"
   !ifdef SOURCE_DLL
     File "/oname=$PLUGINSDIR\window-frame.dll" "${SOURCE_DLL}"
   !endif
   StrCpy $INSTDIR "${TARGET_DIR}"
-  ; 让路：目标已存在时先改名到 `.old-<guid>`。失败（例如里面有文件被打开）就在这里以
-  ; errorlevel 2 结束，旧版本原样保留 —— 这正是 `locked` 场景期望的结果。
   !insertmacro dshStageApplication
+  !ifdef RESTORE_CONFLICT
+    Rename $dshFinalDirectory $dshOldDirectory
+    StrCpy $dshOldMoved "1"
+    CreateDirectory $dshFinalDirectory
+    FileOpen $0 "$dshFinalDirectory\unrelated.txt" w
+    FileWrite $0 "unrelated file"
+    FileClose $0
+    StrCpy $dshDirectorySource $dshNewDirectory
+    StrCpy $dshDirectoryDestination $dshFinalDirectory
+    !insertmacro dshDirectoryOperation "$dshDirectorySource" "$dshDirectoryDestination" $dshDirectoryError "promote"
+    Call dshRollbackDirectories
+    !insertmacro dshReportDirectoryFailure
+    Rename $dshFinalDirectory "${TARGET_DIR}.conflict"
+    Call dshCleanupDirectories
+    SetErrorLevel 2
+    Quit
+  !endif
   !ifdef CANCELLED
     SetErrorLevel 2
     Call dshCleanupDirectories
     Quit
   !endif
-  ; 负载直接解压进最终目录；解压失败由 `dshExtractPayload` 负责回滚。
-  !insertmacro installApplicationFiles
+  !ifdef MISSING_STAGE
+    ; A missing source makes the second rename fail after the old directory moved.
+    RMDir /r "\\?\$dshNewDirectory"
+  !endif
+  !ifdef LOCKED_STAGE
+    System::Call 'kernel32::CreateFileW(w "$dshNewDirectory\asset.txt", i 0x80000000, i 1, p 0, i 3, i 0, p 0) p.r9'
+  !endif
+  Call dshPromoteDirectories
   IfErrors failed
   !insertmacro dshFinishDirectories
   SetErrorLevel 0
   Quit
   failed:
+  !ifdef LOCKED_STAGE
+    System::Call 'kernel32::CloseHandle(p r9)'
+    Call dshCleanupDirectories
+  !endif
   SetErrorLevel 2
   Quit
 SectionEnd

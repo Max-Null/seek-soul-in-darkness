@@ -32,15 +32,14 @@ it.each(['allowOnlyOneInstallerInstance.nsh', 'installUtil.nsh'])('cleans staged
   expect(adapted).toContain('!ifndef BUILD_UNINSTALLER')
 })
 
-it('moves the existing installation aside before the payload is extracted', () => {
+it('stages the payload and promotes it at the upstream extraction point', () => {
   const result = directoryInstallSection(section)
-  // The prepare step must run before extraction: a blocked rename has to surface before 427 MB
-  // are unpacked, which is what made the old promote-after-extract order fail at 96%.
-  expect(result.indexOf('!insertmacro dshStageApplication')).toBeLessThan(result.indexOf('!insertmacro installApplicationFiles'))
+  // 暂存必须在其它安装期工作之前：旧安装在 promote 时才被挪走，失败还能整体回滚。
   expect(result.indexOf('!insertmacro dshStageApplication')).toBeLessThan(result.indexOf('!insertmacro CHECK_APP_RUNNING'))
-  // The payload now lands directly in the final directory, so upstream's call stays where it is.
-  expect(result).toContain('!insertmacro installApplicationFiles')
-  expect(result).not.toContain('Call dshPromoteDirectories')
+  // 负载落在暂存目录，上游的 `installApplicationFiles` 调用点改成 promote ——
+  // 换入失败时原安装仍在，而且能在解压 427 MB 之前报错。
+  expect(result).not.toContain('!insertmacro installApplicationFiles')
+  expect(result).toContain('Call dshPromoteDirectories')
   expect(result).toContain('!insertmacro addStartMenuLink $keepShortcuts')
   expect(result).toContain('!insertmacro addDesktopLink $keepShortcuts')
   expect(result).toContain('!insertmacro handleUninstallResult HKEY_CURRENT_USER')

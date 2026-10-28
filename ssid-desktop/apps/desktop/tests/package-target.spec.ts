@@ -73,19 +73,16 @@ describe('desktop package target', () => {
     expect(desktopElectronBuilderArguments(target, true)).toContain('--dir')
   })
 
-  it('accepts unsigned Windows and macOS artifacts and rejects preparation-only use', () => {
+  it('accepts unsigned supported targets and rejects preparation-only use', () => {
     expect(parseDesktopPackageInvocation(['win-x64', '--unsigned'], 'win32', 'x64').unsigned).toBe(true)
     expect(parseDesktopPackageInvocation(['win-x64'], 'win32', 'x64').unsigned).toBe(false)
     expect(parseDesktopPackageInvocation(['--unsigned', '--dir'], 'win32', 'x64')).toMatchObject({
       unsigned: true, directory: true,
     })
-    // macOS 未签名构建与 Windows 同形；宿主限制不变，mac-x64 仍要 Intel Mac 或带 Rosetta 的 Apple Silicon。
-    expect(parseDesktopPackageInvocation(['mac-arm64', '--unsigned'], 'darwin', 'arm64'))
-      .toMatchObject({ unsigned: true, target: { name: 'mac-arm64' } })
-    expect(parseDesktopPackageInvocation(['mac-x64', '--unsigned', '--dir'], 'darwin', 'arm64'))
-      .toMatchObject({ unsigned: true, directory: true, target: { name: 'mac-x64' } })
-    expect(() => parseDesktopPackageInvocation(['mac-x64', '--unsigned'], 'darwin', 'ppc64'))
-      .toThrow(/Rosetta/u)
+    for (const name of ['mac-arm64', 'mac-x64']) {
+      expect(parseDesktopPackageInvocation([name, '--unsigned'], 'darwin', 'arm64').unsigned).toBe(true)
+      expect(parseDesktopPackageInvocation([name, '--unsigned', '--dir'], 'darwin', 'arm64').directory).toBe(true)
+    }
     expect(() => parseDesktopPackageInvocation(['--unsigned', '--prepare-only'], 'win32', 'x64'))
       .toThrow(/cannot use --prepare-only/u)
   })
@@ -98,10 +95,16 @@ describe('desktop package target', () => {
       CSC_KEY_PASSWORD: 'secret',
       WIN_CSC_LINK: 'windows.pfx',
       CSC_IDENTITY_AUTO_DISCOVERY: 'true',
+      APPLE_API_KEY: 'private.p8',
+      APPLE_APP_SPECIFIC_PASSWORD: 'apple-secret',
+      DSH_DESKTOP_MACOS_SIGNING_IDENTITY: 'Example Company (TEAMID1234)',
+      DSH_DESKTOP_MACOS_TEAM_ID: 'TEAMID1234',
+      DSH_DESKTOP_MACOS_PACK_CONCURRENCY: '2',
       DSH_DESKTOP_UNSIGNED: '1',
     }
     expect(desktopElectronBuilderEnvironment(environment, true)).toEqual({
       DSH_DESKTOP_APP_ID: 'com.example.desktop',
+      DSH_DESKTOP_MACOS_PACK_CONCURRENCY: '2',
       CSC_IDENTITY_AUTO_DISCOVERY: 'false',
       DSH_DESKTOP_UNSIGNED: '1',
     })
@@ -174,4 +177,13 @@ describe('desktop package target', () => {
       DSH_DESKTOP_AUTO_UPDATE_ENV: 'production',
     })
   })
+})
+
+it('allows skipping notarization only for signed macOS packages', () => {
+  expect(parseDesktopPackageInvocation(['mac-arm64'], 'darwin', 'arm64').skipNotarization).toBe(false)
+  expect(parseDesktopPackageInvocation(['mac-arm64', '--skip-notarization'], 'darwin', 'arm64').skipNotarization).toBe(true)
+  for (const flag of ['--unsigned', '--prepare-only']) {
+    expect(() => parseDesktopPackageInvocation(['mac-arm64', '--skip-notarization', flag], 'darwin', 'arm64')).toThrow(/requires a signed macOS build/u)
+  }
+  expect(() => parseDesktopPackageInvocation(['win-x64', '--skip-notarization'], 'win32', 'x64')).toThrow(/requires a signed macOS build/u)
 })

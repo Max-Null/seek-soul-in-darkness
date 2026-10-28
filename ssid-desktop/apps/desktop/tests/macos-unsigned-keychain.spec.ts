@@ -6,8 +6,15 @@ import { afterEach, expect, it, vi } from 'vitest'
 
 const state = vi.hoisted(() => ({ root: '', keychainCalls: 0 }))
 
+// 上游的未签名通道走 `localMacOSPackageEnvironment()`（不读发布凭据文件），
+// 因此 mock 必须同时给出这一个导出。本地环境 → 发布凭据缺失，正是未签名起点。
 vi.mock('../scripts/desktop-package-environment.mjs', () => ({
   loadDesktopPackageEnvironment: () => ({
+    DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN: 'https://policy.example.com',
+    DSH_DESKTOP_TARGET_PLATFORM: 'darwin',
+    DSH_DESKTOP_TARGET_ARCH: 'arm64',
+  }),
+  localMacOSPackageEnvironment: () => ({
     DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN: 'https://policy.example.com',
     DSH_DESKTOP_TARGET_PLATFORM: 'darwin',
     DSH_DESKTOP_TARGET_ARCH: 'arm64',

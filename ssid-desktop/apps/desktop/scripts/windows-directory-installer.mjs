@@ -37,9 +37,7 @@ export function directoryInstallSection(source) {
 !macroend`)
   result = replaceOnce(result, '!insertmacro setLinkVars', `!insertmacro setLinkVars
 !insertmacro dshStageApplication`)
-  // Payload extraction now lands directly in the final directory, so upstream's
-  // `installApplicationFiles` call stays where it is: the prepare step (before it) moves any existing
-  // installation aside, and a failure there is reported before 427 MB are unpacked.
+  result = replaceOnce(result, '!insertmacro installApplicationFiles', 'Call dshPromoteDirectories\nIfErrors 0 +3\n  SetErrorLevel 2\n  Quit')
   result = replaceOnce(result, '!ifdef UNINSTALLER_ICON\n  File /oname=uninstallerIcon.ico "${UNINSTALLER_ICON}"\n!endif\n', '')
   // The staging macro uses the upstream installer macro, including its signed uninstaller.
   return result

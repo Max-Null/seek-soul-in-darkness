@@ -56,7 +56,7 @@ async function runPackageScript(script: string, cwd: string): Promise<void> {
   await run(process.execPath, [packageManager, 'run', script], cwd)
 }
 
-async function launchElectron(): Promise<void> {
+async function launchElectron(extraArgs: readonly string[]): Promise<void> {
   const require = createRequire(import.meta.url)
   const electron: unknown = require('electron')
   if (typeof electron !== 'string') throw new Error('desktop development: electron executable is unavailable')
@@ -86,6 +86,7 @@ async function launchElectron(): Promise<void> {
     `--inspect=127.0.0.1:${String(mainPort)}`,
     `--remote-debugging-port=${String(rendererPort)}`,
     `--user-data-dir=${userData}`,
+    ...extraArgs,
     APP_ROOT,
   ], APP_ROOT, environment)
 }
@@ -93,7 +94,7 @@ async function launchElectron(): Promise<void> {
 async function main(): Promise<void> {
   const { values } = parseArgs({ options: { 'skip-build': { type: 'boolean', default: false } } })
   if (!values['skip-build']) {
-    await runPackageScript('build', REPOSITORY_ROOT)
+    await runPackageScript('build:artifacts', REPOSITORY_ROOT)
     await runPackageScript('build', APP_ROOT)
   }
   for (const path of [
@@ -122,7 +123,10 @@ async function main(): Promise<void> {
     target: resolveDesktopBuildTarget(),
   })
   await preparePrimaryRuntime()
-  await launchElectron()
+  // 诊断/临时开关：`SSID_DEV_ELECTRON_ARGS` 里的空格分隔参数原样转给 Electron
+  // （如 `--disable-gpu`），不参与下面的 parseArgs 选项解析。
+  const extraArgs = (process.env.SSID_DEV_ELECTRON_ARGS ?? '').trim()
+  await launchElectron(extraArgs === '' ? [] : extraArgs.split(/\s+/u))
 }
 
 await main().catch((error: unknown) => {

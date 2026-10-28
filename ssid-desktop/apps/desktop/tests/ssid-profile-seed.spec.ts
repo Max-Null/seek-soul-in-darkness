@@ -231,7 +231,7 @@ describe('出厂 patch 条目合并', () => {
   it('空骨架的 profile 拿到出厂条目：`[]` 必须去掉，文件头必须留住', () => {
     makePluginSet(['@max-null/dsh-memory'])
     makeProfile()
-    makePluginSetPatch('# 出厂说明（不该被搬进 profile）\n- id: connection\n  inject: [webRuntime, webServer]\n\n'.concat(MCP_INSERT))
+    makePluginSetPatch('# 出厂说明（不该被搬进 profile）\n- id: connection\n  inject: [webStartup, webServer]\n\n'.concat(MCP_INSERT))
     // `initProfile()` 的产物形态：一段注释 + 裸 `[]`（packages/boot/app-boot/src/profile.ts）。
     makeProfilePatch('# 你自己的 patch 层\n[]\n')
 
@@ -250,10 +250,12 @@ describe('出厂 patch 条目合并', () => {
   it('出厂条目以模板为准：旧版同名条目退役，用户自己的条目原样保留', () => {
     makePluginSet(['@max-null/dsh-memory'])
     makeProfile()
-    makePluginSetPatch('- id: connection\n  inject: [webRuntime, webServer]\n')
+    makePluginSetPatch('- id: connection\n  inject: [webStartup, webServer]\n')
     makeProfilePatch([
       '# 用户文件头',
       '- id: connection',
+      // 旧内核（0.2.0 及更早）留下的值：`webRuntime` 服务在 0.2.1-alpha.2 被删除。
+      // 保留它正是这条用例的意思 —— 同名条目按 id 退役，与旧内容长什么样无关。
       '  inject: [webRuntime]',
       '',
       '- id: my-own-thing',
@@ -265,8 +267,8 @@ describe('出厂 patch 条目合并', () => {
     seedSsidProfile({ profileDir, pluginSetRoot })
 
     const text = readPatch()
-    expect(text).toContain('inject: [webRuntime, webServer]')
-    expect(text).not.toContain('inject: [webRuntime]\n')
+    expect(text).toContain('inject: [webStartup, webServer]')
+    expect(text).not.toContain('inject: [webStartup]\n')
     expect(text).toContain('- id: my-own-thing')
     expect(text).toContain('# 用户文件头')
   })
@@ -290,12 +292,12 @@ describe('出厂 patch 条目合并', () => {
   it('已是最新就不写盘：不留备份、内容逐字节不变', () => {
     makePluginSet(['@max-null/dsh-memory'])
     makeProfile()
-    makePluginSetPatch('- id: connection\n  inject: [webRuntime, webServer]\n')
-    makeProfilePatch('# head\n- id: connection\n  inject: [webRuntime, webServer]\n')
+    makePluginSetPatch('- id: connection\n  inject: [webStartup, webServer]\n')
+    makeProfilePatch('# head\n- id: connection\n  inject: [webStartup, webServer]\n')
 
     seedSsidProfile({ profileDir, pluginSetRoot })
 
-    expect(readPatch()).toBe('# head\n- id: connection\n  inject: [webRuntime, webServer]\n')
+    expect(readPatch()).toBe('# head\n- id: connection\n  inject: [webStartup, webServer]\n')
     expect(readdirSync(profileDir).filter(name => name.startsWith('cordis.patch.yml.bak-'))).toEqual([])
   })
 
@@ -310,7 +312,7 @@ describe('出厂 patch 条目合并', () => {
     expect(readPatch()).toBe(untouched)
 
     // 有出厂 patch：写盘前留一份备份。
-    makePluginSetPatch('- id: connection\n  inject: [webRuntime, webServer]\n')
+    makePluginSetPatch('- id: connection\n  inject: [webStartup, webServer]\n')
     seedSsidProfile({ profileDir, pluginSetRoot })
     const backups = readdirSync(profileDir).filter(name => name.startsWith('cordis.patch.yml.bak-'))
     expect(backups).toHaveLength(1)

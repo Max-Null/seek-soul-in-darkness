@@ -85,7 +85,9 @@ async function fixture(body: (context: {
       updaterCacheDirName: `dsh-update-test-${run.id}-updater` }))
     const seal = async () => {
       // ASAR 3 returns the output stream after end(), before its writes finish.
-      const output = await createPackageWithOptions(source, archive, { unpack: '**/*.exe' })
+      // `unpack` matches the file NAME in asar 3.4.x, not the archive-relative path:
+      // `**/*.exe` silently matches nothing there, so the executable must be named directly.
+      const output = await createPackageWithOptions(source, archive, { unpack: '*.exe' })
       await finished(output, { cleanup: true })
       uncache(archive)
     }

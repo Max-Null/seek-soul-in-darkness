@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import type { NotarizeOptions } from '@electron/notarize'
 import {
   resolveDesktopAppId,
@@ -12,6 +13,11 @@ import {
   assertMacOSSignatureDetails,
 } from '../scripts/verify-macos-signature.mjs'
 import { macOSNativeSigningIdentity } from '../scripts/macos-runtime.ts'
+
+const require = createRequire(import.meta.url)
+const { validateConfiguration } = require('app-builder-lib/out/util/config/config.js') as {
+  validateConfiguration: (config: object, logger: { isEnabled: false }) => Promise<void>
+}
 
 const RELEASE_ENVIRONMENT = {
   DSH_DESKTOP_APP_ID: 'com.example.desktop',
@@ -89,6 +95,7 @@ describe('desktop macOS release signature', () => {
         signIgnore: ['/Contents/Resources/app\\.asar\\.unpacked/dsh(?:/|$)', '/Contents/Resources/runtime/primary-runtime(?:/|$)', '/Contents/Resources/ssid-plugins(?:/|$)', '\\.pak$'],
       },
       dmg: {
+        format: 'ULMO',
         sign: true,
         writeUpdateInfo: false,
       },
@@ -101,15 +108,32 @@ describe('desktop macOS release signature', () => {
     expect(typeof config.artifactBuildCompleted).toBe('function')
   })
 
+  it('accepts LZMA DMGs through builder validation while rejecting unknown formats', async () => {
+    const { createElectronBuilderConfig } = await import('../scripts/electron-builder-config.mjs')
+    for (const arch of ['arm64', 'x64']) {
+      for (const unsigned of ['0', '1']) {
+        const config = createElectronBuilderConfig({
+          ...RELEASE_ENVIRONMENT,
+          DSH_DESKTOP_TARGET_ARCH: arch,
+          DSH_DESKTOP_UNSIGNED: unsigned,
+        }, 'darwin', arch)
+        expect(config.dmg.format).toBe('ULMO')
+        await expect(validateConfiguration(config, { isEnabled: false })).resolves.toBeUndefined()
+      }
+    }
+    await expect(validateConfiguration({ dmg: { format: 'invalid' } }, { isEnabled: false }))
+      .rejects.toThrow('configuration.dmg.format')
+  })
+
   it('seals PAK resources with their enclosing bundle while signing executable code', async () => {
     const { createElectronBuilderConfig } = await import('../electron-builder.config.mjs')
     const config = createElectronBuilderConfig(RELEASE_ENVIRONMENT, 'darwin', 'arm64')
     const ignored = (path: string): boolean => config.mac.signIgnore.some(pattern => new RegExp(pattern).test(path))
     expect(ignored('/App.app/Contents/Frameworks/Electron.framework/Versions/A/Resources/en.lproj/locale.pak')).toBe(true)
     expect(ignored('/App.app/Contents/Frameworks/Electron.framework/Versions/A/Resources/resources.pak')).toBe(true)
+    expect(ignored('/App.app/Contents/Resources/runtime/primary-runtime/dependencies/pnpm/addon.node')).toBe(true)
     for (const path of [
       '/App.app/Contents/Resources/runtime/node/node',
-      '/App.app/Contents/Resources/runtime/pnpm/addon.node',
       '/App.app/Contents/Frameworks/Electron.framework/Versions/A/library.dylib',
       '/App.app/Contents/Frameworks/Electron.framework',
       '/App.app',
@@ -147,34 +171,40 @@ describe('desktop macOS release signature', () => {
     })
   })
 
-  it('packages unsigned macOS builds with an ad-hoc identity and no notarization', async () => {
-    const { createElectronBuilderConfig } = await import('../electron-builder.config.mjs')
+  it.each(['arm64', 'x64'])('does not let electron-builder sign an unsigned macOS %s build, and points it at the GitHub release feed', async (arch) => {
+    const { createElectronBuilderConfig } = await import('../scripts/electron-builder-config.mjs')
     // SSiD：未签名构建不读 Apple 凭据，所以这套只有目标平台的配置必须能构造出 builder 配置。
-    const unsignedEnvironment = {
+    const config = createElectronBuilderConfig({
       DSH_DESKTOP_APP_ID: RELEASE_ENVIRONMENT.DSH_DESKTOP_APP_ID,
-      DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN: 'https://policy.example.com',
-      DSH_DESKTOP_MANDATORY_UPDATE_CONFIG: JSON.stringify({ allowedAuthOrigins: ['https://login.example.com'] }),
-      DSH_DESKTOP_TARGET_PLATFORM: 'darwin',
-      DSH_DESKTOP_TARGET_ARCH: 'arm64',
       DSH_DESKTOP_UNSIGNED: '1',
-    }
-    const config = createElectronBuilderConfig(unsignedEnvironment, 'darwin', 'arm64')
-    expect(portablePath(config.directories.output)).toContain('/targets/mac-arm64/unsigned-artifacts')
+    }, 'darwin', arch)
+    expect(portablePath(config.directories.output)).toContain(`/targets/mac-${arch}/unsigned-artifacts`)
+    // SSiD：产物名前缀是产品名 `ssid-`（官方是 `deepseek-harness-`）。
     expect(config.artifactName).toBe('ssid-${version}-${os}-${arch}-unsigned.${ext}')
-    expect(config).toMatchObject({
-      // SSiD：unsigned 下 electron-builder 整个跳过签名，由 afterPack 自己用 ad-hoc 身份签 ——
-      // osx-sign 那次关不掉的 `codesign --verify --deep` 在这棵含 LibreOfficeDev.app 的 bundle 上不可靠。
-      mac: { identity: null, forceCodeSigning: false, notarize: false },
-      dmg: { sign: false, writeUpdateInfo: false },
-      publish: [{ provider: 'github', owner: 'Max-Null', repo: 'seek-soul-in-darkness' }],
-    })
+    // SSiD：未签名构建的 identity 是 null 而不是 ad-hoc 的 `-` —— 不让 electron-builder 签，
+    // 因为它签完会固定跑 `codesign --verify --deep --strict`，而 signIgnore 排除了 runtime 与
+    // ssid-plugins，里面本来就有未签的二进制（普查 141 个 Mach-O 里 8 个未签），verify 必失败。
+    // ad-hoc 签名改由 afterPack 对整个 app 做一次 `--deep`。
+    expect(config.mac).toMatchObject({ identity: null, forceCodeSigning: false, notarize: false, target: ['dmg'] })
+    expect(config.dmg).toMatchObject({ sign: false, writeUpdateInfo: false })
+    // SSiD：官方让未签名产物不带更新元数据（`publish: null`）。思灵不买签名证书（构建恒为
+    // unsigned），但仍要自动更新，所以未签名构建也写 feed 指向公开的 GitHub Releases ——
+    // 代价是更新包没有签名校验，那是「不签名」这一决定本身的既有代价，不是新增的。
+    expect(config.publish).toEqual([{ provider: 'github', owner: 'Max-Null', repo: 'seek-soul-in-darkness' }])
+    expect(config.extraMetadata).not.toHaveProperty('dshMandatoryUpdatePolicy')
+    await expect(config.afterSign({ electronPlatformName: 'darwin' } as Parameters<typeof config.afterSign>[0])).resolves.toBeUndefined()
     // 未签名构建没有可提交的凭据，磁盘映像钩子必须直接返回而不是去解析公证环境。
-    expect(config.artifactBuildCompleted({ file: '/tmp/release.dmg' })).toBeUndefined()
-    expect(typeof config.afterSign).toBe('function')
+    expect(config.artifactBuildCompleted({ file: '/tmp/local-unsigned.dmg' })).toBeUndefined()
+  })
+
+  it('omits mandatory-update policy from local macOS builds even when release settings are supplied', async () => {
+    const { createElectronBuilderConfig } = await import('../scripts/electron-builder-config.mjs')
+    const config = createElectronBuilderConfig({ ...RELEASE_ENVIRONMENT, DSH_DESKTOP_UNSIGNED: '1' }, 'darwin', 'arm64')
+    expect(config.extraMetadata).not.toHaveProperty('dshMandatoryUpdatePolicy')
   })
 
   it('still requires Apple credentials for a signed macOS build', async () => {
-    const { createElectronBuilderConfig } = await import('../electron-builder.config.mjs')
+    const { createElectronBuilderConfig } = await import('../scripts/electron-builder-config.mjs')
     const platformOnly = {
       DSH_DESKTOP_APP_ID: RELEASE_ENVIRONMENT.DSH_DESKTOP_APP_ID,
       DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN: 'https://policy.example.com',
@@ -193,7 +223,7 @@ describe('desktop macOS release signature', () => {
     }, 'darwin', 'arm64')).toThrow(/macOS packaging requires/u)
   })
 
-  it('rejects a malformed unsigned mode', async () => {
+  it('rejects malformed signing modes', async () => {
     const { createElectronBuilderConfig } = await import('../electron-builder.config.mjs')
     expect(() => createElectronBuilderConfig({ ...RELEASE_ENVIRONMENT, DSH_DESKTOP_UNSIGNED: 'yes' }))
       .toThrow(/must be 0 or 1/u)
@@ -295,4 +325,20 @@ describe('desktop macOS release signature', () => {
     expect(submitted).toEqual(['/tmp/release.dmg'])
     expect(verified).toEqual(['/tmp/release.dmg'])
   })
+})
+
+it('signs debugging artifacts without Apple credentials and isolates them from releases', async () => {
+  const { createElectronBuilderConfig } = await import('../scripts/electron-builder-config.mjs')
+  const config = createElectronBuilderConfig({ ...RELEASE_ENVIRONMENT,
+    APPLE_API_KEY: undefined, APPLE_API_KEY_ID: undefined, APPLE_API_ISSUER: undefined,
+    DSH_DESKTOP_MACOS_SKIP_NOTARIZATION: '1',
+  }, 'darwin', 'arm64')
+  expect(config.mac.forceCodeSigning).toBe(true)
+  expect(config.mac.notarize).toBe(false)
+  expect(config.dmg.sign).toBe(true)
+  expect(config.mac).toMatchObject({ target: ['dmg', 'zip'] })
+  expect(config.artifactName).toContain('-unnotarized.')
+  expect(portablePath(config.directories.output)).toContain('/unnotarized-artifacts')
+  expect(() => createElectronBuilderConfig({ ...RELEASE_ENVIRONMENT, DSH_DESKTOP_MACOS_SKIP_NOTARIZATION: 'yes' }, 'darwin', 'arm64')).toThrow(/must be 0 or 1/u)
+  expect(() => createElectronBuilderConfig({ ...RELEASE_ENVIRONMENT, DSH_DESKTOP_MACOS_SKIP_NOTARIZATION: '1', DSH_DESKTOP_UNSIGNED: '1' }, 'darwin', 'arm64')).toThrow(/requires a signed macOS build/u)
 })

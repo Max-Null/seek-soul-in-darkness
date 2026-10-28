@@ -79,7 +79,7 @@ describe('migrateLegacyProfile', () => {
     symlinkSync(pluginSetRoot, join(scope, 'cosmokit'), 'junction')
     const patch = '# head\n- id: keep-me\n  config:\n    keep: true\n'
     makeProfile({}, patch)
-    makePluginSet([], '- id: connection\n  inject: [webRuntime]\n')
+    makePluginSet([], '- id: connection\n  inject: [webStartup]\n')
 
     const result = migrateLegacyProfile(profileDir, pluginSetRoot, () => {})
 
@@ -96,7 +96,7 @@ describe('migrateLegacyProfile', () => {
 
   it('归档部署的旧 profile：改名备份，用户层搬过去，出厂条目留给模板', () => {
     makeLegacyEntities(12)
-    makePluginSet(['@max-null/dsh-memory'], '- id: connection\n  inject: [webRuntime, webServer]\n')
+    makePluginSet(['@max-null/dsh-memory'], '- id: connection\n  inject: [webStartup, webServer]\n')
     makeProfile({
       '@max-null/dsh-memory': 'link:/somewhere/dsh-memory', // 随包插件集供的
       '@deepseek-ai/dsh-app-boot': '0.1.5-rc.2', // 官方内核供的
@@ -106,6 +106,8 @@ describe('migrateLegacyProfile', () => {
     }, [
       '# 用户文件头',
       '- id: connection',
+      // 旧内核（0.2.0 及更早）留下的值：`webRuntime` 服务在 0.2.1-alpha.2 被删除。
+      // 迁移按 id 剔除出厂条目，与旧内容长什么样无关 —— 保留旧值正是这条用例的意思。
       '  inject: [webRuntime]',
       '',
       '- id: keep-me',
@@ -137,7 +139,7 @@ describe('migrateLegacyProfile', () => {
 
   it('实体在但没进 bundles 的包不搬（运行时框架不是插件）', () => {
     makeLegacyEntities(12)
-    makePluginSet([], '- id: connection\n  inject: [webRuntime]\n')
+    makePluginSet([], '- id: connection\n  inject: [webStartup]\n')
     makeProfile({ cordis: '4.0.0-rc.8', '@standard-schema/spec': '^1.1.0' }, '# head\n')
     makeInstalled('cordis')
     makeInstalled('@standard-schema/spec')
@@ -151,7 +153,7 @@ describe('migrateLegacyProfile', () => {
 
   it('旧 profile 里是链接的插件，搬过去仍建链接', () => {
     makeLegacyEntities(12)
-    makePluginSet([], '- id: connection\n  inject: [webRuntime]\n')
+    makePluginSet([], '- id: connection\n  inject: [webStartup]\n')
     makeProfile({ 'linked-plugin': 'link:H:/dev/linked-plugin' }, '# head\n', ['linked-plugin'])
     const source = join(root, 'dev-linked')
     mkdirSync(source, { recursive: true })

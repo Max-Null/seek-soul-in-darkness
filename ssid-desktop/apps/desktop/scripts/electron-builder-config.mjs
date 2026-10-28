@@ -12,7 +12,7 @@ import {
   resolveMacOSSigningEnvironment,
 } from './desktop-release-environment.mjs'
 import { notarizeMacOSDiskImageArtifact } from './notarize-macos-disk-images.mjs'
-import { verifyMacOSSignatureAfterSign } from './verify-macos-signature.mjs'
+import { verifyMacOSDiskImageSignature, verifyMacOSSignatureAfterSign } from './verify-macos-signature.mjs'
 import {
   createWindowsTokenSigner,
   installWindowsNsisBootstrapSigner,
@@ -23,7 +23,7 @@ import { resolveDesktopAutoUpdateConfig } from './desktop-auto-update-environmen
 import { resolveDesktopBuildCommit } from './desktop-build-commit.mjs'
 import { resolveDesktopBuildVersion } from './desktop-build-version.mjs'
 import { resolveDesktopPolicyEnvironment } from './desktop-policy-environment.mjs'
-import { desktopTargetBuildPaths, resolveDesktopBuildTarget } from './desktop-build-paths.mjs'
+import { desktopArtifactOutput, desktopTargetBuildPaths, resolveDesktopBuildTarget } from './desktop-build-paths.mjs'
 import { installWindowsDirectoryInstaller } from './windows-directory-installer.mjs'
 import { preserveWindowsRuntimeSignature, signWindowsCode } from './windows-runtime-signature.mjs'
 import { prepareWindowsAsarUnpack, verifyWindowsAsarUnpack } from './windows-asar-unpack.mjs'
@@ -61,7 +61,6 @@ export function createElectronBuilderConfig(
   preparedRuntimeVersion = undefined,
 ) {
   const appId = resolveDesktopAppId(env)
-  const policy = resolveDesktopPolicyEnvironment(env)
   const targetPlatform = env.DSH_DESKTOP_TARGET_PLATFORM
   const resolvedPlatform = targetPlatform ?? hostPlatform
   const resolvedArch = env.DSH_DESKTOP_TARGET_ARCH ?? hostArch
@@ -69,16 +68,23 @@ export function createElectronBuilderConfig(
     throw new Error('desktop package: DSH_DESKTOP_UNSIGNED must be 0 or 1')
   }
   const unsigned = env.DSH_DESKTOP_UNSIGNED === '1'
+  const skipNotarization = env.DSH_DESKTOP_MACOS_SKIP_NOTARIZATION === '1'
+  if (env.DSH_DESKTOP_MACOS_SKIP_NOTARIZATION !== undefined && !['0', '1'].includes(env.DSH_DESKTOP_MACOS_SKIP_NOTARIZATION)) {
+    throw new Error('desktop package: DSH_DESKTOP_MACOS_SKIP_NOTARIZATION must be 0 or 1')
+  }
+  if (skipNotarization && (unsigned || resolvedPlatform !== 'darwin')) throw new Error('Skipping notarization requires a signed macOS build')
   const packagesMacOS = targetPlatform === 'darwin' || (targetPlatform === undefined && hostPlatform === 'darwin')
   const packagesWindows = resolvedPlatform === 'win32'
+  const policy = packagesMacOS && unsigned ? undefined : resolveDesktopPolicyEnvironment(env)
   if (resolvedPlatform === 'win32') installWindowsDirectoryInstaller()
   // SSiD：未签名构建不读 Apple 凭据 —— macOS 侧改用 ad-hoc 身份（identity `-`）签名并跳过公证，
   // 没有开发者账号也能出可运行的包。这与 Windows 侧「不买证书、接受 SmartScreen」是同一取舍的
   // 两个平台版本：产物可运行，但分发时 Windows 弹 SmartScreen 警告、macOS 被 Gatekeeper 拦，
   // 由使用者自行决定是否放行。有签名构建仍要求完整的签名身份与公证策略。
   const macOSSigning = packagesMacOS && !unsigned ? resolveMacOSSigningEnvironment(env) : undefined
-  if (packagesMacOS && !unsigned) resolveMacOSNotarizationEnvironment(env)
+  if (packagesMacOS && !unsigned && !skipNotarization) resolveMacOSNotarizationEnvironment(env)
   const buildPaths = desktopTargetBuildPaths(resolveDesktopBuildTarget(env, hostPlatform, hostArch))
+  const output = desktopArtifactOutput(buildPaths, { unsigned, skipNotarization })
   let primaryRuntimeDestination
   let dshDestination
   let windowsCode = []
@@ -112,20 +118,22 @@ export function createElectronBuilderConfig(
   // 产品版本 —— 自 1.0.0 起两者独立，下面校验运行时树的完整性必须用对是哪一个。
   const dshVersion = JSON.parse(readFileSync(fileURLToPath(new URL('../../../package.json', import.meta.url)), 'utf8')).version
   const buildVersion = resolveDesktopBuildVersion(env, productVersion)
+  if (update?.channel === 'latest' && buildVersion.includes('-')) throw new Error('desktop package: latest requires a stable version')
   const packaged = resolveDesktopBuildCommit(env)
   return {
     appId,
     protocols: [{ name: '思灵', schemes: ['dsh'] }],
     extraMetadata: {
       dshDesktopAppId: appId,
-      dshMandatoryUpdatePolicy: policy,
+      dshDesktopUpdateChannel: update?.channel ?? 'nightly',
+      ...(policy === undefined ? {} : { dshMandatoryUpdatePolicy: policy }),
       ...buildVersion === productVersion ? {} : { version: buildVersion },
       ...packaged === undefined ? {} : { dshBuildCommit: packaged.commit, dshBuildDirty: packaged.dirty },
     },
     productName: DESKTOP_PRODUCT_NAME,
     // Unsigned builds carry their own suffix so a shared file can never pass for a release artifact.
-    artifactName: `ssid-\${version}-\${os}-\${arch}${unsigned ? '-unsigned' : ''}.\${ext}`,
-    directories: { output: unsigned ? buildPaths.unsignedArtifacts : buildPaths.artifacts },
+    artifactName: `ssid-\${version}-\${os}-\${arch}${output.suffix}.\${ext}`,
+    directories: { output: output.directory },
     asar: true,
     electronDist: buildPaths.electron,
     electronFuses: { runAsNode: true },
@@ -154,6 +162,8 @@ export function createElectronBuilderConfig(
       'lib/preload-welcome.cjs',
       'renderer/**/*',
       'package.json',
+      '!node_modules/**/*.{js,cjs,mjs,ts,cts,mts,css}.map',
+      '!node_modules/**/*.tsbuildinfo',
       { from: buildPaths.dsh, to: 'dsh', filter: ['**/*'] },
       // electron-builder excludes a source directory's root node_modules.
       { from: join(buildPaths.dsh, 'node_modules'), to: 'dsh/node_modules', filter: ['**/*'] },
@@ -176,9 +186,12 @@ export function createElectronBuilderConfig(
     mac: {
       icon: fileURLToPath(new URL('../resources/icon-macos.png', import.meta.url)),
       category: 'public.app-category.developer-tools',
-      // SSiD：未签名构建落到 ad-hoc 身份 `-`（取舍见上面的凭据解析），有签名构建用发布身份。
-      // SSiD：未签名构建让 electron-builder 整个跳过签名（identity null + forceCodeSigning false），
-      // 改由 afterPack 用 ad-hoc 身份自己签 —— 原因见那边调用点的注释。
+      // Ad-hoc signing keeps the modified Electron executable runnable without a Developer ID.
+      // SSiD：未签名构建**不让 electron-builder 签**（identity: null）——它签完会固定跑
+      // `codesign --verify --deep --strict`，而 signIgnore 排除了 runtime/primary-runtime 与
+      // ssid-plugins，里面 python 的 .so、pnpm 的 @reflink 本来就没有签名（普查 141 个 Mach-O
+      // 里 8 个未签），于是 verify 必失败；@electron/osx-sign 又把真正的错因吞成一句 Command failed。
+      // 改由 afterPack 用 ad-hoc 身份对整个 app 做一次 --deep 签名，把那些文件一起带上。
       identity: unsigned ? null : macOSSigning?.signingIdentity,
       forceCodeSigning: !unsigned,
       hardenedRuntime: true,
@@ -189,21 +202,15 @@ export function createElectronBuilderConfig(
       },
       entitlements: fileURLToPath(new URL('./macos-entitlements.plist', import.meta.url)),
       entitlementsInherit: fileURLToPath(new URL('./macos-entitlements.plist', import.meta.url)),
-      // ASAR-unpacked native runtime files are pre-signed; PAK resources are sealed by their enclosing bundle.
+      // Prepared runtime files retain their signatures; PAK resources are sealed by their enclosing bundle.
       // SSiD：插件集里带着从 GitHub release 下载的二进制（codegraph 引擎），与 runtime/primary-runtime 同理
       // 不在这里签。**macOS 侧尚未验证** —— 公证可能拒绝这些第三方二进制。
-      // SSiD：未签名构建没有「已预签名」这回事 —— @electron/osx-sign 签名后固定跑
-      // `codesign --verify --deep`（--deep 关不掉），被排除的嵌套 Mach-O 会让它直接失败，
-      // 所以 unsigned 下不再排除任何路径，交给 osx-sign 统一用 ad-hoc 身份签。
-      signIgnore: unsigned
-        ? ['\\.pak$']
-        : ['/Contents/Resources/app\\.asar\\.unpacked/dsh(?:/|$)', '/Contents/Resources/runtime/primary-runtime(?:/|$)', '/Contents/Resources/ssid-plugins(?:/|$)', '\\.pak$'],
-      // 未签名构建没有可提交给 Apple 的凭据，公证整条跳过。
-      notarize: !unsigned,
-      target: ['dmg', 'zip'],
+      signIgnore: ['/Contents/Resources/app\\.asar\\.unpacked/dsh(?:/|$)', '/Contents/Resources/runtime/primary-runtime(?:/|$)', '/Contents/Resources/ssid-plugins(?:/|$)', '\\.pak$'],
+      notarize: !unsigned && !skipNotarization,
+      target: unsigned ? ['dmg'] : ['dmg', 'zip'],
     },
     dmg: {
-      // 未签名构建的磁盘映像不签名：ad-hoc 对 Gatekeeper 不构成任何保证。
+      format: 'ULMO',
       sign: !unsigned,
       writeUpdateInfo: false,
     },
@@ -234,18 +241,13 @@ export function createElectronBuilderConfig(
         preparedRuntimeVersion ?? dshVersion, { platform: resolvedPlatform, arch: resolvedArch })
       // Unsigned Windows builds skip electron-builder's afterSign hook.
       if (packagesWindows && unsigned) await verifyWindowsAsarUnpack(buildPaths.dsh, resourcesDir, windowsCode)
-      // SSiD：未签名 mac 构建在这里自己用 ad-hoc 身份签名。@electron/osx-sign 签完固定跑
-      // `codesign --verify --deep`（该验证关不掉：`mac.strictVerify` 只控制 --strict，`mac.timestamp`
-      // 又被 MacTargetHelper 的 `customSignOptions.timestamp || undefined` 吞回默认 true），实测它在这棵
-      // 含 LibreOfficeDev.app 的巨型 bundle 上必然失败，而同一个 app 事后重跑同一条命令却通过 ——
-      // 产物本身完好（普查 144 个 Mach-O 全部有签名）。所以 unsigned 下让 electron-builder 跳过签名，
-      // 由这里用同一条 codesign 完成，不让一个结果不可复现的验证卡住整条打包链。
-      if (packagesMacOS && unsigned) {
-        await promisify(execFile)('/usr/bin/codesign', [
-          '--force', '--deep', '--sign', '-', '--options', 'runtime',
-          '--entitlements', fileURLToPath(new URL('./macos-entitlements.plist', import.meta.url)),
-          join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`),
-        ])
+      // 未签名 macOS：electron-builder 不再签名（identity: null），这里对整包做一次 ad-hoc 深签。
+      // 用 --deep 是为了把 signIgnore 排除掉的那些文件（python 的 .so、pnpm 的 @reflink）一起带上——
+      // 它们没有原生签名，留着就会让后续任何 `codesign --verify --deep` 失败。
+      if (context.electronPlatformName === 'darwin' && unsigned) {
+        const appBundle = join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`)
+        await promisify(execFile)('codesign', ['--sign', '-', '--force', '--deep', '--options', 'runtime',
+          '--entitlements', fileURLToPath(new URL('./macos-entitlements.plist', import.meta.url)), appBundle])
       }
     },
     afterSign: async context => {
@@ -257,7 +259,7 @@ export function createElectronBuilderConfig(
         })
         await verifyWindowsAsarUnpack(buildPaths.dsh, context.packager.getResourcesDir(context.appOutDir), windowsCode)
       }
-      if (context.electronPlatformName !== 'darwin') return
+      if (context.electronPlatformName !== 'darwin' || unsigned) return
       const appPath = join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`)
       if (update !== undefined) {
         await verifyMacOSAppUpdateConfig(appPath, resolveMacOSAppUpdateFeed(context.packager.config.publish),
@@ -268,6 +270,10 @@ export function createElectronBuilderConfig(
     },
     artifactBuildCompleted: artifact => {
       if (unsigned || !artifact.file.endsWith('.dmg')) return
+      if (skipNotarization) {
+        verifyMacOSDiskImageSignature(artifact.file, macOSSigning ?? resolveMacOSSigningEnvironment(env))
+        return
+      }
       return notarizeMacOSDiskImageArtifact(
         artifact,
         env,
@@ -306,6 +312,6 @@ export function createElectronBuilderConfig(
     // 「不签名」这一决定本身的既有代价，不是新增的。配了 COS 的构建仍按原样走 generic。
     publish: update === undefined
       ? [{ provider: 'github', owner: 'Max-Null', repo: 'seek-soul-in-darkness' }]
-      : [{ provider: 'generic', url: update.publicUrl, channel: 'nightly' }],
+      : [{ provider: 'generic', url: update.publicUrl, channel: update.channel }],
   }
 }

@@ -105,6 +105,7 @@ vi.mock('electron', () => ({
 vi.mock('../src/tray.ts', () => ({ DesktopTray: class { relabel() {} dispose() {} } }))
 
 vi.mock('../src/paths.ts', () => ({ resolveDesktopPaths: () => ({ profile: '/profile' }) }))
+vi.mock('../src/settings.ts', () => ({ readDesktopSettings: () => ({ updates: { allowTestAuthPopupWindow: false } }) }))
 vi.mock('../src/login-shell-environment.ts', async importOriginal => ({
   ...await importOriginal<typeof import('../src/login-shell-environment.ts')>(),
   readDesktopLoginShellEnvironment: async (base: NodeJS.ProcessEnv) => ({ environment: base, failures: [] }),
@@ -199,7 +200,7 @@ it.each([false, true])('starts welcome onboarding without carrying update focus 
   state.beforeWelcome.mockReturnValueOnce(loading.promise)
   const activate = () => {
     state.appListeners.get('second-instance')!()
-    state.appListeners.get('open-url')!({ preventDefault: vi.fn() }, 'dsh://open')
+    state.appListeners.get('open-url')!({ preventDefault: vi.fn() }, 'ssid://open')
   }
   await import('../src/main.ts')
   await vi.waitFor(() => { expect(state.beforeRead).toHaveBeenCalledOnce() })
@@ -297,8 +298,10 @@ it.each([false, true])('starts welcome onboarding without carrying update focus 
   expect(state.focusWorkspace).not.toHaveBeenCalled()
   expect(state.moveTopWorkspace).not.toHaveBeenCalled()
   expect(state.openDevTools).not.toHaveBeenCalled()
+  // `dsh://` 让给了官方桌面版（两者是同一份上游代码、注册同一个协议名，谁后启动谁抢走），
+  // 思灵的协议是 `ssid://`。所以收到 `dsh://open` 必须**毫无动作** —— 这正是共存的前提。
   state.appListeners.get('open-url')!({ preventDefault: vi.fn() }, 'dsh://open')
-  expect(state.showWorkspace).toHaveBeenCalledOnce()
-  expect(state.focusWorkspace).toHaveBeenCalledOnce()
+  expect(state.showWorkspace).not.toHaveBeenCalled()
+  expect(state.focusWorkspace).not.toHaveBeenCalled()
 
 })

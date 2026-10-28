@@ -248,7 +248,7 @@ async function main(): Promise<void> {
     })
     if (incompatible.length > 0) {
       throw new Error(`ssid plugins: 随包 bundle 与内核 ${runtimeVersion} 不兼容，内核启动时会静默跳过它们：\n`
-        + incompatible.map(issue => `  ${issue.name}@${issue.version} → peers ${JSON.stringify(issue.peers)}`).join('\n'))
+        + incompatible.map(issue => `  ${issue.name}@${issue.version} → requirements ${JSON.stringify(issue.requirements)}`).join('\n'))
     }
     writeFileSync(join(out, SSID_PLUGIN_SET_MANIFEST), `${JSON.stringify({
       schemaVersion: 1,
