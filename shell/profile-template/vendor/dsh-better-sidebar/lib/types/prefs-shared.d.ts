@@ -25,6 +25,17 @@ export interface SidebarPrefs {
      * classic indentation tree (the in-page toggle still flips it ad hoc).
      */
     tasksViewMode: 'graph' | 'tree';
+    /** Automatically fold settled leaf tasks (agents without child agents). */
+    tasksAutoFoldSettled: boolean;
+    /** Aggregate a fully settled branch independently of the settled-leaf switch. */
+    tasksAutoFoldBranches: boolean;
+    /** Aggregate idle teammates when at least three are idle. */
+    tasksAutoFoldIdle: boolean;
+    /**
+     * Collapse the jobs drawer when the agent count reaches eight; manual
+     * toggling remains available.
+     */
+    jobsAutoCollapse: boolean;
     /**
      * MOBILE ADAPTATION (narrow viewports, `isNarrowWidth`): while the viewport
      * is narrow, do not auto-activate the Tasks page for background activity —

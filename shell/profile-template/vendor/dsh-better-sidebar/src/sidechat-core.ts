@@ -304,25 +304,37 @@ function compactionTail(events: readonly SidechatLogEvent[]): SidechatLogEvent[]
   const checkpoint = events[cut]
   if (checkpoint === undefined) return undefined
   let parentNodes: readonly number[]
+  let checkpointShadowed: ReadonlySet<number> | undefined
   try {
     const fold = foldSurface(events as unknown as Parameters<typeof foldSurface>[0])
     parentNodes = fold.nodes
+    // The checkpoint's declared [startSeq,endSeq] range is not its shadowed
+    // set once a replacement sits inside it: use the surface entries the fold
+    // recorded as actually removed.
+    const replacement = fold.replacements.find(item => item.seq === checkpoint.seq)
+    checkpointShadowed = replacement === undefined ? undefined : new Set<number>(replacement.shadowedSeqs)
   } catch {
     return undefined
   }
   const surfaceIndex = parentNodes.indexOf(checkpoint.seq)
-  // The checkpoint must sit on the surface, and every node before its
-  // surface slot must predate the cut (a post-cut node reordered ahead of
-  // the checkpoint would need the very shadowing we are removing).
+  // The checkpoint must sit on the surface. The nodes before its slot are
+  // the head; a post-cut node there is a later replacement of the protected
+  // head slot (a model switch rewrites the system prompt), not a reordered
+  // tail node — `headSlotOf` resolves the replacement chain or refuses.
   if (surfaceIndex === -1) return undefined
-  const head: number[] = []
+  const headSlots: HeadSlot[] = []
   let keepFirst: number | undefined
   let sawTailNode = false
   for (let index = 0; index < parentNodes.length; index++) {
     if (index === surfaceIndex) continue
     const seq = parentNodes[index] as number
+    if (index < surfaceIndex) {
+      const slot = headSlotOf(events, seq, cut, checkpointShadowed)
+      if (slot === undefined) return undefined
+      headSlots.push(slot)
+      continue
+    }
     if (seq >= cut) {
-      if (index < surfaceIndex) return undefined
       sawTailNode = true
       continue
     }
@@ -330,11 +342,12 @@ function compactionTail(events: readonly SidechatLogEvent[]): SidechatLogEvent[]
     // log order]; anything else cannot be reproduced and degrades to the
     // full copy.
     if (sawTailNode) return undefined
-    if (index < surfaceIndex) head.push(seq)
-    else if (keepFirst === undefined) keepFirst = seq
+    if (keepFirst === undefined) keepFirst = seq
   }
-  const headEvents = headSkeleton(events, head)
+  const headEvents = headSkeleton(events, headSlots)
   if (headEvents === undefined) return undefined
+  const consumedSeqs = new Set<number>()
+  for (const slot of headSlots) for (const seq of slot.consumed) consumedSeqs.add(seq)
   let keepStart = enclosingTurnStart(events, keepFirst)
   // The loop writes a turn's inbox INSERT before its turn/start and the
   // CLAIM right after it; starting the keep window at the turn/start would
@@ -366,6 +379,7 @@ function compactionTail(events: readonly SidechatLogEvent[]): SidechatLogEvent[]
     for (let index = from; index < to; index++) {
       const event = events[index]
       if (event === undefined || isCompactionGroupEvent(event, groupId)) continue
+      if (consumedSeqs.has(event.seq)) continue
       const op = (event as { surfaceOp?: unknown }).surfaceOp
       if (op === null || typeof op !== 'object' || (op as { op?: unknown }).op !== 'replace') continue
       const start = (op as { startSeq?: unknown }).startSeq
@@ -392,6 +406,7 @@ function compactionTail(events: readonly SidechatLogEvent[]): SidechatLogEvent[]
       const event = events[index]
       if (event === undefined) continue
       if (isCompactionGroupEvent(event, groupId)) continue
+      if (consumedSeqs.has(event.seq)) continue
       if (index < cut && keepSkip(event)) continue
       emittedSeqs.add(event.seq)
     }
@@ -479,6 +494,7 @@ function compactionTail(events: readonly SidechatLogEvent[]): SidechatLogEvent[]
   for (let index = keepStart; index < cut; index++) {
     const event = events[index]
     if (event === undefined || isCompactionGroupEvent(event, groupId)) continue
+    if (consumedSeqs.has(event.seq)) continue
     if (keepSkip(event)) continue
     if (droppedGroups.has(String(dataOf(event).compactionId))) continue
     if (droppedDones.has(event.seq)) continue
@@ -487,6 +503,7 @@ function compactionTail(events: readonly SidechatLogEvent[]): SidechatLogEvent[]
   for (let index = cut + 1; index < events.length; index++) {
     const event = events[index]
     if (event === undefined || isCompactionGroupEvent(event, groupId)) continue
+    if (consumedSeqs.has(event.seq)) continue
     if (droppedGroups.has(String(dataOf(event).compactionId))) continue
     if (droppedDones.has(event.seq)) continue
     emit(event)
@@ -652,31 +669,117 @@ function toolResultCallIdOf(event: SidechatLogEvent): string | undefined {
   return typeof callId === 'string' && callId !== '' ? callId : undefined
 }
 
+/** Bound on a system-prompt replacement chain; real chains are 2-4 hops. */
+const MAX_HEAD_REPLACEMENTS = 16
+
 /**
- * The surviving pre-cut head as a state-machine-complete event list: the
- * head nodes (surface order == log order for surviving appends) wrapped in
- * a turn/step skeleton NORMALIZED to turn 1 step 1 — the seed is a fresh
- * log, the host's turn/step counters must start there, and the head node's
- * original numbers are envelope metadata the rebase is free to rewrite
- * (the protected system head can be a mid-session rewrite living in a later
- * turn/step). Closers are recovered from the log when the skeleton's own
- * closers were dropped with the span. A head wider than one step/turn (or
- * numbers that disagree) is not a shape this builder represents and falls
- * back to the full copy.
+ * One head slot before the checkpoint. The anchor is the pre-cut event the
+ * checkpoint left outside its shadowed set; the effective event is what the
+ * parent surface shows in that slot — the anchor itself, or the latest
+ * replacement of it (a model switch rewrites the system prompt). The
+ * replacement-chain events the head consumes must not be emitted again.
+ */
+interface HeadSlot {
+  /** Seq of the anchor event that owns the slot. */
+  anchor: number
+  /** Event the child emits in the slot (the anchor or its latest replacement). */
+  effective: SidechatLogEvent
+  /** Replacement-chain events the head consumes (the effective included); keep/tail loops skip them. */
+  consumed: readonly number[]
+}
+
+/** The span a replace surface marker targets, when it is a valid one. */
+function surfaceReplaceSpan(event: SidechatLogEvent): { start: number; end: number } | undefined {
+  const op = (event as { surfaceOp?: unknown }).surfaceOp
+  if (op === null || typeof op !== 'object' || (op as { op?: unknown }).op !== 'replace') return undefined
+  const start = (op as { startSeq?: unknown }).startSeq
+  const end = (op as { endSeq?: unknown }).endSeq
+  if (typeof start !== 'number' || typeof end !== 'number' || start > end) return undefined
+  return { start, end }
+}
+
+/**
+ * Resolve one surface node before the checkpoint to the head slot the child
+ * must carry. A node at or after the cut can still sit ahead of the
+ * checkpoint when a later event replaced the protected system head (a model
+ * switch rewrites the system prompt): the surface keeps the LATEST
+ * replacement in the head slot, so the child carries that replacement and
+ * drops the chain it replaced — the switched model saw the same
+ * post-compaction surface as the original one.
+ *
+ * The chain is representable only when every step is a single-node
+ * replacement of the system head and the anchor predates the cut and is not
+ * one of the entries the checkpoint removed. Membership uses the checkpoint's
+ * recorded shadowed set, not its declared numeric range: a replacement inside
+ * that range may still be a surviving keep-window entry. A range replace, a
+ * removed target, a non-system node, a forward/cyclic chain, or a missing
+ * anchor returns undefined and degrades to the verbatim full copy.
  * @param events - the parent's log.
- * @param head - seqs of the surviving pre-cut surface nodes before the
- *  checkpoint's surface slot.
+ * @param seq - the surface node seq to resolve.
+ * @param cut - the checkpoint's log index.
+ * @param checkpointShadowed - the checkpoint's actual shadowed entries, when the fold recorded them.
+ * @returns the resolved slot, or undefined when the shape is not representable.
+ */
+function headSlotOf(
+  events: readonly SidechatLogEvent[],
+  seq: number,
+  cut: number,
+  checkpointShadowed: ReadonlySet<number> | undefined,
+): HeadSlot | undefined {
+  const surface = events[seq]
+  if (surface === undefined) return undefined
+  if (seq < cut) return { anchor: seq, effective: surface, consumed: [] }
+  // A post-cut node in the head slot needs the checkpoint's actual shadowed
+  // set: membership, not the declared numerical range, decides whether a
+  // replacement target was already removed by the checkpoint.
+  if (checkpointShadowed === undefined || checkpointShadowed.size === 0) return undefined
+  const consumed: number[] = []
+  const seen = new Set<number>()
+  let current: SidechatLogEvent | undefined = surface
+  while (current !== undefined) {
+    if (seen.has(current.seq) || seen.size > MAX_HEAD_REPLACEMENTS) return undefined
+    seen.add(current.seq)
+    if (current.type !== 'system/message') return undefined
+    const replace = surfaceReplaceSpan(current)
+    if (replace === undefined) {
+      // The chain ends at the surviving anchor: it must predate the cut and
+      // must not be one of the entries the checkpoint removed.
+      if (current.seq >= cut || checkpointShadowed.has(current.seq)) return undefined
+      return { anchor: current.seq, effective: surface, consumed }
+    }
+    if (replace.start !== replace.end || replace.start >= current.seq) return undefined
+    if (checkpointShadowed.has(replace.start)) return undefined
+    consumed.push(current.seq)
+    current = events[replace.start]
+  }
+  return undefined
+}
+
+/**
+ * The surviving head as a state-machine-complete event list: the head slots
+ * (surface order; a slot is its pre-cut anchor, or the latest replacement of
+ * it) wrapped in a turn/step skeleton NORMALIZED to turn 1 step 1 — the seed
+ * is a fresh log, the host's turn/step counters must start there, and the
+ * emitted node's original numbers are envelope metadata the rebase is free to
+ * rewrite (the protected system head can be a mid-session rewrite living in a
+ * later turn/step, including a replacement written after the checkpoint).
+ * Closers are recovered from the log when the skeleton's own closers were
+ * dropped with the span. A head wider than one step/turn (or numbers that
+ * disagree) is not a shape this builder represents and falls back to the full
+ * copy.
+ * @param events - the parent's log.
+ * @param slots - the resolved head slots before the checkpoint's surface slot.
  * @returns the head segment's events, or undefined when the shape is not
  *  representable.
  */
-function headSkeleton(events: readonly SidechatLogEvent[], head: readonly number[]): SidechatLogEvent[] | undefined {
-  if (head.length === 0) return []
-  const first = events[head[0] as number]
-  const last = events[head[head.length - 1] as number]
+function headSkeleton(events: readonly SidechatLogEvent[], slots: readonly HeadSlot[]): SidechatLogEvent[] | undefined {
+  if (slots.length === 0) return []
+  const first = events[slots[0]!.anchor]
+  const last = events[slots[slots.length - 1]!.anchor]
   if (first === undefined || last === undefined) return undefined
   let turnStart: SidechatLogEvent | undefined
   let stepStart: SidechatLogEvent | undefined
-  for (let index = head[0]! - 1; index >= 0; index--) {
+  for (let index = first.seq - 1; index >= 0; index--) {
     const event = events[index]
     if (event === undefined) break
     if (event.type === 'turn/end') break
@@ -704,10 +807,12 @@ function headSkeleton(events: readonly SidechatLogEvent[], head: readonly number
     if (typeof turn !== 'number') return undefined
     const step = stepStart !== undefined ? dataOf(stepStart).step : undefined
     if (stepStart !== undefined && typeof step !== 'number') return undefined
-    // Nodes must all sit in this ONE step/turn (by their ORIGINAL numbers);
-    // a wider head is not a shape this builder represents.
-    for (const seq of head) {
-      const node = events[seq]
+    // The ANCHORS must all sit in this ONE step/turn (by their ORIGINAL
+    // numbers); a replacement slot carries the anchor's slot position, so it
+    // is checked by the anchor's numbers, not the replacement's. A wider head
+    // is not a shape this builder represents.
+    for (const slot of slots) {
+      const node = events[slot.anchor]
       if (node === undefined) return undefined
       const nodeData = dataOf(node)
       if (nodeData.turn !== turn && nodeData.turn !== undefined) return undefined
@@ -715,11 +820,11 @@ function headSkeleton(events: readonly SidechatLogEvent[], head: readonly number
     }
     parts.push(normalized(turnStart, { turn: 1 }))
     if (stepStart !== undefined) parts.push(normalized(stepStart, { turn: 1, step: 1 }))
-    for (const seq of head) parts.push(normalized(events[seq]!, { turn: 1, ...(stepStart !== undefined ? { step: 1 } : {}) }))
+    for (const slot of slots) parts.push(normalized(slot.effective, { turn: 1, ...(stepStart !== undefined ? { step: 1 } : {}) }))
     // Close the skeleton when its closers are dropped with the span: the
-    // first step/end / turn/end of this step/turn after the last node.
+    // first step/end / turn/end of this step/turn after the last anchor.
     let closedStep = false
-    for (let index = head[head.length - 1]! + 1; index < events.length; index++) {
+    for (let index = last.seq + 1; index < events.length; index++) {
       const event = events[index]
       if (event === undefined) break
       if (!closedStep && event.type === 'step/end' && typeof step === 'number'
@@ -736,10 +841,11 @@ function headSkeleton(events: readonly SidechatLogEvent[], head: readonly number
     }
     return closedStep || step === undefined ? parts : undefined
   }
-  // No enclosing turn: out-of-turn events are legal as-is.
-  for (const seq of head) {
-    const node = events[seq]
-    if (node === undefined) return undefined
+  // No enclosing turn: out-of-turn events are legal as-is. A replacement slot
+  // has no turn to normalize into, so it is not representable here.
+  for (const slot of slots) {
+    const node = events[slot.anchor]
+    if (node === undefined || slot.effective !== node) return undefined
     parts.push(node)
   }
   return parts

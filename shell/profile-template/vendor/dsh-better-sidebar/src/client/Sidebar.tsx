@@ -48,10 +48,10 @@ import { createOpenInApp } from './open-in-app.ts'
 import { useCenterColumn } from './sidebar/use-center-column.ts'
 import { useHostFeeds } from './sidebar/use-host-feeds.ts'
 import { mountedSessions } from './native/surface.ts'
-import { useRightPanelOpen } from './sidebar/right-panel-open.ts'
 import type { TabDragPayload } from './TabBar.tsx'
 import { t } from './locales.ts'
 import { useSessionRoot } from './use-session-root.ts'
+import { useSessionScope } from './session-scope.ts'
 import css from './sidebar.module.css'
 
 /**
@@ -268,18 +268,22 @@ export function Sidebar(props: { ctx: Context; store: SidebarStore }) {
   // signal `renderTab` already gates its tab bodies on, so a collapsed shell
   // holds no session-root timer (the store adds `document.hidden` on top).
   const cwd = useSessionRoot(ctx, sessionId, { visible: state?.bottomOpen === true })
+  // The scope the registry seams receive (badge / rightActions / + menu). Stable
+  // by content (session-scope.ts): external plugins may memoize on it, and it is
+  // rebuilt in three different callbacks below.
+  const shellScope = useSessionScope(sessionId, cwd)
 
   // The + menu options ride a memo so the workbench does not rebuild the
   // array identity across renders that did not change the store (drag state,
   // viewport resize): fresh arrays per render re-rendered every LeafView's
   // + affordance whether or not anything tab-related moved.
   const newTabOptions = useMemo(
-    () => (state === undefined || sessionId === undefined ? [] : buildNewTabOptions(state, ctx, { sessionId, cwd })),
+    () => (state === undefined || shellScope === undefined ? [] : buildNewTabOptions(state, ctx, shellScope)),
     // state is the whole session state — every field it wraps is fair game
     // for the descriptors' available() callbacks. (The render's own guard
     // sits below every hook; this memo must handle the no-session case
     // itself.)
-    [state, ctx, sessionId, cwd],
+    [state, ctx, shellScope],
   )
 
   // Host feeds (sidebar/use-host-feeds.ts): the agent-opens WebSocket push
@@ -496,13 +500,13 @@ export function Sidebar(props: { ctx: Context; store: SidebarStore }) {
       // Route through the service: the tab-bar close is the canonical close
       // path (finds the pane itself, fires descriptor.onClose); the session
       // scope (with its cwd) rides to the callback.
-      ctx.get('betterSidebar')?.closeTab(tabId, sessionId === undefined ? undefined : { sessionId, cwd })
+      ctx.get('betterSidebar')?.closeTab(tabId, shellScope)
     },
     activateTab: (paneId, tabId) => {
       // Route through the service: same reducer (finds the pane, sets the
       // active pane) and fires descriptor.onActivate; the session scope
       // (with its cwd) rides to the callback.
-      ctx.get('betterSidebar')?.activateTab(tabId, sessionId === undefined ? undefined : { sessionId, cwd })
+      ctx.get('betterSidebar')?.activateTab(tabId, shellScope)
     },
     focusPane: (paneId) => { store.reduce(s => ({ ...s, activePane: paneId })) },
     moveTabToEdge: (payload: TabDragPayload, toPane: string, zone: DropZone) => {
@@ -521,7 +525,8 @@ export function Sidebar(props: { ctx: Context; store: SidebarStore }) {
     resizeSplit: (splitId, index, deltaFrac) => {
       store.reduce(s => resizeSplitIn(s, splitId, index, deltaFrac))
     },
-  }), [store, sessionId, cwd, ctx])
+    // shellScope carries cwd (memoized on sessionId+cwd), so it stands in for it.
+  }), [store, sessionId, ctx, shellScope])
 
   /**
    * The explorer's @-reference button. The token is spelled against the
@@ -581,7 +586,7 @@ export function Sidebar(props: { ctx: Context; store: SidebarStore }) {
     // The session scope rides along: lifecycle callbacks receive it. The
     // open is bottom-targeted so the tab lands in THIS workbench, not in the
     // native right Sidebar.
-    service.openTab({ type: optionId, title, target: 'bottom' }, { sessionId, cwd })
+    service.openTab({ type: optionId, title, target: 'bottom' }, shellScope)
   }
 
   /**
@@ -607,10 +612,10 @@ export function Sidebar(props: { ctx: Context; store: SidebarStore }) {
    */
   const tabBadgeOf = (tab: SidebarTab): ReactNode => {
     const descriptor = ctx.get('betterSidebar')?.getTab(tab.type)
-    if (descriptor?.badge === undefined) return null
+    if (descriptor?.badge === undefined || shellScope === undefined) return null
     let value: string | number | null | undefined
     try {
-      value = descriptor.badge(ctx, { sessionId, cwd }, state)
+      value = descriptor.badge(ctx, shellScope, state)
     } catch (error) {
       console.error('[dsh-better-sidebar] tab badge error:', error)
       return null
@@ -639,9 +644,9 @@ export function Sidebar(props: { ctx: Context; store: SidebarStore }) {
    */
   const tabRightActionsOf = (tab: SidebarTab, paneId: string): ReactNode => {
     const descriptor = ctx.get('betterSidebar')?.getTab(tab.type)
-    if (descriptor?.rightActions === undefined) return null
+    if (descriptor?.rightActions === undefined || shellScope === undefined) return null
     try {
-      return descriptor.rightActions(ctx, { sessionId, cwd }, state, tab, paneId)
+      return descriptor.rightActions(ctx, shellScope, state, tab, paneId)
     } catch (error) {
       console.error('[dsh-better-sidebar] tab rightActions error:', error)
       return null
@@ -784,9 +789,9 @@ export function BottomDockToggle(props: { store: SidebarStore }) {
     useCallback((callback: () => void) => store.subscribe(callback), [store]),
     useCallback(() => store.getSnapshot(), [store]),
   )
-  // 宿主右侧面板展开时不出现：那个状态下它右上角是一簇自己的控件
-  // （Split / Fullscreen / Collapse right sidebar），入口挤进去只会跟它们打架。
-  if (useRightPanelOpen()) return null
+  // 宿主右侧面板展开时**照常渲染**：本入口在会话头 utilities，位于右栏控件簇
+  // （Split / Fullscreen / Collapse right sidebar）左侧的独立一列，不会被它们盖住。
+  // 早先这里在右栏展开时早退，结果「先开右栏就再也打不开工作台」。
   const open = snapshot.state?.bottomOpen === true
   const label = open ? t('collapseBottomPanel') : t('expandBottomPanel')
   return (

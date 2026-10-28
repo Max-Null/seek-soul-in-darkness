@@ -5,9 +5,16 @@
  * buttons plus a screen-reader-only `labels.footnotes` heading — and the
  * MarkdownText/CodeBlock are cordis-free, falling back to HARDCODED Chinese
  * when the labels are omitted, so every render site threads the plugin
- * dictionary's localized pair through here (re-evaluated per render).
+ * dictionary's localized pair through here.
  * `footnotes` is left empty (the heading is sr-only; give it a real string
  * only if a locale key ever earns its place in all 19 dictionaries).
+ *
+ * The nested object is built ONCE per distinct set of label VALUES
+ * ({@link cachedLabels}): `MarkdownText` is memoized on the `labels` identity
+ * (its streaming render cache is dropped when the identity changes), so a
+ * fresh object per render re-parsed every markdown row on every parent
+ * re-render — a composer keystroke or one streaming push. Callers pass a
+ * plain value bag and may build that bag inline; identity is never the key.
  *
  * DSH 0.1.7-rc.1 added `labels.code.toolbarLabels` (language name + wrap
  * toggle + copy). Supplying it is what swaps the legacy info-string banner for

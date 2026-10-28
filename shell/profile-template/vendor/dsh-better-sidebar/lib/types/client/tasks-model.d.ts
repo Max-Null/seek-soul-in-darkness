@@ -15,8 +15,8 @@
  *   member data (so a finished run still shows its members);
  * - team members enrich matching agent nodes in place (role/phase/status);
  *   the lead's roster row lands on the root node;
- * - fold: per parent, settled agent LEAVES (state done/error, never the
- *   current session, never a workflow member's run node) collapse into one
+ * - fold: per parent, settled agent leaves and fully settled known branches
+ *   (never the current session or its ancestors) collapse into one
  *   trailing `fold` node per GROUP (finished work / waiting members) carrying
  *   the member ids and label previews; a group the reader opened
  *   ({@link TasksModelInput.expandedGroups}) keeps its members visible while
@@ -79,7 +79,7 @@ export interface TasksAgentNode {
         index: number;
         title?: string;
     };
-    /** The catalog's durable children signal (fold candidacy's leaf test). */
+    /** Unknown/nonempty catalog signal (known branches are checked as subtrees). */
     hasChildren?: boolean;
     /** Shared tasks owned by this agent (team boards only; empty otherwise). */
     tasks?: TasksNodeTask[];
@@ -120,7 +120,7 @@ export interface TasksFoldNode {
     idleCount: number;
     /** How many ended in a failure (出错); they belong to the `done` group. */
     errorCount: number;
-    /** The folded session ids, in original order (expansion restores them). */
+    /** All hidden agent ids, including descendants, in topology order. */
     memberIds: string[];
     /** Up to two label previews for the collapsed subtitle. */
     previews: string[];
@@ -145,14 +145,20 @@ export interface TasksModelInput {
     teamMembers: readonly TeamMemberRow[];
     /** The team's shared tasks; each lands on its OWNER's node. */
     teamTasks?: readonly SidebarTeamTaskView[];
-    /** Whether settled leaves collapse into fold nodes. */
+    /** Global gate for automatic folding; manual foldedIds remain independent. */
     folded: boolean;
+    /** Automatically aggregate settled leaves (default true). */
+    autoFoldSettled?: boolean;
+    /** Automatically aggregate fully settled, known branches (default true). */
+    autoFoldBranches?: boolean;
+    /** Automatically aggregate idle members at the existing threshold (default true). */
+    autoFoldIdle?: boolean;
     /**
      * Nodes the READER folded by hand (a settled card's bar chevron). This is a
      * PER-NODE trigger, not a second copy of the global rule, so it only has to
-     * satisfy the guards that protect the reader from hiding live work: never a
+     * satisfy the existing per-node guards: never a
      * running node, never the current session. It is deliberately NOT subject to
-     * {@link isAutoFoldable} — the chevron is drawn on every settled card, and a
+     * the automatic subtree rule — the chevron is drawn on every settled card, and a
      * trigger that cannot fire is a dead control.
      */
     foldedIds?: ReadonlySet<string>;

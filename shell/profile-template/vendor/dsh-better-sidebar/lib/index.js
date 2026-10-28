@@ -34,6 +34,10 @@ const SIDEBAR_PREFS_DEFAULTS = {
 	autoOpenSubagent: true,
 	autoOpenJobs: true,
 	tasksViewMode: "graph",
+	tasksAutoFoldSettled: true,
+	tasksAutoFoldBranches: true,
+	tasksAutoFoldIdle: true,
+	jobsAutoCollapse: true,
 	mobileNoAutoOpen: true,
 	mobileDefaultTree: true,
 	agentOpenTools: false,
@@ -105,6 +109,10 @@ const PrefsSchema = z.object({
 	autoOpenSubagent: z.boolean().default(true),
 	autoOpenJobs: z.boolean().default(true),
 	tasksViewMode: z.union([z.const("graph"), z.const("tree")]).default("graph"),
+	tasksAutoFoldSettled: z.boolean().default(true),
+	tasksAutoFoldBranches: z.boolean().default(true),
+	tasksAutoFoldIdle: z.boolean().default(true),
+	jobsAutoCollapse: z.boolean().default(true),
 	mobileNoAutoOpen: z.boolean().default(true),
 	mobileDefaultTree: z.boolean().default(true),
 	agentOpenTools: z.boolean().default(false),
@@ -449,17 +457,29 @@ function spawnGit(cwd, args, timeoutMs, safe, options = {}) {
 		let outBytes = 0;
 		let outFields = 0;
 		let stderr = "";
+		let errBytes = 0;
 		let fieldCapped = false;
-		const timer = setTimeout(() => {
+		let byteCapped = false;
+		const killTree = () => {
+			try {
+				child.stdout.destroy();
+			} catch {}
+			try {
+				child.stderr.destroy();
+			} catch {}
 			child.kill("SIGKILL");
+		};
+		const timer = setTimeout(() => {
+			killTree();
 			reject(new GitCommandError(`git ${args[0] ?? ""} timed out after ${timeoutMs}ms`, "git-error", args.join(" ")));
 		}, timeoutMs);
 		child.stdout.on("data", (chunk) => {
-			if (fieldCapped) return;
+			if (fieldCapped || byteCapped) return;
 			stdout += chunk.toString("utf8");
 			outBytes += chunk.length;
 			if (outBytes > maxBytes) {
-				child.kill("SIGKILL");
+				byteCapped = true;
+				killTree();
 				reject(new GitCommandError(`git ${args[0] ?? ""} output exceeded ${maxBytes} bytes`, "git-error", args.join(" ")));
 				return;
 			}
@@ -467,12 +487,19 @@ function spawnGit(cwd, args, timeoutMs, safe, options = {}) {
 				outFields += countNulFields(chunk);
 				if (outFields >= maxNulFields) {
 					fieldCapped = true;
-					child.kill("SIGKILL");
+					killTree();
 				}
 			}
 		});
 		child.stderr.on("data", (chunk) => {
+			if (byteCapped) return;
 			stderr += chunk.toString("utf8");
+			errBytes += chunk.length;
+			if (errBytes > maxBytes) {
+				byteCapped = true;
+				killTree();
+				reject(new GitCommandError(`git ${args[0] ?? ""} stderr exceeded ${maxBytes} bytes`, "git-error", args.join(" ")));
+			}
 		});
 		child.on("error", (error) => {
 			clearTimeout(timer);
@@ -3382,8 +3409,11 @@ function decodeHtmlUrl(pathname) {
 * ETag (content hash, memoized per file by mtime/size) and honors
 * If-None-Match — the browser revalidates each fetch, but a 304 avoids
 * re-downloading multi-MB chunks that did not change (page refresh, HMR
-* re-activation). Same browser-trust fence as every other /sidebar route;
-* only allowlisted chunk names are servable (no path traversal).
+* re-activation). A HEAD answers from the stat alone (headers + content-length,
+* no body): the client re-checks every loaded chunk with HEAD when the sidebar
+* re-activates, and Node discards the body of a HEAD response anyway. Same
+* browser-trust fence as every other /sidebar route; only allowlisted chunk
+* names are servable (no path traversal).
 */
 /** The chunk names the client may request (mirror of src/client/chunk-loader.ts). */
 const CHUNK_NAMES = [
@@ -3401,9 +3431,10 @@ function shortHash(input) {
 /** ETag memo: recompute the content hash only when the file's stat changed. */
 const etags = /* @__PURE__ */ new Map();
 /**
-* The chunk file's ETag (quoted hash), or undefined when the file is
-* missing. Hash is recomputed only when mtime/size changed (hashing a
-* multi-MB chunk per request is wasteful).
+* The chunk file's ETag (quoted hash) and byte size, or undefined when the
+* file is missing. Hash is recomputed only when mtime/size changed (hashing a
+* multi-MB chunk per request is wasteful); the size comes from the same stat,
+* so a HEAD never has to read the body.
 */
 async function etagOf(name, chunkDir) {
 	const path = join(chunkDir, `client-${name}.js`);
@@ -3411,14 +3442,20 @@ async function etagOf(name, chunkDir) {
 	try {
 		const info = await stat(path);
 		const memo = etags.get(key);
-		if (memo !== void 0 && memo.mtimeMs === info.mtimeMs && memo.size === info.size) return memo.etag;
+		if (memo !== void 0 && memo.mtimeMs === info.mtimeMs && memo.size === info.size) return {
+			etag: memo.etag,
+			size: info.size
+		};
 		const etag = `"${shortHash(await readFile(path))}"`;
 		etags.set(key, {
 			mtimeMs: info.mtimeMs,
 			size: info.size,
 			etag
 		});
-		return etag;
+		return {
+			etag,
+			size: info.size
+		};
 	} catch {
 		return;
 	}
@@ -3447,16 +3484,26 @@ function createBundleRouteHandler(fence, chunkDir = LIB_DIR) {
 			res.end("not found");
 			return;
 		}
-		const etag = await etagOf(name, chunkDir);
-		if (etag === void 0) {
+		const info = await etagOf(name, chunkDir);
+		if (info === void 0) {
 			res.writeHead(404);
 			res.end("not found");
 			return;
 		}
-		if (req.headers["if-none-match"] === etag) {
+		if (req.headers["if-none-match"] === info.etag) {
 			res.writeHead(304, {
 				"cache-control": "no-cache",
-				etag
+				etag: info.etag
+			});
+			res.end();
+			return;
+		}
+		if (req.method === "HEAD") {
+			res.writeHead(200, {
+				"content-type": "text/javascript; charset=utf-8",
+				"cache-control": "no-cache",
+				etag: info.etag,
+				"content-length": String(info.size)
 			});
 			res.end();
 			return;
@@ -3466,7 +3513,7 @@ function createBundleRouteHandler(fence, chunkDir = LIB_DIR) {
 			res.writeHead(200, {
 				"content-type": "text/javascript; charset=utf-8",
 				"cache-control": "no-cache",
-				etag
+				etag: info.etag
 			});
 			res.end(body);
 		} catch {
@@ -4485,13 +4532,16 @@ function createArchiveTasks(options = {}) {
 //#region src/git-graph.ts
 const MAX_OUTPUT = 8388608;
 const MAX_OFFSET = 1e4;
+const MAX_GRAPH_TAGS = 5e3;
+const MAX_HISTORY_REFS = 1e5;
+const MAX_SHALLOW_BYTES = 1048576;
 const OID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 const fail = (message, code = "bad-request") => {
 	throw new GitCommandError(message, code, "graph");
 };
 /** Separate read-only runner: bounded buffers, no prompts/lazy network fetches,
 * replacement objects or optional index writes. Never pass client revisions. */
-function readGit(cwd, args, allowMissing = false) {
+function readGit(cwd, args, allowMissing = false, truncateOutput = false) {
 	return new Promise((resolve, reject) => {
 		execFile("git", [
 			"-C",
@@ -4515,6 +4565,7 @@ function readGit(cwd, args, allowMissing = false) {
 			}
 		}, (error, stdout, stderr) => {
 			if (!error) return resolve(stdout);
+			if (truncateOutput && error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return resolve(stdout.slice(0, stdout.lastIndexOf("\n") + 1));
 			if (allowMissing && error.code === 1 && !stderr.trim()) return resolve("");
 			reject(new GitCommandError(stderr.trim() || error.message, "git-error", args[0] ?? "graph"));
 		});
@@ -4561,17 +4612,39 @@ async function snapshotOf(root, branch) {
 	], true)).trim();
 	if (head && !OID.test(head)) fail("Invalid HEAD", "git-error");
 	if (!head && (!symbolicHead || branches.some((item) => item.ref === symbolicHead))) fail("Cannot resolve HEAD", "git-error");
+	const rawTags = await readGit(root, [
+		"for-each-ref",
+		"--sort=refname",
+		`--count=${MAX_GRAPH_TAGS}`,
+		"--format=%(refname)%00%(objectname)%00%(objecttype)%00%(*objectname)%00%(*objecttype)",
+		"refs/tags/"
+	], false, true);
+	const tags = rawTags.trimEnd().split("\n").filter(Boolean).flatMap((line) => {
+		const [ref, object, type, peeled, peeledType] = line.split("\0");
+		const hashFull = peeled || object;
+		if ((peeled ? peeledType : type) !== "commit") return [];
+		if (!ref?.startsWith("refs/tags/") || !hashFull || !OID.test(hashFull)) return fail("Invalid Git tag output", "git-error");
+		return [{
+			name: `tag: ${ref.slice(10)}`,
+			hashFull
+		}];
+	});
 	const fingerprint = createHash("sha256").update(JSON.stringify({
 		root,
 		branch,
 		branches,
+		tags: rawTags,
 		head,
 		symbolicHead
 	})).digest("hex");
 	const selected = branch === void 0 ? void 0 : branches.find((item) => item.ref === branch);
 	const tips = branch === void 0 ? [.../* @__PURE__ */ new Set([...branches.map((item) => item.hashFull), ...head ? [head] : []])].sort() : selected ? [selected.hashFull] : [];
 	const decorations = /* @__PURE__ */ new Map();
-	for (const item of branches) decorations.set(item.hashFull, [...decorations.get(item.hashFull) ?? [], item.name]);
+	for (const item of [...branches, ...tags]) {
+		const refs = decorations.get(item.hashFull) ?? [];
+		refs.push(item.name);
+		decorations.set(item.hashFull, refs);
+	}
 	if (head) decorations.set(head, ["HEAD", ...decorations.get(head) ?? []]);
 	return {
 		branches,
@@ -4579,6 +4652,105 @@ async function snapshotOf(root, branch) {
 		tips,
 		decorations,
 		selected
+	};
+}
+/** 计算线性历史的状态指纹，限制引用输出与浅克隆边界文件的大小。 */
+async function historySnapshot(root) {
+	const lines = (await readGit(root, [
+		"for-each-ref",
+		"--sort=refname",
+		"--format=%(refname)%00%(objectname)"
+	])).trimEnd().split("\n").filter(Boolean);
+	if (lines.length > MAX_HISTORY_REFS) fail("Too many references to safely snapshot history (limit 100000)", "graph-limit");
+	const head = (await readGit(root, [
+		"rev-parse",
+		"--verify",
+		"--quiet",
+		"HEAD"
+	], true)).trim();
+	const shallowPath = (await readGit(root, [
+		"rev-parse",
+		"--git-path",
+		"shallow"
+	])).trim();
+	let shallow = null;
+	try {
+		const bytes = await readFile(resolve(root, shallowPath));
+		if (bytes.byteLength > MAX_SHALLOW_BYTES) fail("Shallow boundary metadata exceeds 1 MiB", "graph-limit");
+		shallow = bytes.toString("base64");
+	} catch (error) {
+		if (error.code !== "ENOENT") throw error;
+	}
+	return createHash("sha256").update(JSON.stringify({
+		root,
+		refs: lines,
+		head,
+		shallow
+	})).digest("hex");
+}
+/** 图形界面超过分支上限时读取提交列表，并校验引用、HEAD 和浅克隆边界。 */
+async function gitHistory(cwd, options = {}, selectedRepo) {
+	const count = options.count ?? 50;
+	if (!Number.isSafeInteger(count) || count < 1) fail("Invalid history count");
+	const limit = Math.min(count, 200);
+	let cursor;
+	if (options.cursor !== void 0) {
+		if (typeof options.cursor !== "string" || options.cursor.length > 512) fail("Invalid history cursor");
+		try {
+			const parsed = JSON.parse(Buffer.from(options.cursor, "base64url").toString("utf8"));
+			if (parsed?.version !== 1 || !/^[a-f0-9]{64}$/.test(parsed.fingerprint) || !Number.isSafeInteger(parsed.offset) || parsed.offset < 1 || parsed.offset > MAX_OFFSET) fail("Invalid history cursor");
+			cursor = parsed;
+		} catch {
+			fail("Invalid history cursor");
+		}
+	}
+	const root = selectedRepo !== void 0 ? await repoRoot(cwd, selectedRepo) : (await readGit(cwd, ["rev-parse", "--show-toplevel"])).trim();
+	const before = await historySnapshot(root);
+	if (cursor && cursor.fingerprint !== before) fail("History changed; refresh", "graph-stale");
+	const offset = cursor?.offset ?? 0;
+	const fields = (await readGit(root, [
+		"log",
+		"--branches",
+		"--remotes",
+		"HEAD",
+		"--topo-order",
+		"--no-decorate",
+		"--no-show-signature",
+		"--encoding=UTF-8",
+		`--max-count=${limit + 1}`,
+		`--skip=${offset}`,
+		"--format=%H%x00%P%x00%an%x00%ai%x00%s%x00%B%x00",
+		"--"
+	])).split("\0");
+	const entries = [];
+	for (let i = 0; i + 5 < fields.length; i += 6) {
+		const hashFull = fields[i].trim(), parents = fields[i + 1].split(" ").filter(Boolean);
+		if (!OID.test(hashFull) || parents.some((parent) => !OID.test(parent))) fail("Invalid Git history output", "git-error");
+		entries.push({
+			hash: hashFull.slice(0, 7),
+			hashFull,
+			parents,
+			author: fields[i + 2],
+			date: fields[i + 3],
+			subject: fields[i + 4],
+			message: fields[i + 5],
+			refs: []
+		});
+	}
+	if (await historySnapshot(root) !== before) fail("History changed; refresh", "graph-stale");
+	const hasMore = entries.length > limit;
+	if (hasMore && offset + limit > MAX_OFFSET) fail("History limit reached (10000)", "graph-limit");
+	return {
+		isRepo: true,
+		root,
+		entries: entries.slice(0, limit),
+		hasMore,
+		snapshot: before,
+		...hasMore ? { nextCursor: Buffer.from(JSON.stringify({
+			version: 1,
+			fingerprint: before,
+			offset: offset + limit
+		})).toString("base64url") } : {}
 	};
 }
 /** Immutable OID traversal + before/after ref fingerprints prevents concatenating
@@ -5089,30 +5261,40 @@ function compactionTail(events) {
 	const checkpoint = events[cut];
 	if (checkpoint === void 0) return void 0;
 	let parentNodes;
+	let checkpointShadowed;
 	try {
-		parentNodes = foldSurface(events).nodes;
+		const fold = foldSurface(events);
+		parentNodes = fold.nodes;
+		const replacement = fold.replacements.find((item) => item.seq === checkpoint.seq);
+		checkpointShadowed = replacement === void 0 ? void 0 : new Set(replacement.shadowedSeqs);
 	} catch {
 		return;
 	}
 	const surfaceIndex = parentNodes.indexOf(checkpoint.seq);
 	if (surfaceIndex === -1) return void 0;
-	const head = [];
+	const headSlots = [];
 	let keepFirst;
 	let sawTailNode = false;
 	for (let index = 0; index < parentNodes.length; index++) {
 		if (index === surfaceIndex) continue;
 		const seq = parentNodes[index];
+		if (index < surfaceIndex) {
+			const slot = headSlotOf(events, seq, cut, checkpointShadowed);
+			if (slot === void 0) return void 0;
+			headSlots.push(slot);
+			continue;
+		}
 		if (seq >= cut) {
-			if (index < surfaceIndex) return void 0;
 			sawTailNode = true;
 			continue;
 		}
 		if (sawTailNode) return void 0;
-		if (index < surfaceIndex) head.push(seq);
-		else if (keepFirst === void 0) keepFirst = seq;
+		if (keepFirst === void 0) keepFirst = seq;
 	}
-	const headEvents = headSkeleton(events, head);
+	const headEvents = headSkeleton(events, headSlots);
 	if (headEvents === void 0) return void 0;
+	const consumedSeqs = /* @__PURE__ */ new Set();
+	for (const slot of headSlots) for (const seq of slot.consumed) consumedSeqs.add(seq);
 	let keepStart = enclosingTurnStart(events, keepFirst);
 	while (keepStart > 0 && events[keepStart - 1]?.type === "agent/inbox/spliced") keepStart -= 1;
 	const groupId = dataOf(events[cut - 1]).compactionId;
@@ -5128,6 +5310,7 @@ function compactionTail(events) {
 	for (const [from, to] of [[keepStart, cut], [cut + 1, events.length]]) for (let index = from; index < to; index++) {
 		const event = events[index];
 		if (event === void 0 || isCompactionGroupEvent(event, groupId)) continue;
+		if (consumedSeqs.has(event.seq)) continue;
 		const op = event.surfaceOp;
 		if (op === null || typeof op !== "object" || op.op !== "replace") continue;
 		const start = op.startSeq;
@@ -5143,6 +5326,7 @@ function compactionTail(events) {
 		const event = events[index];
 		if (event === void 0) continue;
 		if (isCompactionGroupEvent(event, groupId)) continue;
+		if (consumedSeqs.has(event.seq)) continue;
 		if (index < cut && keepSkip(event)) continue;
 		emittedSeqs.add(event.seq);
 	}
@@ -5210,6 +5394,7 @@ function compactionTail(events) {
 	for (let index = keepStart; index < cut; index++) {
 		const event = events[index];
 		if (event === void 0 || isCompactionGroupEvent(event, groupId)) continue;
+		if (consumedSeqs.has(event.seq)) continue;
 		if (keepSkip(event)) continue;
 		if (droppedGroups.has(String(dataOf(event).compactionId))) continue;
 		if (droppedDones.has(event.seq)) continue;
@@ -5218,6 +5403,7 @@ function compactionTail(events) {
 	for (let index = cut + 1; index < events.length; index++) {
 		const event = events[index];
 		if (event === void 0 || isCompactionGroupEvent(event, groupId)) continue;
+		if (consumedSeqs.has(event.seq)) continue;
 		if (droppedGroups.has(String(dataOf(event).compactionId))) continue;
 		if (droppedDones.has(event.seq)) continue;
 		emit(event);
@@ -5362,31 +5548,98 @@ function toolResultCallIdOf(event) {
 	const callId = dataOf(event).message?.source?.callId;
 	return typeof callId === "string" && callId !== "" ? callId : void 0;
 }
+/** Bound on a system-prompt replacement chain; real chains are 2-4 hops. */
+const MAX_HEAD_REPLACEMENTS = 16;
+/** The span a replace surface marker targets, when it is a valid one. */
+function surfaceReplaceSpan(event) {
+	const op = event.surfaceOp;
+	if (op === null || typeof op !== "object" || op.op !== "replace") return void 0;
+	const start = op.startSeq;
+	const end = op.endSeq;
+	if (typeof start !== "number" || typeof end !== "number" || start > end) return void 0;
+	return {
+		start,
+		end
+	};
+}
 /**
-* The surviving pre-cut head as a state-machine-complete event list: the
-* head nodes (surface order == log order for surviving appends) wrapped in
-* a turn/step skeleton NORMALIZED to turn 1 step 1 — the seed is a fresh
-* log, the host's turn/step counters must start there, and the head node's
-* original numbers are envelope metadata the rebase is free to rewrite
-* (the protected system head can be a mid-session rewrite living in a later
-* turn/step). Closers are recovered from the log when the skeleton's own
-* closers were dropped with the span. A head wider than one step/turn (or
-* numbers that disagree) is not a shape this builder represents and falls
-* back to the full copy.
+* Resolve one surface node before the checkpoint to the head slot the child
+* must carry. A node at or after the cut can still sit ahead of the
+* checkpoint when a later event replaced the protected system head (a model
+* switch rewrites the system prompt): the surface keeps the LATEST
+* replacement in the head slot, so the child carries that replacement and
+* drops the chain it replaced — the switched model saw the same
+* post-compaction surface as the original one.
+*
+* The chain is representable only when every step is a single-node
+* replacement of the system head and the anchor predates the cut and is not
+* one of the entries the checkpoint removed. Membership uses the checkpoint's
+* recorded shadowed set, not its declared numeric range: a replacement inside
+* that range may still be a surviving keep-window entry. A range replace, a
+* removed target, a non-system node, a forward/cyclic chain, or a missing
+* anchor returns undefined and degrades to the verbatim full copy.
 * @param events - the parent's log.
-* @param head - seqs of the surviving pre-cut surface nodes before the
-*  checkpoint's surface slot.
+* @param seq - the surface node seq to resolve.
+* @param cut - the checkpoint's log index.
+* @param checkpointShadowed - the checkpoint's actual shadowed entries, when the fold recorded them.
+* @returns the resolved slot, or undefined when the shape is not representable.
+*/
+function headSlotOf(events, seq, cut, checkpointShadowed) {
+	const surface = events[seq];
+	if (surface === void 0) return void 0;
+	if (seq < cut) return {
+		anchor: seq,
+		effective: surface,
+		consumed: []
+	};
+	if (checkpointShadowed === void 0 || checkpointShadowed.size === 0) return void 0;
+	const consumed = [];
+	const seen = /* @__PURE__ */ new Set();
+	let current = surface;
+	while (current !== void 0) {
+		if (seen.has(current.seq) || seen.size > MAX_HEAD_REPLACEMENTS) return void 0;
+		seen.add(current.seq);
+		if (current.type !== "system/message") return void 0;
+		const replace = surfaceReplaceSpan(current);
+		if (replace === void 0) {
+			if (current.seq >= cut || checkpointShadowed.has(current.seq)) return void 0;
+			return {
+				anchor: current.seq,
+				effective: surface,
+				consumed
+			};
+		}
+		if (replace.start !== replace.end || replace.start >= current.seq) return void 0;
+		if (checkpointShadowed.has(replace.start)) return void 0;
+		consumed.push(current.seq);
+		current = events[replace.start];
+	}
+}
+/**
+* The surviving head as a state-machine-complete event list: the head slots
+* (surface order; a slot is its pre-cut anchor, or the latest replacement of
+* it) wrapped in a turn/step skeleton NORMALIZED to turn 1 step 1 — the seed
+* is a fresh log, the host's turn/step counters must start there, and the
+* emitted node's original numbers are envelope metadata the rebase is free to
+* rewrite (the protected system head can be a mid-session rewrite living in a
+* later turn/step, including a replacement written after the checkpoint).
+* Closers are recovered from the log when the skeleton's own closers were
+* dropped with the span. A head wider than one step/turn (or numbers that
+* disagree) is not a shape this builder represents and falls back to the full
+* copy.
+* @param events - the parent's log.
+* @param slots - the resolved head slots before the checkpoint's surface slot.
 * @returns the head segment's events, or undefined when the shape is not
 *  representable.
 */
-function headSkeleton(events, head) {
-	if (head.length === 0) return [];
-	const first = events[head[0]];
-	const last = events[head[head.length - 1]];
+function headSkeleton(events, slots) {
+	if (slots.length === 0) return [];
+	const first = events[slots[0].anchor];
+	const last = events[slots[slots.length - 1].anchor];
 	if (first === void 0 || last === void 0) return void 0;
 	let turnStart;
 	let stepStart;
-	for (let index = head[0] - 1; index >= 0; index--) {
+	for (let index = first.seq - 1; index >= 0; index--) {
 		const event = events[index];
 		if (event === void 0) break;
 		if (event.type === "turn/end") break;
@@ -5411,8 +5664,8 @@ function headSkeleton(events, head) {
 		if (typeof turn !== "number") return void 0;
 		const step = stepStart !== void 0 ? dataOf(stepStart).step : void 0;
 		if (stepStart !== void 0 && typeof step !== "number") return void 0;
-		for (const seq of head) {
-			const node = events[seq];
+		for (const slot of slots) {
+			const node = events[slot.anchor];
 			if (node === void 0) return void 0;
 			const nodeData = dataOf(node);
 			if (nodeData.turn !== turn && nodeData.turn !== void 0) return void 0;
@@ -5423,12 +5676,12 @@ function headSkeleton(events, head) {
 			turn: 1,
 			step: 1
 		}));
-		for (const seq of head) parts.push(normalized(events[seq], {
+		for (const slot of slots) parts.push(normalized(slot.effective, {
 			turn: 1,
 			...stepStart !== void 0 ? { step: 1 } : {}
 		}));
 		let closedStep = false;
-		for (let index = head[head.length - 1] + 1; index < events.length; index++) {
+		for (let index = last.seq + 1; index < events.length; index++) {
 			const event = events[index];
 			if (event === void 0) break;
 			if (!closedStep && event.type === "step/end" && typeof step === "number" && dataOf(event).step === step && dataOf(event).turn === turn) {
@@ -5447,9 +5700,9 @@ function headSkeleton(events, head) {
 		}
 		return closedStep || step === void 0 ? parts : void 0;
 	}
-	for (const seq of head) {
-		const node = events[seq];
-		if (node === void 0) return void 0;
+	for (const slot of slots) {
+		const node = events[slot.anchor];
+		if (node === void 0 || slot.effective !== node) return void 0;
 		parts.push(node);
 	}
 	return parts;
@@ -7647,7 +7900,13 @@ const FS_TREES_MAX_PATHS = 64;
 * `git rev-parse --show-toplevel` (falling back to its directory for files),
 * and only top levels whose `--absolute-git-dir` differs from their
 * `--git-common-dir` (i.e. real LINKED worktrees, not the main checkout and
-* not submodules) are adopted. The highest-scoring linked worktree of the
+* not submodules) are adopted. A linked worktree that sits INSIDE the session
+* workspace is adopted only when it belongs to the SAME repository — a
+* `git worktree add .worktrees/x` of the session's own repo is the session
+* moving, while a nested repository's worktree is ordinary content of the
+* workspace: re-rooting the explorer into it hides every sibling directory
+* (#952). Outside the workspace any linked worktree is adopted, which is PR
+* #802's cross-repository case. The highest-scoring adoptable worktree of the
 * newest event that has one wins, but only evidence after the last committed
 * working-directory/change is eligible. When there is no evidence the cwd is
 * kept (lifted to the repository top level for subdirectory sessions).
@@ -7655,8 +7914,10 @@ const FS_TREES_MAX_PATHS = 64;
 * Resolutions are cached process-wide ({@link ACTIVE_ROOT_TTL_MS}), concurrent
 * callers share one in-flight resolution AND one in-flight base probe, and
 * every cache is bounded — so the client's periodic re-ask, the debounced
-* fs-watch frames and the twelve route handlers that funnel through
-* `cwdOf()` are answered without a process spawn after the first scan.
+* fs-watch frames and the route handlers that funnel through `cwdOf()` are
+* answered without a process spawn after the first scan. A DETACHED session is
+* answered with its base (the workspace address) and never folds the stored
+* log — see {@link activeWorktreeRootOf}.
 */
 /**
 * How long one computed root is reused before the event log is scanned again.
@@ -7677,7 +7938,7 @@ const ACTIVE_ROOT_MAX_EVENTS = 4e3;
 const ACTIVE_ROOT_MAX_PROBES = 24;
 /** Bounds of the three process-wide caches below (LRU, oldest evicted first). */
 const PATH_TOP_CACHE_MAX = 512;
-const LINKED_WORKTREE_CACHE_MAX = 512;
+const GIT_IDENTITY_CACHE_MAX = 512;
 const ACTIVE_ROOT_CACHE_MAX = 256;
 /** Explicit override, mainly for tests and manual pinning. */
 const ACTIVE_ROOT_OVERRIDE_ENV = "DSH_SIDEBAR_WORKTREE_ROOT";
@@ -7693,15 +7954,28 @@ const ACTIVE_ROOT_PATH_PATTERN = /[A-Za-z]:(?:\\|\/)[^\\/\s"'\x60,;|)<>*?]+(?:[\
 * route call, the client's 5 s poll  are exactly what the TTL exists to keep
 * free.
 *
+* `eventSeq` is the live session cursor observed when the entry was computed,
+* and `gitResolved` says whether the base probe actually found a repository.
+* A TTL expiry alone means only that wall time passed; when the log has not
+* moved since, nothing the EVENT SCAN reads can have changed, so a resolved
+* entry is re-armed instead of snapshotting the log and scanning up to 4000
+* events again (measured 9.6–44.7 ms per miss — the idle 5 s poll landed on
+* one every third ask). A negative/failed base probe is NOT re-armed: `git
+* init` in a parent, a transient spawn failure, or a mount coming back are
+* invisible to the event log, so those keep the wall-clock re-probe. A moved
+* cursor (or a host with no `seq`) also keeps the old meaning.
+*
 * All three maps are BOUNDED: a long-lived host (and a `keepMounted` right
 * sidebar that keeps asking about every session it has ever shown) would
 * otherwise grow them forever. `pathTopCache` caches negative answers too
 * (`undefined` = "no git top level here"), which is what keeps a non-repo
-* session cheap; those entries are evictable like any other.
+* session cheap; `gitIdentityCache` does the same for "not in a repository",
+* and `activeWorktreeRootCache` the same for a session with no evidence —
+* those entries are evictable like any other.
 */
 const activeWorktreeRootCache = /* @__PURE__ */ new Map();
 const pathTopCache = /* @__PURE__ */ new Map();
-const linkedWorktreeCache = /* @__PURE__ */ new Map();
+const gitIdentityCache = /* @__PURE__ */ new Map();
 /**
 * In-flight de-duplication, mirroring `git.ts`'s `repoRootsInFlight`.
 *
@@ -7866,35 +8140,75 @@ async function topOfActivePath(value) {
 	return result;
 }
 /**
-* Whether a git top level is a LINKED worktree: its git dir lives under the
-* common dir (`<main>/.git/worktrees/<name>`) instead of being it. Submodules
-* report the same dir for both, so they are excluded.
+* `git rev-parse` identity of one directory, cached process-wide (a probe is a
+* spawn). `undefined` for a directory that is not in a repository, or whose
+* answer is unusable — callers treat that as "no identity", never as a match.
+* @param dir - an existing directory (or any path inside one).
+* @returns the identity, or undefined.
 */
-async function isLinkedWorktree(top) {
-	const key = pathKeyOf(top);
-	const cached = linkedWorktreeCache.get(key);
-	if (cached !== void 0) {
-		cachePut(linkedWorktreeCache, key, cached, LINKED_WORKTREE_CACHE_MAX);
+async function gitIdentityOf(dir) {
+	const key = pathKeyOf(dir);
+	if (gitIdentityCache.has(key)) {
+		const cached = gitIdentityCache.get(key);
+		cachePut(gitIdentityCache, key, cached, GIT_IDENTITY_CACHE_MAX);
 		return cached;
 	}
-	let linked = false;
+	let identity;
 	try {
-		const out = (await runGit(top, [
+		const out = (await runGit(dir, [
 			"rev-parse",
 			"--absolute-git-dir",
 			"--git-common-dir"
 		])).trim().split(/\r?\n/);
 		const gitDir = out[0];
 		const commonRaw = out[1] ?? "";
-		if (gitDir !== void 0 && gitDir !== "" && commonRaw !== "") {
-			const common = isAbsolute(commonRaw) ? commonRaw : join(top, commonRaw);
-			linked = pathKeyOf(requireAbsolute(gitDir)) !== pathKeyOf(requireAbsolute(common));
-		}
+		if (gitDir !== void 0 && gitDir !== "" && commonRaw !== "") identity = {
+			gitDir: requireAbsolute(gitDir),
+			commonDir: requireAbsolute(isAbsolute(commonRaw) ? commonRaw : join(dir, commonRaw))
+		};
 	} catch {
-		linked = false;
+		identity = void 0;
 	}
-	cachePut(linkedWorktreeCache, key, linked, LINKED_WORKTREE_CACHE_MAX);
-	return linked;
+	cachePut(gitIdentityCache, key, identity, GIT_IDENTITY_CACHE_MAX);
+	return identity;
+}
+/**
+* Whether a git top level is a LINKED worktree: its git dir lives under the
+* common dir (`<main>/.git/worktrees/<name>`) instead of being it. Submodules
+* report the same dir for both, so they are excluded.
+*
+* Both questions are answered from ONE {@link gitIdentityOf} probe: the same
+* identity also names the repository a checkout belongs to, which is what
+* {@link isAdoptableTop} compares against the session workspace.
+*/
+async function isLinkedWorktree(top) {
+	const identity = await gitIdentityOf(top);
+	return identity !== void 0 && pathKeyOf(identity.gitDir) !== pathKeyOf(identity.commonDir);
+}
+/**
+* Whether a linked worktree is the session MOVING there, rather than ordinary
+* content of the workspace it already roots (#952).
+*
+* Outside the workspace any linked worktree counts — that is exactly PR #802's
+* case (the session's header cwd points at one repository and the agent works
+* in a worktree of another). Inside the workspace the answer depends on the
+* repository: `.worktrees/<branch>` of the session's OWN repo is the session
+* working on a branch, which the explorer should follow; the linked worktrees
+* of a repository NESTED in the workspace (a bare repo's checkouts, a
+* container workspace's sub-projects) are ordinary content, and adopting one
+* re-roots the explorer into that single subdirectory and hides every sibling
+* — the reported 20-of-27-sessions bug.
+*
+* @param top - a candidate's `git rev-parse --show-toplevel`.
+* @param base - the session's effective workspace root.
+* @returns whether the candidate may become the active root.
+*/
+async function isAdoptableTop(top, base) {
+	if (!await isLinkedWorktree(top)) return false;
+	if (pathKeyOf(base) === "" || !pathUnderOf(base, top)) return true;
+	const candidate = await gitIdentityOf(top);
+	const workspace = await gitIdentityOf(base);
+	return candidate !== void 0 && workspace !== void 0 && pathKeyOf(candidate.commonDir) === pathKeyOf(workspace.commonDir);
 }
 /** The newest linked worktree the session's tool/call paths resolve to. */
 async function activeRootFromEvents(events, base) {
@@ -7918,7 +8232,7 @@ async function activeRootFromEvents(events, base) {
 			if (top === void 0) continue;
 			const topKey = pathKeyOf(top);
 			if (topKey === baseKey) continue;
-			if (!await isLinkedWorktree(top)) continue;
+			if (!await isAdoptableTop(top, base)) continue;
 			const entry = scores.get(topKey);
 			if (entry === void 0) scores.set(topKey, {
 				top,
@@ -7961,11 +8275,22 @@ async function activeWorktreeRootOf(ctx, sessionId, base) {
 	if (base === "") return base;
 	const override = (process.env[ACTIVE_ROOT_OVERRIDE_ENV] ?? "").trim();
 	if (override !== "" && isAbsolute(override)) return requireAbsolute(override);
+	if (ctx.sessions.get(sessionId) === void 0) return base;
 	const directoryEpoch = directoryEpochOf(ctx, sessionId);
+	const liveSeq = ctx.sessions.get(sessionId)?.seq;
 	const cached = activeWorktreeRootCache.get(sessionId);
-	if (cached !== void 0 && cached.expires > Date.now() && cached.base === base && cached.directoryEpoch === directoryEpoch) {
-		cachePut(activeWorktreeRootCache, sessionId, cached, ACTIVE_ROOT_CACHE_MAX);
-		return cached.root;
+	if (cached !== void 0 && cached.base === base && cached.directoryEpoch === directoryEpoch) {
+		if (cached.expires > Date.now()) {
+			cachePut(activeWorktreeRootCache, sessionId, cached, ACTIVE_ROOT_CACHE_MAX);
+			return cached.root;
+		}
+		if (cached.gitResolved && liveSeq !== void 0 && cached.eventSeq === liveSeq) {
+			cachePut(activeWorktreeRootCache, sessionId, {
+				...cached,
+				expires: Date.now() + ACTIVE_ROOT_TTL_MS
+			}, ACTIVE_ROOT_CACHE_MAX);
+			return cached.root;
+		}
 	}
 	const flightKey = `${sessionId}\0${base}\0${directoryEpoch ?? ""}`;
 	const pending = activeRootInFlight.get(flightKey);
@@ -7982,12 +8307,15 @@ async function activeWorktreeRootOf(ctx, sessionId, base) {
 }
 /** One uncached resolution (see {@link activeWorktreeRootOf}). */
 async function resolveActiveWorktreeRoot(ctx, sessionId, base, directoryEpoch) {
+	const eventSeq = ctx.sessions.get(sessionId)?.seq;
 	const top = await topLevelOf(base);
 	if (top === void 0) {
 		cachePut(activeWorktreeRootCache, sessionId, {
 			root: base,
 			base,
 			directoryEpoch,
+			eventSeq,
+			gitResolved: false,
 			expires: Date.now() + ACTIVE_ROOT_TTL_MS
 		}, ACTIVE_ROOT_CACHE_MAX);
 		return base;
@@ -7999,6 +8327,8 @@ async function resolveActiveWorktreeRoot(ctx, sessionId, base, directoryEpoch) {
 		root,
 		base,
 		directoryEpoch,
+		eventSeq,
+		gitResolved: true,
 		expires: Date.now() + ACTIVE_ROOT_TTL_MS
 	}, ACTIVE_ROOT_CACHE_MAX);
 	return root;
@@ -8094,10 +8424,78 @@ function mediaTypeForPath(path) {
 	return MEDIA_TYPES[extname(path).toLowerCase()] ?? "application/octet-stream";
 }
 /**
-* Resolve the committed execution directory before client or original-header
-* hints. Live reads are synchronous; detached reads use the host observation
-* lease and its revision-keyed projection cache, never a plugin-owned log fold
-* or TTL that could hide a working_directory change.
+* Stored header cwd per session id, kept for the process lifetime.
+*
+* A session header is immutable, so once read the workspace address cannot
+* change. The map is bounded and every entry is a short string; it exists so
+* the sidebar's re-asks (every watch frame, every 5 s poll, every route) do
+* not even pay the header read.
+*/
+const storedCwdCache = /* @__PURE__ */ new Map();
+/** Per-session in-flight header read (the same-key sharing for a cold burst). */
+const storedCwdInFlight = /* @__PURE__ */ new Map();
+/** Bound on {@link storedCwdCache}; well above any plausible open-session set. */
+const STORED_CWD_CACHE_MAX = 256;
+/**
+* The workspace address of a session the host has not attached: the cwd stored
+* in its immutable header.
+*
+* This is a HEADER-ONLY read (`sessionPersistence.stat` reads the first zstd
+* frame, never the log). It is deliberately not `sessionQuery.observeSession`:
+* that public cold-cwd API decodes the WHOLE artifact and hydrates every
+* projection to answer with one string, and a startup burst asks dozens of
+* times in parallel (0.28.0: 39 MB × 44 ≈ 1.7 GB, OOM). The committed
+* working_directory is adopted again the moment the host attaches the session
+* (see {@link sessionCwdOf}).
+* @param ctx - host plugin context.
+* @param sessionId - the detached session to locate.
+* @returns the stored header cwd, or undefined when the host cannot answer.
+*/
+async function storedHeaderCwdOf(ctx, sessionId) {
+	const cached = storedCwdCache.get(sessionId);
+	if (cached !== void 0) return cached;
+	const pending = storedCwdInFlight.get(sessionId);
+	if (pending !== void 0) return pending;
+	const promise = (async () => {
+		const persistence = ctx.get("sessionPersistence");
+		if (persistence?.stat === void 0) return void 0;
+		try {
+			const cwd = (await persistence.stat(sessionId))?.header.cwd;
+			if (cwd === void 0 || cwd === "") return void 0;
+			storedCwdCache.set(sessionId, cwd);
+			while (storedCwdCache.size > STORED_CWD_CACHE_MAX) {
+				const oldest = storedCwdCache.keys().next();
+				if (oldest.done) break;
+				storedCwdCache.delete(oldest.value);
+			}
+			return cwd;
+		} catch (error) {
+			ctx.logger.warn("dsh-better-sidebar: cannot stat stored session %s", sessionId);
+			ctx.logger.warn(error);
+			return;
+		}
+	})();
+	storedCwdInFlight.set(sessionId, promise);
+	try {
+		return await promise;
+	} finally {
+		storedCwdInFlight.delete(sessionId);
+	}
+}
+/**
+* Resolve the directory a session's file/Git routes are rooted at.
+*
+* An attached session answers from the host's committed working directory
+* (following `cd` and linked worktrees), synchronously. A DETACHED session
+* answers from its stored header — the workspace address — because the only
+* public cold-cwd API decodes the whole log for that one string (see
+* {@link storedHeaderCwdOf}); the committed directory takes over again on the
+* next ask after the host attaches the session.
+* @param ctx - host plugin context.
+* @param sessionId - the session whose workspace is resolved.
+* @param clientCwd - the client's summary cwd, used only when the host cannot
+*   answer at all.
+* @returns the absolute workspace directory.
 */
 async function sessionCwdOf(ctx, sessionId, clientCwd) {
 	const session = ctx.sessions.get(sessionId);
@@ -8105,29 +8503,18 @@ async function sessionCwdOf(ctx, sessionId, clientCwd) {
 		const cwd = ctx.get("workingDirectory")?.get(session) ?? session.header.cwd;
 		if (cwd !== void 0 && cwd !== "") return cwd;
 	}
-	const query = ctx.get("sessionQuery");
-	if (query !== void 0) {
-		const observation = await query.observeSession(sessionId, { projectionMode: "all" });
-		try {
-			const cwd = observation.projections?.values.workingDirectory ?? observation.header.cwd ?? ctx.get("workingDirectory")?.defaultDirectory;
-			if (cwd !== void 0 && cwd !== "") return requireAbsolute(cwd);
-		} finally {
-			observation[Symbol.dispose]();
-		}
+	const stored = await storedHeaderCwdOf(ctx, sessionId);
+	if (stored !== void 0) try {
+		return requireAbsolute(stored);
+	} catch {
+		throw new SidebarError("bad-request", `invalid working directory "${stored}"`);
 	}
+	const defaultDirectory = ctx.get("workingDirectory")?.defaultDirectory;
+	if (defaultDirectory !== void 0 && defaultDirectory !== "") return requireAbsolute(defaultDirectory);
 	if (clientCwd !== void 0 && clientCwd !== "") try {
 		return requireAbsolute(clientCwd);
 	} catch {
 		throw new SidebarError("bad-request", `invalid working directory "${clientCwd}"`);
-	}
-	const persistence = ctx.get("sessionPersistence");
-	if (persistence !== void 0) {
-		const metaCwd = (await readPersistedSession(persistence, sessionId)).header.cwd;
-		if (metaCwd !== void 0 && metaCwd !== "") try {
-			return requireAbsolute(metaCwd);
-		} catch {
-			throw new SidebarError("bad-request", `invalid working directory "${metaCwd}"`);
-		}
 	}
 	return process.cwd();
 }
@@ -8450,13 +8837,35 @@ async function readPage(path, offset) {
 	}
 }
 function buildApi(ctx, resolved, getSettings, assistantLive, archiveTasks) {
+	/**
+	* Same-key sharing for the shared cwd path. Every file/Git route below
+	* resolves the session cwd through here, and a session switch fires them at
+	* once. Cold resolution is now a header-only read (see `storedHeaderCwdOf`),
+	* but the whole resolution still folds the active-worktree scan, so sharing
+	* one leader keeps a burst from repeating that too. Concurrent asks for the
+	* same session + client hint share ONE resolution; the hint is part of the
+	* key because it is a fallback the result depends on. No TTL: the stored
+	* header is memoized, and a live session's committed directory is re-read on
+	* every ask after this short-lived entry is dropped.
+	*/
+	const cwdInFlight = /* @__PURE__ */ new Map();
 	const cwdOf = async (payload) => {
 		const sessionId = requireString(payload, "sessionId");
 		const record = payload;
-		return {
+		const clientCwd = typeof record?.cwd === "string" && record.cwd !== "" ? record.cwd : void 0;
+		const key = `${sessionId}\u0000${clientCwd ?? ""}`;
+		const pending = cwdInFlight.get(key);
+		if (pending !== void 0) return pending;
+		const resolved = (async () => ({
 			sessionId,
-			cwd: await activeWorktreeRootOf(ctx, sessionId, await sessionCwdOf(ctx, sessionId, typeof record?.cwd === "string" && record.cwd !== "" ? record.cwd : void 0))
-		};
+			cwd: await activeWorktreeRootOf(ctx, sessionId, await sessionCwdOf(ctx, sessionId, clientCwd))
+		}))();
+		cwdInFlight.set(key, resolved);
+		try {
+			return await resolved;
+		} finally {
+			cwdInFlight.delete(key);
+		}
 	};
 	/** Resolve the optional Git-panel checkout selector against the selected
 	* session repository. Unlike `cwd`, `worktree` is never trusted directly. */
@@ -8627,6 +9036,15 @@ function buildApi(ctx, resolved, getSettings, assistantLive, archiveTasks) {
 			const { cwd } = await gitCwdOf(payload);
 			try {
 				return await gitGraph(cwd, payload, selectedRepoOf(payload));
+			} catch (error) {
+				if (error instanceof GitCommandError && (error.code === "graph-stale" || error.code === "graph-limit" || error.code === "bad-request")) throw new SidebarError(error.code, error.message, error.code === "graph-stale" ? 409 : 400);
+				throw error;
+			}
+		},
+		"git.history": async (payload) => {
+			const { cwd } = await gitCwdOf(payload);
+			try {
+				return await gitHistory(cwd, payload, selectedRepoOf(payload));
 			} catch (error) {
 				if (error instanceof GitCommandError && (error.code === "graph-stale" || error.code === "graph-limit" || error.code === "bad-request")) throw new SidebarError(error.code, error.message, error.code === "graph-stale" ? 409 : 400);
 				throw error;

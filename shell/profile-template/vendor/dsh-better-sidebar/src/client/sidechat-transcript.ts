@@ -21,6 +21,14 @@
  * Failures: a provider/agent error used to end a turn with nothing on screen.
  * The terminal `turn/end` reason and a failed attempt's embedded finish chunk
  * both map onto one visible `error` row per turn.
+ *
+ * Deliveries: a `present` call maps onto a compact deliverables card, and the
+ * authoritative `deliverables/presented` event the tool appends attaches to
+ * that card by `callId` — or stands alone when the call row is outside the
+ * events route's head cap. One card per call; a FAILED call replaces its card
+ * with the generic failed tool row. (The host's own `PresentRow` is a status
+ * disclosure row over the call — its delivery cards come from the turn-tail
+ * deliverables, not from the call itself.)
  */
 import type { DiffHunk, ReadBlockLine } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SidebarHistoryEntry } from '../context-types.ts'
@@ -44,6 +52,14 @@ export type SidechatToolCard =
   }
   | { type: 'diff'; diffs: DiffHunk[] }
   | { type: 'read'; label: string; lines: ReadBlockLine[]; totalLines: number; lang?: string }
+
+/** One file a `present` call delivered: its path (absolute from the
+ *  `deliverables/presented` event, session-relative from the call arguments)
+ *  plus the model's own description when it wrote one. */
+export interface SidechatDeliverable {
+  path: string
+  description?: string
+}
 
 /** One compact transcript row rendered in the thread view. `seq` is the
  *  source event's log sequence — stable row identity for React keys across
@@ -82,6 +98,13 @@ export type SidechatTranscriptRow =
     /** Structured render payload (host Block atoms); absent = generic row. */
     card?: SidechatToolCard
   }
+  /** One `present` delivery (a compact deliverables card instead of a tool
+   *  row). A `deliverables/presented` event with the same `callId` REPLACES
+   *  the call's arguments copy — one card per call, never two, whichever
+   *  event lands first. An event with no call row in the window (an
+   *  event-only delivery) still gets its own. A FAILED present call delivered
+   *  nothing and renders as the generic failed tool row instead. */
+  | { kind: 'deliverables'; seq: number; callId?: string; files: readonly SidechatDeliverable[] }
   /** One turn's tail metrics, emitted at `turn/end`: the turn's token usage
    *  (aggregated from `assistant/message.usage`) and wall duration (envelope
    *  time delta from `turn/start`), whichever are computable. */
@@ -207,6 +230,43 @@ function parseArgsObject(args: string | undefined): Record<string, unknown> | un
   } catch {
     return undefined
   }
+}
+
+/**
+ * Narrow one delivered-file entry (`{ path, description? }`). The path is
+ * kept verbatim: the card resolves it against the session cwd on click and
+ * through the media route on render, so both the call-arguments spelling
+ * (cwd-relative) and the event spelling (absolute) work unchanged. A
+ * malformed entry declines the whole list: the call-arguments path then falls
+ * back to the generic tool row, while the event path renders no card (an
+ * event carries no call row of its own to fall back to).
+ */
+function deliverableOf(value: unknown): SidechatDeliverable | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const { path, description } = value as { path?: unknown; description?: unknown }
+  if (typeof path !== 'string' || path.trim() === '') return undefined
+  if (description !== undefined && typeof description !== 'string') return undefined
+  return { path, ...(description !== undefined && description !== '' ? { description } : {}) }
+}
+
+/** The `files` array of a `present` argument object or a
+ *  `deliverables/presented` event, or undefined when the value is not one. */
+function deliverableFiles(value: unknown): SidechatDeliverable[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const files: SidechatDeliverable[] = []
+  for (const entry of value) {
+    const file = deliverableOf(entry)
+    if (file === undefined) return undefined
+    files.push(file)
+  }
+  return files
+}
+
+/** The delivered files of a `present` tool call, or undefined when its
+ *  arguments name none (the call then renders as the generic tool row). */
+function presentCallFiles(args: string | undefined): SidechatDeliverable[] | undefined {
+  const files = deliverableFiles(parseArgsObject(args)?.files)
+  return files !== undefined && files.length > 0 ? files : undefined
 }
 
 /**
@@ -385,6 +445,11 @@ export function transcriptRows(entries: readonly SidebarHistoryEntry[], prev?: r
   const streamRows = new Map<string, number>()
   /** tool callId → index of its tool row in `rows` (result pairing). */
   const callRows = new Map<string, number>()
+  /** present callId → its deliverables card: the card row's index plus the
+   *  call's raw arguments (a FAILED result needs them to rebuild the generic
+   *  tool row). A `deliverables/presented` event attaches to this card
+   *  instead of appending a second one, in either arrival order. */
+  const presentCalls = new Map<string, { rowIndex: number; args: string | undefined }>()
   /** turn → envelope time of its `turn/start` (turn-tail duration basis). */
   const turnStarts = new Map<number, number>()
   /** Turns that already rendered a failure row (an attempt error and the
@@ -531,6 +596,29 @@ export function transcriptRows(entries: readonly SidebarHistoryEntry[], prev?: r
         const callId = data.callId
         const name = typeof data.name === 'string' ? data.name : 'tool'
         const args = typeof data.arguments === 'string' ? data.arguments : undefined
+        // A present call renders as its deliverables card, not a tool row.
+        // Its arguments are the pre-event copy a later deliverables/presented
+        // event refines; when the event already drew the card, keep that card
+        // and record the arguments only for a possible failed result.
+        if (name === 'present') {
+          // Event-first: the deliverables event already drew this call's card
+          // (the event reached the window before the call). The event is
+          // authoritative, so keep its files and only record the arguments a
+          // failed result needs.
+          if (typeof callId === 'string') {
+            const existing = presentCalls.get(callId)
+            if (existing !== undefined) {
+              presentCalls.set(callId, { ...existing, args })
+              break
+            }
+          }
+          const files = presentCallFiles(args)
+          if (files !== undefined) {
+            if (typeof callId === 'string') presentCalls.set(callId, { rowIndex: rows.length, args })
+            rows.push({ kind: 'deliverables', seq: event.seq, ...(typeof callId === 'string' ? { callId } : {}), files })
+            break
+          }
+        }
         const card = callCard(name, args)
         const rowIndex = rows.length
         if (typeof callId === 'string') callRows.set(callId, rowIndex)
@@ -540,9 +628,33 @@ export function transcriptRows(entries: readonly SidebarHistoryEntry[], prev?: r
       case 'tool/result': {
         const source = data.message as { source?: { callId?: unknown } } | undefined
         const callId = typeof source?.source?.callId === 'string' ? source.source.callId : undefined
+        const resultText = resultTextOf(data)
+        // A present call's result is not a row: its deliverables card already
+        // shows what was delivered (and the event supersedes that copy). A
+        // FAILED present delivered nothing, so its card is replaced by the
+        // generic failed tool row the call rendered before the card existed,
+        // and the call stops being associated with a card.
+        const present = callId === undefined ? undefined : presentCalls.get(callId)
+        if (callId !== undefined && present !== undefined) {
+          if (data.error !== undefined) {
+            presentCalls.delete(callId)
+            const card = rows[present.rowIndex]
+            if (card !== undefined && card.kind === 'deliverables') {
+              rows[present.rowIndex] = {
+                kind: 'tool',
+                seq: card.seq,
+                name: 'present',
+                failed: true,
+                ...(present.args !== undefined ? { args: present.args } : {}),
+                ...(resultText !== '' ? { resultText } : {}),
+                executing: false,
+              }
+            }
+          }
+          break
+        }
         const rowIndex = callId === undefined ? undefined : callRows.get(callId)
         const failed = data.error !== undefined
-        const resultText = resultTextOf(data)
         if (rowIndex !== undefined) {
           const row = rows[rowIndex]
           if (row !== undefined && row.kind === 'tool') {
@@ -570,6 +682,25 @@ export function transcriptRows(entries: readonly SidebarHistoryEntry[], prev?: r
             resultText: resultText === '' ? undefined : resultText,
           })
         }
+        break
+      }
+      case 'deliverables/presented': {
+        // The authoritative delivery record (`files[].path` absolute, plus the
+        // model's descriptions). It attaches to its call's card by callId —
+        // one card per call — and stands on its own when the call row is not
+        // in the window (the events route caps the window's head, so this
+        // event can be served without its earlier call).
+        const files = deliverableFiles(data.files)
+        if (files === undefined || files.length === 0) break
+        const callId = typeof data.callId === 'string' ? data.callId : undefined
+        const existing = callId === undefined ? undefined : presentCalls.get(callId)
+        const card = existing === undefined ? undefined : rows[existing.rowIndex]
+        if (existing !== undefined && card !== undefined && card.kind === 'deliverables') {
+          rows[existing.rowIndex] = { ...card, files }
+          break
+        }
+        if (callId !== undefined) presentCalls.set(callId, { rowIndex: rows.length, args: undefined })
+        rows.push({ kind: 'deliverables', seq: event.seq, ...(callId !== undefined ? { callId } : {}), files })
         break
       }
       default: {
@@ -609,6 +740,14 @@ function rowsEqual(a: SidechatTranscriptRow, b: SidechatTranscriptRow): boolean 
       const other = b as typeof a
       return a.name === other.name && a.failed === other.failed && a.args === other.args
         && a.resultText === other.resultText && a.executing === other.executing
+    }
+    case 'deliverables': {
+      const other = b as typeof a
+      if (a.callId !== other.callId || a.files.length !== other.files.length) return false
+      return a.files.every((file, index) => {
+        const peer = other.files[index]
+        return peer !== undefined && file.path === peer.path && file.description === peer.description
+      })
     }
     case 'turnSummary': {
       const other = b as typeof a

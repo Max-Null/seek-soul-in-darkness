@@ -43,10 +43,22 @@ import { type NativeTabInfo, type NativeTabParams, type NativeTabRecords } from 
  * {@link NativeTabParams.line}. The range end and the column are deliberately
  * dropped: {@link splitTrailingLineSpec} parses them, and a start line is all
  * the editor has anywhere to put a cursor.
+ *
+ * `base` is where an address-relative path is resolved, and it must be the
+ * base the ADDRESS was built with — the session's stored header cwd, see
+ * `src/client/address-base.ts` — never the tab body's worktree root. Without
+ * it the seed stays relative and every downstream reader (the viewer's
+ * `fs.read`, the editor, the directory watch) re-bases it on the ACTIVE
+ * worktree: a chat link to `<repo>/frontend/.worktrees/wt/a.md` arrives as
+ * `frontend/.worktrees/wt/a.md` and is joined onto the worktree root a second
+ * time (#947), or silently reads the same-named file of another checkout
+ * (#950). Omitted (a caller with no session context) keeps the historical
+ * relative seed.
  * @param info - the native tab record the body is drawing.
+ * @param base - the address's own base, when the caller knows it.
  * @returns the seed, or `undefined` when the tab is not a file address.
  */
-export declare function fileParamsOf(info: NativeTabInfo): NativeTabParams | undefined;
+export declare function fileParamsOf(info: NativeTabInfo, base?: string): NativeTabParams | undefined;
 /** Everything the registrations need. */
 export interface NativeSurfaceDeps {
     readonly ctx: Context;

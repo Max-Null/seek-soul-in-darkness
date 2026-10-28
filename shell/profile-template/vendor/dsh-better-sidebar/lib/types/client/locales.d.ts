@@ -257,6 +257,7 @@ export declare const zh: {
     graphBranchFilter: string;
     graphEmpty: string;
     graphLoadError: string;
+    graphLinearFallback: string;
     graphStale: string;
     graphDetails: string;
     graphParents: string;
@@ -352,6 +353,14 @@ export declare const zh: {
     settingsSubagentDesc: string;
     settingsJobsTitle: string;
     settingsJobsDesc: string;
+    settingsTasksAutoFoldSettledTitle: string;
+    settingsTasksAutoFoldSettledDesc: string;
+    settingsTasksAutoFoldBranchesTitle: string;
+    settingsTasksAutoFoldBranchesDesc: string;
+    settingsTasksAutoFoldIdleTitle: string;
+    settingsTasksAutoFoldIdleDesc: string;
+    settingsJobsAutoCollapseTitle: string;
+    settingsJobsAutoCollapseDesc: string;
     settingsToolsTitle: string;
     settingsToolsDesc: string;
     settingsBottomTerminalTitle: string;
@@ -450,6 +459,8 @@ export declare const zh: {
     sideChatCancelTitle: string;
     sideChatError: string;
     sideChatTurnUsage: string;
+    sideChatDeliverables: string;
+    sideChatDeliverableOpen: string;
     sideChatBlockCollapse: string;
     sideChatBlockCollapseAria: string;
     sideChatBlockExpand: string;

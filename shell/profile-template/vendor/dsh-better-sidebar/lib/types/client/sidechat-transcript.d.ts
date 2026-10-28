@@ -21,6 +21,14 @@
  * Failures: a provider/agent error used to end a turn with nothing on screen.
  * The terminal `turn/end` reason and a failed attempt's embedded finish chunk
  * both map onto one visible `error` row per turn.
+ *
+ * Deliveries: a `present` call maps onto a compact deliverables card, and the
+ * authoritative `deliverables/presented` event the tool appends attaches to
+ * that card by `callId` — or stands alone when the call row is outside the
+ * events route's head cap. One card per call; a FAILED call replaces its card
+ * with the generic failed tool row. (The host's own `PresentRow` is a status
+ * disclosure row over the call — its delivery cards come from the turn-tail
+ * deliverables, not from the call itself.)
  */
 import type { DiffHunk, ReadBlockLine } from '@deepseek-ai/dsh-client-ui-primitives';
 import type { SidebarHistoryEntry } from '../context-types.ts';
@@ -48,6 +56,13 @@ export type SidechatToolCard = {
     totalLines: number;
     lang?: string;
 };
+/** One file a `present` call delivered: its path (absolute from the
+ *  `deliverables/presented` event, session-relative from the call arguments)
+ *  plus the model's own description when it wrote one. */
+export interface SidechatDeliverable {
+    path: string;
+    description?: string;
+}
 /** One compact transcript row rendered in the thread view. `seq` is the
  *  source event's log sequence — stable row identity for React keys across
  *  polls (streaming caches ride the key, so window slides must not re-key
@@ -105,6 +120,18 @@ export type SidechatTranscriptRow =
     executing?: boolean;
     /** Structured render payload (host Block atoms); absent = generic row. */
     card?: SidechatToolCard;
+}
+/** One `present` delivery (a compact deliverables card instead of a tool
+ *  row). A `deliverables/presented` event with the same `callId` REPLACES
+ *  the call's arguments copy — one card per call, never two, whichever
+ *  event lands first. An event with no call row in the window (an
+ *  event-only delivery) still gets its own. A FAILED present call delivered
+ *  nothing and renders as the generic failed tool row instead. */
+ | {
+    kind: 'deliverables';
+    seq: number;
+    callId?: string;
+    files: readonly SidechatDeliverable[];
 }
 /** One turn's tail metrics, emitted at `turn/end`: the turn's token usage
  *  (aggregated from `assistant/message.usage`) and wall duration (envelope

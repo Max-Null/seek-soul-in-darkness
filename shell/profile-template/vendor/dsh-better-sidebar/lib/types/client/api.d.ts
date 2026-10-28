@@ -372,6 +372,18 @@ export declare const api: {
     }>;
     /** Read-only topological history; stale cursors require a fresh first page. */
     gitGraph: (scope: SessionScope, options?: GitGraphOptions, worktree?: string, signal?: AbortSignal) => Promise<GitGraphResult>;
+    /** 图形界面超过分支上限时读取经状态指纹校验的分页历史。 */
+    gitHistory: (scope: SessionScope, options?: {
+        count?: number;
+        cursor?: string;
+    }, worktree?: string, signal?: AbortSignal) => Promise<{
+        isRepo: boolean;
+        root?: string;
+        entries: GitGraphResult["entries"];
+        hasMore: boolean;
+        nextCursor?: string;
+        snapshot: string;
+    }>;
     /** Recent commit history, lazily pageable (skip/count; defaults 0/30). */
     gitLog: (scope: SessionScope, count?: number, skip?: number, worktree?: string, signal?: AbortSignal) => Promise<GitLogEntry[]>;
     /** Full patch text of one commit (diff display for the history rows). */

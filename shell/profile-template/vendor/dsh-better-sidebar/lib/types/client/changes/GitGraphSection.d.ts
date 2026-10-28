@@ -39,28 +39,33 @@ export interface GitGraphSectionProps {
      *  revert / cherry-pick). Absent, the rows simply carry no menu. */
     onContextMenu?: (event: MouseEvent<HTMLButtonElement>, entry: GraphEntry) => void;
 }
-/** HEAD is the local-current marker; remote refs read muted, local ones brand.
- *  Exported for {@link CommitDetails}, which renders the same pills. */
-export declare function refTone(ref: string, remotes: ReadonlySet<string>): 'head' | 'remote' | 'local';
+/** HEAD is the local-current marker; remote refs read muted, local ones brand,
+ *  tags take their own neutral rung (never a lane colour). Exported for
+ *  {@link CommitDetails}, which renders the same pills. */
+export declare function refTone(ref: string, remotes: ReadonlySet<string>): 'head' | 'remote' | 'local' | 'tag';
 /** One ref pill's paint model: the display name, the tone rung and whether it
  *  carries the "currently checked out" check. */
 export interface RefPillModel {
     readonly name: string;
-    readonly tone: 'head' | 'remote' | 'local';
+    readonly tone: 'head' | 'remote' | 'local' | 'tag';
     readonly current: boolean;
 }
 /** The pills one entry's refs render as, in the refs' own order. A literal
  *  `HEAD` never becomes a pill of its own — it folds into the current local
  *  branch's pill as a leading check, the convention every graph tool shares
  *  (GitLens, GitKraken, …); only a DETACHED head renders it standalone. The
- *  current branch's pill takes the emphasised `head` tone. */
+ *  current branch's pill takes the emphasised `head` tone. Tags are skipped by
+ *  that fold: they are decorations, not the checked-out branch (a tag may even
+ *  share a branch's name). */
 export declare function refPills(refs: readonly string[], remotes: ReadonlySet<string>): RefPillModel[];
 /** One pill: the ref-kind icon (branch / remote globe) plus the name, with a
  *  leading check when this is the branch the worktree stands on. `slot` paints
  *  the pill in the commit's LANE colour (the same palette mapping the edges
  *  and the node dot resolve through), so a branch head is recognisable by
- *  colour alone. Shared by the graph rows, the hover card and the details
- *  card so a ref reads the same everywhere. */
+ *  colour alone. A tag is not a lane painter: it paints the neutral label rung,
+ *  carries no glyph, and the server's `tag: ` name prefix is its kind marker.
+ *  Shared by the graph rows, the hover card and the details card so a ref reads
+ *  the same everywhere. */
 export declare function RefPill({ pill, slot }: {
     pill: RefPillModel;
     slot?: number;

@@ -37,6 +37,7 @@ import clsx from 'clsx'
 import {
   ConnectionIndicator,
   DiffBlock,
+  FileTypeIcon,
   IconApiOutlineRegular,
   IconArchiveOutlineRegular,
   IconBrowseOutlineRegular,
@@ -56,12 +57,17 @@ import {
   StateDot,
   TerminalBlock,
   Tooltip,
+  classifyFileType,
   type DiffBlockLabels,
   type MenuEntry,
   type ReadBlockLabels,
   type TerminalBlockLabels,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { markdownTextProps } from './markdown-labels.tsx'
+import { rewriteProseLocalImageUrls } from './markdown-images.ts'
+import { hostTransportBase } from './desktop-env.ts'
+import { baseName, resolveSidebarPath } from './paths.ts'
+import { openSidebarFile } from './sidebar-file.ts'
 import { useMarkdownSurface } from './use-markdown-surface.ts'
 import { IconHistoryOutline16, IconSaveOutline16 } from './icons.tsx'
 import type { Context, SidebarHistoryEntry, SidebarSessionEvent } from '../context-types.ts'
@@ -86,7 +92,7 @@ import {
   type SidechatToolCard,
   type SidechatTranscriptRow,
 } from './sidechat-transcript.ts'
-import { api } from './api.ts'
+import { api, mediaUrl } from './api.ts'
 import { usePolling } from './use-polling.ts'
 import { useSidechatPush } from './use-sidechat-push.ts'
 import { t } from './locales.ts'
@@ -469,21 +475,44 @@ function toolLeading(name: string, failed: boolean): React.ReactNode {
   }
 }
 
-/** One row renderer (React keys ride the source event seq). `rewrite` is the
- *  surface's markdown link pass — the rows are model prose, so a relative link
- *  resolves against the session cwd (see use-markdown-surface). */
-function renderRow(row: SidechatTranscriptRow, labels: RowLabels, rewrite: (text: string) => string): React.ReactNode {
+/** The per-view helpers every row renderer needs, collected in one stable
+ *  object so a row body never rebuilds them per render. */
+interface RowSurface {
+  /** The row's prose pass: local image destinations become session media URLs
+   *  first, then the surface's local-link pass runs (see the view's wiring).
+   *  Takes the ROW (not its text) so the view can reuse an unchanged row's
+   *  rewrite result by object identity. Only prose rows (user / assistant)
+   *  carry `text`; the other kinds never run this pass. */
+  rewrite: (row: Extract<SidechatTranscriptRow, { text: string }>) => string
+  /** Open one delivered file through the plugin's own open path. */
+  openFile: (path: string) => void
+  /** The session-scoped media URL of one image deliverable. */
+  media: (path: string) => string
+  /** The absolute spelling of one delivered path (the row's title tooltip;
+   *  call-argument paths arrive relative to the session cwd). */
+  resolvePath: (path: string) => string
+}
+
+/** One row renderer (React keys ride the source event seq). `surface` is the
+ *  markdown prose pass the rows run before rendering — the rows are model
+ *  prose, so a relative destination resolves against the session cwd (see
+ *  use-markdown-surface) — plus the delivered-file open and media helpers. */
+function renderRow(row: SidechatTranscriptRow, labels: RowLabels, surface: RowSurface): React.ReactNode {
   switch (row.kind) {
     case 'user':
       return (
         <div key={`${row.kind}:${row.seq}`} className={css.sidechatUser}>
-          <MarkdownText {...markdownTextProps(rewrite(row.text), labels)} />
+          <MarkdownText {...markdownTextProps(surface.rewrite(row), labels)} />
         </div>
       )
     case 'assistant':
       return (
         <div key={`${row.kind}:${row.seq}`} className={css.sidechatAssistant}>
-          <MarkdownText {...markdownTextProps(rewrite(row.text), labels)} />
+          {/* `streaming` keeps the host's incremental parse across chunks
+              instead of restarting it; only the durable (settled) message is
+              the final parse. It rides the row's own flag so a superseded
+              live row never claims to be settled. */}
+          <MarkdownText {...markdownTextProps(surface.rewrite(row), labels)} streaming={!row.settled} />
         </div>
       )
     case 'reasoning':
@@ -522,6 +551,48 @@ function renderRow(row: SidechatTranscriptRow, labels: RowLabels, rewrite: (text
       return (
         <div key={`${row.kind}:${row.seq}`} className={css.sidechatTurnSummary}>
           {parts.join(' · ')}
+        </div>
+      )
+    }
+    case 'deliverables': {
+      return (
+        <div key={`${row.kind}:${row.seq}`} className={css.sidechatDeliverables}>
+          <div className={css.sidechatDeliverablesHead}>{t('sideChatDeliverables')}</div>
+          <ul className={css.sidechatDeliverablesList}>
+            {row.files.map((file, index) => {
+              const name = baseName(file.path)
+              // The visible description is part of the button's accessible
+              // name too: an `Open {name}` label alone would hide it from
+              // assistive tech while sighted readers see it.
+              const openLabel = file.description === undefined
+                ? t('sideChatDeliverableOpen', { name })
+                : `${t('sideChatDeliverableOpen', { name })}: ${file.description}`
+              return (
+                <li key={`${String(index)}:${file.path}`} className={css.sidechatDeliverableItem}>
+                  {/* One row per delivered file: the type glyph (and an image's
+                      own thumbnail) plus the basename, the description, and a
+                      click that opens the file through the plugin's editor
+                      path — the same open the transcript's file links use. */}
+                  <button
+                    type="button"
+                    className={css.sidechatDeliverable}
+                    title={surface.resolvePath(file.path)}
+                    aria-label={openLabel}
+                    onClick={() => { surface.openFile(file.path) }}
+                  >
+                    {classifyFileType(file.path) === 'image'
+                      ? <img className={css.sidechatDeliverableThumb} src={surface.media(file.path)} alt="" loading="lazy" />
+                      : null}
+                    <FileTypeIcon path={file.path} size={16} />
+                    <span className={css.sidechatDeliverableName}>{name}</span>
+                    {file.description !== undefined && (
+                      <span className={css.sidechatDeliverableDesc}>{file.description}</span>
+                    )}
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
         </div>
       )
     }
@@ -658,11 +729,80 @@ export function SideChatView(props: {
   /** Heading slugs, anchor jumps and `.md` link claiming for the transcript (a
    *  prose surface: it renders no file of its own, so a relative link target
    *  resolves against the session cwd). */
-  const { surfaceRef: chatSurfaceRef, openFile: openChatFile, rewrite: rewriteChatText } = useMarkdownSurface({
+  const { surfaceRef: chatSurfaceRef, openFile: openChatFile, rewrite: rewriteChatLinks } = useMarkdownSurface({
     ctx,
     sessionId: scope.sessionId,
     cwd: scope.cwd,
   })
+  /**
+   * The prose pass every row runs before rendering: LOCAL image destinations
+   * become absolute `/sidebar/file` media URLs FIRST (the host renderer only
+   * draws absolute http(s) image sources, and a row is not a file, so relative
+   * destinations resolve against the session cwd), and the surface's local-link
+   * pass runs second — it must never see a raw image destination (see
+   * markdown-navigation.ts). Both passes mask code regions, so a fenced
+   * example stays literal.
+   */
+  const rewriteChatText = useCallback(
+    (text: string): string => rewriteChatLinks(
+      rewriteProseLocalImageUrls(text, scope, scope.cwd, hostTransportBase()),
+    ),
+    [rewriteChatLinks, scope],
+  )
+  /** The media URL base the rewrite bakes into image destinations. */
+  const transportBase = hostTransportBase()
+  /**
+   * The row-level prose pass, memoized by ROW OBJECT: the transcript reuses an
+   * unchanged row's object across updates (`sidechat-transcript.ts`), so a
+   * composer keystroke or a streaming push must not re-run two regex passes
+   * over every unchanged row's text. The cache is rebuilt when the inputs the
+   * pass resolves against change (session, cwd, transport base); the row's own
+   * text is compared too, so a row mutated in place never serves a stale
+   * rewrite.
+   */
+  const rewriteCache = useMemo(() => {
+    // The cache is keyed by rows, but its RESULTS were resolved against the
+    // session cwd and the transport base, so it must not outlive either. The
+    // reads below make the dependency real to the hook linter (the repo's
+    // `void wantedKey` idiom).
+    void scope.sessionId
+    void scope.cwd
+    void transportBase
+    return new WeakMap<object, { text: string; out: string }>()
+  }, [scope.sessionId, scope.cwd, transportBase])
+  const rewriteRow = useCallback((row: Extract<SidechatTranscriptRow, { text: string }>): string => {
+    const cached = rewriteCache.get(row)
+    if (cached !== undefined && cached.text === row.text) return cached.out
+    const out = rewriteChatText(row.text)
+    rewriteCache.set(row, { text: row.text, out })
+    return out
+  }, [rewriteCache, rewriteChatText])
+  /** Open one delivered file: the plugin's own editor path, session-scoped
+   *  like every other open in this view (a relative path resolves against the
+   *  session cwd). */
+  const openDeliveredFile = useCallback((path: string): void => {
+    try {
+      openSidebarFile(ctx, scope.sessionId, path)
+    } catch (error) {
+      console.error('[dsh-better-sidebar] side chat deliverable open failed', error)
+    }
+  }, [ctx, scope.sessionId])
+  /** The session-scoped media URL of one image deliverable (the card's
+   *  thumbnail; the same route the markdown image pass produces). */
+  const deliverableMediaUrl = useCallback((path: string): string => mediaUrl(scope, path), [scope])
+  /** The absolute spelling of one delivered path for the card's title tooltip
+   *  (the call-argument copy is cwd-relative; the event copy is already
+   *  absolute and passes through unchanged). */
+  const deliverableTitlePath = useCallback((path: string): string => resolveSidebarPath(scope.cwd, path), [scope.cwd])
+  const rowSurface = useMemo<RowSurface>(
+    () => ({
+      rewrite: rewriteRow,
+      openFile: openDeliveredFile,
+      media: deliverableMediaUrl,
+      resolvePath: deliverableTitlePath,
+    }),
+    [rewriteRow, openDeliveredFile, deliverableMediaUrl, deliverableTitlePath],
+  )
   const transcriptRef = useCallback((element: HTMLDivElement | null) => {
     scrollRef.current = element
     chatSurfaceRef(element)
@@ -1252,7 +1392,7 @@ export function SideChatView(props: {
             clickable at all (see use-markdown-surface), scoped to this
             transcript so nothing outside it is claimed. */}
         <MarkdownDelegateProvider openFile={openChatFile}>
-          {rows.map(row => renderRow(row, rowLabels, rewriteChatText))}
+          {rows.map(row => renderRow(row, rowLabels, rowSurface))}
           {/* The unclaimed inbox: accepted messages whose claim has not logged
               them yet. The same bubble surface (and markdown pass) as a
               durable user row, plus the state word and the dequeue button. */}

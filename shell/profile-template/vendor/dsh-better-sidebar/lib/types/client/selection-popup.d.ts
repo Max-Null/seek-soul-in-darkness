@@ -28,15 +28,18 @@
  * hide for it).
  */
 import { type RefObject } from 'react';
-/** The floating "add to conversation" action: payload + viewport anchor. */
-export interface SelectionPopup {
-    insert: string;
+/**
+ * The floating "add to conversation" action: payload + viewport anchor.
+ * The payload type belongs to the caller; the hook only carries it through.
+ */
+export interface SelectionPopup<T> {
+    insert: T;
     left: number;
     top: number;
 }
-export interface SelectionPopupOptions {
+export interface SelectionPopupOptions<T> {
     /** Commit the payload into the composer draft (button click). */
-    onCommit(insert: string): void;
+    onCommit(insert: T): void;
     /**
      * The DOM surface that must stay on screen for the popup to live: the
      * markdown preview container in preview mode, the CodeMirror host
@@ -44,16 +47,16 @@ export interface SelectionPopupOptions {
      */
     getSurface(): HTMLElement | null;
 }
-export interface SelectionPopupControls {
+export interface SelectionPopupControls<T> {
     /** The current popup (null = hidden). */
-    popup: SelectionPopup | null;
+    popup: SelectionPopup<T> | null;
     /** Attach to the portaled button element. */
     buttonRef: RefObject<HTMLButtonElement>;
     /** Anchor the popup above a selection (viewport-clamped). */
-    show(insert: string, left: number, top: number): void;
+    show(insert: T, left: number, top: number): void;
     /** Hide the popup (idempotent). */
     hide(): void;
     /** The button's click: commit the stored payload, then hide. */
     commit(): void;
 }
-export declare function useSelectionPopup(options: SelectionPopupOptions): SelectionPopupControls;
+export declare function useSelectionPopup<T>(options: SelectionPopupOptions<T>): SelectionPopupControls<T>;

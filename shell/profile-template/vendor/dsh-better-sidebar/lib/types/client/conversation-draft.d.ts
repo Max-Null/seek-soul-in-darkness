@@ -5,74 +5,100 @@
  * through `ctx.get` (the inject-free read the app's own plugins use); a
  * missing service or scope degrades to a logged no-op, never a crash.
  *
- * File references additionally use DSH's own structured insert event
- * (`slash/input-insert-reference`, see `insertFileReference`) instead of
- * plain draft text: the native `@file` picker emits this event, and the
- * conversation input machine mints one occurrence whose chip covers the
- * whole reference. Plain text `@folder/file.ts` only ever gets DSH's
- * folder-ref decoration (`@folder/`) — the file name stays undecorated — so
- * plain append is the fallback, not the primary path, for files.
+ * Structured references (file chips, selection chips, and any append onto a
+ * draft that already carries chips) go through the host's span channels
+ * instead of plain draft text: `setDraft` rebuilds the document from a string
+ * and flattens every chip. A reference chip mints through
+ * `SidebarSessionInput.insertReference` (what the native `@` picker
+ * calls); plain-text insertion onto a chipped draft has no facade method and
+ * emits `slash/input-insert-text` directly. Plain `setDraft` is the fallback
+ * for chipless drafts only.
  *
- * Insert position (fixes upstream issue #425): the draft store only exposes
- * the whole string (`getSnapshot().draft` + `setDraft(text)`) — there is no
- * caret API on the conversation service. The composer's `<textarea>` keeps
- * its last selection even while unfocused, so the live caret is probed from
- * the DOM (guarded by a value-sync check), and the text is spliced at that
- * position, replacing any live selection — with whitespace-aware joins, an
- * insert into the middle of a sentence keeps single-space separation like
- * the append path. An unknown/stale caret falls back to appending at the
- * end (the pre-fix behavior).
- *
- * The caret is also *restored* after the insert: committing a programmatic
- * draft change resets the controlled textarea's caret (observed landing at
- * the start of the value), which would make every later insert probe the
- * reset position and drift the stack (A|B + C + D ended up as |DACB). The
- * placement (`placeComposerCaretAfterInsert`) puts the caret right after the
- * inserted text once the value commit lands — the index accounts for the
- * separating space on the left, so stacked inserts stay at their running
- * position (A|B + C + D → ACD|B).
+ * Everything appends at the document end. The host composer is a Lexical
+ * contenteditable and this face publishes no caret, so a mid-draft insert
+ * would have to guess a position — see {@link appendOffset} for the one
+ * coordinate it does derive.
  */
-import type { Context } from '../context-types.ts';
-/** A resolved composer caret/selection in draft coordinates. */
-export interface DraftCaret {
-    start: number;
-    end: number;
+import type { Context, SidebarSessionOccurrence } from '../context-types.ts';
+/**
+ * One structured reference to insert as a chip: the compact `label` the
+ * composer shows, and the `text` the model receives on send. The two are
+ * deliberately different — a selection reads as `docs/a.md:12-15` on screen
+ * while the model still gets the whole fenced block.
+ *
+ * Named `Pending*` to keep clear of the host's own `DraftReference`, which is
+ * the opposite thing: a chip ALREADY in the draft, carrying its offset and
+ * length.
+ */
+export interface PendingReference {
+    label: string;
+    text: string;
+    /**
+     * What the draft string carries for this chip (the clipboard projection).
+     * Defaults to `label`; a file reference spells its `@path` here instead.
+     * This is the text other draft consumers (copy, plain projections) see, so
+     * it stays short — the full payload rides in `text` and is only expanded
+     * on send.
+     */
+    clipboardText?: string;
+    /**
+     * Chip icon family. Omit for a reference whose `text` is not a path: the
+     * host marks `'file'` chips openable, and a click would hand the raw text
+     * (a fenced block, for a selection) to the file opener.
+     */
+    appearance?: 'file' | 'folder' | 'session';
 }
+/** `draft` with `text` appended behind one separating space when needed. */
+export declare function appendText(draft: string, text: string): string;
 /**
- * The spliced draft string (see {@link spliceInsert}); pure string math —
- * unit-tested directly.
- */
-export declare function insertAtCaret(draft: string, text: string, caret: DraftCaret | null): string;
-/**
- * Resolve the composer's live caret from its DOM `<textarea>`. The draft
- * store has no caret API, so the sidebar reads the composed input's selection
- * directly; the value-sync check (`el.value === draft`) discards stale or
- * wrong-composer reads — a caret must never be applied against a draft it
- * was not measured on.
+ * Fold one clipboard-projection offset to its detect-projection twin.
  *
- * Returns null when the composer is missing, disabled/read-only, out of
- * sync with the store draft, or has no measurable selection (jsdom/odd
- * hosts report null selectionStart/End).
+ * The host maintains two coordinate systems over the same document: the
+ * clipboard projection (`InputState.draft`, `occurrences`) expands every chip
+ * to its whole `clipboardText`, while the detect projection — the one every
+ * insert/replace event's `span` must speak — collapses each chip to a single
+ * placeholder character. Deriving a span from a draft offset without folding
+ * therefore overshoots by `length - 1` per chip, and the host rejects the
+ * out-of-range span (`applied = false`) — the second chip insert of a session
+ * would silently fail.
+ *
+ * An offset inside a chip's expansion snaps to that chip's trailing edge: the
+ * host only ever replaces whole chips, never splits one. An offset exactly at
+ * a chip's START resolves to the position BEFORE the chip — the host's own
+ * `detectOffsetOfClipboardOffset` reads that case as "inside" and returns the
+ * trailing edge, which would move a caret one chip too far right.
  */
-export declare function probeComposerCaret(draft: string): DraftCaret | null;
+export declare function foldClipboardOffset(draft: string, occurrences: readonly SidebarSessionOccurrence[], offset: number): number;
 /**
- * Restore the composer caret to `caretIndex` after a programmatic
- * `setDraft` commit. A controlled textarea update resets the caret (React
- * commits the value asynchronously and the browser moves the caret to the
- * start/end), so the placement is scheduled and retried across at most two
- * animation frames (setTimeout fallback for jsdom), and only applied when
- * the textarea still matches `expectedDraft` — a newer edit or a different
- * composer wins the race untouched. The caret is clamped into the value
- * bounds, mirroring how browsers clamp type-in positions.
+ * Mint one reference chip through the host's own `insertReference` — the
+ * same facade method the native `@` picker's event listener calls, so the
+ * composer shows a compact chip while the model receives `reference.text`.
+ * The host runs its own admission-phase and revision guards and reports
+ * whether the edit applied.
+ *
+ * The chip's `clipboardText` is the compact `label`, not the full payload —
+ * see {@link PendingReference.clipboardText}.
+ *
+ * Returns false when the host refused the insert (stale revision, a frozen
+ * submission phase, or no chip channel at all) so the caller can fall back.
  */
-export declare function placeComposerCaretAfterInsert(expectedDraft: string, caretIndex: number): void;
+export declare function insertDraftReference(ctx: Context, sessionId: string, reference: PendingReference): boolean;
 /**
- * Insert `text` into the session's composer draft at the composer's live
- * caret (see {@link probeComposerCaret}), falling back to appending at the
- * end when the caret cannot be resolved. Returns false — and logs — when the
- * conversation service or the session scope is unavailable.
+ * Append `text` to the session's composer draft. Returns false — and logs —
+ * when the conversation service or the session scope is unavailable.
+ *
+ * The host composer is a Lexical contenteditable with no caret API on this
+ * face, so this appends at the end; a mid-draft insert would need the caret
+ * the host does not publish here.
  */
 export declare function appendToDraft(ctx: Context, sessionId: string, text: string): boolean;
+/**
+ * Insert one reference as a chip, degrading to its plain-text form when the
+ * host has no chip channel or refuses the insert. This is the ONE place the
+ * fallback policy lives: the explorer's `@` button and the viewer selection
+ * popup both come through here.
+ */
+export declare function insertReferenceOrText(ctx: Context, sessionId: string, reference: PendingReference): boolean;
 /**
  * The DSH `@` spelling for one relative path, mirroring the host grammar
  * (`formatFileMention` in `@deepseek-ai/dsh-file-reference`): plain when
@@ -111,13 +137,3 @@ export declare function directoryMention(relativePath: string): string | undefin
  * an unrepresentable path is a logged no-op; never guess from session cwd.
  */
 export declare function insertWorkspaceReference(ctx: Context, sessionId: string, path: string, isDir: boolean): boolean;
-/**
- * Insert one FILE reference as a structured chip (like DSH's own `@` picker).
- * The chip displays `@<basename>` but serializes to `@<relative path>` on
- * send, so the reference stays a single link from trigger to basename.
- *
- * Directories keep the sidebar's plain-text completion behavior (`@dir/`)
- * through `insertWorkspaceReference`. The rc.1 picker also supports folder
- * chips on explicit selection; its drill action still inserts plain text.
- */
-export declare function insertFileReference(ctx: Context, sessionId: string, relativePath: string): boolean;

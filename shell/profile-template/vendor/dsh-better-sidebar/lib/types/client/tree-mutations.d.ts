@@ -15,6 +15,12 @@
  * a delete must close every tab at or under the removed path. Both ride the
  * SERVICE paths (`updateTab`/`closeTab`) rather than direct state reducers so
  * the registered lifecycle callbacks fire like any other tab mutation.
+ *
+ * The walk covers EVERY session the store has cached, not just the one on
+ * screen: the bottom workbench is per session, and a background conversation's
+ * file page has the same next-save hazard. Each row therefore names its own
+ * session, and the writes go to that session (`updateTab`/`closeTab` take the
+ * targeted channel for a session that is not on screen).
  */
 import type { Context } from '../context-types.ts';
 import { type SidebarStore } from './state.ts';
@@ -40,13 +46,21 @@ export declare function consumeRetargetedPath(key: string, from: string, to: str
  *  current path anyway), loaded something else, or its tab is being closed —
  *  so the map cannot grow for the life of the page. */
 export declare function clearRetargetedPath(key: string): void;
-/** Retarget tabs after `oldPath` became `newPath` (title follows the new
- *  base name, matching how openFile titles editor tabs).
+/** Retarget tabs after `oldPath` became `newPath`.
  *
  *  Files and anything under a renamed DIRECTORY are retargeted — the same
- *  subtree rule the delete path uses. The move is announced through
- *  {@link markRetargetedPath} so the editor keeps its document (and an unsaved
- *  draft) instead of reloading the new name. */
+ *  subtree rule the delete path uses — in EVERY session the store has cached.
+ *  The move is announced through {@link markRetargetedPath} so the editor keeps
+ *  its document (and an unsaved draft) instead of reloading the new name.
+ *
+ *  The TITLE follows only when it was DERIVED from the file name — an editor
+ *  page opened the way the plugin opens one is titled with the basename, so a
+ *  rename has to carry it along; a title its author chose is not the tree's to
+ *  rewrite. The host's agent-opens push is the live case: the model asks for a
+ *  file with a title of its own (`use-host-feeds` → `openFile(scope, path,
+ *  title)`), and a consumer plugin may label a page itself. A directory rename
+ *  never retitles a descendant anyway (their basenames do not change), so this
+ *  is the same rule seen from the file side. */
 export declare function retargetPathTabs(ctx: Context, store: SidebarStore, oldPath: string, newPath: string): void;
 /** Close tabs at or under the removed `target` (a directory takes its whole
  *  subtree of open files with it). A tab holding an unsaved draft asks first
@@ -56,5 +70,7 @@ export declare function retargetPathTabs(ctx: Context, store: SidebarStore, oldP
  *
  *  The question is asked in the tab's OWN session: the draft registry is keyed
  *  by `sessionId::tabId`, so a bare id read would look up a same-numbered tab in
- *  some other session (or nothing at all) and close a live draft unprompted. */
+ *  some other session (or nothing at all) and close a live draft unprompted.
+ *  Every session the store has cached is walked (a background conversation's
+ *  page would otherwise come back with its next save). */
 export declare function closePathTabs(ctx: Context, store: SidebarStore, target: string, unsavedMessage: string): void;

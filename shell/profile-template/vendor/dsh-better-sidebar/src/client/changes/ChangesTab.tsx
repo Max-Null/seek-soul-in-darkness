@@ -152,8 +152,7 @@ export function ChangesTab({ ctx, store, scope, tab, visible, onOpenFile, onOpen
     } finally {
       if (generation === pollGen.current) pullingRef.current = false
     }
-    // Granular scope fields: the scope object's identity churns, only its
-    // sessionId / cwd fields gate the poll target.
+    // Granular scope fields: only these two gate the poll target.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope.sessionId, scope.cwd])
   useEffect(() => {

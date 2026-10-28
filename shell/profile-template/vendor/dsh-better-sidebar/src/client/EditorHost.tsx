@@ -235,13 +235,13 @@ export function EditorHost(props: {
         ctx.get('betterSidebar')?.updateTab(tab.id, { path: absolute, title: baseName(absolute) }, scope.sessionId)
       }
     } else {
-      openSidebarFile(ctx, scope.sessionId, absolute)
+      openSidebarFile(ctx, scope.sessionId, absolute, { cwd: scope.cwd })
     }
   }
 
   /** The context menu's explicit "new tab" escape (per-path dedupe). */
   const openFileNewTab = (absolute: string): void => {
-    openSidebarFile(ctx, scope.sessionId, absolute)
+    openSidebarFile(ctx, scope.sessionId, absolute, { cwd: scope.cwd })
   }
 
   /**
@@ -479,8 +479,8 @@ export function EditorHost(props: {
     }
     apply(planFirstMatch(ctx.get('betterSidebar')?.matchFileViewer(path), mediaUrlOf))
     return () => { cancelled = true; controller.abort() }
-    // The deps are deliberately granular: the scope object's identity churns,
-    // only its sessionId / cwd fields gate the (re)fetch.
+    // Granular deps: only these two fields gate the (re)fetch (see
+    // session-scope.ts for why the object itself is no longer a signal).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope.sessionId, scope.cwd, path, ctx, showEmpty, isDir, reloadSeq])
 
@@ -532,8 +532,7 @@ export function EditorHost(props: {
     // button stays the explicit escape hatch in both cases.
     if (toolbar?.dirty === true || toolbar?.mode === 'edit') return
     setReloadSeq(sequence => sequence + 1)
-    // Granular deps: the scope object's identity churns, so only its
-    // sessionId / cwd fields gate this decision.
+    // Granular deps: only the two scope fields gate this decision.
   }, [ops, path, scope.sessionId, scope.cwd, toolbar?.dirty, toolbar?.mode])
 
   const treeOpen = treeOpenOf(tab)

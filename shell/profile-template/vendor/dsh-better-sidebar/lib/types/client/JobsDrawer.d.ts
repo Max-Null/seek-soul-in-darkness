@@ -32,6 +32,8 @@ export interface JobsDrawerProps {
     observed: SidebarObservedJob | undefined;
     /** Agent count of the tree (root included) — the auto-collapse signal. */
     agentCount: number;
+    /** Follow the agent-count collapse rule unless the reader overrides it. */
+    autoCollapse?: boolean;
     /** Open the output popover of one row (anchor = the row's main button). */
     onOpenOutput(row: TreeJob, anchor: HTMLElement): void;
     /** The job whose output popover is currently open (row highlight). */

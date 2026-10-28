@@ -529,6 +529,11 @@ export interface NativePathTab {
     /** The path the tab is bound to — a file path, or a browser tab's address
      *  (a url seed is stored on the same field). */
     path: string;
+    /** The chip's current title. The rename reconciliation reads it to tell a
+     *  title the tree DERIVED from the file name (the basename it wrote on open)
+     *  from one its author chose — a model-driven open names its own title, and
+     *  that is not the tree's to rewrite. */
+    title: string;
 }
 /**
  * The plugin's write face over DSH's native right Sidebar.
@@ -690,6 +695,11 @@ export interface BetterSidebarService {
      * strict no-op (no state churn, no callbacks). `scope` (v0.12.0+) rides
      * to the callback (its optional cwd included); absent, the callback gets
      * `{ sessionId }` of the active session.
+     *
+     * v0.26.0+: a scope naming a session that is **not the one on screen** closes
+     * the row in THAT session's layout through the targeted channel (no publish,
+     * no notify), which is how the file tree's delete reconciliation reaches a
+     * background conversation's pages. Without a scope nothing changes.
      */
     closeTab(tabId: string, scope?: SessionScope): void;
     /** Subscribe to registry changes (register/dispose). */
@@ -721,6 +731,13 @@ export interface BetterSidebarService {
      * carried (#826) is dropped with it, because that line belongs to the
      * navigation that delivered the file — an in-place switch or a rename that
      * kept it would send the next file to the previous file's line.
+     *
+     * v0.26.0+: a `sessionId` that is **not the session on screen** patches that
+     * session's own layout through the targeted channel (no publish, no notify —
+     * the same route a targeted `openTab(seed, scope)` takes), so the file tree's
+     * rename reconciliation reaches a background conversation's pages instead of
+     * resolving them against the active session. The active session keeps the
+     * publishing path, and an omitted `sessionId` behaves exactly as before.
      */
     updateTab(tabId: string, patch: {
         title?: string;
@@ -788,7 +805,7 @@ export declare function matchUrlTarget(tabs: readonly TabDescriptor[], url: URL)
  * The plugin version this service instance reports. Keep in lockstep with
  * `package.json`'s version — `tests/service.spec.ts` asserts the pair.
  */
-export declare const SIDEBAR_SERVICE_VERSION = "0.28.0";
+export declare const SIDEBAR_SERVICE_VERSION = "0.28.2";
 /**
  * Monotonic capability list consumers use to gate new API usage (features
  * are never removed). Each string names a v0.12.0+ capability:

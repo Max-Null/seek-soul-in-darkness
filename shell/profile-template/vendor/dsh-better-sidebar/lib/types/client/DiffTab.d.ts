@@ -1,6 +1,6 @@
+import type { SessionScope } from './api.ts';
 import type { SidebarDiffRef } from './state.ts';
 export declare function DiffTab(props: {
-    sessionId: string;
-    cwd: string | undefined;
+    scope: SessionScope;
     diff: SidebarDiffRef;
 }): import("react").JSX.Element;

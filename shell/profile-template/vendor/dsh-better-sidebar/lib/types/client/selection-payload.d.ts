@@ -1,3 +1,4 @@
+import type { PendingReference } from './conversation-draft.ts';
 /** Max inserted selection length (UTF-16 code units, i.e. JS `.length`). */
 export declare const SELECTION_LIMIT = 500;
 /** The source line span a selection maps to (1-based, inclusive). */
@@ -11,11 +12,11 @@ export interface SelectionLines {
  */
 export declare function headerOf(path: string, cwd: string | undefined, lines?: SelectionLines): string;
 /**
- * The full text appended to the composer draft for one selection.
- * Over the limit the content is dropped: the plain path line is the whole
- * payload (an empty fenced block would just occupy the draft).
+ * The composer payload for one selection: the chip label and the model text.
+ * Over the limit the content is dropped and both halves are the plain path
+ * line (an empty fenced block would just occupy the draft).
  */
-export declare function buildSelectionInsert(path: string, cwd: string | undefined, lines: SelectionLines | undefined, selected: string): string;
+export declare function buildSelectionInsert(path: string, cwd: string | undefined, lines: SelectionLines | undefined, selected: string): PendingReference;
 /**
  * Reverse-map a rendered-DOM selection back to source line numbers. The
  * preview selection is plain text (block boundaries come out as `\n`), so

@@ -13,10 +13,14 @@ export interface DirectoryWatchOptions {
      */
     visible?: boolean;
     /**
-     * A directory whose listing is stale.
-     * @param dir - absolute directory path, exactly the form the tree keys levels by.
+     * Directories whose listings are stale.
+     *
+     * A watch notice names one directory. The parked→visible re-arm names the
+     * WHOLE watched set at once: the caller re-lists it in one batch request
+     * instead of firing one request per directory.
+     * @param dirs - absolute directory paths, exactly the form the tree keys levels by.
      */
-    onStale: (dir: string) => void;
+    onStale: (dirs: readonly string[]) => void;
 }
 /**
  * Keep the file tree's expanded folders watched for the component's lifetime.
