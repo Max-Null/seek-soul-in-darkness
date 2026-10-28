@@ -100,17 +100,24 @@ node -e "console.log('local =', require('./package.json').version)"
 npm pack --dry-run
 ```
 
-**硬前提：npm 侧的 Trusted Publisher 必须已为该包配好**（2026-10-19 在 `dsh-allostasis` 上实际踩过）。查法：
+**硬前提：npm 侧的 Trusted Publisher 必须已为该包配好**（2026-10-19 在 `dsh-allostasis` 上实际踩过；2026-10-28 在 `dsh-plugin-center` 上又踩一次——那个仓此前的 tag/Release 都是手工建的，workflow 从未真正 publish 过，trust 一直是空的）。查法：
 
 ```powershell
 npm trust list @max-null/<pkg>   # 需要 2FA；输出 "No trust configurations found" 就是没配
 ```
 
-**只有网页配得可靠**：`https://www.npmjs.com/package/@max-null/<pkg>/access` → Trusted Publisher 选 **GitHub Actions** → 填 `Repository: Max-Null/<repo>`、`Workflow filename: publish.yml`、`Environment: **留空**`（workflow 里没有定义 environment，填了就匹配不上）。
+**只有网页配得可靠**：`https://www.npmjs.com/package/@max-null/<pkg>/access`（打不开就进包页 → **Settings** → **Trusted publishing**）→ 选 **GitHub Actions**，字段是这些：
+
+- `Organization or user` 与 `Repository` 是**两栏**，不是一个 `owner/repo`（旧文档的写法对不上现在的 UI）。
+- `Workflow filename` 只填文件名 `publish.yml`（带 `.yml`，不要写 `.github/workflows/` 路径）。
+- `Environment` **留空**：workflow 里没有定义 environment，填了就永远匹配不上。
+- `Allowed actions` **必须勾上 allow `npm publish`**：2026-09-03 之后新建的配置默认**只给 `npm stage publish`**。不勾这一项，前面的字段全对也会被拒（E404），看起来和「trust 没配」一模一样。
+
+**新配置有 2 天验证期**：必须在 2 天内完成首次成功发布，否则自动过期、且不能编辑，只能删掉重建。配完立刻触发 workflow，别隔天再跑。
 
 **别信 CLI**：`npm trust github <pkg> --file publish.yml --repo <repo> --yes` 在 2FA 下会中途弹 OTP，失败时**不报错**，事后 `trust list` 仍是空——看起来像成功。
 
-**怎么判定真发成功**：workflow 日志里必须同时出现 `npm notice Publishing to https://registry.npmjs.org/ ...` 与 `+ @max-null/<pkg>@X.Y.Z`。只有 provenance 签名行而**没有** `Publishing to` 那行 = 授权被拒（E404），是 trust 没配。
+**怎么判定真发成功**：workflow 日志里必须同时出现 `npm notice Publishing to https://registry.npmjs.org/ ...` 与 `+ @max-null/<pkg>@X.Y.Z`。只有 provenance 签名行而**没有** `Publishing to` 那行 = 授权被拒（E404），是 trust 没配；**有** `Publishing to` 而随后仍 E404 = 权限层被拒，先查 `Allowed actions` 有没有勾 `npm publish`，再查 `Environment` 是否留空。
 
 **registry 有延迟**：`dist-tags` 更新实测要 **2–4 分钟**（同一个包先后两次分别是 2 分钟和 4 分钟），中间的 404 不代表失败；要绕本地缓存就直接查官方源。
 
