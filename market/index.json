@@ -1,0 +1,312 @@
+{
+  "format": 1,
+  "title": {
+    "en": "MaxNull SSiD plugins",
+    "zh": "MaxNull 思灵插件全家桶"
+  },
+  "description": {
+    "en": "The @max-null plugin family behind SSiD",
+    "zh": "思灵（SSiD）背后的 @max-null 插件全家桶"
+  },
+  "plugins": [
+    {
+      "name": "@max-null/dsh-achievements",
+      "description": {
+        "en": "SSiD family progress achievements — listens to session/tool events, folds activity into durable counters, unlocks trophies with toasts and an achievements page; the GenUI category merges the genui plugin's own counter data.",
+        "zh": "SSiD family progress achievements — listens to session/tool events, folds activity into durable counters, unlocks trophies with toasts and an achievements page; the GenUI category merges the genui plugin's own counter data."
+      },
+      "author": "Max Null",
+      "dist-tags": {
+        "latest": "0.1.4"
+      },
+      "versions": [
+        {
+          "version": "0.1.4",
+          "publishTimestamp": 1792266631,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": ">=0.1.1-rc.1 <0.3.0"
+          }
+        }
+      ]
+    },
+    {
+      "name": "@max-null/dsh-allostasis",
+      "description": {
+        "en": "应变（allostasis）：模型复读、推理退化、思考死循环的检测与掐断——语言漂移锚定、退化提醒、空回合兜底，以及生成中截断复读并续跑",
+        "zh": "应变（allostasis）：模型复读、推理退化、思考死循环的检测与掐断——语言漂移锚定、退化提醒、空回合兜底，以及生成中截断复读并续跑"
+      },
+      "author": "Max Null",
+      "dist-tags": {
+        "latest": "0.6.2"
+      },
+      "versions": [
+        {
+          "version": "0.6.2",
+          "publishTimestamp": 1792921525,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": ">=0.1.7-rc.1 <0.3.0"
+          }
+        }
+      ]
+    },
+    {
+      "name": "@max-null/dsh-chat-rail",
+      "description": {
+        "en": "画卷式消息导航栏：右侧竖条 hover 展开画卷，scroll-spy 高亮居中跟随，编号+时间+完整预览，锚定会话列右缘避让侧边栏，收藏过滤，tip 内嵌提问&回答直达",
+        "zh": "画卷式消息导航栏：右侧竖条 hover 展开画卷，scroll-spy 高亮居中跟随，编号+时间+完整预览，锚定会话列右缘避让侧边栏，收藏过滤，tip 内嵌提问&回答直达"
+      },
+      "author": "Max Null",
+      "dist-tags": {
+        "latest": "0.6.13"
+      },
+      "versions": [
+        {
+          "version": "0.6.13",
+          "publishTimestamp": 1790933492,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": ">=0.1.7-rc.2 <0.3.0"
+          }
+        }
+      ]
+    },
+    {
+      "name": "@max-null/dsh-chinese-thinking",
+      "description": {
+        "en": "Injects one system-prompt section so a DeepSeek Harness agent thinks and replies in Chinese",
+        "zh": "Injects one system-prompt section so a DeepSeek Harness agent thinks and replies in Chinese"
+      },
+      "author": "Max Null",
+      "dist-tags": {
+        "latest": "0.3.1"
+      },
+      "versions": [
+        {
+          "version": "0.3.1",
+          "publishTimestamp": 1790635692,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": ">=0.1.1-rc.1 <0.3.0"
+          }
+        }
+      ]
+    },
+    {
+      "name": "@max-null/dsh-tone-layer",
+      "description": {
+        "en": "Injects one system-prompt section that sets how a DeepSeek Harness agent talks, without touching how it reasons",
+        "zh": "Injects one system-prompt section that sets how a DeepSeek Harness agent talks, without touching how it reasons"
+      },
+      "author": "Max Null",
+      "dist-tags": {
+        "latest": "0.2.0"
+      },
+      "versions": [
+        {
+          "version": "0.2.0",
+          "publishTimestamp": 1793204994,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": ">=0.1.1-rc.1 <0.3.0"
+          }
+        }
+      ]
+    },
+    {
+      "name": "@max-null/dsh-draft-polish",
+      "description": {
+        "en": "DSH 草稿润色：发送按钮左侧 ✨ 一键调用 LLM 润色输入框草稿，可选携带会话上下文帮助模型理解意图；走 DSH llm 渠道，会话进行中也能用",
+        "zh": "DSH 草稿润色：发送按钮左侧 ✨ 一键调用 LLM 润色输入框草稿，可选携带会话上下文帮助模型理解意图；走 DSH llm 渠道，会话进行中也能用"
+      },
+      "author": "Max Null",
+      "dist-tags": {
+        "latest": "0.2.5"
+      },
+      "versions": [
+        {
+          "version": "0.2.5",
+          "publishTimestamp": 1790635781,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": ">=0.1.7-rc.2 <0.3.0"
+          }
+        }
+      ]
+    },
+    {
+      "name": "@max-null/dsh-guardian",
+      "description": {
+        "en": "Guardian state engine for the DeepSeek Harness — assertion counting, edit review queue, and no-feedback-loop monitoring over session events",
+        "zh": "Guardian state engine for the DeepSeek Harness — assertion counting, edit review queue, and no-feedback-loop monitoring over session events"
+      },
+      "author": "Max Null",
+      "dist-tags": {
+        "latest": "0.2.2"
+      },
+      "versions": [
+        {
+          "version": "0.2.2",
+          "publishTimestamp": 1790635724,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": ">=0.1.1-rc.1 <0.3.0"
+          }
+        }
+      ]
+    },
+    {
+      "name": "@max-null/dsh-habit",
+      "description": {
+        "en": "Self-learning habit engine for the DeepSeek Harness — detects user-correction signals, judges habits with a low-cost model on threshold, settles candidates behind a two-level human gate",
+        "zh": "Self-learning habit engine for the DeepSeek Harness — detects user-correction signals, judges habits with a low-cost model on threshold, settles candidates behind a two-level human gate"
+      },
+      "author": "Max Null",
+      "dist-tags": {
+        "latest": "0.2.2"
+      },
+      "versions": [
+        {
+          "version": "0.2.2",
+          "publishTimestamp": 1790635843,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": ">=0.1.7-rc.2 <0.3.0"
+          }
+        }
+      ]
+    },
+    {
+      "name": "@max-null/dsh-jubensha",
+      "description": {
+        "en": "剧本杀（jubensha）：一个人也能开局的推理本与情感本 —— AI 当 DM，AI 填满整张桌子",
+        "zh": "剧本杀（jubensha）：一个人也能开局的推理本与情感本 —— AI 当 DM，AI 填满整张桌子"
+      },
+      "author": "Max Null",
+      "dist-tags": {
+        "latest": "0.1.1"
+      },
+      "versions": [
+        {
+          "version": "0.1.1",
+          "publishTimestamp": 1792265937,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": ">=0.2.0-rc.1 <0.3.0"
+          }
+        }
+      ]
+    },
+    {
+      "name": "@max-null/dsh-memory",
+      "description": {
+        "en": "Cross-session plaintext memory plugin for the DeepSeek Harness — deterministic BM25 recall, writes take effect immediately, signal-driven injection, no embeddings",
+        "zh": "Cross-session plaintext memory plugin for the DeepSeek Harness — deterministic BM25 recall, writes take effect immediately, signal-driven injection, no embeddings"
+      },
+      "author": "Max Null",
+      "dist-tags": {
+        "latest": "0.19.1"
+      },
+      "versions": [
+        {
+          "version": "0.19.1",
+          "publishTimestamp": 1792921097,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": ">=0.1.1-rc.1 <0.3.0"
+          }
+        }
+      ]
+    },
+    {
+      "name": "@max-null/dsh-node-appearance",
+      "description": {
+        "en": "会话节点外观插件：节点/工具分类着色（可配置）、折叠摘要条按类别取色、恢复 0.2.0 起被官方隐藏的上下文注入行与系统提示词卡（自有 kind 注册 + 各自开关）、接管「加载技能」行（展开体剥掉 XML 壳）、触发通知卡字段化（接管 turn-trigger）、提问卡展示全部选项、交付文件清单展开、目标详情折叠条、思考过程显示开关（DeepSeek Harness Web GUI）",
+        "zh": "会话节点外观插件：节点/工具分类着色（可配置）、折叠摘要条按类别取色、恢复 0.2.0 起被官方隐藏的上下文注入行与系统提示词卡（自有 kind 注册 + 各自开关）、接管「加载技能」行（展开体剥掉 XML 壳）、触发通知卡字段化（接管 turn-trigger）、提问卡展示全部选项、交付文件清单展开、目标详情折叠条、思考过程显示开关（DeepSeek Harness Web GUI）"
+      },
+      "author": "Max Null",
+      "dist-tags": {
+        "latest": "0.10.1"
+      },
+      "versions": [
+        {
+          "version": "0.10.1",
+          "publishTimestamp": 1790933569,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": ">=0.1.7-rc.2 <0.3.0"
+          }
+        }
+      ]
+    },
+    {
+      "name": "@max-null/dsh-plugin-center",
+      "description": {
+        "en": "Plugin center for DeepSeek Harness — installed metadata, community market, update detection, and What's New",
+        "zh": "Plugin center for DeepSeek Harness — installed metadata, community market, update detection, and What's New"
+      },
+      "author": "Max Null",
+      "dist-tags": {
+        "latest": "0.5.2"
+      },
+      "versions": [
+        {
+          "version": "0.5.2",
+          "publishTimestamp": 1793288852,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": ">=0.1.1-rc.1 <0.3.0"
+          }
+        }
+      ]
+    },
+    {
+      "name": "@max-null/dsh-skill-mcp-center",
+      "description": {
+        "en": "Skill & MCP management center for DeepSeek Harness — manage skills and MCP servers in Settings, live MCP status in the sidebar",
+        "zh": "Skill & MCP management center for DeepSeek Harness — manage skills and MCP servers in Settings, live MCP status in the sidebar"
+      },
+      "author": "Max Null",
+      "dist-tags": {
+        "latest": "0.7.0"
+      },
+      "versions": [
+        {
+          "version": "0.7.0",
+          "publishTimestamp": 1792944527,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": ">=0.1.1-rc.1 <0.3.0"
+          }
+        }
+      ]
+    }
+  ]
+}
