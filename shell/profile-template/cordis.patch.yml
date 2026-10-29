@@ -140,3 +140,12 @@
 - id: session-persistence-jsonl
   config:
     root: !!js 'process.env.SSID_SESSION_ISOLATED_ROOT || ((process.env.DSH_HOME || (process.env.USERPROFILE + "\\.dsh")) + "\\sessions")'
+
+# ── 预制插件市场索引源（2026-10-30）────────────────────────────────────
+# 官方「发现」页读这个列表；plugin-market 的 indexes 是 Volatile config，
+# 这里写的是**默认值**——用户在界面上加过源之后，Settings 的值优先，这份不再生效。
+# 出厂预配一个社区索引，新装思灵不必手动添加。换源时把下面这条替换掉即可。
+- id: plugin-market
+  config:
+    indexes:
+      - https://cdn.jsdelivr.net/npm/dsh-plugin-catalog/index.json

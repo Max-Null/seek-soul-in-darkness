@@ -24,14 +24,14 @@
     "@max-null/dsh-ssid-zh-ui": "file:./vendor/dsh-ssid-zh-ui",
     "@max-null/dsh-ssid-pwsh-retry": "file:./vendor/dsh-ssid-pwsh-retry",
     "@playwright/mcp": "0.0.83",
-    "ds-harness-remote": "0.5.22",
+    "ds-harness-remote": "0.5.23",
     "dsh-better-sidebar": "file:./vendor/dsh-better-sidebar",
-    "dsh-context": "0.78.0",
-    "dsh-dream-skin": "10.28.1",
+    "dsh-context": "0.78.1",
+    "dsh-dream-skin": "10.29.0",
     "dsh-excel-panel": "0.6.1",
     "dsh-meme": "0.1.65",
     "dsh-session-manager": "0.7.5",
-    "dsh-sidebar-qa": "1.2.1",
+    "dsh-sidebar-qa": "1.2.2",
     "dsh-video-preview": "0.1.4",
     "dsh-wechat": "0.14.0",
     "@astudioplus/codegraph-mcp": "0.21.0",
@@ -76,7 +76,8 @@
         "@max-null/dsh-allostasis",
         "@max-null/dsh-jubensha",
         "@dsh-pet/bridge",
-        "dsh-meme"
+        "dsh-meme",
+        "@deepseek-ai/dsh-experimental-plugin-market-bundle"
       ],
       "patchReload": "live"
     }
