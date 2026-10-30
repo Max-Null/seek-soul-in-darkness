@@ -98,6 +98,7 @@
 
 | 2026-10-02 | `plugins/dsh-ssid-env` 0.1.2 | **环境自述插件自 1.0.0 起一直静默失效**：0.1.0 / 0.1.1 按 `SSID_PROFILE_DIR` 判定「我在不在思灵里」，那是自建壳写在 kernel-child 的变量；换官方桌面端底座后壳给的是 `DSH_SHELL` / `DSH_PROFILE_DIR`，于是它每次都返回 undefined —— **不报错、日志无痕，那段提示词一次都没注入过**。判据改为 `DSH_SHELL=1` + `DSH_PROFILE_DIR`（缺一不注册），并读入会话根 / 存储根 / 壳版本当可复核证据；内容补上这版新出现的事实：官方桌面版可同时运行、存储根隔离（`storages-ssid` 与共享 `storages` 的分工）、userData 让位、`ssid://` 与 `dsh://` 各归各；进程链判据由 `kernel-child.bundle.mjs` 改为实测形态。测试 5/5（两个方向都锁），七门全绿 | 用户问「思灵改版了，这个提示也该升级了吧」——查下去发现不是过时而是失效（`docs/SSiD开发手册.md` §3.4 同套三层） |
 | 2026-10-03 | `plugins/dsh-ssid-env` **0.1.3**（订正上一行） | **上一行记的 0.1.2 判据也不成立 —— 那段提示词其实仍未注入**：0.1.2 押在 `DSH_SHELL` / `DSH_PROFILE_DIR` 上，依据是「工具子进程 pwsh 里看得到它们」，但**工具进程的环境是内核 spawn 时按需拼装的，内核进程自己并没有这两个变量**（探针直读内核环境实测：两者皆 `undefined`，而 `SSID_SHELL_VERSION` 在）。0.1.3 改读 `SSID_SHELL_VERSION`，`section-registered` 确认注册成功、会话 system prompt 里出现该段。判据落定为「只取目标进程里真实可得的变量」；测试补两条（反例：只设 `DSH_SHELL`/`DSH_PROFILE_DIR` 必须不注册；可选项缺失时不许留空档），7/7 通过 | 用户选 A（加探针 + 重启）后由探针日志定位；两个 turn 内两次重启完成闭环 |
+| 2026-10-30 | §3.3（新增「同一个 `DSH_HOME` 只能有一个实例」） | 三件套里的 `DSH_HOME` 必须各自独立：两个「第二实例」共用同一 home（源码 dev 与隔离装版都用 `home-100`）时，web 端口也随该 home 的 patch 走（`port: 19488`），照样 `EADDRINUSE`、壳照样弹「Another DSH instance」。**判据看 crash log 里的地址**：`19388` 撞生产（坑 #64），`19488` 撞另一个第二实例（本条）。源码 dev 用 `启动-dev-源码.ps1`（起前检查 19488，`-CloseOther` 自动关隔离装版） | 在 dev 里验 `dsh-capture` 时连撞两次：先被 `ELECTRON_RUN_AS_NODE` 拦（见 746 行），再被 19488 撞 |
 
 ## 工作区规范（布局 + 放置规则，2026-08-29 整理定稿）
 
@@ -294,6 +295,17 @@ H:\MaxNull\WorkStation\
 profile 目录用 junction 指回真实的那份，即可零拷贝共用插件实体。`SSID_PROFILE_NAME` 让第二个实例有自己的 profile 名与会话根。
 
 > 原第三件套 `SSID_LOG_FILE` 已失效——userData 的 `logs/` 只承载崩溃报告（`crash-*.log`），不是常规日志通道。并行实例的日志由 `--user-data-dir` 天然分开。
+
+**⚠ 同一个 `DSH_HOME` 只能有一个实例**（2026-10-30 实测）：三件套里的 `DSH_HOME` 必须是**各自独立**的目录。两个「第二实例」若共用同一个 home（例如源码 dev 与隔离装版都用 `.ssid-iso-test/home-100`），他们的 web 端口也由该 home 的 `cordis.patch.yml` 决定（`port: 19488`），于是照样撞 `EADDRINUSE`，壳依旧弹「Another DSH instance is running」那个框——**这次撞的是另一个第二实例，不是生产**。
+
+**判据：看 crash log 里 `EADDRINUSE` 的地址，别按壳的文案判断**（两种情况文案一字不差）：
+
+| 地址 | 撞的是谁 | 出路 |
+|---|---|---|
+| `19388` | 生产实例（坑 #64） | 隔离实例要用 profile patch 把 webserver 挪到 19488 |
+| `19488` | 另一个第二实例（本条） | 给其中一方独立的 `DSH_HOME`（端口随 home 的 patch 走），或不同时跑 |
+
+**推论**：`pnpm run start:desktop`（源码 dev）与 `.ssid-iso-test/启动-ssid-dev-1.0.0.ps1`（装版隔离）二者共用 `home-100` 时**互斥**——源码 dev 用 `启动-dev-源码.ps1`，它会在起之前检查 19488 并提示（`-CloseOther` 自动关掉隔离装版）。
 
 ### 3.4 会话根隔离（三层契约，缺一不可）
 
