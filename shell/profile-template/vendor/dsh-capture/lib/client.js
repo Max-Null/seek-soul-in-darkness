@@ -1246,18 +1246,29 @@ window.__ModuleLoader__.load({
 		//#endregion
 		//#region src/client/ImagePreviewEdit.tsx
 		/**
-		* ImagePreviewEdit: 官方「原图预览」(ImageLightbox) 的编辑入口。
+		* ImagePreviewEdit: 官方「原图预览」(ImageLightbox) 的工具入口。
 		*
 		* MutationObserver 发现预览 dialog（role=dialog + aria-label 原图预览 /
 		* Original image preview —— 官方文案，不依赖 CSS hash，草稿附件预览与
-		* 消息图片预览共用同一个 ImageLightbox）→ 注入「编辑」按钮 → 点击打开
-		* CaptureOverlay 整图模式（immediate：跳过框选直接标注）→ 完成时：
-		*   - 有标注：投递一张编辑图到输入框（原图已在对话里，不再投原图）；
-		*   - 无标注：视为未修改，直接关闭不投递（2026-08-24 用户决定）。
-		* Escape / 取消逐级回退到底 = 放弃编辑回到原预览。
+		* 消息图片预览共用同一个 ImageLightbox）→ 在图片右上角浮出一组工具：
+		*   - 编辑（✎）：打开 CaptureOverlay 整图模式（immediate：跳过框选直接标注）。
+		*     有标注投递一张编辑图到输入框；无标注视为未修改，直接关闭不投递。
+		*   - 复制（⧉）：把原图写进系统剪贴板。
+		*
+		* 工具条的定位必须**跟随图片的 rect**，不能用 fixed 的固定 top/right——
+		* 那样它会永远贴在视口右上角、压在窗口控制按钮上（2026-10-30 用户实测错位）。
 		*/
 		const PREVIEW_LABELS = /^(原图预览|Original image preview)$/;
-		const EDIT_BTN_CSS = [".dsh-img-edit-btn{position:fixed;top:20px;right:64px;z-index:1;display:grid;place-items:center;width:36px;height:36px;border:1px solid var(--dsw-alias-border-l2-darkmode-thin,rgba(255,255,255,.14));border-radius:999px;background:var(--dsw-specific-input-major,rgba(20,24,32,.92));color:var(--dsw-alias-label-primary,#e8eaed);cursor:pointer;padding:0}", ".dsh-img-edit-btn:hover{border-color:var(--dsw-alias-brand-primary,#4f8cff);color:var(--dsw-alias-brand-primary,#4f8cff)}"].join("");
+		/** 工具按钮尺寸 / 间距 / 距图片边缘的内缩，定位计算与 CSS 必须一致。 */
+		const TOOL_SIZE = 36;
+		const TOOL_GAP = 6;
+		const TOOL_INSET = 8;
+		const TOOLS_CSS = [
+			`.dsh-img-tools{position:fixed;z-index:2147483646;display:flex;gap:${TOOL_GAP}px;pointer-events:auto}`,
+			`.dsh-img-tool{display:grid;place-items:center;width:${TOOL_SIZE}px;height:${TOOL_SIZE}px;border:1px solid var(--dsw-alias-border-l2-darkmode-thin,rgba(255,255,255,.14));border-radius:999px;background:var(--dsw-specific-input-major,rgba(20,24,32,.92));color:var(--dsw-alias-label-primary,#e8eaed);cursor:pointer;padding:0;font:16px/1 sans-serif}`,
+			".dsh-img-tool:hover{border-color:var(--dsw-alias-brand-primary,#4f8cff);color:var(--dsw-alias-brand-primary,#4f8cff)}",
+			".dsh-img-tool[data-busy=\"1\"]{opacity:.55;cursor:default}"
+		].join("");
 		const STYLE_ID = "@max-null/dsh-capture/image-edit.css";
 		function ensureStyle() {
 			if (typeof document === "undefined") return;
@@ -1265,7 +1276,7 @@ window.__ModuleLoader__.load({
 			const tag = document.createElement("style");
 			tag.dataset.plugin = "dsh-capture";
 			tag.dataset.pluginCss = STYLE_ID;
-			tag.textContent = EDIT_BTN_CSS;
+			tag.textContent = TOOLS_CSS;
 			document.head.appendChild(tag);
 		}
 		/** 触发官方面板关闭：点预览 dialog 内的关闭按钮（aria-label 文案稳定）。
@@ -1277,7 +1288,33 @@ window.__ModuleLoader__.load({
 				return;
 			}
 		}
-		/** 常驻注入宿主：观察预览对话框并注入编辑按钮；零视觉输出（null portal）。 */
+		/**
+		* 把一张图片写进系统剪贴板。
+		*
+		* `ClipboardItem` 在各实现里只可靠支持 `image/png`，所以非 PNG 先用 canvas 重编码；
+		* `src` 可能是 blob:/data: 也可能是 http(s)，一律走 fetch 取字节。
+		* @param src - 预览里那张图的 src。
+		*/
+		async function copyImageToClipboard(src) {
+			const response = await fetch(src);
+			if (!response.ok) throw new Error(`读取图片失败（HTTP ${response.status}）`);
+			const blob = await response.blob();
+			let png = blob;
+			if (blob.type !== "image/png") {
+				const bitmap = await createImageBitmap(blob);
+				const canvas = document.createElement("canvas");
+				canvas.width = bitmap.width;
+				canvas.height = bitmap.height;
+				const context = canvas.getContext("2d");
+				if (context === null) throw new Error("无法创建画布");
+				context.drawImage(bitmap, 0, 0);
+				png = await new Promise((resolve, reject) => {
+					canvas.toBlob((result) => result === null ? reject(/* @__PURE__ */ new Error("图片重编码失败")) : resolve(result), "image/png");
+				});
+			}
+			await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
+		}
+		/** 常驻注入宿主：观察预览对话框并挂上工具条；零视觉输出（null portal）。 */
 		function ImagePreviewEditHost() {
 			const [edit, setEdit] = (0, react.useState)(null);
 			const [error, setError] = (0, react.useState)(null);
@@ -1305,29 +1342,82 @@ window.__ModuleLoader__.load({
 					};
 					probe.src = src;
 				};
+				/** 当前挂在 body 上的工具条（同一时刻只服务一个预览对话框）。 */
+				let tools = null;
+				let activeImage = null;
+				const place = () => {
+					if (tools === null || activeImage === null) return;
+					const rect = activeImage.getBoundingClientRect();
+					if (rect.width === 0 || rect.height === 0) return;
+					const left = Math.max(TOOL_INSET, rect.right - 78 - TOOL_INSET);
+					const top = Math.max(TOOL_INSET, rect.top + TOOL_INSET);
+					tools.style.left = `${Math.round(left)}px`;
+					tools.style.top = `${Math.round(top)}px`;
+				};
+				const dropTools = () => {
+					tools?.remove();
+					tools = null;
+					activeImage = null;
+				};
 				const injectInto = (dialog, img) => {
-					if (dialog.querySelector("[data-dsh-image-edit]") !== null) return false;
-					const btn = document.createElement("button");
-					btn.type = "button";
-					btn.dataset.dshImageEdit = "1";
-					btn.className = "dsh-img-edit-btn";
-					btn.setAttribute("aria-label", "编辑图片");
-					btn.title = "标注编辑这张图片";
-					btn.innerHTML = "✎";
-					btn.addEventListener("click", (event) => {
+					if (tools !== null && activeImage === img) return;
+					dropTools();
+					const bar = document.createElement("div");
+					bar.dataset.dshImageTools = "1";
+					bar.className = "dsh-img-tools";
+					const editBtn = document.createElement("button");
+					editBtn.type = "button";
+					editBtn.className = "dsh-img-tool";
+					editBtn.dataset.dshImageEdit = "1";
+					editBtn.setAttribute("aria-label", "编辑图片");
+					editBtn.title = "标注编辑这张图片";
+					editBtn.innerHTML = "✎";
+					editBtn.addEventListener("click", (event) => {
 						event.stopPropagation();
 						openEdit(img.src, img.closest("[role=\"dialog\"]"));
 					});
-					dialog.appendChild(btn);
-					return true;
+					const copyBtn = document.createElement("button");
+					copyBtn.type = "button";
+					copyBtn.className = "dsh-img-tool";
+					copyBtn.setAttribute("aria-label", "复制图片");
+					copyBtn.title = "复制这张图片到剪贴板";
+					copyBtn.innerHTML = "⧉";
+					copyBtn.addEventListener("click", (event) => {
+						event.stopPropagation();
+						if (copyBtn.dataset.busy === "1") return;
+						copyBtn.dataset.busy = "1";
+						copyImageToClipboard(img.src).then(() => {
+							copyBtn.innerHTML = "✓";
+						}, (reason) => {
+							setError(reason instanceof Error ? reason.message : String(reason));
+						}).finally(() => {
+							delete copyBtn.dataset.busy;
+							window.setTimeout(() => {
+								copyBtn.innerHTML = "⧉";
+							}, 1200);
+						});
+					});
+					bar.append(editBtn, copyBtn);
+					document.body.appendChild(bar);
+					tools = bar;
+					activeImage = img;
+					place();
 				};
 				const scan = () => {
+					let live = false;
 					for (const dialog of Array.from(document.querySelectorAll("[role=\"dialog\"]"))) {
 						if (!PREVIEW_LABELS.test(dialog.getAttribute("aria-label") ?? "")) continue;
 						const img = dialog.querySelector("img");
-						if (img !== null) injectInto(dialog, img);
+						if (img === null) continue;
+						live = true;
+						injectInto(dialog, img);
 					}
+					if (!live) dropTools();
 				};
+				const onResize = () => {
+					place();
+				};
+				window.addEventListener("resize", onResize);
 				const observer = new MutationObserver(scan);
 				if (document.body !== null) {
 					observer.observe(document.body, {
@@ -1336,7 +1426,11 @@ window.__ModuleLoader__.load({
 					});
 					scan();
 				}
-				return () => observer.disconnect();
+				return () => {
+					window.removeEventListener("resize", onResize);
+					observer.disconnect();
+					dropTools();
+				};
 			}, []);
 			(0, react.useEffect)(() => {
 				if (error !== null) {
