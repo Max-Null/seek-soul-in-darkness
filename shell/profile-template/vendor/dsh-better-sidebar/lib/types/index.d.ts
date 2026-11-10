@@ -5,7 +5,7 @@ import { FS_TREES_MAX_PATHS } from './fs-batch.ts';
 export { Config };
 export type { SidebarConfig, ResolvedSidebarConfig };
 export type { Context } from './context-types.ts';
-export type { BetterSidebarService, TabDescriptor, TabComponentProps, FileViewerDescriptor, FileViewerProps, FileFetchStrategy, } from './client/service.ts';
+export type { BetterSidebarService, SidechatSurface, SidechatSurfaceAdapter, TabDescriptor, TabComponentProps, FileViewerDescriptor, FileViewerProps, FileFetchStrategy, } from './client/service.ts';
 export { contentDispositionOf } from './archive-route.ts';
 /** Plugin identity for cordis.yml rows. */
 export declare const name = "dsh-better-sidebar";
@@ -22,7 +22,7 @@ export interface SidebarFsLevel {
 }
 /** Services required before mounting: routes, sessions, native request admission, and tools. */
 export declare const inject: string[];
-/** Content type served by /sidebar/file (binary-safe fallback for unknowns). */
+/** Content type served by /sidebar/file and /sidebar/html; unknowns use a binary-safe fallback. */
 export declare function mediaTypeForPath(path: string): string;
 /** One file read, in the shape the client's viewer dispatch consumes. */
 export type SidebarReadResult = {

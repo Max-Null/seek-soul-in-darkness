@@ -12,6 +12,14 @@ export interface SelectionLines {
  */
 export declare function headerOf(path: string, cwd: string | undefined, lines?: SelectionLines): string;
 /**
+ * The chip label's identity: `file Lstart[-end]` — the file's basename plus
+ * the line span, mirroring the header's line variants (a single line keeps
+ * just `Lstart`; unknown lines drop the `L` part). Deliberately NO sequence
+ * number: file+lines IS the identity, so deleting a chip from the draft can
+ * never leave a numbering gap — the next quote simply names itself again.
+ */
+export declare function whereOf(path: string, lines?: SelectionLines): string;
+/**
  * The composer payload for one selection: the chip label and the model text.
  * Over the limit the content is dropped and both halves are the plain path
  * line (an empty fenced block would just occupy the draft).

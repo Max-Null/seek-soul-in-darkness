@@ -20158,15 +20158,6 @@ globalThis.__dshChunks__["editor"] = (require) => {
 	}
 	//#endregion
 	//#region src/client/api.ts
-	/**
-	* Typed fetch wrapper over the /sidebar JSON API. Every call posts through
-	* {@link hostRouteUrl} to `/sidebar/api/<method>` with the sessionId and —
-	* when known — the session's cwd from the client's own list summary (the
-	* route keeps a reverse-proxy prefix; see host-route-url.ts). The host prefers
-	* its attached session header and uses the summary cwd only while the session
-	* is still hydrating at page load (a detached session would otherwise fail the
-	* request). Failures surface as {@link SidebarApiError} with the wire code.
-	*/
 	/** One wire failure. */
 	var SidebarApiError = class extends Error {
 		code;
@@ -20518,9 +20509,10 @@ globalThis.__dshChunks__["editor"] = (require) => {
 			question: question ?? ""
 		}),
 		/** Deliver one follow-up message to a Side Chat thread. */
-		sidechatPrompt: (childId, text) => call$1("sidechat.prompt", {
+		sidechatPrompt: (childId, text, images) => call$1("sidechat.prompt", {
 			childId,
-			text
+			text,
+			...images === void 0 || images.length === 0 ? {} : { images }
 		}),
 		/** Abort a Side Chat thread's running turn (queued work is preserved). */
 		sidechatCancel: (childId) => call$1("sidechat.cancel", { childId }),
@@ -21113,6 +21105,8 @@ globalThis.__dshChunks__["editor"] = (require) => {
 		refresh: "刷新",
 		refreshUnsavedConfirm: "文件已在磁盘更新，刷新将丢弃未保存编辑。继续吗？",
 		closeUnsavedConfirm: "该文件有未保存的编辑，关闭后将丢弃。继续吗？",
+		draftRestoreConfirm: "检测到未保存的草稿，恢复吗？（选择取消将丢弃该草稿）",
+		switchUnsavedConfirm: "该文件有未保存的编辑，切换文件将丢弃这些内容。继续吗？",
 		save: "保存",
 		saved: "已保存",
 		unsaved: "未保存",
@@ -21259,6 +21253,7 @@ globalThis.__dshChunks__["editor"] = (require) => {
 		openEditor: "打开编辑器",
 		referenceFile: "@文件",
 		addToConversation: "添加到对话",
+		quoteChip: "引用 {where}",
 		copyRelative: "复制相对地址",
 		copyAbsolute: "复制绝对地址",
 		rename: "重命名",
@@ -21385,6 +21380,7 @@ globalThis.__dshChunks__["editor"] = (require) => {
 		sideChatSaveTitle: "把该线程提升为顶层会话，出现在主会话列表中",
 		sideChatArchive: "归档这条侧边对话（在会话列表的「显示已归档」里可找回）",
 		sideChatArchiveRunning: "该线程正在运行，停止后才能归档",
+		sideChatArchiveBlocked: "侧边对话归档后无法找回（宿主会话列表在任何筛选下都不显示侧边对话），因此已禁用归档；如需保留，请先「保存为新会话」",
 		sideChatSaved: "已保存为新会话",
 		sideChatNoTurn: "至少完成一轮对话后才能保存",
 		sideChatPendingDrop: "最后一条未完成的追问不会包含在新会话中",
@@ -21400,6 +21396,17 @@ globalThis.__dshChunks__["editor"] = (require) => {
 		sideChatThinking: "正在深入…",
 		sideChatThink: "思考过程",
 		sideChatInjection: "已注入上下文",
+		sideChatAddImages: "添加图片",
+		sideChatRemoveImage: "移除 {name}",
+		sideChatImagesDisabled: "图片附件不可用",
+		sideChatImageFormat: "请选择 PNG、JPEG、WebP 或 GIF 图片",
+		sideChatImageLimit: "图片数量或大小超出限制",
+		sideChatImageReadError: "无法读取图片",
+		sideChatImageOwnerChanged: "发送时对话已切换",
+		sideChatSendUncertain: "连接已断开。消息可能已被接收。草稿已保留，请先查看对话再重试。",
+		sideChatImageLoading: "正在加载图片…",
+		sideChatImageUnavailable: "图片不可用",
+		sideChatImage: "图片",
 		sideChatSend: "发送",
 		sideChatCancelTitle: "中止当前回合（保留队列）",
 		sideChatError: "侧边对话出错：{message}",
@@ -21754,6 +21761,8 @@ globalThis.__dshChunks__["editor"] = (require) => {
 		refresh: "Refresh",
 		refreshUnsavedConfirm: "The file changed on disk. Refreshing will discard unsaved edits. Continue?",
 		closeUnsavedConfirm: "This file has unsaved edits. Closing the tab will discard them. Continue?",
+		draftRestoreConfirm: "An unsaved draft was found. Restore it? (Cancel discards the draft.)",
+		switchUnsavedConfirm: "This file has unsaved edits. Switching files will discard them. Continue?",
 		save: "Save",
 		saved: "Saved",
 		unsaved: "Unsaved",
@@ -21900,6 +21909,7 @@ globalThis.__dshChunks__["editor"] = (require) => {
 		openEditor: "Open editor",
 		referenceFile: "@file",
 		addToConversation: "Add to conversation",
+		quoteChip: "Quote {where}",
 		copyRelative: "Copy relative path",
 		copyAbsolute: "Copy absolute path",
 		rename: "Rename",
@@ -22026,6 +22036,7 @@ globalThis.__dshChunks__["editor"] = (require) => {
 		sideChatSaveTitle: "Promote this thread to a top-level session in the main session list",
 		sideChatArchive: "Archive this side conversation (find it again via “Show archived” in the session list)",
 		sideChatArchiveRunning: "This thread is running — stop it before archiving",
+		sideChatArchiveBlocked: "A side conversation can never be found again once archived (the host session list hides side conversations in every filter), so archiving is disabled — use “Save as new session” first to keep it",
 		sideChatSaved: "Saved as a new session",
 		sideChatNoTurn: "Save is available after the first completed turn",
 		sideChatPendingDrop: "The last unanswered follow-up will not be included in the saved session",
@@ -22041,6 +22052,17 @@ globalThis.__dshChunks__["editor"] = (require) => {
 		sideChatThinking: "Deep diving…",
 		sideChatThink: "Thinking",
 		sideChatInjection: "Context injected",
+		sideChatAddImages: "Add images",
+		sideChatRemoveImage: "Remove {name}",
+		sideChatImagesDisabled: "Image attachments are unavailable",
+		sideChatImageFormat: "Choose PNG, JPEG, WebP or GIF images",
+		sideChatImageLimit: "Image count or size limit exceeded",
+		sideChatImageReadError: "Could not read image",
+		sideChatImageOwnerChanged: "Conversation changed while sending",
+		sideChatSendUncertain: "Connection lost. The message may have been accepted. Your draft is kept; check the conversation before retrying.",
+		sideChatImageLoading: "Loading image…",
+		sideChatImageUnavailable: "Image unavailable",
+		sideChatImage: "Image",
 		sideChatSend: "Send",
 		sideChatCancelTitle: "Abort the running turn (queued work is kept)",
 		sideChatError: "Side Chat error: {message}",
@@ -22715,7 +22737,7 @@ globalThis.__dshChunks__["editor"] = (require) => {
 	}
 	//#endregion
 	//#region \0dsh-css:/home/runner/work/DSH-better-sidebar/DSH-better-sidebar/src/client/sidebar.module.css.mjs
-	const css$2 = "[data-dsh-panel-host]{z-index:25;pointer-events:none;height:100vh;position:fixed;inset:0;overflow:clip}html[data-platform] body>[data-dsh-better-sidebar],[data-dsh-panel-host]{-webkit-app-region:initial!important}[data-dsh-panel-host]>*{-webkit-app-region:no-drag}[data-dockkit-float-resize]{z-index:2}[data-dsh-panel-host][data-dsh-panel-host-degraded]{position:absolute;top:0;left:0}.nArs4W_dockFallback{z-index:40;align-items:center;gap:2px;display:inline-flex;position:fixed}.nArs4W_toggleButton{width:28px;height:28px;color:var(--dsw-alias-label-secondary);cursor:pointer;transition:background var(--ds-transition-duration-slow) var(--ds-ease-in-out), color var(--ds-transition-duration-slow) var(--ds-ease-in-out);background:0 0;border:none;border-radius:50%;justify-content:center;align-items:center;display:flex}.nArs4W_toggleButton:hover:not(:disabled):not([aria-disabled=true]){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_toggleButton:disabled,.nArs4W_toggleButton[aria-disabled=true]{opacity:.4;cursor:default}.nArs4W_panelBody{flex:1;min-width:0;min-height:0;display:flex}.nArs4W_bottomPanel{z-index:40;background:var(--dsw-alias-bg-layer-1);border-top:1px solid var(--dsw-alias-border-l2);pointer-events:auto;padding-bottom:env(safe-area-inset-bottom);transition:transform var(--ds-transition-duration-slow) var(--ds-ease-in-out), height var(--ds-transition-duration-slow) var(--ds-ease-in-out);flex-direction:column;display:flex;position:absolute;bottom:0}.nArs4W_bottomPanelHidden{pointer-events:none;visibility:hidden;transition:transform var(--ds-transition-duration-slow) var(--ds-ease-in-out), height var(--ds-transition-duration-slow) var(--ds-ease-in-out), visibility 0s linear var(--ds-transition-duration-slow);transform:translateY(102%)}.nArs4W_bottomPanel[data-dragging]{transition:none}.nArs4W_bottomPanel{contain:layout style}body[data-dsh-sidebar-dragging] .nArs4W_panel,body[data-dsh-sidebar-dragging] .nArs4W_bottomPanel{will-change:transform}.nArs4W_bottomResize{cursor:row-resize;z-index:2;touch-action:none;height:8px;position:absolute;top:-4px;left:0;right:0}.nArs4W_bottomResizeActive{background:var(--dsw-alias-interactive-bg-hover-accent)}.nArs4W_bottomClose{z-index:4;width:28px;height:28px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:50%;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex;position:absolute;top:3px;right:6px}.nArs4W_bottomClose:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_bottomPanel .nArs4W_tabBar{padding-right:40px}.nArs4W_toggleButton,.nArs4W_tabBar{-webkit-app-region:no-drag}.nArs4W_iconButton{width:28px;height:28px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:50%;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex}.nArs4W_iconButton:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_iconButton:disabled{opacity:.4;cursor:default}.nArs4W_workbench,.nArs4W_split{flex:1;min-width:0;min-height:0;display:flex}.nArs4W_splitRow{flex-direction:row}.nArs4W_splitCol{flex-direction:column}.nArs4W_splitChild{display:flex;position:relative;overflow:hidden}.nArs4W_divider{z-index:3;touch-action:none;flex:none;position:relative}.nArs4W_dividerRow:after,.nArs4W_dividerCol:after{content:\"\";background:var(--dsw-alias-border-l2);transition:background var(--ds-transition-duration-slow) var(--ds-ease-in-out);position:absolute}.nArs4W_dividerRow{cursor:col-resize;width:7px;margin:0 -2px}.nArs4W_dividerRow:after{width:1px;top:0;bottom:0;left:50%;transform:translate(-50%)}.nArs4W_dividerCol{cursor:row-resize;height:7px;margin:-2px 0}.nArs4W_dividerCol:after{height:1px;top:50%;left:0;right:0;transform:translateY(-50%)}.nArs4W_divider:hover:after,.nArs4W_dividerActive:after{background:var(--dsw-alias-interactive-bg-hover-accent)}.nArs4W_pane{background:var(--dsw-alias-bg-base);flex-direction:column;flex:1;min-width:0;min-height:0;display:flex;position:relative}.nArs4W_paneDrop{outline:1px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}.nArs4W_dropOverlay{z-index:6;pointer-events:none;background:var(--dsw-alias-interactive-bg-hover-accent);opacity:.5;position:absolute}.nArs4W_dropLeft{width:25%;top:0;bottom:0;left:0}.nArs4W_dropRight{width:25%;top:0;bottom:0;right:0}.nArs4W_dropUp{height:25%;top:0;left:0;right:0}.nArs4W_dropDown{height:25%;bottom:0;left:0;right:0}.nArs4W_dropCenter{outline:2px dashed var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-2px;background:0 0;inset:25%}.nArs4W_paneContent{flex-direction:column;flex:1;min-height:0;display:flex;overflow:hidden}.nArs4W_chipIcon{flex:none;align-items:center;margin-right:6px;display:inline-flex}.nArs4W_chipUnread{background:var(--dsw-alias-danger);vertical-align:middle;border-radius:50%;width:6px;height:6px;margin-left:6px;display:inline-block}.nArs4W_tabUnreadDot{background:var(--dsw-alias-danger);border-radius:50%;flex:none;width:7px;height:7px}.nArs4W_paneTab{flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_paneTabHidden{display:none}.nArs4W_paneEmptyCards{flex:1;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));align-content:start;gap:12px;min-height:0;padding:12px;display:grid;overflow:hidden}.nArs4W_paneCard{box-sizing:border-box;border:.5px solid var(--dsw-alias-border-l4);background:var(--dsw-alias-bg-layer-1);min-width:0;min-height:56px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-s-strong-14);cursor:pointer;text-align:left;border-radius:24px;flex-direction:row;justify-content:flex-start;align-items:center;gap:14px;padding:14px 20px;display:flex}.nArs4W_paneCard>svg{color:var(--dsw-alias-label-secondary);flex:none}.nArs4W_paneCard:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l4)}.nArs4W_paneCard:disabled{opacity:.45;cursor:default}.nArs4W_tabBar{border-bottom:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);flex:none;align-items:stretch;height:34px;display:flex}.nArs4W_tabBarDrop{outline:1px dashed var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}.nArs4W_tabList{scrollbar-width:none;flex:1;min-width:0;display:flex;overflow-x:auto}.nArs4W_tabList::-webkit-scrollbar{display:none}.nArs4W_tab{min-width:64px;max-width:160px;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-secondary);border-right:1px solid var(--dsw-alias-border-l1);cursor:pointer;user-select:none;background:0 0;flex:none;align-items:center;gap:4px;padding:0 4px 0 10px;display:flex}.nArs4W_tab:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_tabActive{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-active)}.nArs4W_tabTitle{text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;overflow:hidden}.nArs4W_tabBadge{min-width:16px;height:15px;font:var(--dsw-font-xxxs-strong-11);background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-brand-primary);border-radius:8px;flex:none;justify-content:center;align-items:center;padding:0 4px;display:inline-flex}.nArs4W_tabClose{width:18px;height:18px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:4px;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex}.nArs4W_tabClose:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_tabBarPlus{background:var(--dsw-alias-bg-layer-1);width:22px;height:22px;color:var(--dsw-alias-label-tertiary);cursor:pointer;border:none;border-radius:5px;flex:none;justify-content:center;align-self:center;align-items:center;margin:0 6px;padding:0;display:inline-flex;position:sticky;right:0}.nArs4W_tabBarPlus:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_tabBarRightActions{flex:0 auto;justify-content:flex-end;align-items:center;gap:2px;min-width:0;padding-right:4px;display:flex;overflow:hidden}.nArs4W_explorer{flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_explorerHeader{flex:none;justify-content:space-between;align-items:center;gap:8px;height:36px;padding:0 8px 0 12px;display:flex}.nArs4W_explorerRoot{font:var(--dsw-font-s-14);color:var(--dsw-alias-label-secondary);text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.nArs4W_explorerBody{flex:1;min-height:0;padding:4px 8px 8px;overflow:hidden auto}.nArs4W_explorerRow{box-sizing:border-box;width:100%;max-width:100%;height:28px;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer;white-space:nowrap;animation:nArs4W_dsh-row-in .15s var(--ds-ease-in-out);background:0 0;border:none;border-radius:4px;align-items:center;gap:6px;padding:0 8px;display:flex;position:relative}.nArs4W_explorerRow:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_explorerRowSelected{background:var(--dsw-alias-interactive-bg-active)}.nArs4W_explorerRowSelected:before{content:\"\";background:var(--dsw-alias-state-business-primary);border-radius:1px;width:2px;position:absolute;top:4px;bottom:4px;left:0}.nArs4W_explorerGitName[data-git-tone=modified]{color:var(--dsw-alias-state-warn-primary)}.nArs4W_explorerGitName[data-git-tone=added],.nArs4W_explorerGitName[data-git-tone=untracked]{color:var(--dsw-alias-state-success-primary)}.nArs4W_explorerGitName[data-git-tone=deleted]{color:var(--dsw-alias-state-error-primary)}.nArs4W_explorerGitName[data-git-tone=renamed]{color:var(--dsw-alias-state-business-primary)}.nArs4W_explorerGitName[data-git-tone=copied]{color:var(--dsw-alias-state-success-primary)}.nArs4W_explorerGitName[data-git-tone=conflict]{color:var(--dsw-alias-state-error-primary)}.nArs4W_explorerDirChanged{color:var(--dsw-alias-state-business-primary)}.nArs4W_explorerRowRevealed{background:var(--dsw-alias-state-business-tertiary)}.nArs4W_explorerRowRevealed+.nArs4W_explorerRowRevealed{border-top-left-radius:0;border-top-right-radius:0}.nArs4W_explorerRowRevealed:has(+.nArs4W_explorerRowRevealed){border-bottom-right-radius:0;border-bottom-left-radius:0}.nArs4W_explorerDir{font:var(--dsw-font-xxs-strong-12)}.nArs4W_explorerHidden{opacity:.45}.nArs4W_explorerSymlink{color:var(--dsw-alias-label-tertiary);flex:none}.nArs4W_explorerBroken .nArs4W_explorerName{color:var(--dsw-alias-state-error-primary)}.nArs4W_explorerName{text-overflow:ellipsis;white-space:nowrap;min-width:0;overflow:hidden}.nArs4W_explorerRenaming{cursor:text}.nArs4W_explorerRenameInput{box-sizing:border-box;border:1px solid var(--dsw-alias-state-business-primary);background:var(--dsw-alias-bg-layer-1);min-width:0;height:22px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:3px;flex:auto;padding:0 6px}.nArs4W_explorerRenameInput:focus{border-color:var(--dsw-alias-state-business-primary);outline:none}.nArs4W_explorerActionError{box-sizing:border-box;border:1px solid var(--dsw-alias-state-error-primary);background:var(--dsw-alias-bg-layer-1);border-radius:8px;align-items:flex-start;gap:6px;width:100%;margin-bottom:4px;padding:6px 8px;display:flex}.nArs4W_explorerActionErrorText{overflow-wrap:anywhere;min-width:0;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);flex:auto}.nArs4W_explorerSelectionBar{z-index:1;box-sizing:border-box;background:var(--dsw-alias-bg-layer-2);border-radius:4px;align-items:center;gap:6px;width:100%;min-height:28px;margin-top:4px;padding:2px 8px;display:flex;position:sticky;bottom:0}.nArs4W_explorerSelectionText{text-overflow:ellipsis;white-space:nowrap;min-width:0;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-secondary);flex:auto;overflow:hidden}.nArs4W_explorerSelectionActions{flex-wrap:wrap;flex:none;justify-content:flex-end;gap:4px;max-width:72%;display:flex}.nArs4W_explorerAppIcon{object-fit:contain;width:14px;height:14px;display:block}.nArs4W_explorerHiddenPane{display:none}.nArs4W_explorerRef,.nArs4W_explorerCopied{margin-left:auto}.nArs4W_explorerRef{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);height:20px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxxs-strong-11);cursor:pointer;border-radius:999px;flex:none;align-items:center;padding:0 8px;display:none}.nArs4W_explorerRef:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_explorerRow:hover .nArs4W_explorerRef,.nArs4W_explorerRow:focus-within .nArs4W_explorerRef{display:inline-flex}.nArs4W_explorerCopied{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary);flex:none}.nArs4W_explorerError{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);cursor:default}@keyframes nArs4W_dsh-row-in{0%{opacity:0}}.nArs4W_explorerEmpty{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);text-align:center;padding:16px}.nArs4W_explorerRowDropTarget{background:var(--dsw-alias-interactive-bg-hover-accent);outline:1px dashed var(--dsw-alias-state-business-primary);outline-offset:-1px}.nArs4W_uploadDropMask{z-index:1001;pointer-events:none;background:color-mix(in srgb, var(--dsw-alias-bg-base) 62%, transparent);animation:nArs4W_dsh-row-in .15s var(--ds-ease-in-out);position:fixed;inset:0}.nArs4W_uploadDropZone{z-index:1002;pointer-events:none;border:2px dashed var(--dsw-alias-border-l2);background:color-mix(in srgb, var(--dsw-alias-state-business-primary) 4%, transparent);animation:nArs4W_dsh-row-in .15s var(--ds-ease-in-out);border-radius:8px;justify-content:center;align-items:flex-start;padding:12px;display:flex;position:fixed}.nArs4W_uploadDropHero{flex-direction:column;align-items:center;gap:8px;max-width:100%;padding-top:8px;display:flex}.nArs4W_uploadDropArtPrimary{color:var(--dsw-alias-state-business-primary)}.nArs4W_uploadDropArtAccent{color:var(--dsw-alias-state-business-tertiary)}.nArs4W_uploadDropArtCut{color:var(--dsw-alias-bg-layer-1)}.nArs4W_uploadDropZonePill{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);max-width:100%;height:28px;box-shadow:var(--dsw-shadow-lv2);color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxxs-11);border-radius:999px;align-items:center;gap:6px;padding:0 12px;display:flex}.nArs4W_uploadDropZoneText{white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.nArs4W_uploadDropChatHint{z-index:1003;pointer-events:none;animation:nArs4W_dsh-row-in .15s var(--ds-ease-in-out);justify-content:center;align-items:center;padding:24px;display:flex;position:fixed;top:0;bottom:0;left:0}.nArs4W_uploadDropChatCard{text-align:center;max-width:100%;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-strong-12);flex-direction:column;align-items:center;gap:10px;display:flex}.nArs4W_uploadOverlay{z-index:30;background:var(--dsw-alias-bg-mask-1);backdrop-filter:var(--dsw-mask-blur);animation:nArs4W_dsh-row-in .15s var(--ds-ease-in-out);justify-content:center;align-items:center;display:flex;position:absolute;inset:0}.nArs4W_uploadOverlayCard{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);min-width:240px;max-width:min(420px,100% - 48px);box-shadow:var(--dsw-shadow-lv3);border-radius:8px;flex-direction:column;gap:10px;padding:16px;display:flex}.nArs4W_uploadOverlayTitle{font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary);align-items:center;gap:6px;display:flex}.nArs4W_uploadOverlayTitle>svg{flex:none}.nArs4W_uploadOverlayTitle>span{white-space:nowrap;text-overflow:ellipsis;min-width:0;overflow:hidden}.nArs4W_uploadOverlayProgress{background:var(--dsw-alias-border-l2);border-radius:3px;height:6px;overflow:hidden}.nArs4W_uploadOverlayProgressFill{background:var(--dsw-alias-interactive-bg-hover-accent);height:100%;transition:width .15s var(--ds-ease-in-out);border-radius:3px}.nArs4W_uploadOverlayStatus{min-height:1em;font:var(--dsw-font-xxxs-11);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary);white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.nArs4W_uploadOverlayCancel{border:1px solid var(--dsw-alias-border-l2);height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-strong-12);cursor:pointer;background:0 0;border-radius:4px;align-self:flex-end;padding:0 12px}.nArs4W_uploadOverlayCancel:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l2)}.nArs4W_uploadOverlayCancel:disabled{opacity:.4;cursor:default}.nArs4W_editor{flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_editorHeader{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:6px;padding:6px 8px;display:flex}.nArs4W_editorTitle{min-width:0;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-secondary);text-overflow:ellipsis;white-space:nowrap;flex:1;overflow:hidden}.nArs4W_editorPathInput{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);min-width:0;height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:6px;flex:1;padding:0 10px}.nArs4W_editorPathInput:focus{border-color:var(--dsw-alias-border-l2);outline:none}.nArs4W_editorTreeToggleActive{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-active)}.nArs4W_editorBody{flex:1;min-height:0;display:flex}.nArs4W_editorMain{flex-direction:column;flex:1;min-width:0;min-height:0;display:flex}.nArs4W_editorTreeDock{border-left:1px solid var(--dsw-alias-border-l1);flex:none;min-height:0;display:flex;position:relative}.nArs4W_editorTreeResize{cursor:col-resize;touch-action:none;z-index:3;width:6px;position:absolute;top:0;bottom:0;left:0}.nArs4W_editorTreeResize:hover{background:var(--dsw-alias-border-l2)}.nArs4W_editorTreePanel{flex-direction:column;flex:1;min-width:0;min-height:0;display:flex;position:relative}.nArs4W_editorTreePanelFull{flex:1}.nArs4W_editorTreeSearch{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:6px;padding:6px 8px;display:flex}.nArs4W_editorSearchInput{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);min-width:0;height:26px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:6px;flex:1;padding:0 10px}.nArs4W_editorSearchInput:focus{border-color:var(--dsw-alias-border-l2);outline:none}.nArs4W_editorSearchHint{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);padding:8px 12px}.nArs4W_editorSearchResult{box-sizing:border-box;width:100%;height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);text-align:left;cursor:pointer;background:0 0;border:none;border-radius:4px;align-items:center;gap:6px;padding:0 8px;line-height:28px;display:flex;overflow:hidden}.nArs4W_editorSearchResultDir{color:var(--dsw-alias-label-secondary)}.nArs4W_editorSearchResultLabel{text-overflow:ellipsis;white-space:nowrap;min-width:0;overflow:hidden}.nArs4W_editorSearchResult:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_editorStatus{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary)}.nArs4W_editorStatusError{color:var(--dsw-alias-state-error-primary)}.nArs4W_dirtyDot{background:var(--dsw-alias-state-warn-primary);border-radius:50%;flex:none;width:7px;height:7px}.nArs4W_editorPlaceholder{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);text-align:center;flex:1;justify-content:center;align-items:center;padding:16px;display:flex}.nArs4W_orphanedType{opacity:.7;overflow-wrap:anywhere;margin-top:8px;font-size:12px;display:block}.nArs4W_editorBinary{text-align:center;flex-direction:column;flex:1;justify-content:center;align-items:center;gap:12px;padding:24px 16px;display:flex}.nArs4W_editorBinaryNotice{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary)}.nArs4W_editorDownloadLink{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-strong-12);cursor:pointer;transition:background var(--ds-transition-duration-slow) var(--ds-ease-in-out), border-color var(--ds-transition-duration-slow) var(--ds-ease-in-out);border-radius:6px;align-items:center;gap:6px;padding:6px 14px;text-decoration:none;display:inline-flex}.nArs4W_editorDownloadLink:hover{background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l2)}.nArs4W_editorError{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);padding:12px 16px}.nArs4W_editorBanner{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-state-warn-label);background:var(--dsw-alias-state-warn-tertiary);flex:none;padding:4px 8px}.nArs4W_editorBannerAction{font:inherit;color:inherit;cursor:pointer;background:0 0;border:0;margin-left:8px;padding:0;text-decoration:underline}.nArs4W_editorGitAdd{color:var(--dsw-alias-state-success-primary)}.nArs4W_editorGitMod{color:var(--dsw-alias-state-warn-primary)}.nArs4W_editorGitDel{color:var(--dsw-alias-state-error-primary)}.nArs4W_editorGitBarGutter{width:2px;min-width:2px}.nArs4W_editorGitBar,.nArs4W_editorGitBarSpacer{width:2px;height:100%}.nArs4W_editorGitBarAdd{background:var(--dsw-alias-state-success-primary)}.nArs4W_editorGitBarMod{background:var(--dsw-alias-state-warn-primary)}.nArs4W_editorGitBarDel{background:var(--dsw-alias-state-error-primary)}.nArs4W_editorBlame{max-width:420px;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-primary);padding:4px 8px}.nArs4W_editorBlameHead{color:var(--dsw-alias-label-secondary)}.nArs4W_editorBlameSummary{color:var(--dsw-alias-label-primary);white-space:pre-wrap;overflow-wrap:anywhere;margin-top:2px}.nArs4W_sandboxStatus{font:var(--dsw-font-xxxs-11);flex:none;align-items:center;gap:8px;padding:4px 10px;display:flex}.nArs4W_sandboxStatusOn{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-1);border-bottom:1px solid var(--dsw-alias-border-l1)}.nArs4W_sandboxStatusOff{color:var(--dsw-alias-state-error-primary);background:color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent);border-bottom:1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 45%, transparent)}.nArs4W_sandboxDot{background:var(--dsw-alias-state-success-primary);border-radius:50%;flex:none;width:6px;height:6px}.nArs4W_sandboxStatusOff .nArs4W_sandboxDot{background:var(--dsw-alias-state-error-primary)}.nArs4W_sandboxStatusText{text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;overflow:hidden}.nArs4W_sandboxAction{border:1px solid var(--dsw-alias-border-l2);font:inherit;color:inherit;cursor:pointer;background:0 0;border-radius:6px;flex:none;padding:2px 8px}.nArs4W_sandboxAction:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_editorHtml{background:var(--dsw-alias-bg-base);border:none;flex:1;width:100%;min-height:0}.nArs4W_browser{flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_browserBar{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:4px;padding:6px 8px;display:flex}.nArs4W_browserInput{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);min-width:0;height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:6px;flex:1;padding:0 10px}.nArs4W_browserInput:focus{border-color:var(--dsw-alias-border-l2);outline:none}.nArs4W_browserMessage{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-state-warn-label);background:var(--dsw-alias-state-warn-tertiary);flex:none;padding:4px 12px}.nArs4W_browserFrame{background:var(--dsw-alias-bg-base);border:none;flex:1;width:100%;min-height:0}.nArs4W_browserStart{text-align:center;min-height:0;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-tertiary);flex:1;justify-content:center;align-items:center;padding:20px;display:flex}.nArs4W_browserBlocked{text-align:center;min-height:0;color:var(--dsw-alias-state-warn-primary);flex-direction:column;flex:1;justify-content:center;align-items:center;gap:6px;padding:24px;display:flex}.nArs4W_browserBlockedTitle{font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary)}.nArs4W_browserBlockedDesc{max-width:280px;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-secondary)}.nArs4W_browserBlockedActions{gap:8px;margin-top:6px;display:flex}.nArs4W_browserBlockedButton{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxxs-11);cursor:pointer;border-radius:6px;padding:4px 12px}.nArs4W_browserBlockedButton:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_editorCm{background:0 0;flex:1;min-height:0;overflow:hidden}.nArs4W_editorCmHidden{display:none}.nArs4W_editorCm .cm-editor{height:100%}.nArs4W_editorCm .cm-scroller{padding:12px 16px}.nArs4W_editorCm .cm-editor.cm-focused{outline:none}.nArs4W_editorModeToggle{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);border-radius:6px;flex:none;align-items:center;gap:2px;padding:2px;display:inline-flex}.nArs4W_editorModeButton{color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxxs-11);cursor:pointer;background:0 0;border:none;border-radius:4px;padding:2px 8px}.nArs4W_editorModeButton:hover{color:var(--dsw-alias-label-primary)}.nArs4W_editorModeActive{background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}.nArs4W_editorMd{min-height:0;font:var(--dsw-font-xs-13);flex:1;padding:12px 16px;overflow-y:auto}.nArs4W_editorMd .md-code-block:not([data-mermaid-processed])>div:first-child{z-index:auto;position:static}.nArs4W_mermaidWrap{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);border-radius:6px;margin:6px 0;overflow:hidden}.nArs4W_mermaidHeader{border-bottom:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);justify-content:space-between;align-items:center;gap:6px;padding:4px 8px;display:flex}.nArs4W_mermaidInfo{font:var(--dsw-font-xxxs-strong-11);color:var(--dsw-alias-label-tertiary)}.nArs4W_mermaidCopy{height:20px;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxxs-11);cursor:pointer;background:0 0;border:none;border-radius:4px;align-items:center;gap:4px;padding:0 6px;display:inline-flex}.nArs4W_mermaidCopy:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_mermaidBody{cursor:zoom-in;justify-content:center;padding:10px;display:flex;overflow:auto}.nArs4W_mermaidBody svg{max-width:100%;height:auto}.nArs4W_mermaidError{border-bottom:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-state-error-primary);font:var(--dsw-font-xxxs-11);padding:6px 10px}.nArs4W_mermaidCode{font:var(--dsw-font-xxxs-11);margin:0;padding:8px 10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow:auto}.nArs4W_mermaidMarkdown .md-code-block[data-mermaid-processed]{display:contents}.nArs4W_mermaidModal{z-index:1000;background:var(--dsw-alias-bg-mask-1);backdrop-filter:blur(2px);flex-direction:column;justify-content:center;align-items:center;display:flex;position:fixed;inset:0;-webkit-app-region:initial!important}.nArs4W_mermaidModalToolbar{z-index:10;gap:8px;display:flex;position:absolute;top:16px;right:16px}.nArs4W_mermaidModalButton{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);width:36px;height:36px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xs-strong-13);cursor:pointer;border-radius:8px;justify-content:center;align-items:center;display:inline-flex}.nArs4W_mermaidModalButton:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_mermaidModalStage{justify-content:center;align-items:center;width:90vw;height:80vh;display:flex;position:relative;overflow:hidden}.nArs4W_mermaidModalStage svg{cursor:grab;transform-origin:50%;user-select:none;-webkit-user-drag:none;background:var(--dsw-alias-bg-layer-1);border-radius:12px;max-width:none;max-height:none;padding:16px}.nArs4W_mermaidModalStage svg:active{cursor:grabbing}.nArs4W_mermaidModalHint{color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxxs-11);pointer-events:none;position:absolute;bottom:16px;left:50%;transform:translate(-50%)}.nArs4W_selectionPopup{z-index:60;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-specific-menu);height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxxs-strong-11);white-space:nowrap;cursor:pointer;border-radius:6px;align-items:center;padding:0 10px;display:inline-flex;position:fixed;transform:translate(-50%,calc(-100% - 8px))}.nArs4W_selectionPopup:hover{background:var(--dsw-alias-interactive-bg-hover-solid)}.nArs4W_editorPdf{background:var(--dsw-alias-bg-base);flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_editorPdfToolbar{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;justify-content:flex-end;padding:6px 8px;display:flex}.nArs4W_editorPdfStage{flex:1;min-height:0;display:flex;position:relative}.nArs4W_editorPdfFrame{background:var(--dsw-alias-bg-base);border:none;flex:1;width:100%;min-height:0}.nArs4W_editorPdfFrameBlocked{pointer-events:none}.nArs4W_editorPdfDragShield{z-index:4;pointer-events:none;background:0 0;position:absolute;inset:0}.nArs4W_editorPdfDragShieldActive{pointer-events:auto}body[data-dsh-tab-dragging] .nArs4W_editorPdfFrame{pointer-events:none!important}body[data-dsh-tab-dragging] .nArs4W_editorPdfDragShield{pointer-events:auto!important}.nArs4W_boundaryError{z-index:50;background:var(--dsw-alias-bg-layer-1);border-left:1px solid var(--dsw-alias-border-l2);font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);flex-direction:column;align-items:flex-start;gap:8px;padding:16px;display:flex;position:fixed;top:0;bottom:0;right:0;overflow:auto}.nArs4W_terminalRetry{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxxs-strong-11);cursor:pointer;border-radius:999px;flex:none;padding:1px 8px}.nArs4W_terminalRetry:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_tabBoundaryError{min-height:0;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);flex-direction:column;flex:1;align-items:flex-start;gap:8px;padding:12px 16px;display:flex;overflow:auto}.nArs4W_nativeTabHost{flex-direction:column;height:100%;min-height:0;display:flex}.nArs4W_gitEmpty{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);padding:4px 12px 8px}.nArs4W_gitPlaceholder{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);text-align:center;padding:16px}.nArs4W_gitError{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);white-space:pre-wrap;padding:8px 12px}.nArs4W_gitDiffTab{flex-direction:column;flex:1;min-width:0;min-height:0;display:flex;overflow:hidden auto}.nArs4W_gitDiffTabHeader{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:8px;height:36px;padding:0 8px 0 12px;display:flex}.nArs4W_gitDiffTabTitle{text-overflow:ellipsis;white-space:nowrap;min-width:0;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary);flex:1;overflow:hidden}.nArs4W_toggleButton:focus-visible,.nArs4W_bottomClose:focus-visible,.nArs4W_iconButton:focus-visible,.nArs4W_tab:focus-visible,.nArs4W_tabClose:focus-visible,.nArs4W_tabBarPlus:focus-visible,.nArs4W_paneCard:focus-visible,.nArs4W_explorerRow:focus-visible,.nArs4W_explorerRef:focus-visible,.nArs4W_terminalRetry:focus-visible,.nArs4W_editorModeButton:focus-visible,.nArs4W_editorDownloadLink:focus-visible,.nArs4W_editorPptxButton:focus-visible,.nArs4W_editorDocxZoomRange:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}@media (prefers-reduced-motion:reduce){.nArs4W_bottomPanel,.nArs4W_bottomPanelHidden,.nArs4W_toggleButton,.nArs4W_tab,.nArs4W_tabBarPlus,.nArs4W_paneCard,.nArs4W_explorerRow,.nArs4W_divider,.nArs4W_dividerRow:after,.nArs4W_dividerCol:after{transition:none;animation:none}}@media (width<=767px){.nArs4W_tab{min-width:48px;max-width:128px}}.nArs4W_openWithLabel{align-items:center;gap:8px;width:100%;min-width:0;display:flex}.nArs4W_openWithName{text-overflow:ellipsis;white-space:nowrap;flex:auto;min-width:0;overflow:hidden}.nArs4W_openWithChevron{color:var(--dsw-alias-label-tertiary);flex:none}.nArs4W_openWithPin{width:16px;height:16px;color:var(--dsw-alias-label-tertiary);cursor:pointer;border-radius:5px;flex:none;justify-content:center;align-items:center;display:inline-flex}.nArs4W_openWithPin:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_openWithPinActive{color:var(--dsw-alias-state-business-primary)}.nArs4W_editorHtmlBlock{margin:8px 0}.nArs4W_editorHtmlBlock img,.nArs4W_editorHtmlBlock video{max-width:100%}.nArs4W_editorHtmlBlock details{margin:4px 0;padding:4px 0}.nArs4W_editorHtmlBlock summary,.nArs4W_editorMd details>summary{cursor:pointer}.nArs4W_tocBar{z-index:7;pointer-events:none;justify-content:flex-end;height:0;display:flex;position:sticky;top:0}.nArs4W_tocButton{pointer-events:auto;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);width:26px;height:26px;color:var(--dsw-alias-label-secondary);cursor:pointer;border-radius:6px;justify-content:center;align-items:center;margin:4px 2px 0 0;padding:0;display:inline-flex}.nArs4W_tocButton:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_tocPanel{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);width:min(300px,82%);max-height:60vh;box-shadow:var(--dsw-shadow-lv2);pointer-events:auto;border-radius:8px;flex-direction:column;padding:4px;display:flex;position:absolute;top:32px;right:2px;overflow-y:auto}.nArs4W_tocItem{min-width:0;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxs-12);text-align:left;cursor:pointer;background:0 0;border:none;border-radius:6px;align-items:baseline;gap:8px;padding:4px 8px;display:flex}.nArs4W_tocItem:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_tocItem[data-level=\"2\"]{padding-left:18px}.nArs4W_tocItem[data-level=\"3\"]{padding-left:28px}.nArs4W_tocItem[data-level=\"4\"]{padding-left:38px}.nArs4W_tocItem[data-level=\"5\"]{padding-left:48px}.nArs4W_tocItem[data-level=\"6\"]{padding-left:58px}.nArs4W_tocItemLevel{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary);flex:none}.nArs4W_tocItemText{text-overflow:ellipsis;white-space:nowrap;flex:auto;min-width:0;overflow:hidden}@keyframes nArs4W_dsh-toc-flash{0%,60%{background:var(--dsw-alias-interactive-bg-hover)}to{background:0 0}}.nArs4W_tocFlash{border-radius:4px;animation:1.2s ease-out nArs4W_dsh-toc-flash}.nArs4W_largeFile{flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_largeFileNotice{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-state-warn-label);background:var(--dsw-alias-state-warn-tertiary);flex:none;align-items:baseline;gap:8px;padding:4px 8px;display:flex}.nArs4W_largeFileDownload{color:inherit;text-decoration:underline}.nArs4W_largeFileNoticeAction{font:inherit;color:inherit;cursor:pointer;background:0 0;border:1px solid;border-radius:4px;margin-left:auto;padding:0 6px}.nArs4W_largeFileNoticeAction:disabled{opacity:.5;cursor:default}.nArs4W_largeFileBody{flex:1;min-height:0;overflow:auto}.nArs4W_largeFileRecords{padding:4px 0}.nArs4W_largeFileList{margin:0;padding:0;list-style:none}.nArs4W_largeFileRecord{gap:8px;padding:2px 8px;display:flex}.nArs4W_largeFileRecordExpanded{background:var(--dsw-alias-bg-layer-1)}.nArs4W_largeFileRecordInvalid{color:var(--dsw-alias-state-error-primary)}.nArs4W_largeFileRecordNo{text-align:right;min-width:4ch;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary);user-select:none;flex:none}.nArs4W_largeFileRecordBody{flex:1;min-width:0}.nArs4W_largeFileRecordSummary{text-align:left;width:100%;font:var(--ds-font-family-code);color:var(--dsw-alias-label-primary);white-space:pre;text-overflow:ellipsis;cursor:pointer;background:0 0;border:0;padding:0;font-size:12px;display:block;overflow:hidden}.nArs4W_largeFileRecordSummary:disabled{cursor:default}.nArs4W_largeFileRecordRaw{font:var(--ds-font-family-code);white-space:pre-wrap;word-break:break-all;overflow-wrap:anywhere;margin:2px 0 0;font-size:12px}.nArs4W_largeFileRecordTree{font:var(--ds-font-family-code);margin-top:2px;font-size:12px}.nArs4W_largeFileLines{font:var(--ds-font-family-code);white-space:pre;padding:4px 0;font-size:12px}.nArs4W_largeFileLine{gap:8px;padding:0 8px;display:flex}.nArs4W_largeFileLineNo{text-align:right;min-width:5ch;color:var(--dsw-alias-label-tertiary);user-select:none;flex:none}.nArs4W_largeFileLineText{color:var(--dsw-alias-label-primary);flex:none}.nArs4W_largeFilePager{border-top:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);flex:none;align-items:center;gap:4px;padding:2px 8px;display:flex}.nArs4W_largeFilePageLabel{text-align:center;min-width:0;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-secondary);white-space:nowrap;text-overflow:ellipsis;flex:1;overflow:hidden}";
+	const css$2 = "[data-dsh-panel-host]{z-index:25;pointer-events:none;height:100dvh;position:fixed;inset:0;overflow:clip}html[data-platform] body>[data-dsh-better-sidebar],[data-dsh-panel-host]{-webkit-app-region:initial!important}[data-dsh-panel-host]>*{-webkit-app-region:no-drag}[data-dockkit-float-resize]{z-index:2}[data-dsh-panel-host][data-dsh-panel-host-degraded]{position:absolute;top:0;left:0}.nArs4W_dockFallback{z-index:40;align-items:center;gap:2px;display:inline-flex;position:fixed}.nArs4W_toggleButton{width:28px;height:28px;color:var(--dsw-alias-label-secondary);cursor:pointer;transition:background var(--ds-transition-duration-slow) var(--ds-ease-in-out), color var(--ds-transition-duration-slow) var(--ds-ease-in-out);background:0 0;border:none;border-radius:50%;justify-content:center;align-items:center;display:flex}.nArs4W_toggleButton:hover:not(:disabled):not([aria-disabled=true]){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_toggleButton:disabled,.nArs4W_toggleButton[aria-disabled=true]{opacity:.4;cursor:default}.nArs4W_panelBody{flex:1;min-width:0;min-height:0;display:flex}.nArs4W_bottomPanel{z-index:40;background:var(--dsw-alias-bg-layer-1);border-top:1px solid var(--dsw-alias-border-l2);pointer-events:auto;padding-bottom:env(safe-area-inset-bottom);transition:transform var(--ds-transition-duration-slow) var(--ds-ease-in-out), height var(--ds-transition-duration-slow) var(--ds-ease-in-out);flex-direction:column;display:flex;position:absolute;bottom:0}.nArs4W_bottomPanelHidden{pointer-events:none;visibility:hidden;transition:transform var(--ds-transition-duration-slow) var(--ds-ease-in-out), height var(--ds-transition-duration-slow) var(--ds-ease-in-out), visibility 0s linear var(--ds-transition-duration-slow);transform:translateY(102%)}.nArs4W_bottomPanel[data-dragging]{transition:none}.nArs4W_bottomPanel{contain:layout style}body[data-dsh-sidebar-dragging] .nArs4W_panel,body[data-dsh-sidebar-dragging] .nArs4W_bottomPanel{will-change:transform}.nArs4W_bottomResize{cursor:row-resize;z-index:2;touch-action:none;height:8px;position:absolute;top:-4px;left:0;right:0}.nArs4W_bottomResizeActive{background:var(--dsw-alias-interactive-bg-hover-accent)}.nArs4W_bottomClose{z-index:4;width:28px;height:28px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:50%;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex;position:absolute;top:3px;right:6px}.nArs4W_bottomClose:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_bottomPanel .nArs4W_tabBar{padding-right:40px}.nArs4W_toggleButton,.nArs4W_tabBar{-webkit-app-region:no-drag}.nArs4W_iconButton{width:28px;height:28px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:50%;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex}.nArs4W_iconButton:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_iconButton:disabled{opacity:.4;cursor:default}.nArs4W_workbench,.nArs4W_split{flex:1;min-width:0;min-height:0;display:flex}.nArs4W_splitRow{flex-direction:row}.nArs4W_splitCol{flex-direction:column}.nArs4W_splitChild{display:flex;position:relative;overflow:hidden}.nArs4W_divider{z-index:3;touch-action:none;flex:none;position:relative}.nArs4W_dividerRow:after,.nArs4W_dividerCol:after{content:\"\";background:var(--dsw-alias-border-l2);transition:background var(--ds-transition-duration-slow) var(--ds-ease-in-out);position:absolute}.nArs4W_dividerRow{cursor:col-resize;width:7px;margin:0 -2px}.nArs4W_dividerRow:after{width:1px;top:0;bottom:0;left:50%;transform:translate(-50%)}.nArs4W_dividerCol{cursor:row-resize;height:7px;margin:-2px 0}.nArs4W_dividerCol:after{height:1px;top:50%;left:0;right:0;transform:translateY(-50%)}.nArs4W_divider:hover:after,.nArs4W_dividerActive:after{background:var(--dsw-alias-interactive-bg-hover-accent)}.nArs4W_pane{background:var(--dsw-alias-bg-base);flex-direction:column;flex:1;min-width:0;min-height:0;display:flex;position:relative}.nArs4W_paneDrop{outline:1px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}.nArs4W_dropOverlay{z-index:6;pointer-events:none;background:var(--dsw-alias-interactive-bg-hover-accent);opacity:.5;position:absolute}.nArs4W_dropLeft{width:25%;top:0;bottom:0;left:0}.nArs4W_dropRight{width:25%;top:0;bottom:0;right:0}.nArs4W_dropUp{height:25%;top:0;left:0;right:0}.nArs4W_dropDown{height:25%;bottom:0;left:0;right:0}.nArs4W_dropCenter{outline:2px dashed var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-2px;background:0 0;inset:25%}.nArs4W_paneContent{flex-direction:column;flex:1;min-height:0;display:flex;overflow:hidden}.nArs4W_chipIcon{flex:none;align-items:center;margin-right:6px;display:inline-flex}.nArs4W_chipUnread{background:var(--dsw-alias-danger);vertical-align:middle;border-radius:50%;width:6px;height:6px;margin-left:6px;display:inline-block}.nArs4W_tabUnreadDot{background:var(--dsw-alias-danger);border-radius:50%;flex:none;width:7px;height:7px}.nArs4W_paneTab{flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_paneTabHidden{display:none}.nArs4W_paneEmptyCards{flex:1;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));align-content:start;gap:12px;min-height:0;padding:12px;display:grid;overflow:hidden}.nArs4W_paneCard{box-sizing:border-box;border:.5px solid var(--dsw-alias-border-l4);background:var(--dsw-alias-bg-layer-1);min-width:0;min-height:56px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-s-strong-14);cursor:pointer;text-align:left;border-radius:24px;flex-direction:row;justify-content:flex-start;align-items:center;gap:14px;padding:14px 20px;display:flex}.nArs4W_paneCard>svg{color:var(--dsw-alias-label-secondary);flex:none}.nArs4W_paneCard:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l4)}.nArs4W_paneCard:disabled{opacity:.45;cursor:default}.nArs4W_tabBar{border-bottom:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);flex:none;align-items:stretch;height:34px;display:flex}.nArs4W_tabBarDrop{outline:1px dashed var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}.nArs4W_tabList{scrollbar-width:none;flex:1;min-width:0;display:flex;overflow-x:auto}.nArs4W_tabList::-webkit-scrollbar{display:none}.nArs4W_tab{min-width:64px;max-width:160px;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-secondary);border-right:1px solid var(--dsw-alias-border-l1);cursor:pointer;user-select:none;background:0 0;flex:none;align-items:center;gap:4px;padding:0 4px 0 10px;display:flex}.nArs4W_tab:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_tabActive{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-active)}.nArs4W_tabTitle{text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;overflow:hidden}.nArs4W_tabBadge{min-width:16px;height:15px;font:var(--dsw-font-xxxs-strong-11);background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-brand-primary);border-radius:8px;flex:none;justify-content:center;align-items:center;padding:0 4px;display:inline-flex}.nArs4W_tabClose{width:18px;height:18px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:4px;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex}.nArs4W_tabClose:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_tabBarPlus{background:var(--dsw-alias-bg-layer-1);width:22px;height:22px;color:var(--dsw-alias-label-tertiary);cursor:pointer;border:none;border-radius:5px;flex:none;justify-content:center;align-self:center;align-items:center;margin:0 6px;padding:0;display:inline-flex;position:sticky;right:0}.nArs4W_tabBarPlus:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_tabBarRightActions{flex:0 auto;justify-content:flex-end;align-items:center;gap:2px;min-width:0;padding-right:4px;display:flex;overflow:hidden}.nArs4W_explorer{flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_explorerHeader{flex:none;justify-content:space-between;align-items:center;gap:8px;height:36px;padding:0 8px 0 12px;display:flex}.nArs4W_explorerRoot{font:var(--dsw-font-s-14);color:var(--dsw-alias-label-secondary);text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.nArs4W_explorerBody{flex:1;min-height:0;padding:4px 8px 8px;overflow:hidden auto}.nArs4W_explorerRow{box-sizing:border-box;width:100%;max-width:100%;height:28px;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer;white-space:nowrap;animation:nArs4W_dsh-row-in .15s var(--ds-ease-in-out);background:0 0;border:none;border-radius:4px;align-items:center;gap:6px;padding:0 8px;display:flex;position:relative}.nArs4W_explorerRow:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_explorerRowSelected{background:var(--dsw-alias-interactive-bg-active)}.nArs4W_explorerRowSelected:before{content:\"\";background:var(--dsw-alias-state-business-primary);border-radius:1px;width:2px;position:absolute;top:4px;bottom:4px;left:0}.nArs4W_explorerGitName[data-git-tone=modified]{color:var(--dsw-alias-state-warn-primary)}.nArs4W_explorerGitName[data-git-tone=added],.nArs4W_explorerGitName[data-git-tone=untracked]{color:var(--dsw-alias-state-success-primary)}.nArs4W_explorerGitName[data-git-tone=deleted]{color:var(--dsw-alias-state-error-primary)}.nArs4W_explorerGitName[data-git-tone=renamed]{color:var(--dsw-alias-state-business-primary)}.nArs4W_explorerGitName[data-git-tone=copied]{color:var(--dsw-alias-state-success-primary)}.nArs4W_explorerGitName[data-git-tone=conflict]{color:var(--dsw-alias-state-error-primary)}.nArs4W_explorerDirChanged{color:var(--dsw-alias-state-business-primary)}.nArs4W_explorerRowRevealed{background:var(--dsw-alias-state-business-tertiary)}.nArs4W_explorerRowRevealed+.nArs4W_explorerRowRevealed{border-top-left-radius:0;border-top-right-radius:0}.nArs4W_explorerRowRevealed:has(+.nArs4W_explorerRowRevealed){border-bottom-right-radius:0;border-bottom-left-radius:0}.nArs4W_explorerDir{font:var(--dsw-font-xxs-strong-12)}.nArs4W_explorerHidden{opacity:.45}.nArs4W_explorerSymlink{color:var(--dsw-alias-label-tertiary);flex:none}.nArs4W_explorerBroken .nArs4W_explorerName{color:var(--dsw-alias-state-error-primary)}.nArs4W_explorerName{text-overflow:ellipsis;white-space:nowrap;min-width:0;overflow:hidden}.nArs4W_explorerRenaming{cursor:text}.nArs4W_explorerRenameInput{box-sizing:border-box;border:1px solid var(--dsw-alias-state-business-primary);background:var(--dsw-alias-bg-layer-1);min-width:0;height:22px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:3px;flex:auto;padding:0 6px}.nArs4W_explorerRenameInput:focus{border-color:var(--dsw-alias-state-business-primary);outline:none}.nArs4W_explorerActionError{box-sizing:border-box;border:1px solid var(--dsw-alias-state-error-primary);background:var(--dsw-alias-bg-layer-1);border-radius:8px;align-items:flex-start;gap:6px;width:100%;margin-bottom:4px;padding:6px 8px;display:flex}.nArs4W_explorerActionErrorText{overflow-wrap:anywhere;min-width:0;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);flex:auto}.nArs4W_explorerSelectionBar{z-index:1;box-sizing:border-box;background:var(--dsw-alias-bg-layer-2);border-radius:4px;align-items:center;gap:6px;width:100%;min-height:28px;margin-top:4px;padding:2px 8px;display:flex;position:sticky;bottom:0}.nArs4W_explorerSelectionText{text-overflow:ellipsis;white-space:nowrap;min-width:0;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-secondary);flex:auto;overflow:hidden}.nArs4W_explorerSelectionActions{flex-wrap:wrap;flex:none;justify-content:flex-end;gap:4px;max-width:72%;display:flex}.nArs4W_explorerAppIcon{object-fit:contain;width:14px;height:14px;display:block}.nArs4W_explorerHiddenPane{display:none}.nArs4W_explorerRef,.nArs4W_explorerCopied{margin-left:auto}.nArs4W_explorerRef{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);height:20px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxxs-strong-11);cursor:pointer;border-radius:999px;flex:none;align-items:center;padding:0 8px;display:none}.nArs4W_explorerRef:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_explorerRow:hover .nArs4W_explorerRef,.nArs4W_explorerRow:focus-within .nArs4W_explorerRef{display:inline-flex}.nArs4W_explorerCopied{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary);flex:none}.nArs4W_explorerError{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);cursor:default}@keyframes nArs4W_dsh-row-in{0%{opacity:0}}.nArs4W_explorerEmpty{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);text-align:center;padding:16px}.nArs4W_explorerRowDropTarget{background:var(--dsw-alias-interactive-bg-hover-accent);outline:1px dashed var(--dsw-alias-state-business-primary);outline-offset:-1px}.nArs4W_uploadDropMask{z-index:1001;pointer-events:none;background:color-mix(in srgb, var(--dsw-alias-bg-base) 62%, transparent);animation:nArs4W_dsh-row-in .15s var(--ds-ease-in-out);position:fixed;inset:0}.nArs4W_uploadDropZone{z-index:1002;pointer-events:none;border:2px dashed var(--dsw-alias-border-l2);background:color-mix(in srgb, var(--dsw-alias-state-business-primary) 4%, transparent);animation:nArs4W_dsh-row-in .15s var(--ds-ease-in-out);border-radius:8px;justify-content:center;align-items:flex-start;padding:12px;display:flex;position:fixed}.nArs4W_uploadDropHero{flex-direction:column;align-items:center;gap:8px;max-width:100%;padding-top:8px;display:flex}.nArs4W_uploadDropArtPrimary{color:var(--dsw-alias-state-business-primary)}.nArs4W_uploadDropArtAccent{color:var(--dsw-alias-state-business-tertiary)}.nArs4W_uploadDropArtCut{color:var(--dsw-alias-bg-layer-1)}.nArs4W_uploadDropZonePill{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);max-width:100%;height:28px;box-shadow:var(--dsw-shadow-lv2);color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxxs-11);border-radius:999px;align-items:center;gap:6px;padding:0 12px;display:flex}.nArs4W_uploadDropZoneText{white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.nArs4W_uploadDropChatHint{z-index:1003;pointer-events:none;animation:nArs4W_dsh-row-in .15s var(--ds-ease-in-out);justify-content:center;align-items:center;padding:24px;display:flex;position:fixed;top:0;bottom:0;left:0}.nArs4W_uploadDropChatCard{text-align:center;max-width:100%;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-strong-12);flex-direction:column;align-items:center;gap:10px;display:flex}.nArs4W_uploadOverlay{z-index:30;background:var(--dsw-alias-bg-mask-1);backdrop-filter:var(--dsw-mask-blur);animation:nArs4W_dsh-row-in .15s var(--ds-ease-in-out);justify-content:center;align-items:center;display:flex;position:absolute;inset:0}.nArs4W_uploadOverlayCard{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);min-width:240px;max-width:min(420px,100% - 48px);box-shadow:var(--dsw-shadow-lv3);border-radius:8px;flex-direction:column;gap:10px;padding:16px;display:flex}.nArs4W_uploadOverlayTitle{font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary);align-items:center;gap:6px;display:flex}.nArs4W_uploadOverlayTitle>svg{flex:none}.nArs4W_uploadOverlayTitle>span{white-space:nowrap;text-overflow:ellipsis;min-width:0;overflow:hidden}.nArs4W_uploadOverlayProgress{background:var(--dsw-alias-border-l2);border-radius:3px;height:6px;overflow:hidden}.nArs4W_uploadOverlayProgressFill{background:var(--dsw-alias-interactive-bg-hover-accent);height:100%;transition:width .15s var(--ds-ease-in-out);border-radius:3px}.nArs4W_uploadOverlayStatus{min-height:1em;font:var(--dsw-font-xxxs-11);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary);white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.nArs4W_uploadOverlayCancel{border:1px solid var(--dsw-alias-border-l2);height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-strong-12);cursor:pointer;background:0 0;border-radius:4px;align-self:flex-end;padding:0 12px}.nArs4W_uploadOverlayCancel:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l2)}.nArs4W_uploadOverlayCancel:disabled{opacity:.4;cursor:default}.nArs4W_editor{flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_editorHeader{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:6px;padding:6px 8px;display:flex}.nArs4W_editorTitle{min-width:0;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-secondary);text-overflow:ellipsis;white-space:nowrap;flex:1;overflow:hidden}.nArs4W_editorPathInput{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);min-width:0;height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:6px;flex:1;padding:0 10px}.nArs4W_editorPathInput:focus{border-color:var(--dsw-alias-border-l2);outline:none}.nArs4W_editorTreeToggleActive{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-active)}.nArs4W_editorBody{flex:1;min-height:0;display:flex}.nArs4W_editorMain{flex-direction:column;flex:1;min-width:0;min-height:0;display:flex}.nArs4W_editorTreeDock{border-left:1px solid var(--dsw-alias-border-l1);flex:none;min-height:0;display:flex;position:relative}.nArs4W_editorTreeResize{cursor:col-resize;touch-action:none;z-index:3;width:6px;position:absolute;top:0;bottom:0;left:0}.nArs4W_editorTreeResize:hover{background:var(--dsw-alias-border-l2)}.nArs4W_editorTreePanel{flex-direction:column;flex:1;min-width:0;min-height:0;display:flex;position:relative}.nArs4W_editorTreePanelFull{flex:1}.nArs4W_editorTreeSearch{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:6px;padding:6px 8px;display:flex}.nArs4W_editorSearchInput{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);min-width:0;height:26px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:6px;flex:1;padding:0 10px}.nArs4W_editorSearchInput:focus{border-color:var(--dsw-alias-border-l2);outline:none}.nArs4W_editorSearchHint{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);padding:8px 12px}.nArs4W_editorSearchResult{box-sizing:border-box;width:100%;height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);text-align:left;cursor:pointer;background:0 0;border:none;border-radius:4px;align-items:center;gap:6px;padding:0 8px;line-height:28px;display:flex;overflow:hidden}.nArs4W_editorSearchResultDir{color:var(--dsw-alias-label-secondary)}.nArs4W_editorSearchResultLabel{text-overflow:ellipsis;white-space:nowrap;min-width:0;overflow:hidden}.nArs4W_editorSearchResult:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_editorStatus{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary)}.nArs4W_editorStatusError{color:var(--dsw-alias-state-error-primary)}.nArs4W_dirtyDot{background:var(--dsw-alias-state-warn-primary);border-radius:50%;flex:none;width:7px;height:7px}.nArs4W_editorPlaceholder{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);text-align:center;flex:1;justify-content:center;align-items:center;padding:16px;display:flex}.nArs4W_orphanedType{opacity:.7;overflow-wrap:anywhere;margin-top:8px;font-size:12px;display:block}.nArs4W_editorBinary{text-align:center;flex-direction:column;flex:1;justify-content:center;align-items:center;gap:12px;padding:24px 16px;display:flex}.nArs4W_editorBinaryNotice{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary)}.nArs4W_editorDownloadLink{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-strong-12);cursor:pointer;transition:background var(--ds-transition-duration-slow) var(--ds-ease-in-out), border-color var(--ds-transition-duration-slow) var(--ds-ease-in-out);border-radius:6px;align-items:center;gap:6px;padding:6px 14px;text-decoration:none;display:inline-flex}.nArs4W_editorDownloadLink:hover{background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l2)}.nArs4W_editorError{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);padding:12px 16px}.nArs4W_editorBanner{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-state-warn-label);background:var(--dsw-alias-state-warn-tertiary);flex:none;padding:4px 8px}.nArs4W_editorBannerAction{font:inherit;color:inherit;cursor:pointer;background:0 0;border:0;margin-left:8px;padding:0;text-decoration:underline}.nArs4W_editorGitAdd{color:var(--dsw-alias-state-success-primary)}.nArs4W_editorGitMod{color:var(--dsw-alias-state-warn-primary)}.nArs4W_editorGitDel{color:var(--dsw-alias-state-error-primary)}.nArs4W_editorGitBarGutter{width:2px;min-width:2px}.nArs4W_editorGitBar,.nArs4W_editorGitBarSpacer{width:2px;height:100%}.nArs4W_editorGitBarAdd{background:var(--dsw-alias-state-success-primary)}.nArs4W_editorGitBarMod{background:var(--dsw-alias-state-warn-primary)}.nArs4W_editorGitBarDel{background:var(--dsw-alias-state-error-primary)}.nArs4W_editorBlame{max-width:420px;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-primary);padding:4px 8px}.nArs4W_editorBlameHead{color:var(--dsw-alias-label-secondary)}.nArs4W_editorBlameSummary{color:var(--dsw-alias-label-primary);white-space:pre-wrap;overflow-wrap:anywhere;margin-top:2px}.nArs4W_sandboxStatus{font:var(--dsw-font-xxxs-11);flex:none;align-items:center;gap:8px;padding:4px 10px;display:flex}.nArs4W_sandboxStatusOn{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-1);border-bottom:1px solid var(--dsw-alias-border-l1)}.nArs4W_sandboxStatusOff{color:var(--dsw-alias-state-error-primary);background:color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent);border-bottom:1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 45%, transparent)}.nArs4W_sandboxDot{background:var(--dsw-alias-state-success-primary);border-radius:50%;flex:none;width:6px;height:6px}.nArs4W_sandboxStatusOff .nArs4W_sandboxDot{background:var(--dsw-alias-state-error-primary)}.nArs4W_sandboxStatusText{text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;overflow:hidden}.nArs4W_sandboxAction{border:1px solid var(--dsw-alias-border-l2);font:inherit;color:inherit;cursor:pointer;background:0 0;border-radius:6px;flex:none;padding:2px 8px}.nArs4W_sandboxAction:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_editorHtml{background:var(--dsw-alias-bg-base);border:none;flex:1;width:100%;min-height:0}.nArs4W_browser{flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_browserBar{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:4px;padding:6px 8px;display:flex}.nArs4W_browserInput{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);min-width:0;height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:6px;flex:1;padding:0 10px}.nArs4W_browserInput:focus{border-color:var(--dsw-alias-border-l2);outline:none}.nArs4W_browserMessage{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-state-warn-label);background:var(--dsw-alias-state-warn-tertiary);flex:none;padding:4px 12px}.nArs4W_browserFrame{background:var(--dsw-alias-bg-base);border:none;flex:1;width:100%;min-height:0}.nArs4W_browserStart{text-align:center;min-height:0;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-tertiary);flex:1;justify-content:center;align-items:center;padding:20px;display:flex}.nArs4W_browserBlocked{text-align:center;min-height:0;color:var(--dsw-alias-state-warn-primary);flex-direction:column;flex:1;justify-content:center;align-items:center;gap:6px;padding:24px;display:flex}.nArs4W_browserBlockedTitle{font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary)}.nArs4W_browserBlockedDesc{max-width:280px;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-secondary)}.nArs4W_browserBlockedActions{gap:8px;margin-top:6px;display:flex}.nArs4W_browserBlockedButton{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxxs-11);cursor:pointer;border-radius:6px;padding:4px 12px}.nArs4W_browserBlockedButton:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_editorCm{background:0 0;flex:1;min-height:0;overflow:hidden}.nArs4W_editorCmHidden{display:none}.nArs4W_editorCm .cm-editor{height:100%}.nArs4W_editorCm .cm-scroller{padding:12px 16px}.nArs4W_editorCm .cm-editor.cm-focused{outline:none}.nArs4W_editorModeToggle{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);border-radius:6px;flex:none;align-items:center;gap:2px;padding:2px;display:inline-flex}.nArs4W_editorModeButton{color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxxs-11);cursor:pointer;background:0 0;border:none;border-radius:4px;padding:2px 8px}.nArs4W_editorModeButton:hover{color:var(--dsw-alias-label-primary)}.nArs4W_editorModeActive{background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}.nArs4W_editorMd{min-height:0;font:var(--dsw-font-xs-13);flex:1;padding:12px 16px;overflow-y:auto}.nArs4W_editorMd .md-code-block:not([data-mermaid-processed])>div:first-child{z-index:auto;position:static}.nArs4W_mermaidWrap{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);content-visibility:auto;contain-intrinsic-size:auto 240px;contain:layout paint style;border-radius:6px;margin:6px 0;overflow:hidden}.nArs4W_mermaidHeader{border-bottom:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);justify-content:space-between;align-items:center;gap:6px;padding:4px 8px;display:flex}.nArs4W_mermaidInfo{font:var(--dsw-font-xxxs-strong-11);color:var(--dsw-alias-label-tertiary)}.nArs4W_mermaidCopy{height:20px;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxxs-11);cursor:pointer;background:0 0;border:none;border-radius:4px;align-items:center;gap:4px;padding:0 6px;display:inline-flex}.nArs4W_mermaidCopy:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_mermaidBody{cursor:zoom-in;justify-content:center;padding:10px;display:flex;overflow:auto}.nArs4W_mermaidBody svg{max-width:100%;height:auto}.nArs4W_mermaidPending{flex-direction:column;justify-content:center;align-items:center;gap:10px;padding:18px 24px;display:flex}.nArs4W_mermaidPendingBar{background:var(--dsw-alias-bg-layer-2);border-radius:5px;width:min(320px,70%);height:10px;animation:1.4s ease-in-out infinite nArs4W_mermaidPendingPulse;display:block}.nArs4W_mermaidPendingBar:nth-child(2){width:min(240px,55%);animation-delay:.15s}.nArs4W_mermaidPendingBar:nth-child(3){width:min(160px,40%);animation-delay:.3s}@keyframes nArs4W_mermaidPendingPulse{0%,to{opacity:.45}50%{opacity:1}}@media (prefers-reduced-motion:reduce){.nArs4W_mermaidPendingBar{animation:none}}.nArs4W_mermaidError{border-bottom:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-state-error-primary);font:var(--dsw-font-xxxs-11);padding:6px 10px}.nArs4W_mermaidErrorDetail{color:var(--dsw-alias-label-tertiary);white-space:pre-wrap;word-break:break-word;margin-top:2px;display:block}.nArs4W_mermaidCode{font:var(--dsw-font-xxxs-11);margin:0;padding:8px 10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow:auto}.nArs4W_mermaidMarkdown .md-code-block[data-mermaid-processed]{display:contents}.nArs4W_mermaidModal{z-index:1000;background:var(--dsw-alias-bg-mask-1);backdrop-filter:blur(2px);flex-direction:column;justify-content:center;align-items:center;display:flex;position:fixed;inset:0;-webkit-app-region:initial!important}.nArs4W_mermaidModalToolbar{z-index:10;gap:8px;display:flex;position:absolute;top:16px;right:16px}.nArs4W_mermaidModalButton{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);width:36px;height:36px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xs-strong-13);cursor:pointer;border-radius:8px;justify-content:center;align-items:center;display:inline-flex}.nArs4W_mermaidModalButton:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_mermaidModalStage{justify-content:center;align-items:center;width:90vw;height:80vh;display:flex;position:relative;overflow:hidden}.nArs4W_mermaidModalStage svg{cursor:grab;transform-origin:50%;user-select:none;-webkit-user-drag:none;background:var(--dsw-alias-bg-layer-1);border-radius:12px;max-width:none;max-height:none;padding:16px}.nArs4W_mermaidModalStage svg:active{cursor:grabbing}.nArs4W_mermaidModalHint{color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxxs-11);pointer-events:none;position:absolute;bottom:16px;left:50%;transform:translate(-50%)}.nArs4W_selectionPopup{z-index:60;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-specific-menu);height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxxs-strong-11);white-space:nowrap;cursor:pointer;border-radius:6px;align-items:center;padding:0 10px;display:inline-flex;position:fixed;transform:translate(-50%,calc(-100% - 8px))}.nArs4W_selectionPopup:hover{background:var(--dsw-alias-interactive-bg-hover-solid)}.nArs4W_editorPdf{background:var(--dsw-alias-bg-base);flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_editorPdfToolbar{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;justify-content:flex-end;padding:6px 8px;display:flex}.nArs4W_editorPdfStage{flex:1;min-height:0;display:flex;position:relative}.nArs4W_editorPdfFrame{background:var(--dsw-alias-bg-base);border:none;flex:1;width:100%;min-height:0}.nArs4W_editorPdfFrameBlocked{pointer-events:none}.nArs4W_editorPdfDragShield{z-index:4;pointer-events:none;background:0 0;position:absolute;inset:0}.nArs4W_editorPdfDragShieldActive{pointer-events:auto}body[data-dsh-tab-dragging] .nArs4W_editorPdfFrame{pointer-events:none!important}body[data-dsh-tab-dragging] .nArs4W_editorPdfDragShield{pointer-events:auto!important}.nArs4W_boundaryError{z-index:50;background:var(--dsw-alias-bg-layer-1);border-left:1px solid var(--dsw-alias-border-l2);font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);flex-direction:column;align-items:flex-start;gap:8px;padding:16px;display:flex;position:fixed;top:0;bottom:0;right:0;overflow:auto}.nArs4W_terminalRetry{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxxs-strong-11);cursor:pointer;border-radius:999px;flex:none;padding:1px 8px}.nArs4W_terminalRetry:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_tabBoundaryError{min-height:0;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);flex-direction:column;flex:1;align-items:flex-start;gap:8px;padding:12px 16px;display:flex;overflow:auto}.nArs4W_nativeTabHost{flex-direction:column;height:100%;min-height:0;display:flex}.nArs4W_gitEmpty{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);padding:4px 12px 8px}.nArs4W_gitPlaceholder{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);text-align:center;padding:16px}.nArs4W_gitError{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);white-space:pre-wrap;padding:8px 12px}.nArs4W_gitDiffTab{flex-direction:column;flex:1;min-width:0;min-height:0;display:flex;overflow:hidden auto}.nArs4W_gitDiffTabHeader{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:8px;height:36px;padding:0 8px 0 12px;display:flex}.nArs4W_gitDiffTabTitle{text-overflow:ellipsis;white-space:nowrap;min-width:0;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary);flex:1;overflow:hidden}.nArs4W_toggleButton:focus-visible,.nArs4W_bottomClose:focus-visible,.nArs4W_iconButton:focus-visible,.nArs4W_tab:focus-visible,.nArs4W_tabClose:focus-visible,.nArs4W_tabBarPlus:focus-visible,.nArs4W_paneCard:focus-visible,.nArs4W_explorerRow:focus-visible,.nArs4W_explorerRef:focus-visible,.nArs4W_terminalRetry:focus-visible,.nArs4W_editorModeButton:focus-visible,.nArs4W_editorDownloadLink:focus-visible,.nArs4W_editorPptxButton:focus-visible,.nArs4W_editorDocxZoomRange:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}@media (prefers-reduced-motion:reduce){.nArs4W_bottomPanel,.nArs4W_bottomPanelHidden,.nArs4W_toggleButton,.nArs4W_tab,.nArs4W_tabBarPlus,.nArs4W_paneCard,.nArs4W_explorerRow,.nArs4W_divider,.nArs4W_dividerRow:after,.nArs4W_dividerCol:after{transition:none;animation:none}}@media (width<=767px){.nArs4W_tab{min-width:48px;max-width:128px}}.nArs4W_openWithLabel{align-items:center;gap:8px;width:100%;min-width:0;display:flex}.nArs4W_openWithName{text-overflow:ellipsis;white-space:nowrap;flex:auto;min-width:0;overflow:hidden}.nArs4W_openWithChevron{color:var(--dsw-alias-label-tertiary);flex:none}.nArs4W_openWithPin{width:16px;height:16px;color:var(--dsw-alias-label-tertiary);cursor:pointer;border-radius:5px;flex:none;justify-content:center;align-items:center;display:inline-flex}.nArs4W_openWithPin:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_openWithPinActive{color:var(--dsw-alias-state-business-primary)}.nArs4W_editorHtmlBlock{margin:8px 0}.nArs4W_editorHtmlBlock img,.nArs4W_editorHtmlBlock video{max-width:100%}.nArs4W_editorHtmlBlock details{margin:4px 0;padding:4px 0}.nArs4W_editorHtmlBlock summary,.nArs4W_editorMd details>summary{cursor:pointer}.nArs4W_tocBar{z-index:7;pointer-events:none;justify-content:flex-end;height:0;display:flex;position:sticky;top:0}.nArs4W_tocButton{pointer-events:auto;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);width:26px;height:26px;color:var(--dsw-alias-label-secondary);cursor:pointer;border-radius:6px;justify-content:center;align-items:center;margin:4px 2px 0 0;padding:0;display:inline-flex}.nArs4W_tocButton:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_tocPanel{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);width:min(300px,82%);max-height:60vh;box-shadow:var(--dsw-shadow-lv2);pointer-events:auto;border-radius:8px;flex-direction:column;padding:4px;display:flex;position:absolute;top:32px;right:2px;overflow-y:auto}.nArs4W_tocItem{min-width:0;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxs-12);text-align:left;cursor:pointer;background:0 0;border:none;border-radius:6px;align-items:baseline;gap:8px;padding:4px 8px;display:flex}.nArs4W_tocItem:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_tocItem[data-level=\"2\"]{padding-left:18px}.nArs4W_tocItem[data-level=\"3\"]{padding-left:28px}.nArs4W_tocItem[data-level=\"4\"]{padding-left:38px}.nArs4W_tocItem[data-level=\"5\"]{padding-left:48px}.nArs4W_tocItem[data-level=\"6\"]{padding-left:58px}.nArs4W_tocItemLevel{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary);flex:none}.nArs4W_tocItemText{text-overflow:ellipsis;white-space:nowrap;flex:auto;min-width:0;overflow:hidden}@keyframes nArs4W_dsh-toc-flash{0%,60%{background:var(--dsw-alias-interactive-bg-hover)}to{background:0 0}}.nArs4W_tocFlash{border-radius:4px;animation:1.2s ease-out nArs4W_dsh-toc-flash}.nArs4W_largeFile{flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_largeFileNotice{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-state-warn-label);background:var(--dsw-alias-state-warn-tertiary);flex:none;align-items:baseline;gap:8px;padding:4px 8px;display:flex}.nArs4W_largeFileDownload{color:inherit;text-decoration:underline}.nArs4W_largeFileNoticeAction{font:inherit;color:inherit;cursor:pointer;background:0 0;border:1px solid;border-radius:4px;margin-left:auto;padding:0 6px}.nArs4W_largeFileNoticeAction:disabled{opacity:.5;cursor:default}.nArs4W_largeFileBody{flex:1;min-height:0;overflow:auto}.nArs4W_largeFileRecords{padding:4px 0}.nArs4W_largeFileList{margin:0;padding:0;list-style:none}.nArs4W_largeFileRecord{gap:8px;padding:2px 8px;display:flex}.nArs4W_largeFileRecordExpanded{background:var(--dsw-alias-bg-layer-1)}.nArs4W_largeFileRecordInvalid{color:var(--dsw-alias-state-error-primary)}.nArs4W_largeFileRecordNo{text-align:right;min-width:4ch;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary);user-select:none;flex:none}.nArs4W_largeFileRecordBody{flex:1;min-width:0}.nArs4W_largeFileRecordSummary{text-align:left;width:100%;font:var(--ds-font-family-code);color:var(--dsw-alias-label-primary);white-space:pre;text-overflow:ellipsis;cursor:pointer;background:0 0;border:0;padding:0;font-size:12px;display:block;overflow:hidden}.nArs4W_largeFileRecordSummary:disabled{cursor:default}.nArs4W_largeFileRecordRaw{font:var(--ds-font-family-code);white-space:pre-wrap;word-break:break-all;overflow-wrap:anywhere;margin:2px 0 0;font-size:12px}.nArs4W_largeFileRecordTree{font:var(--ds-font-family-code);margin-top:2px;font-size:12px}.nArs4W_largeFileLines{font:var(--ds-font-family-code);white-space:pre;padding:4px 0;font-size:12px}.nArs4W_largeFileLine{gap:8px;padding:0 8px;display:flex}.nArs4W_largeFileLineNo{text-align:right;min-width:5ch;color:var(--dsw-alias-label-tertiary);user-select:none;flex:none}.nArs4W_largeFileLineText{color:var(--dsw-alias-label-primary);flex:none}.nArs4W_largeFilePager{border-top:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);flex:none;align-items:center;gap:4px;padding:2px 8px;display:flex}.nArs4W_largeFilePageLabel{text-align:center;min-width:0;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-secondary);white-space:nowrap;text-overflow:ellipsis;flex:1;overflow:hidden}";
 	const tagId = "dsh-better-sidebar/sidebar.module.css";
 	if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
 		const tag = document.createElement("style");
@@ -22725,229 +22747,233 @@ globalThis.__dshChunks__["editor"] = (require) => {
 		document.head.appendChild(tag);
 	}
 	var sidebar_module_css_default = {
-		"split": "nArs4W_split",
-		"divider": "nArs4W_divider",
-		"editorGitBarMod": "nArs4W_editorGitBarMod",
-		"editorCm": "nArs4W_editorCm",
-		"editor": "nArs4W_editor",
-		"mermaidHeader": "nArs4W_mermaidHeader",
-		"bottomClose": "nArs4W_bottomClose",
-		"mermaidInfo": "nArs4W_mermaidInfo",
-		"sandboxStatusText": "nArs4W_sandboxStatusText",
-		"tabClose": "nArs4W_tabClose",
-		"editorError": "nArs4W_editorError",
-		"editorTitle": "nArs4W_editorTitle",
-		"editorSearchResult": "nArs4W_editorSearchResult",
-		"editorBlame": "nArs4W_editorBlame",
+		"editorSearchInput": "nArs4W_editorSearchInput",
 		"editorPdfToolbar": "nArs4W_editorPdfToolbar",
-		"editorPdfFrameBlocked": "nArs4W_editorPdfFrameBlocked",
-		"editorPdfDragShieldActive": "nArs4W_editorPdfDragShieldActive",
-		"explorerSelectionBar": "nArs4W_explorerSelectionBar",
-		"nativeTabHost": "nArs4W_nativeTabHost",
-		"openWithChevron": "nArs4W_openWithChevron",
-		"openWithPinActive": "nArs4W_openWithPinActive",
-		"workbench": "nArs4W_workbench",
-		"explorerRowRevealed": "nArs4W_explorerRowRevealed",
-		"explorerBroken": "nArs4W_explorerBroken",
-		"dsh-toc-flash": "nArs4W_dsh-toc-flash",
-		"largeFileBody": "nArs4W_largeFileBody",
-		"bottomPanelHidden": "nArs4W_bottomPanelHidden",
-		"editorModeToggle": "nArs4W_editorModeToggle",
-		"explorerActionErrorText": "nArs4W_explorerActionErrorText",
-		"editorTreePanelFull": "nArs4W_editorTreePanelFull",
-		"largeFileRecords": "nArs4W_largeFileRecords",
-		"largeFileRecordNo": "nArs4W_largeFileRecordNo",
-		"tocButton": "nArs4W_tocButton",
-		"largeFileLines": "nArs4W_largeFileLines",
-		"dsh-row-in": "nArs4W_dsh-row-in",
-		"mermaidModalToolbar": "nArs4W_mermaidModalToolbar",
-		"editorSearchHint": "nArs4W_editorSearchHint",
-		"openWithLabel": "nArs4W_openWithLabel",
-		"uploadOverlayCard": "nArs4W_uploadOverlayCard",
-		"paneTabHidden": "nArs4W_paneTabHidden",
+		"largeFileLineText": "nArs4W_largeFileLineText",
+		"tabBarDrop": "nArs4W_tabBarDrop",
+		"uploadOverlayProgressFill": "nArs4W_uploadOverlayProgressFill",
+		"browserFrame": "nArs4W_browserFrame",
+		"explorerSelectionText": "nArs4W_explorerSelectionText",
+		"terminalRetry": "nArs4W_terminalRetry",
+		"editorPdfStage": "nArs4W_editorPdfStage",
+		"uploadOverlayTitle": "nArs4W_uploadOverlayTitle",
 		"browserBar": "nArs4W_browserBar",
-		"tabActive": "nArs4W_tabActive",
-		"browserBlocked": "nArs4W_browserBlocked",
-		"tabBoundaryError": "nArs4W_tabBoundaryError",
-		"gitPlaceholder": "nArs4W_gitPlaceholder",
-		"sandboxStatusOff": "nArs4W_sandboxStatusOff",
-		"splitCol": "nArs4W_splitCol",
-		"explorerAppIcon": "nArs4W_explorerAppIcon",
-		"paneCard": "nArs4W_paneCard",
-		"editorTreeSearch": "nArs4W_editorTreeSearch",
-		"toggleButton": "nArs4W_toggleButton",
+		"largeFileRecord": "nArs4W_largeFileRecord",
+		"uploadDropHero": "nArs4W_uploadDropHero",
+		"tocItemText": "nArs4W_tocItemText",
+		"editorPdfFrameBlocked": "nArs4W_editorPdfFrameBlocked",
+		"tabUnreadDot": "nArs4W_tabUnreadDot",
+		"boundaryError": "nArs4W_boundaryError",
+		"largeFileRecords": "nArs4W_largeFileRecords",
+		"editorGitAdd": "nArs4W_editorGitAdd",
+		"editorBlameSummary": "nArs4W_editorBlameSummary",
+		"explorerHiddenPane": "nArs4W_explorerHiddenPane",
+		"paneTab": "nArs4W_paneTab",
+		"largeFileNotice": "nArs4W_largeFileNotice",
+		"explorerBroken": "nArs4W_explorerBroken",
+		"explorerEmpty": "nArs4W_explorerEmpty",
+		"uploadOverlayCard": "nArs4W_uploadOverlayCard",
 		"editorBanner": "nArs4W_editorBanner",
-		"dividerCol": "nArs4W_dividerCol",
-		"browserInput": "nArs4W_browserInput",
-		"panelBody": "nArs4W_panelBody",
-		"uploadDropArtAccent": "nArs4W_uploadDropArtAccent",
+		"browserStart": "nArs4W_browserStart",
+		"divider": "nArs4W_divider",
+		"editorStatus": "nArs4W_editorStatus",
+		"tabBadge": "nArs4W_tabBadge",
+		"dsh-toc-flash": "nArs4W_dsh-toc-flash",
+		"panel": "nArs4W_panel",
+		"largeFileLines": "nArs4W_largeFileLines",
+		"explorerRowDropTarget": "nArs4W_explorerRowDropTarget",
+		"tabBar": "nArs4W_tabBar",
+		"chipIcon": "nArs4W_chipIcon",
+		"editorError": "nArs4W_editorError",
+		"dropDown": "nArs4W_dropDown",
+		"editorGitBarDel": "nArs4W_editorGitBarDel",
+		"editorBlame": "nArs4W_editorBlame",
+		"editorBody": "nArs4W_editorBody",
+		"editorDownloadLink": "nArs4W_editorDownloadLink",
+		"explorer": "nArs4W_explorer",
+		"sandboxDot": "nArs4W_sandboxDot",
+		"uploadDropZonePill": "nArs4W_uploadDropZonePill",
+		"gitEmpty": "nArs4W_gitEmpty",
+		"largeFilePager": "nArs4W_largeFilePager",
+		"uploadDropChatHint": "nArs4W_uploadDropChatHint",
+		"mermaidModalHint": "nArs4W_mermaidModalHint",
+		"editorPptxButton": "nArs4W_editorPptxButton",
+		"editorTreeToggleActive": "nArs4W_editorTreeToggleActive",
+		"editorPdf": "nArs4W_editorPdf",
+		"largeFileDownload": "nArs4W_largeFileDownload",
+		"editorTreeResize": "nArs4W_editorTreeResize",
+		"bottomClose": "nArs4W_bottomClose",
+		"editorTreePanelFull": "nArs4W_editorTreePanelFull",
+		"uploadDropMask": "nArs4W_uploadDropMask",
+		"browserMessage": "nArs4W_browserMessage",
+		"explorerRenameInput": "nArs4W_explorerRenameInput",
+		"openWithName": "nArs4W_openWithName",
+		"sandboxStatusText": "nArs4W_sandboxStatusText",
+		"sandboxStatusOff": "nArs4W_sandboxStatusOff",
+		"tocItem": "nArs4W_tocItem",
+		"nativeTabHost": "nArs4W_nativeTabHost",
+		"mermaidModal": "nArs4W_mermaidModal",
+		"editorGitBarGutter": "nArs4W_editorGitBarGutter",
+		"largeFileRecordNo": "nArs4W_largeFileRecordNo",
+		"tab": "nArs4W_tab",
+		"dividerActive": "nArs4W_dividerActive",
+		"tabClose": "nArs4W_tabClose",
+		"mermaidMarkdown": "nArs4W_mermaidMarkdown",
+		"editorPlaceholder": "nArs4W_editorPlaceholder",
+		"largeFileLine": "nArs4W_largeFileLine",
+		"gitDiffTab": "nArs4W_gitDiffTab",
 		"largeFileRecordRaw": "nArs4W_largeFileRecordRaw",
-		"editorStatusError": "nArs4W_editorStatusError",
+		"explorerCopied": "nArs4W_explorerCopied",
+		"openWithLabel": "nArs4W_openWithLabel",
+		"editorPdfDragShieldActive": "nArs4W_editorPdfDragShieldActive",
+		"gitError": "nArs4W_gitError",
+		"dividerRow": "nArs4W_dividerRow",
+		"browserBlockedDesc": "nArs4W_browserBlockedDesc",
+		"mermaidPendingBar": "nArs4W_mermaidPendingBar",
+		"split": "nArs4W_split",
+		"explorerError": "nArs4W_explorerError",
+		"openWithChevron": "nArs4W_openWithChevron",
+		"largeFileRecordSummary": "nArs4W_largeFileRecordSummary",
+		"uploadDropChatCard": "nArs4W_uploadDropChatCard",
 		"uploadOverlayProgress": "nArs4W_uploadOverlayProgress",
 		"pane": "nArs4W_pane",
-		"editorSearchInput": "nArs4W_editorSearchInput",
-		"dropOverlay": "nArs4W_dropOverlay",
-		"editorBinary": "nArs4W_editorBinary",
-		"browserBlockedButton": "nArs4W_browserBlockedButton",
-		"editorTreeResize": "nArs4W_editorTreeResize",
 		"largeFileList": "nArs4W_largeFileList",
-		"bottomResizeActive": "nArs4W_bottomResizeActive",
-		"dropUp": "nArs4W_dropUp",
-		"tabBadge": "nArs4W_tabBadge",
-		"tocItemLevel": "nArs4W_tocItemLevel",
-		"explorerCopied": "nArs4W_explorerCopied",
-		"iconButton": "nArs4W_iconButton",
-		"dropCenter": "nArs4W_dropCenter",
 		"explorerHidden": "nArs4W_explorerHidden",
-		"explorerRoot": "nArs4W_explorerRoot",
-		"mermaidCode": "nArs4W_mermaidCode",
-		"tocBar": "nArs4W_tocBar",
-		"editorHtml": "nArs4W_editorHtml",
-		"mermaidMarkdown": "nArs4W_mermaidMarkdown",
-		"explorerGitName": "nArs4W_explorerGitName",
-		"mermaidError": "nArs4W_mermaidError",
-		"explorerHiddenPane": "nArs4W_explorerHiddenPane",
-		"editorMd": "nArs4W_editorMd",
-		"tabBarDrop": "nArs4W_tabBarDrop",
-		"editorPlaceholder": "nArs4W_editorPlaceholder",
-		"tocItemText": "nArs4W_tocItemText",
-		"explorerError": "nArs4W_explorerError",
-		"editorGitBarSpacer": "nArs4W_editorGitBarSpacer",
-		"tabList": "nArs4W_tabList",
-		"tocItem": "nArs4W_tocItem",
-		"splitRow": "nArs4W_splitRow",
-		"uploadOverlayProgressFill": "nArs4W_uploadOverlayProgressFill",
-		"largeFileLineText": "nArs4W_largeFileLineText",
-		"uploadDropZonePill": "nArs4W_uploadDropZonePill",
-		"sandboxStatus": "nArs4W_sandboxStatus",
-		"largeFilePageLabel": "nArs4W_largeFilePageLabel",
-		"uploadDropHero": "nArs4W_uploadDropHero",
-		"sandboxAction": "nArs4W_sandboxAction",
-		"openWithName": "nArs4W_openWithName",
-		"uploadDropZoneText": "nArs4W_uploadDropZoneText",
-		"bottomPanel": "nArs4W_bottomPanel",
-		"explorerBody": "nArs4W_explorerBody",
-		"editorMain": "nArs4W_editorMain",
-		"editorModeButton": "nArs4W_editorModeButton",
-		"gitDiffTabTitle": "nArs4W_gitDiffTabTitle",
-		"largeFileRecordTree": "nArs4W_largeFileRecordTree",
-		"explorerRow": "nArs4W_explorerRow",
-		"editorHeader": "nArs4W_editorHeader",
-		"paneEmptyCards": "nArs4W_paneEmptyCards",
-		"editorBinaryNotice": "nArs4W_editorBinaryNotice",
-		"uploadDropChatHint": "nArs4W_uploadDropChatHint",
-		"gitDiffTabHeader": "nArs4W_gitDiffTabHeader",
-		"largeFilePager": "nArs4W_largeFilePager",
-		"editorModeActive": "nArs4W_editorModeActive",
-		"editorBannerAction": "nArs4W_editorBannerAction",
-		"editorGitBarGutter": "nArs4W_editorGitBarGutter",
-		"dropLeft": "nArs4W_dropLeft",
-		"editorPptxButton": "nArs4W_editorPptxButton",
-		"largeFileRecordSummary": "nArs4W_largeFileRecordSummary",
-		"explorerRenameInput": "nArs4W_explorerRenameInput",
-		"tabBar": "nArs4W_tabBar",
-		"orphanedType": "nArs4W_orphanedType",
-		"uploadDropArtPrimary": "nArs4W_uploadDropArtPrimary",
-		"chipIcon": "nArs4W_chipIcon",
-		"tabBarPlus": "nArs4W_tabBarPlus",
-		"editorPdfFrame": "nArs4W_editorPdfFrame",
-		"editorSearchResultLabel": "nArs4W_editorSearchResultLabel",
-		"browserStart": "nArs4W_browserStart",
 		"bottomResize": "nArs4W_bottomResize",
-		"editorPathInput": "nArs4W_editorPathInput",
-		"terminalRetry": "nArs4W_terminalRetry",
-		"editorGitBar": "nArs4W_editorGitBar",
-		"explorerEmpty": "nArs4W_explorerEmpty",
-		"gitEmpty": "nArs4W_gitEmpty",
-		"editorGitBarAdd": "nArs4W_editorGitBarAdd",
-		"editorBlameHead": "nArs4W_editorBlameHead",
-		"selectionPopup": "nArs4W_selectionPopup",
-		"gitDiffTab": "nArs4W_gitDiffTab",
-		"uploadOverlayTitle": "nArs4W_uploadOverlayTitle",
-		"editorTreePanel": "nArs4W_editorTreePanel",
-		"dirtyDot": "nArs4W_dirtyDot",
-		"editorStatus": "nArs4W_editorStatus",
-		"tabUnreadDot": "nArs4W_tabUnreadDot",
-		"tabTitle": "nArs4W_tabTitle",
-		"explorer": "nArs4W_explorer",
-		"editorGitBarDel": "nArs4W_editorGitBarDel",
-		"editorBody": "nArs4W_editorBody",
-		"dropRight": "nArs4W_dropRight",
-		"uploadOverlayStatus": "nArs4W_uploadOverlayStatus",
-		"browserFrame": "nArs4W_browserFrame",
-		"editorGitDel": "nArs4W_editorGitDel",
-		"openWithPin": "nArs4W_openWithPin",
-		"paneContent": "nArs4W_paneContent",
-		"chipUnread": "nArs4W_chipUnread",
-		"explorerSelectionActions": "nArs4W_explorerSelectionActions",
-		"uploadDropArtCut": "nArs4W_uploadDropArtCut",
-		"browser": "nArs4W_browser",
-		"editorHtmlBlock": "nArs4W_editorHtmlBlock",
-		"tab": "nArs4W_tab",
-		"largeFileRecordBody": "nArs4W_largeFileRecordBody",
-		"uploadOverlayCancel": "nArs4W_uploadOverlayCancel",
-		"editorTreeToggleActive": "nArs4W_editorTreeToggleActive",
-		"editorDocxZoomRange": "nArs4W_editorDocxZoomRange",
-		"tabBarRightActions": "nArs4W_tabBarRightActions",
-		"explorerSelectionText": "nArs4W_explorerSelectionText",
-		"browserBlockedActions": "nArs4W_browserBlockedActions",
-		"dropDown": "nArs4W_dropDown",
-		"tocPanel": "nArs4W_tocPanel",
+		"uploadDropArtAccent": "nArs4W_uploadDropArtAccent",
 		"explorerDirChanged": "nArs4W_explorerDirChanged",
-		"largeFileRecord": "nArs4W_largeFileRecord",
-		"largeFileLine": "nArs4W_largeFileLine",
-		"editorSearchResultDir": "nArs4W_editorSearchResultDir",
-		"sandboxStatusOn": "nArs4W_sandboxStatusOn",
-		"tocFlash": "nArs4W_tocFlash",
-		"largeFileLineNo": "nArs4W_largeFileLineNo",
-		"dockFallback": "nArs4W_dockFallback",
-		"uploadDropZone": "nArs4W_uploadDropZone",
-		"paneTab": "nArs4W_paneTab",
-		"uploadOverlay": "nArs4W_uploadOverlay",
-		"browserBlockedDesc": "nArs4W_browserBlockedDesc",
-		"explorerRowDropTarget": "nArs4W_explorerRowDropTarget",
-		"explorerActionError": "nArs4W_explorerActionError",
-		"explorerHeader": "nArs4W_explorerHeader",
-		"explorerName": "nArs4W_explorerName",
-		"editorCmHidden": "nArs4W_editorCmHidden",
-		"dividerActive": "nArs4W_dividerActive",
-		"explorerRowSelected": "nArs4W_explorerRowSelected",
-		"boundaryError": "nArs4W_boundaryError",
-		"panel": "nArs4W_panel",
-		"mermaidModal": "nArs4W_mermaidModal",
-		"uploadDropChatCard": "nArs4W_uploadDropChatCard",
-		"mermaidWrap": "nArs4W_mermaidWrap",
-		"mermaidBody": "nArs4W_mermaidBody",
+		"editorDocxZoomRange": "nArs4W_editorDocxZoomRange",
+		"iconButton": "nArs4W_iconButton",
 		"largeFileRecordExpanded": "nArs4W_largeFileRecordExpanded",
-		"browserMessage": "nArs4W_browserMessage",
-		"editorTreeDock": "nArs4W_editorTreeDock",
-		"editorGitAdd": "nArs4W_editorGitAdd",
-		"mermaidModalHint": "nArs4W_mermaidModalHint",
-		"mermaidCopy": "nArs4W_mermaidCopy",
-		"editorPdfDragShield": "nArs4W_editorPdfDragShield",
-		"splitChild": "nArs4W_splitChild",
+		"tabList": "nArs4W_tabList",
+		"editorGitBarAdd": "nArs4W_editorGitBarAdd",
 		"explorerRef": "nArs4W_explorerRef",
-		"mermaidModalStage": "nArs4W_mermaidModalStage",
-		"explorerDir": "nArs4W_explorerDir",
-		"uploadDropMask": "nArs4W_uploadDropMask",
-		"editorDownloadLink": "nArs4W_editorDownloadLink",
-		"browserBlockedTitle": "nArs4W_browserBlockedTitle",
-		"explorerRenaming": "nArs4W_explorerRenaming",
-		"editorGitMod": "nArs4W_editorGitMod",
-		"editorBlameSummary": "nArs4W_editorBlameSummary",
-		"editorPdf": "nArs4W_editorPdf",
 		"explorerSymlink": "nArs4W_explorerSymlink",
-		"dividerRow": "nArs4W_dividerRow",
-		"editorPdfStage": "nArs4W_editorPdfStage",
-		"gitError": "nArs4W_gitError",
-		"largeFile": "nArs4W_largeFile",
-		"largeFileNotice": "nArs4W_largeFileNotice",
-		"largeFileDownload": "nArs4W_largeFileDownload",
-		"sandboxDot": "nArs4W_sandboxDot",
-		"paneDrop": "nArs4W_paneDrop",
+		"editorMain": "nArs4W_editorMain",
+		"gitDiffTabHeader": "nArs4W_gitDiffTabHeader",
+		"splitCol": "nArs4W_splitCol",
+		"explorerHeader": "nArs4W_explorerHeader",
 		"largeFileNoticeAction": "nArs4W_largeFileNoticeAction",
+		"paneCard": "nArs4W_paneCard",
+		"uploadOverlayCancel": "nArs4W_uploadOverlayCancel",
+		"browserBlockedButton": "nArs4W_browserBlockedButton",
+		"editorModeButton": "nArs4W_editorModeButton",
+		"mermaidInfo": "nArs4W_mermaidInfo",
+		"tocButton": "nArs4W_tocButton",
+		"browser": "nArs4W_browser",
+		"dropLeft": "nArs4W_dropLeft",
+		"editorSearchHint": "nArs4W_editorSearchHint",
+		"browserBlocked": "nArs4W_browserBlocked",
+		"editorHtml": "nArs4W_editorHtml",
+		"chipUnread": "nArs4W_chipUnread",
+		"editorPathInput": "nArs4W_editorPathInput",
+		"tocBar": "nArs4W_tocBar",
+		"tabBarRightActions": "nArs4W_tabBarRightActions",
+		"uploadDropZoneText": "nArs4W_uploadDropZoneText",
+		"mermaidModalToolbar": "nArs4W_mermaidModalToolbar",
+		"largeFileBody": "nArs4W_largeFileBody",
+		"explorerSelectionActions": "nArs4W_explorerSelectionActions",
+		"largeFileRecordTree": "nArs4W_largeFileRecordTree",
+		"bottomPanelHidden": "nArs4W_bottomPanelHidden",
+		"mermaidError": "nArs4W_mermaidError",
+		"mermaidModalButton": "nArs4W_mermaidModalButton",
+		"toggleButton": "nArs4W_toggleButton",
+		"panelBody": "nArs4W_panelBody",
+		"mermaidPendingPulse": "nArs4W_mermaidPendingPulse",
+		"editorGitMod": "nArs4W_editorGitMod",
+		"mermaidCode": "nArs4W_mermaidCode",
+		"uploadOverlay": "nArs4W_uploadOverlay",
+		"editorTreePanel": "nArs4W_editorTreePanel",
+		"editorSearchResultDir": "nArs4W_editorSearchResultDir",
+		"orphanedType": "nArs4W_orphanedType",
+		"mermaidErrorDetail": "nArs4W_mermaidErrorDetail",
+		"editorBinary": "nArs4W_editorBinary",
+		"editorCmHidden": "nArs4W_editorCmHidden",
+		"tabBoundaryError": "nArs4W_tabBoundaryError",
+		"uploadDropArtPrimary": "nArs4W_uploadDropArtPrimary",
+		"largeFileLineNo": "nArs4W_largeFileLineNo",
+		"paneTabHidden": "nArs4W_paneTabHidden",
+		"sandboxStatus": "nArs4W_sandboxStatus",
+		"editorMd": "nArs4W_editorMd",
+		"dividerCol": "nArs4W_dividerCol",
+		"browserBlockedActions": "nArs4W_browserBlockedActions",
+		"splitRow": "nArs4W_splitRow",
+		"editorPdfFrame": "nArs4W_editorPdfFrame",
+		"gitDiffTabTitle": "nArs4W_gitDiffTabTitle",
+		"tabTitle": "nArs4W_tabTitle",
+		"sandboxStatusOn": "nArs4W_sandboxStatusOn",
+		"dropRight": "nArs4W_dropRight",
+		"mermaidHeader": "nArs4W_mermaidHeader",
+		"editorGitBar": "nArs4W_editorGitBar",
+		"editorStatusError": "nArs4W_editorStatusError",
+		"splitChild": "nArs4W_splitChild",
+		"largeFileRecordBody": "nArs4W_largeFileRecordBody",
+		"editorGitBarMod": "nArs4W_editorGitBarMod",
+		"editorModeActive": "nArs4W_editorModeActive",
+		"uploadOverlayStatus": "nArs4W_uploadOverlayStatus",
+		"tabBarPlus": "nArs4W_tabBarPlus",
+		"explorerActionError": "nArs4W_explorerActionError",
+		"explorerRowRevealed": "nArs4W_explorerRowRevealed",
+		"editorBlameHead": "nArs4W_editorBlameHead",
+		"explorerRoot": "nArs4W_explorerRoot",
+		"paneDrop": "nArs4W_paneDrop",
+		"selectionPopup": "nArs4W_selectionPopup",
+		"dropUp": "nArs4W_dropUp",
+		"dsh-row-in": "nArs4W_dsh-row-in",
+		"uploadDropZone": "nArs4W_uploadDropZone",
+		"editorPdfDragShield": "nArs4W_editorPdfDragShield",
+		"largeFilePageLabel": "nArs4W_largeFilePageLabel",
+		"explorerBody": "nArs4W_explorerBody",
+		"dockFallback": "nArs4W_dockFallback",
+		"mermaidCopy": "nArs4W_mermaidCopy",
+		"mermaidWrap": "nArs4W_mermaidWrap",
+		"gitPlaceholder": "nArs4W_gitPlaceholder",
+		"mermaidPending": "nArs4W_mermaidPending",
+		"explorerDir": "nArs4W_explorerDir",
+		"explorerGitName": "nArs4W_explorerGitName",
+		"editorBinaryNotice": "nArs4W_editorBinaryNotice",
+		"explorerRowSelected": "nArs4W_explorerRowSelected",
+		"editorGitDel": "nArs4W_editorGitDel",
+		"openWithPinActive": "nArs4W_openWithPinActive",
+		"editorSearchResult": "nArs4W_editorSearchResult",
+		"editor": "nArs4W_editor",
+		"editorBannerAction": "nArs4W_editorBannerAction",
+		"explorerActionErrorText": "nArs4W_explorerActionErrorText",
+		"tocFlash": "nArs4W_tocFlash",
+		"editorHtmlBlock": "nArs4W_editorHtmlBlock",
+		"explorerRow": "nArs4W_explorerRow",
+		"editorSearchResultLabel": "nArs4W_editorSearchResultLabel",
+		"editorCm": "nArs4W_editorCm",
+		"tocPanel": "nArs4W_tocPanel",
+		"browserBlockedTitle": "nArs4W_browserBlockedTitle",
+		"paneEmptyCards": "nArs4W_paneEmptyCards",
+		"explorerAppIcon": "nArs4W_explorerAppIcon",
+		"workbench": "nArs4W_workbench",
+		"bottomPanel": "nArs4W_bottomPanel",
+		"mermaidBody": "nArs4W_mermaidBody",
+		"uploadDropArtCut": "nArs4W_uploadDropArtCut",
+		"editorTreeSearch": "nArs4W_editorTreeSearch",
+		"mermaidModalStage": "nArs4W_mermaidModalStage",
+		"openWithPin": "nArs4W_openWithPin",
+		"largeFile": "nArs4W_largeFile",
+		"editorHeader": "nArs4W_editorHeader",
+		"dropOverlay": "nArs4W_dropOverlay",
+		"explorerName": "nArs4W_explorerName",
+		"editorModeToggle": "nArs4W_editorModeToggle",
+		"tocItemLevel": "nArs4W_tocItemLevel",
+		"dirtyDot": "nArs4W_dirtyDot",
+		"paneContent": "nArs4W_paneContent",
 		"largeFileRecordInvalid": "nArs4W_largeFileRecordInvalid",
-		"mermaidModalButton": "nArs4W_mermaidModalButton"
+		"tabActive": "nArs4W_tabActive",
+		"browserInput": "nArs4W_browserInput",
+		"dropCenter": "nArs4W_dropCenter",
+		"explorerRenaming": "nArs4W_explorerRenaming",
+		"editorTitle": "nArs4W_editorTitle",
+		"explorerSelectionBar": "nArs4W_explorerSelectionBar",
+		"editorGitBarSpacer": "nArs4W_editorGitBarSpacer",
+		"editorTreeDock": "nArs4W_editorTreeDock",
+		"sandboxAction": "nArs4W_sandboxAction",
+		"bottomResizeActive": "nArs4W_bottomResizeActive"
 	};
 	//#endregion
 	//#region src/client/editor-git-gutter.ts
@@ -23755,9 +23781,10 @@ globalThis.__dshChunks__["editor"] = (require) => {
 	* @param docPath - the absolute path of the markdown document being rendered;
 	*   relative targets resolve against its directory. Absent for prose surfaces.
 	* @param cwd - the session workspace root, the base for prose surfaces.
+	* @param allLocalFiles - claim source files too, accepting only empty or line fragments.
 	* @returns the resolved target, or null for every link the plugin does not own.
 	*/
-	function markdownAnchorTarget(destination, docPath, cwd) {
+	function markdownAnchorTarget(destination, docPath, cwd, allLocalFiles = false) {
 		const raw = destination.trim();
 		if (raw === "") return null;
 		const separator = separatorOf(raw);
@@ -23769,8 +23796,9 @@ globalThis.__dshChunks__["editor"] = (require) => {
 		};
 		if (SCHEME_RE.test(pathPart) && !DRIVE_RE.test(pathPart)) return null;
 		if (pathPart.startsWith("//")) return null;
+		if (pathPart.includes("?")) return null;
 		const path = decodePercent(pathPart);
-		if (!MARKDOWN_EXT_RE.test(path)) return null;
+		if (!MARKDOWN_EXT_RE.test(path) && (!allLocalFiles || fragment !== "" && !isHostLineFragment(fragment))) return null;
 		return {
 			kind: "file",
 			path: resolveTargetPath(path, docPath, cwd),
@@ -23819,11 +23847,11 @@ globalThis.__dshChunks__["editor"] = (require) => {
 	* Idempotent: an already-rewritten `%23` destination, a line destination and a
 	* fragment-less link all come back untouched.
 	*/
-	function rewriteDestination(destination, docPath, cwd) {
+	function rewriteDestination(destination, docPath, cwd, allLocalFiles = false) {
 		const separator = separatorOf(destination);
 		const pathPart = separator === null ? destination : destination.slice(0, separator.at);
 		const fragment = separator === null ? "" : destination.slice(separator.at + separator.length);
-		if (markdownAnchorTarget(destination, docPath, cwd) === null) {
+		if (markdownAnchorTarget(destination, docPath, cwd, allLocalFiles) === null) {
 			if (!isLocalDestination(pathPart)) return destination;
 			const rest = separator === null ? "" : destination.slice(separator.at);
 			return `${markdownPathOf(pathPart)}?${rest}`;
@@ -23836,7 +23864,8 @@ globalThis.__dshChunks__["editor"] = (require) => {
 	/**
 	* Make the host renderer able to SERVE the local links of one markdown text:
 	* a claimed `.md`/`.markdown` destination gets its heading fragment carried as
-	* `%23`, and every other local destination gets the `?` that keeps it inert.
+	* `%23`. Other local destinations stay inert unless `allLocalFiles` opts the
+	* surface into opening source files as well.
 	*
 	* Code regions are masked first (see `maskCodeRegions` — fenced blocks opened
 	* by ``` ``` ``` OR `~~~`, and inline code spans), so documentation that
@@ -23848,11 +23877,15 @@ globalThis.__dshChunks__["editor"] = (require) => {
 	* @param cwd - the session workspace root, the base for prose surfaces.
 	* @returns the markdown with local link destinations rewritten in place.
 	*/
-	function rewriteLocalMarkdownLinks(text, docPath, cwd) {
+	function rewriteLocalMarkdownLinks(text, docPath, cwd, allLocalFiles = false) {
 		const { masked, restore } = maskCodeRegions(text);
-		return restore(masked.replace(/(?<!!)\[((?:[^[\]]|\[[^\]]*\])*)\]\(([^)\s]+)((?:\s+"[^"]*")?)\)/g, (_match, label, destination, title) => `[${label}](${rewriteDestination(destination, docPath, cwd)}${title})`).replace(/^(\s*\[([^\]]+)\]:\s*)(<[^>]+>|[^\s]+)/gm, (_match, head, _label, destination) => {
+		return restore(masked.replace(/(?<!!)\[((?:[^[\]]|\[[^\]]*\])*)\]\((<[^<>\n]*>|[^)\s]+)((?:\s+"[^"]*")?)\)/g, (_match, label, destination, title) => {
 			const bracketed = destination.startsWith("<") && destination.endsWith(">");
-			const rewritten = rewriteDestination(bracketed ? destination.slice(1, -1) : destination, docPath, cwd);
+			const rewritten = rewriteDestination(bracketed ? destination.slice(1, -1) : destination, docPath, cwd, allLocalFiles);
+			return `[${label}](${bracketed ? `<${rewritten}>` : rewritten}${title})`;
+		}).replace(/^(\s*\[([^\]]+)\]:\s*)(<[^>]+>|[^\s]+)/gm, (_match, head, _label, destination) => {
+			const bracketed = destination.startsWith("<") && destination.endsWith(">");
+			const rewritten = rewriteDestination(bracketed ? destination.slice(1, -1) : destination, docPath, cwd, allLocalFiles);
 			return `${head}${bracketed ? `<${rewritten}>` : rewritten}`;
 		}));
 	}
@@ -49356,6 +49389,315 @@ globalThis.__dshChunks__["editor"] = (require) => {
 		}
 	};
 	//#endregion
+	//#region src/client/editor-draft-backup.ts
+	/**
+	* Durable backups of unsaved editor drafts.
+	*
+	* Why this exists: the two host-owned paths that can take an editor tab away
+	* without asking are not interceptable with a confirmation.
+	*
+	* - The native right column's tab strip (its × / middle click / context menu /
+	*   page.close) runs `ctx.sidebarRight.registerCloseHandler` before removing
+	*   the record, but that hook is a synchronous CLEANUP callback
+	*   ("Failure preserves the tab"), not a confirmation channel: vetoing means
+	*   throwing, which the host logs as "Sidebar tab close failed:" and which
+	*   escapes from `replaceTab` and the public `close()` callers. It may flush a
+	*   draft, never ask.
+	* - The Desktop shell quits on its own (Electron main intercepts `before-quit`
+	*   and the page receives no cancellable quit event), so Cmd+Q cannot show a
+	*   page-level prompt either.
+	*
+	* The remaining protection is to keep the draft somewhere that survives both:
+	* a small localStorage entry keyed by `sessionId::path`, offered back when the
+	* same file is opened again (TextEditor shows the restore prompt).
+	*
+	* Cost rules (steady-state):
+	* - Writing is a single trailing throttle armed only by an edit and disarmed
+	*   by the flush; idle tabs hold no timer and no polling is added.
+	* - At most {@link DRAFT_BACKUP_LIMIT} drafts and {@link DRAFT_BACKUP_TOTAL_CHARS}
+	*   characters live in storage; the oldest entry is evicted first (FIFO).
+	* - A draft larger than {@link DRAFT_BACKUP_CHARS} is not stored at all (a
+	*   single entry would evict the whole budget).
+	* - An entry is deleted the moment its draft stops being unsaved (save, or a
+	*   confirmed discard) and when the throttle is cleared.
+	*/
+	/** localStorage prefix; every key under it is one of our drafts. */
+	const STORAGE_PREFIX = "dsh-better-sidebar:draft:";
+	/** Delay after an edit before the draft is written. */
+	const DRAFT_BACKUP_THROTTLE_MS = 1e3;
+	/** How many live editor sources are remembered (open editor bodies). */
+	const SOURCE_LIMIT = 32;
+	/**
+	* One mounted editor's live text reader, keyed by `sessionId::path`.
+	* Reading at flush time (rather than per keystroke) keeps the backup free of
+	* the O(document) stringification the editor deliberately avoids on every key.
+	*/
+	const sources = /* @__PURE__ */ new Map();
+	/** Keys whose draft changed since the last write. */
+	const pending = /* @__PURE__ */ new Set();
+	let timer = null;
+	/** The map/storage key of one draft: ids and paths only mean something in a session. */
+	function keyOf(sessionId, path) {
+		return `${sessionId}::${path}`;
+	}
+	/** localStorage, when this runtime has it (specs, SSR). */
+	function storage() {
+		try {
+			return typeof localStorage === "undefined" ? void 0 : localStorage;
+		} catch {
+			return;
+		}
+	}
+	/** One stored entry; malformed values are treated as absent. */
+	function readStored(key) {
+		const raw = storage()?.getItem(STORAGE_PREFIX + key);
+		if (raw === void 0 || raw === null) return void 0;
+		try {
+			const parsed = JSON.parse(raw);
+			if (typeof parsed !== "object" || parsed === null) return void 0;
+			const { text, savedAt } = parsed;
+			if (typeof text !== "string" || typeof savedAt !== "number") return void 0;
+			return {
+				text,
+				savedAt
+			};
+		} catch {
+			return;
+		}
+	}
+	/** Every stored key with its timestamp, oldest first. */
+	function storedDrafts(store) {
+		const entries = [];
+		for (let index = 0; index < store.length; index += 1) {
+			const key = store.key(index);
+			if (key === null || !key.startsWith(STORAGE_PREFIX)) continue;
+			const entry = readStored(key.slice(25));
+			entries.push({
+				key,
+				savedAt: entry?.savedAt ?? 0,
+				chars: entry?.text.length ?? 0
+			});
+		}
+		return entries.sort((left, right) => left.savedAt - right.savedAt);
+	}
+	/** Evict the oldest entries until both budgets hold. */
+	function evict(store) {
+		const entries = storedDrafts(store);
+		let chars = entries.reduce((sum, entry) => sum + entry.chars, 0);
+		while (entries.length > 0 && (entries.length > 8 || chars > 6e5)) {
+			const oldest = entries.shift();
+			if (oldest === void 0) break;
+			store.removeItem(oldest.key);
+			chars -= oldest.chars;
+		}
+	}
+	/** Persist one draft, dropping older ones when storage is full. */
+	function writeDraft(key, text) {
+		const store = storage();
+		if (store === void 0) return;
+		if (text.length === 0 || text.length > 2e5) return;
+		if (readStored(key)?.text === text) return;
+		const payload = JSON.stringify({
+			text,
+			savedAt: Date.now()
+		});
+		try {
+			store.setItem(STORAGE_PREFIX + key, payload);
+		} catch {
+			const older = storedDrafts(store).filter((entry) => entry.key !== STORAGE_PREFIX + key);
+			for (const entry of older) store.removeItem(entry.key);
+			try {
+				store.setItem(STORAGE_PREFIX + key, payload);
+			} catch {
+				return;
+			}
+		}
+		evict(store);
+	}
+	/** Write every pending draft now (the close / unload flush). */
+	function flushDraftBackups() {
+		if (timer !== null) {
+			clearTimeout(timer);
+			timer = null;
+		}
+		const keys = [...pending];
+		pending.clear();
+		for (const key of keys) {
+			const text = sources.get(key)?.();
+			if (text !== null && text !== void 0) writeDraft(key, text);
+		}
+	}
+	/**
+	* Remember one mounted editor's live text and return its disposer.
+	*
+	* The reader runs at flush time and must answer `null` once its editor is
+	* gone, so a flush after an unmount can never write a destroyed view's text.
+	* @param sessionId - the session owning the tab.
+	* @param path - the file the draft belongs to.
+	* @param read - the live document's text, or null.
+	* @returns the disposer (idempotent; a newer source for the same file wins).
+	*/
+	function registerDraftSource(sessionId, path, read) {
+		const key = keyOf(sessionId, path);
+		sources.set(key, read);
+		if (sources.size > SOURCE_LIMIT) {
+			const oldest = sources.keys().next().value;
+			if (oldest !== void 0 && oldest !== key) sources.delete(oldest);
+		}
+		return () => {
+			if (sources.get(key) === read) sources.delete(key);
+		};
+	}
+	/**
+	* Mark one draft as changed; a single shared throttle writes the pending set
+	* once {@link DRAFT_BACKUP_THROTTLE_MS} has passed since the first change.
+	* @param sessionId - the session owning the tab.
+	* @param path - the file the draft belongs to.
+	*/
+	function scheduleDraftBackup(sessionId, path) {
+		const key = keyOf(sessionId, path);
+		if (!sources.has(key)) return;
+		pending.add(key);
+		if (timer !== null) return;
+		timer = setTimeout(() => {
+			timer = null;
+			flushDraftBackups();
+		}, DRAFT_BACKUP_THROTTLE_MS);
+	}
+	/**
+	* The pending draft of one file, if its content differs from the bytes on
+	* disk; otherwise the stale entry is dropped.
+	* @param sessionId - the session owning the tab.
+	* @param path - the file the draft belongs to.
+	* @param content - the bytes just loaded from disk.
+	* @returns the stored text, or null.
+	*/
+	function readDraftBackup(sessionId, path, content) {
+		const entry = readStored(keyOf(sessionId, path));
+		if (entry === void 0) return null;
+		if (entry.text === content) {
+			clearDraftBackup(sessionId, path);
+			return null;
+		}
+		return entry.text;
+	}
+	/** Drop one file's backup (saved, discarded, or restored). Idempotent. */
+	function clearDraftBackup(sessionId, path) {
+		const key = keyOf(sessionId, path);
+		pending.delete(key);
+		storage()?.removeItem(STORAGE_PREFIX + key);
+	}
+	//#endregion
+	//#region src/client/quote-flash.ts
+	/**
+	* The landing flash: when a navigation lands the editor on a source range
+	* (a quote chip's lines), those lines wash in the theme's hover-accent color
+	* and fade out, so the span reads at a glance instead of a caret somewhere.
+	*
+	* The mechanism is a CodeMirror StateField carrying the flash's doc range plus
+	* a decorations facet rendering one line class per line; the flash clears
+	* itself (the caller owns the timer). Colors come from the skin tokens — a
+	* decoration class must be a literal name, so the rule lives outside the CSS
+	* module and is injected once per document on the first flash.
+	*/
+	/** The injected stylesheet's element id (one per document). */
+	const QUOTE_FLASH_STYLE_ID = "dsh-quote-flash-style";
+	/**
+	* How long a flash stays up before the caller clears it (ms). The CSS fade is
+	* slightly shorter, so the class removal never cuts a visible color change.
+	*/
+	const QUOTE_FLASH_MS = 2400;
+	/**
+	* Inject the flash stylesheet once per document (idempotent). The wash is the
+	* skin's hover accent — the same token the search panel's active line uses —
+	* mixed toward transparent so the text underneath stays readable; a reduced-
+	* motion reader gets a static tint (the flash still clears on its timer).
+	*/
+	function ensureQuoteFlashStyle() {
+		if (typeof document === "undefined") return;
+		if (document.getElementById("dsh-quote-flash-style") !== null) return;
+		const tint = (percent) => `color-mix(in srgb, var(--dsw-alias-interactive-bg-hover-accent) ${percent}%, transparent)`;
+		const style = document.createElement("style");
+		style.id = QUOTE_FLASH_STYLE_ID;
+		style.textContent = [
+			`.cm-quote-flash{background-color:${tint(55)}!important;`,
+			"animation:dsh-quote-flash-fade 2.2s ease-out forwards}",
+			`@keyframes dsh-quote-flash-fade{0%{background-color:${tint(85)}}`,
+			"100%{background-color:transparent}}",
+			"@media (prefers-reduced-motion:reduce){.cm-quote-flash{animation:none;",
+			`background-color:${tint(45)}}}`
+		].join("");
+		document.head.appendChild(style);
+	}
+	/**
+	* Clamp a flash line range to the document.
+	* @param docLines - the document's line count (the 1-based world).
+	* @param line - the 1-based start line.
+	* @param lineEnd - the 1-based end line (`undefined` = the start line alone).
+	* @returns the clamped first/last line numbers, or `undefined` when the start
+	*   lies outside the document (nothing to flash).
+	*/
+	function clampQuoteRange(docLines, line, lineEnd) {
+		if (!(line >= 1) || line > docLines) return void 0;
+		return {
+			first: line,
+			last: Math.min(Math.max(lineEnd ?? line, line), docLines)
+		};
+	}
+	/** The flash a viewer owes: a doc range, or `undefined` to clear. */
+	const quoteFlashEffect = StateEffect.define();
+	/** The flash's live range, mapped through document edits between flashes. */
+	const quoteFlashField = StateField.define({
+		create: () => null,
+		update(value, tr) {
+			let next = value;
+			for (const effect of tr.effects) if (effect.is(quoteFlashEffect)) next = effect.value ?? null;
+			if (next === null) return null;
+			return {
+				from: tr.changes.mapPos(next.from, -1),
+				to: tr.changes.mapPos(next.to, 1)
+			};
+		}
+	});
+	/** Renders the flash as one line decoration per line of the range. */
+	const quoteFlashHighlight = EditorView.decorations.compute([quoteFlashField], (state) => {
+		const range = state.field(quoteFlashField);
+		if (range === null) return Decoration.none;
+		const marks = [];
+		const first = state.doc.lineAt(range.from).number;
+		const last = state.doc.lineAt(range.to).number;
+		for (let number = first; number <= last; number++) marks.push(Decoration.line({ class: "cm-quote-flash" }).range(state.doc.line(number).from));
+		return Decoration.set(marks, true);
+	});
+	/**
+	* Flash one source line range in the live view and clear it after
+	* {@link QUOTE_FLASH_MS}.
+	* @param view - the editor view.
+	* @param line - the 1-based start line.
+	* @param lineEnd - the 1-based end line (`undefined` = the start line alone).
+	* @returns the clear timer, or `undefined` when the range did not fit.
+	*/
+	function flashQuoteLines(view, line, lineEnd) {
+		const range = clampQuoteRange(view.state.doc.lines, line, lineEnd);
+		if (range === void 0) return void 0;
+		ensureQuoteFlashStyle();
+		const doc = view.state.doc;
+		view.dispatch({ effects: quoteFlashEffect.of({
+			from: doc.line(range.first).from,
+			to: doc.line(range.last).to
+		}) });
+		return setTimeout(() => {
+			try {
+				if (viewDestroyed(view)) return;
+				view.dispatch({ effects: quoteFlashEffect.of(void 0) });
+			} catch {}
+		}, QUOTE_FLASH_MS);
+	}
+	/** Whether a view has been destroyed (its dom left the document). */
+	function viewDestroyed(view) {
+		return view.dom.isConnected === false;
+	}
+	//#endregion
 	//#region src/client/theme.ts
 	/**
 	* Live theme access for surfaces that cannot consume the token colors
@@ -49566,8 +49908,8 @@ globalThis.__dshChunks__["editor"] = (require) => {
 				start = at + 1;
 			}
 			const chip = {
-				source: "reference",
-				ref: reference.text,
+				source: reference.source ?? "reference",
+				ref: reference.ref ?? reference.text,
 				label: reference.label,
 				...reference.appearance === void 0 ? {} : { appearance: reference.appearance },
 				clipboardText: reference.clipboardText ?? reference.label
@@ -49777,6 +50119,19 @@ globalThis.__dshChunks__["editor"] = (require) => {
 		return `${rel}:${lines.start}`;
 	}
 	/**
+	* The chip label's identity: `file Lstart[-end]` — the file's basename plus
+	* the line span, mirroring the header's line variants (a single line keeps
+	* just `Lstart`; unknown lines drop the `L` part). Deliberately NO sequence
+	* number: file+lines IS the identity, so deleting a chip from the draft can
+	* never leave a numbering gap — the next quote simply names itself again.
+	*/
+	function whereOf(path, lines) {
+		const file = path.replace(/\\/g, "/").split("/").at(-1) ?? path;
+		if (lines === void 0) return file;
+		if (lines.end > lines.start) return `${file} L${lines.start}-${lines.end}`;
+		return `${file} L${lines.start}`;
+	}
+	/**
 	* The composer payload for one selection: the chip label and the model text.
 	* Over the limit the content is dropped and both halves are the plain path
 	* line (an empty fenced block would just occupy the draft).
@@ -49816,6 +50171,218 @@ globalThis.__dshChunks__["editor"] = (require) => {
 			start: lineAt(source, at),
 			end: lineAt(source, at + Math.max(text.length - 1, 0))
 		};
+	}
+	//#endregion
+	//#region src/client/selection-quote.ts
+	/** The input-trigger source name the quote chips route by. */
+	const QUOTE_SOURCE = "betterSidebarQuote";
+	/** localStorage key for the quote record store (FIFO, see module doc). */
+	const QUOTE_STORE_KEY = "dsh-better-sidebar:quote-refs";
+	const records = /* @__PURE__ */ new Map();
+	/** Monotonic chip numbering; restored from the store so numbers keep growing
+	*  across reloads instead of colliding with chips still in old drafts. */
+	let nextN = 1;
+	let storeLoaded = false;
+	/**
+	* Read the persisted store into memory. Safe to call repeatedly: the merge is
+	* idempotent and `nextN` never moves backwards.
+	*/
+	function readStoreIntoMemory() {
+		try {
+			if (typeof localStorage === "undefined") return;
+			const raw = localStorage.getItem(QUOTE_STORE_KEY);
+			if (raw === null) return;
+			const parsed = JSON.parse(raw);
+			if (!Array.isArray(parsed)) return;
+			for (const entry of parsed) {
+				if (!isQuoteRecord(entry)) continue;
+				if (!records.has(entry.id)) records.set(entry.id, entry);
+				if (entry.n >= nextN) nextN = entry.n + 1;
+			}
+		} catch {}
+	}
+	/** First-load wrapper (startup and insert paths). */
+	function loadStore() {
+		if (storeLoaded) return;
+		storeLoaded = true;
+		readStoreIntoMemory();
+	}
+	function isQuoteRecord(value) {
+		if (typeof value !== "object" || value === null) return false;
+		const record = value;
+		return typeof record.id === "string" && typeof record.sessionId === "string" && typeof record.n === "number" && typeof record.path === "string" && typeof record.text === "string" && typeof record.label === "string" && typeof record.clipboardText === "string";
+	}
+	/**
+	* Persist the store, dropping the oldest records beyond {@link QUOTE_STORE_CAP}.
+	* @returns whether the store really reached `localStorage`. `false` means the
+	*   record must NOT become a chip: the other module instance (the core bundle
+	*   registers the source, the editor chunk inserts) resolves refs through this
+	*   store, so an unpersisted record would be a silent dead chip and the codec
+	*   would block the send.
+	*/
+	function saveStore() {
+		try {
+			if (typeof localStorage === "undefined") return false;
+			const all = [...records.values()].sort((a, b) => a.n - b.n);
+			const over = Math.max(0, all.length - 200);
+			const kept = all.slice(over);
+			if (kept.length === 0) localStorage.removeItem(QUOTE_STORE_KEY);
+			else localStorage.setItem(QUOTE_STORE_KEY, JSON.stringify(kept));
+			if (over > 0) for (const dropped of all.slice(0, over)) records.delete(dropped.id);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+	/** The chip's `ref` — unique across reloads via the number plus a random suffix. */
+	function quoteId(n) {
+		return `q${n}-${Math.random().toString(36).slice(2, 6)}`;
+	}
+	/**
+	* Resolve one quote record by chip `ref`. The persisted store is re-read on
+	* every resolve: the record may have been written by the other bundle
+	* instance, whose in-memory map this instance never sees directly.
+	* @param ref - the chip's reference id.
+	* @returns the record, or `undefined` when it is not (or no longer) stored.
+	*/
+	function resolveQuote(ref) {
+		loadStore();
+		readStoreIntoMemory();
+		return records.get(ref);
+	}
+	/** Build the source object the host registers (one per module instance). */
+	function createQuoteSource(ctx) {
+		return {
+			trigger: "@",
+			name: QUOTE_SOURCE,
+			showGroupTitle: false,
+			candidates: () => Promise.resolve([]),
+			onPick: () => "handled",
+			openReference: (session, reference) => {
+				try {
+					const record = resolveQuote(reference.ref);
+					if (record === void 0 || record.sessionId !== session.sessionId) return false;
+					ctx.betterSidebar.openFile({
+						sessionId: session.sessionId,
+						...record.cwd === void 0 ? {} : { cwd: record.cwd }
+					}, record.path, void 0, record.lines === void 0 ? void 0 : {
+						line: record.lines.start,
+						lineEnd: record.lines.end
+					});
+					return true;
+				} catch (error) {
+					console.warn("[dsh-better-sidebar] quote open failed:", error);
+					return false;
+				}
+			},
+			codec: {
+				clipboardText: (ref) => resolveQuote(ref)?.clipboardText ?? ref,
+				serialize: async (ref) => {
+					const record = resolveQuote(ref);
+					if (record === void 0) throw new Error(`[dsh-better-sidebar] quote reference "${ref}" is no longer available`);
+					return record.text;
+				}
+			}
+		};
+	}
+	/** Whether a quote source is live (ours or the other bundle instance's). */
+	let sourceReady = false;
+	/** The disposer of the source THIS instance registered. `undefined` while the
+	*  live source is BORROWED (the other module instance owns it — duplicate
+	*  registration is a real error in the host, see `tryRegisterOnce`). */
+	let registeredDisposer;
+	/** Whether the live source is the other instance's (readiness is a borrow,
+	*  and every commit re-probes for the moment that owner releases it). */
+	let borrowed = false;
+	/**
+	* One synchronous registration attempt. Duplicate tolerance here is about the
+	* BORROWED case, not about calling `registerSource` twice: this module ships
+	* in both the core bundle and the editor chunk (two independent module
+	* instances), so the host's "already registered" error usually means the other
+	* instance owns the live source — inserts and click routing work identically
+	* either way. But the borrowing instance holds no disposer, so it cannot learn
+	* when that owner unregisters (a fiber disposal does not reach it): readiness
+	* is therefore re-probed on every commit that does not own the source, and a
+	* released slot is taken over instead of leaving a dead chip behind. Every
+	* outcome logs; nothing stays silent.
+	*/
+	function tryRegisterOnce(ctx) {
+		if (sourceReady && registeredDisposer !== void 0) return true;
+		try {
+			const triggers = ctx.get("inputTriggers");
+			if (triggers === void 0) return false;
+			registeredDisposer = triggers.registerSource(createQuoteSource(ctx));
+			sourceReady = true;
+			borrowed = false;
+			console.info("[dsh-better-sidebar] quote chips ready");
+			return true;
+		} catch (error) {
+			if (error instanceof Error && /already registered|duplicate/i.test(error.message)) {
+				sourceReady = true;
+				if (!borrowed) {
+					borrowed = true;
+					console.info("[dsh-better-sidebar] quote chips ready (source already registered by the other bundle instance)");
+				}
+				return true;
+			}
+			console.warn("[dsh-better-sidebar] quote source registration failed:", error);
+			return false;
+		}
+	}
+	/**
+	* Register the selection as a quote record and insert its chip into the
+	* session's composer draft. Returns false — leaving the draft untouched —
+	* when chips are unavailable, the record cannot be persisted (quota / private
+	* mode), or the host refuses the insert; the caller then falls back to
+	* {@link quoteFallbackInsert}.
+	* @param ctx - the client context.
+	* @param sessionId - the session whose composer receives the chip.
+	* @param sel - the selection the viewer's popup committed.
+	* @returns whether the chip landed in the draft.
+	*/
+	function insertQuoteChip(ctx, sessionId, sel) {
+		if (!sourceReady || registeredDisposer === void 0) {
+			if (!sourceReady) console.info("[dsh-better-sidebar] quote source not ready at commit, re-registering");
+			if (!tryRegisterOnce(ctx)) {
+				console.info("[dsh-better-sidebar] quote chips unavailable: source not registered");
+				return false;
+			}
+		}
+		loadStore();
+		const n = nextN++;
+		const clipboardText = headerOf(sel.path, sel.cwd, sel.lines);
+		const insert = buildSelectionInsert(sel.path, sel.cwd, sel.lines, sel.text);
+		const record = {
+			id: quoteId(n),
+			sessionId,
+			n,
+			path: sel.path,
+			...sel.cwd === void 0 ? {} : { cwd: sel.cwd },
+			...sel.lines === void 0 ? {} : { lines: sel.lines },
+			label: t("quoteChip", { where: whereOf(sel.path, sel.lines) }),
+			clipboardText,
+			text: insert.text
+		};
+		const reference = {
+			source: QUOTE_SOURCE,
+			ref: record.id,
+			label: record.label,
+			appearance: "file",
+			clipboardText,
+			text: insert.text
+		};
+		records.set(record.id, record);
+		if (!saveStore()) {
+			records.delete(record.id);
+			console.warn("[dsh-better-sidebar] quote chip skipped: the reference store cannot be written (quota/private mode)");
+			return false;
+		}
+		const landed = insertDraftReference(ctx, sessionId, reference);
+		if (!landed) {
+			records.delete(record.id);
+			saveStore();
+		}
+		return landed;
 	}
 	//#endregion
 	//#region src/client/mermaid-blocks.ts
@@ -53089,21 +53656,41 @@ globalThis.__dshChunks__["editor"] = (require) => {
 			const container = containerRef.current;
 			if (container === null) return;
 			runInlineHtmlPass(container, media);
-			let scheduled = false;
+			let timer;
+			/** A pass was skipped because the page was hidden; flush it on return. */
+			let dirty = false;
+			const runPass = () => {
+				if (document.visibilityState === "hidden") {
+					dirty = true;
+					return;
+				}
+				dirty = false;
+				runInlineHtmlPass(container, media);
+			};
 			const observer = new MutationObserver(() => {
-				if (scheduled) return;
-				scheduled = true;
-				queueMicrotask(() => {
-					scheduled = false;
-					runInlineHtmlPass(container, media);
-				});
+				if (timer !== void 0) return;
+				timer = window.setTimeout(() => {
+					timer = void 0;
+					runPass();
+				}, 80);
 			});
+			const onVisibilityChange = () => {
+				if (document.visibilityState === "hidden" || !dirty) return;
+				if (timer !== void 0) {
+					window.clearTimeout(timer);
+					timer = void 0;
+				}
+				runPass();
+			};
+			document.addEventListener("visibilitychange", onVisibilityChange);
 			observer.observe(container, {
 				childList: true,
 				subtree: true
 			});
 			return () => {
 				observer.disconnect();
+				document.removeEventListener("visibilitychange", onVisibilityChange);
+				if (timer !== void 0) window.clearTimeout(timer);
 			};
 		}, [text, media]);
 		return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
@@ -53892,13 +54479,23 @@ globalThis.__dshChunks__["editor"] = (require) => {
 	* POSIX keeps the path verbatim: there `\` is a legal file-name character, not
 	* a separator (the same reason `resolveSidebarPath` never folds on POSIX).
 	*
+	* A UNC prefix is NOT a separator run to fold: `\\server\share` is one path
+	* root, and folding its two leading separators into one turns an absolute
+	* network path into a drive-root-relative one. On Windows the host then runs
+	* `path.resolve()` on it, anchoring `\wsl.localhost\...` on the host process
+	* drive (`C:\wsl.localhost\...`, ENOENT) — every file opened from a
+	* `\\wsl.localhost\<distro>\...` workspace failed that way. Keep exactly the
+	* two leading separators and fold only the rest.
+	*
 	* @param base - the workspace root whose separator style decides the answer.
 	* @param path - an address path (relative to `base`) or an absolute path.
 	* @returns the resolved path in `base`'s separator style.
 	*/
 	function resolveAddressPath(base, path) {
 		const resolved = resolveSidebarPath(base, path);
-		return base !== void 0 && base.includes("\\") ? resolved.replace(/[/\\]+/g, "\\") : resolved;
+		if (base === void 0 || !base.includes("\\")) return resolved;
+		const folded = resolved.replace(/[/\\]+/g, "\\");
+		return /^[\\/]{2}/.test(resolved) ? `\\\\${folded.replace(/^\\+/, "")}` : folded;
 	}
 	//#endregion
 	//#region src/client/resource-address.ts
@@ -54082,6 +54679,43 @@ globalThis.__dshChunks__["editor"] = (require) => {
 		});
 	}
 	//#endregion
+	//#region src/client/path-line.ts
+	/**
+	* A trailing line spec: `:<line>`, `:<line>-<end>` or `:<line>:<column>`.
+	*
+	* Line numbers are 1-based with no leading zero, exactly as the host's own
+	* fragment rule (`^L([1-9]\d*)`) — so `version:0` and a bare `:0` are file
+	* names, not line references. The regex is anchored at the END of the string,
+	* which is what keeps `data:2024.csv` and `C:` intact.
+	*/
+	const TRAILING_LINE_SPEC = /:([1-9]\d{0,8})(?:-([1-9]\d{0,8}))?(?::([1-9]\d{0,8}))?$/u;
+	/**
+	* Split a trailing `path:line` spec off a path.
+	*
+	* Rejected on purpose, because stripping them would break a path that is
+	* already a valid file name: a spec with nothing in front of it (`:131`), a
+	* one-character remainder (`C:131`, where `C` could only be a drive letter),
+	* and an inverted range (`a.c:20-12`) — the host rejects that one too.
+	* @param path - a path as a caller holds it, in either separator spelling.
+	* @returns the path without the spec plus the line it named, or `undefined`
+	* when the path carries no trailing line spec.
+	*/
+	function splitTrailingLineSpec(path) {
+		const match = TRAILING_LINE_SPEC.exec(path);
+		if (match === null) return void 0;
+		const head = path.slice(0, match.index);
+		if (head.length < 2) return void 0;
+		const line = Number(match[1]);
+		const end = match[2] === void 0 ? line : Number(match[2]);
+		if (end < line) return void 0;
+		return {
+			path: head,
+			line,
+			end,
+			column: match[3] === void 0 ? void 0 : Number(match[3])
+		};
+	}
+	//#endregion
 	//#region src/client/use-markdown-surface.ts
 	/**
 	* React glue for ONE plugin-drawn markdown surface (the container that holds
@@ -54119,7 +54753,7 @@ globalThis.__dshChunks__["editor"] = (require) => {
 	* @returns the container ref, the delegate handler and the source rewrite.
 	*/
 	function useMarkdownSurface(opts) {
-		const { ctx, sessionId, cwd, path } = opts;
+		const { ctx, sessionId, cwd, path, allLocalFiles = false } = opts;
 		const containerRef = (0, react.useRef)(null);
 		const detachRef = (0, react.useRef)(null);
 		/** The session workspace root: the caller's scope when it has one, else the
@@ -54143,17 +54777,19 @@ globalThis.__dshChunks__["editor"] = (require) => {
 				resolveCwd
 			]),
 			openFile: (0, react.useCallback)((destination, options) => {
-				const target = markdownAnchorTarget(destination, path, resolveCwd());
+				const target = markdownAnchorTarget(destination, path, resolveCwd(), allLocalFiles);
 				if (target === null) return;
 				if (target.kind === "same-page") {
 					const container = containerRef.current;
 					if (container !== null) jumpToFragment(container, target.fragment);
 					return;
 				}
-				const line = options?.line ?? lineOfHostFragment(target.fragment);
-				if (line === void 0 && target.fragment !== "") rememberMarkdownAnchor(sessionId, resolveCwd(), target.path, target.fragment);
+				const spec = allLocalFiles ? splitTrailingLineSpec(target.path) : void 0;
+				const filePath = spec?.path ?? target.path;
+				const line = options?.line ?? lineOfHostFragment(target.fragment) ?? spec?.line;
+				if (line === void 0 && target.fragment !== "") rememberMarkdownAnchor(sessionId, resolveCwd(), filePath, target.fragment);
 				try {
-					openSidebarFile(ctx, sessionId, target.path, {
+					openSidebarFile(ctx, sessionId, filePath, {
 						line,
 						cwd: resolveCwd()
 					});
@@ -54164,9 +54800,14 @@ globalThis.__dshChunks__["editor"] = (require) => {
 				ctx,
 				sessionId,
 				path,
-				resolveCwd
+				resolveCwd,
+				allLocalFiles
 			]),
-			rewrite: (0, react.useCallback)((text) => rewriteLocalMarkdownLinks(text, path, resolveCwd()), [path, resolveCwd])
+			rewrite: (0, react.useCallback)((text) => rewriteLocalMarkdownLinks(text, path, resolveCwd(), allLocalFiles), [
+				path,
+				resolveCwd,
+				allLocalFiles
+			])
 		};
 	}
 	/**
@@ -54185,15 +54826,14 @@ globalThis.__dshChunks__["editor"] = (require) => {
 			if (pending !== null && jumpToFragment(container, pending)) pending = null;
 		};
 		if (pending !== null) queueMicrotask(applyPending);
-		let scheduled = false;
+		let scheduled;
 		const observer = new MutationObserver(() => {
-			if (scheduled) return;
-			scheduled = true;
-			queueMicrotask(() => {
-				scheduled = false;
+			if (scheduled !== void 0) return;
+			scheduled = window.setTimeout(() => {
+				scheduled = void 0;
 				prepareMarkdownAnchors(container);
 				applyPending();
-			});
+			}, 80);
 		});
 		observer.observe(container, {
 			childList: true,
@@ -54201,6 +54841,7 @@ globalThis.__dshChunks__["editor"] = (require) => {
 		});
 		return () => {
 			observer.disconnect();
+			if (scheduled !== void 0) window.clearTimeout(scheduled);
 			container.removeAttribute(MARKDOWN_SURFACE_ATTR);
 		};
 	}
@@ -54333,6 +54974,18 @@ globalThis.__dshChunks__["editor"] = (require) => {
 	* the FileViewerProps toolbar callbacks so the host's path-input header
 	* renders the controls instead.
 	*/
+	/** Build the popup payload for one selection. */
+	function selectionInsertOf(path, cwd, lines, text) {
+		return {
+			...buildSelectionInsert(path, cwd, lines, text),
+			selection: {
+				path,
+				...cwd === void 0 ? {} : { cwd },
+				...lines === void 0 ? {} : { lines },
+				text
+			}
+		};
+	}
 	/** Per-file preview scroll memory. Module-level so it survives viewer
 	*  remounts: the save-then-switch-to-preview reload (EditorHost #215 case B)
 	*  rebuilds the whole TextEditor instance, and without this the preview
@@ -54401,6 +55054,9 @@ globalThis.__dshChunks__["editor"] = (require) => {
 		const [conflict, setConflict] = (0, react.useState)(false);
 		const hostRef = (0, react.useRef)(null);
 		const viewRef = (0, react.useRef)(null);
+		/** The landing flash's self-clear timer (one per editor; see the landing
+		*  effect and the view's unmount cleanup). */
+		const flashTimerRef = (0, react.useRef)(void 0);
 		const savingRef = (0, react.useRef)(false);
 		/** The mtime the draft is based on (`null` = the file did not exist yet).
 		*  Seeded from the load, re-based whenever a fresh load reports a new mtime
@@ -54520,6 +55176,7 @@ globalThis.__dshChunks__["editor"] = (require) => {
 		*/
 		const selectionPopup = useSelectionPopup({
 			onCommit: (insert) => {
+				if (insertQuoteChip(ctx, scope.sessionId, insert.selection)) return;
 				insertReferenceOrText(ctx, scope.sessionId, insert);
 			},
 			getSurface: () => markdown && mode === "preview" ? mdRef.current : hostRef.current
@@ -54558,6 +55215,23 @@ globalThis.__dshChunks__["editor"] = (require) => {
 			previewScrollRef.current = previewScrollOf(scope, path);
 			editScrollRef.current = editScrollOf(scope, path);
 		}, [scope, path]);
+		/**
+		* Offer this file's durable backup back to the reader (see
+		* editor-draft-backup.ts): the native tab strip's × and the Desktop shell's
+		* quit can drop the tab without a prompt, so the draft is kept in storage.
+		* Declining drops it; accepting makes it the live draft, which the normal
+		* dirty path then owns.
+		*/
+		const restoreDraftBackup = () => {
+			if (content === void 0) return null;
+			const backup = readDraftBackup(scope.sessionId, path, content);
+			if (backup === null) return null;
+			if (!(typeof window.confirm === "function" ? window.confirm(t("draftRestoreConfirm")) : false)) {
+				clearDraftBackup(scope.sessionId, path);
+				return null;
+			}
+			return backup;
+		};
 		(0, react.useEffect)(() => {
 			if (content === void 0) return;
 			const host = hostRef.current;
@@ -54569,9 +55243,10 @@ globalThis.__dshChunks__["editor"] = (require) => {
 			searchPhrasesRef.current = searchPhrases;
 			const gitComp = new CmGitGutterCompartment();
 			gitCompRef.current = gitComp;
+			const restored = restoreDraftBackup();
 			const view = new EditorView({
 				state: EditorState.create({
-					doc: content,
+					doc: restored ?? content,
 					extensions: [
 						EditorView.lineWrapping,
 						gitComp.of(gitGutterEnabled ? gitHost : null),
@@ -54580,12 +55255,17 @@ globalThis.__dshChunks__["editor"] = (require) => {
 						EditorState.tabSize.of(2),
 						EditorView.contentAttributes.of({ spellcheck: "false" }),
 						cmSurfaceTheme,
+						quoteFlashField,
+						quoteFlashHighlight,
 						themeComp.of(dark),
 						...cmSearchExtensions(),
 						searchPhrases.of(),
 						...language !== null ? [language] : [],
 						EditorView.updateListener.of((update) => {
-							if (update.docChanged) setDirty(true);
+							if (update.docChanged) {
+								setDirty(true);
+								scheduleDraftBackup(scope.sessionId, path);
+							}
 						}),
 						keymap.of([
 							{
@@ -54625,16 +55305,23 @@ globalThis.__dshChunks__["editor"] = (require) => {
 								return;
 							}
 							const doc = update.state.doc;
-							selectionPopup.show(buildSelectionInsert(path, scope.cwd, {
+							const lines = {
 								start: doc.lineAt(sel.from).number,
 								end: doc.lineAt(sel.to).number
-							}, text), rect.left - window.scrollX + (rect.right - rect.left) / 2, rect.top - window.scrollY);
+							};
+							selectionPopup.show(selectionInsertOf(path, scope.cwd, lines, text), rect.left - window.scrollX + (rect.right - rect.left) / 2, rect.top - window.scrollY);
 						})] : []
 					]
 				}),
 				parent: host
 			});
 			viewRef.current = view;
+			const releaseDraft = registerDraftSource(scope.sessionId, path, () => viewRef.current?.state.doc.toString() ?? null);
+			if (restored !== null) {
+				setDirty(true);
+				setDraft(restored);
+				scheduleDraftBackup(scope.sessionId, path);
+			}
 			const scroller = view.scrollDOM;
 			const onScroll = () => {
 				if (restoringEditRef.current) return;
@@ -54644,11 +55331,15 @@ globalThis.__dshChunks__["editor"] = (require) => {
 			scroller.addEventListener("scroll", onScroll, { passive: true });
 			return () => {
 				scroller.removeEventListener("scroll", onScroll);
+				flushDraftBackups();
+				releaseDraft();
 				view.destroy();
 				viewRef.current = null;
 				themeCompRef.current = null;
 				searchPhrasesRef.current = null;
 				gitCompRef.current = null;
+				if (flashTimerRef.current !== void 0) clearTimeout(flashTimerRef.current);
+				flashTimerRef.current = void 0;
 			};
 		}, [content, path]);
 		/**
@@ -54754,6 +55445,10 @@ globalThis.__dshChunks__["editor"] = (require) => {
 			view.requestMeasure();
 			view.dispatch({ selection: { anchor: target } });
 			view.focus();
+			if (props.lineEnd !== void 0 && props.lineEnd > line) {
+				if (flashTimerRef.current !== void 0) clearTimeout(flashTimerRef.current);
+				flashTimerRef.current = flashQuoteLines(view, line, props.lineEnd);
+			}
 			requestAnimationFrame(() => {
 				requestAnimationFrame(() => {
 					const block = view.lineBlockAt(target);
@@ -54767,7 +55462,8 @@ globalThis.__dshChunks__["editor"] = (require) => {
 			path,
 			line,
 			mode,
-			props.onLineConsumed
+			props.onLineConsumed,
+			props.lineEnd
 		]);
 		(0, react.useEffect)(() => {
 			const view = viewRef.current;
@@ -54845,6 +55541,7 @@ globalThis.__dshChunks__["editor"] = (require) => {
 				setDirty(false);
 				setConflict(false);
 				setSaveState("saved");
+				clearDraftBackup(scope.sessionId, path);
 				setGitRevision((value) => value + 1);
 			}).catch((error) => {
 				savingRef.current = false;
@@ -54970,7 +55667,7 @@ globalThis.__dshChunks__["editor"] = (require) => {
 			}
 			const rect = sel.getRangeAt(0).getBoundingClientRect();
 			const lines = linesOfSelection(mdText, text);
-			selectionPopup.show(buildSelectionInsert(path, scope.cwd, lines ?? void 0, text), rect.left + rect.width / 2, rect.top);
+			selectionPopup.show(selectionInsertOf(path, scope.cwd, lines ?? void 0, text), rect.left + rect.width / 2, rect.top);
 		};
 		const editable = content !== void 0;
 		/**

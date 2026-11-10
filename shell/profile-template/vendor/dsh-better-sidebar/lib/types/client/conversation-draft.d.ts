@@ -44,9 +44,27 @@ export interface PendingReference {
     /**
      * Chip icon family. Omit for a reference whose `text` is not a path: the
      * host marks `'file'` chips openable, and a click would hand the raw text
-     * (a fenced block, for a selection) to the file opener.
+     * (a fenced block, for a selection) to the file opener. A chip whose
+     * {@link PendingReference.source} is a plugin-owned source may declare one
+     * safely — that source answers the click itself.
      */
     appearance?: 'file' | 'folder' | 'session';
+    /**
+     * The trigger source that OWNS this chip. Defaults to the host's built-in
+     * `'reference'`, whose `ref` is the payload itself (`text`). A
+     * plugin-owned source (see `selection-quote.ts`) passes its own name so the
+     * host routes chip clicks and send-time serialization there instead.
+     */
+    source?: string;
+    /**
+     * The chip's reference id under {@link PendingReference.source}. Defaults
+     * to `text` — the built-in source's spelling, where the ref IS the
+     * payload. A custom source passes a short opaque id and resolves the
+     * payload from its own store (it must also answer the serialization codec,
+     * or the host refuses the send rather than downgrading to the clipboard
+     * text).
+     */
+    ref?: string;
 }
 /** `draft` with `text` appended behind one separating space when needed. */
 export declare function appendText(draft: string, text: string): string;

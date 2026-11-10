@@ -1,3 +1,13 @@
+/**
+ * Typed fetch wrapper over the /sidebar JSON API. Every call posts through
+ * {@link hostRouteUrl} to `/sidebar/api/<method>` with the sessionId and —
+ * when known — the session's cwd from the client's own list summary (the
+ * route keeps a reverse-proxy prefix; see host-route-url.ts). The host prefers
+ * its attached session header and uses the summary cwd only while the session
+ * is still hydrating at page load (a detached session would otherwise fail the
+ * request). Failures surface as {@link SidebarApiError} with the wire code.
+ */
+import type { SidechatImageUpload } from '../sidechat-images.ts';
 import type { SidechatLiveEvent, SidechatLogEvent, SidechatModelCatalog, SidechatModelSelection, SidechatPendingInput, SidechatThreadInfo } from '../sidechat-core.ts';
 import type { SidebarCreateTeamTaskRequest, SidebarChildLiveView, SidebarSessionEvent, SidebarTeamTaskView, SidebarUpdateTeamTaskRequest } from '../context-types.ts';
 import type { WorkflowRunView } from '../workflow-runs.ts';
@@ -454,8 +464,9 @@ export declare const api: {
         childId: string;
     }>;
     /** Deliver one follow-up message to a Side Chat thread. */
-    sidechatPrompt: (childId: string, text: string) => Promise<{
+    sidechatPrompt: (childId: string, text: string, images?: readonly SidechatImageUpload[]) => Promise<{
         accepted: true;
+        messageId: string;
     }>;
     /** Abort a Side Chat thread's running turn (queued work is preserved). */
     sidechatCancel: (childId: string) => Promise<{

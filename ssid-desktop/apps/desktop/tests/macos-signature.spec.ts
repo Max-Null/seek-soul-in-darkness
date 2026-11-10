@@ -60,6 +60,8 @@ describe('desktop macOS release signature', () => {
     expect(portablePath(config.directories.output)).toContain('/.desktop-build/targets/mac-arm64/artifacts')
     // SSiD：这条描述已本地化为中文（产品名也从 DeepSeek Harness 换成思灵）。
     expect(config.mac.extendInfo.NSMicrophoneUsageDescription).toContain('麦克风')
+    // SSiD：app 界面只随包中英两语，语言清单与本产品实际字典一致。
+    expect(config.mac.extendInfo.CFBundleLocalizations).toEqual(['en', 'zh_CN'])
     expect(config.mac.entitlementsInherit).toBe(config.mac.entitlements)
     const entitlements = readFileSync(config.mac.entitlements, 'utf8')
     for (const key of ['com.apple.security.cs.allow-jit', 'com.apple.security.cs.allow-unsigned-executable-memory',

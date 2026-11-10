@@ -375,10 +375,28 @@ window.__ModuleLoader__.load({
 				})
 			};
 		}
-		/** Move a tab from one pane to another (insert at index; -1 appends).
-		*  The panes may live in DIFFERENT trees — dragging a tab between the two
-		*  panels removes it from its own tree and lands it in the other one. */
+		/**
+		* 在底部工作台窗格之间移动标签，或在同一窗格内重排。
+		* index 对应移动前的目标标签位置，-1 表示追加。
+		*/
 		function moveTab(state, fromPane, tabId, toPane, index = -1) {
+			if (fromPane === toPane) {
+				const source = leafWithTab(state.bottomSplits, tabId);
+				if (source?.id !== fromPane) return state;
+				const sourceIndex = source.tabs.findIndex((tab) => tab.id === tabId);
+				const tabs = source.tabs.filter((tab) => tab.id !== tabId);
+				const insertAt = index < 0 || index > source.tabs.length ? tabs.length : sourceIndex < index ? index - 1 : index;
+				tabs.splice(insertAt, 0, source.tabs[sourceIndex]);
+				const splits = mapLeaf(state.bottomSplits, fromPane, (leaf) => {
+					leaf.tabs = tabs;
+					leaf.active = tabId;
+				});
+				return {
+					...state,
+					bottomSplits: splits,
+					activePane: fromPane
+				};
+			}
 			const fromKey = "bottomSplits";
 			let moved;
 			let emptied = false;
@@ -517,7 +535,7 @@ window.__ModuleLoader__.load({
 				[key]: resizeSplit(state[key], splitId, index, delta)
 			};
 		}
-		const STORAGE_PREFIX = "dsh-sidebar:v1";
+		const STORAGE_PREFIX$1 = "dsh-sidebar:v1";
 		/**
 		* URL escape hatch (#369): loading the app with `?dsh-sidebar-reset` drops
 		* the persisted layout for the session instead of restoring it. When a
@@ -538,10 +556,10 @@ window.__ModuleLoader__.load({
 		function loadState(sessionId) {
 			const reset = resetRequested();
 			if (reset) try {
-				localStorage.removeItem(`${STORAGE_PREFIX}:${sessionId}`);
+				localStorage.removeItem(`${STORAGE_PREFIX$1}:${sessionId}`);
 			} catch {}
 			if (!reset) try {
-				const raw = localStorage.getItem(`${STORAGE_PREFIX}:${sessionId}`);
+				const raw = localStorage.getItem(`${STORAGE_PREFIX$1}:${sessionId}`);
 				if (raw !== null) {
 					const parsed = JSON.parse(raw);
 					nextIdCounter = maxCounterId(parsed);
@@ -966,7 +984,7 @@ window.__ModuleLoader__.load({
 			}
 			writePersisted(sessionId, state) {
 				try {
-					localStorage.setItem(`${STORAGE_PREFIX}:${sessionId}`, JSON.stringify(state));
+					localStorage.setItem(`${STORAGE_PREFIX$1}:${sessionId}`, JSON.stringify(state));
 				} catch {}
 			}
 			schedulePersist(sessionId, state) {
@@ -1287,6 +1305,194 @@ window.__ModuleLoader__.load({
 			});
 		}
 		//#endregion
+		//#region src/client/sidechat-surface.ts
+		const noop = () => {};
+		function safely(action) {
+			try {
+				action();
+			} catch (error) {
+				console.error("[dsh-better-sidebar] sidechat surface adapter error:", error);
+			}
+		}
+		/** Identity is log-owned, never guessed from a DOM position or parent session. */
+		function isSidechatSurfaceIdentity(threadId, eventSeq, contentBlockIndex) {
+			return typeof threadId === "string" && threadId.trim() !== "" && typeof eventSeq === "number" && Number.isSafeInteger(eventSeq) && eventSeq >= 0 && typeof contentBlockIndex === "number" && Number.isSafeInteger(contentBlockIndex) && contentBlockIndex >= 0;
+		}
+		function createRegistry() {
+			const adapters = /* @__PURE__ */ new Map();
+			const roots = /* @__PURE__ */ new Map();
+			let disposed = false;
+			const mount = (registration, attached) => {
+				if (!registration.active || !attached.active || attached.mounts.has(registration)) return;
+				safely(() => {
+					const cleanup = registration.adapter.mount({
+						...attached.surface,
+						sendPrompt: async (text) => {
+							if (!registration.active || !attached.active) throw new Error("Sidechat surface is no longer active");
+							await attached.surface.sendPrompt(text);
+						}
+					});
+					if (typeof cleanup !== "function") throw new Error("Sidechat surface adapter must return a cleanup function");
+					if (!registration.active || !attached.active) safely(cleanup);
+					else attached.mounts.set(registration, cleanup);
+				});
+			};
+			const detach = (attached) => {
+				if (!attached.active) return;
+				attached.active = false;
+				if (roots.get(attached.surface.root) === attached) roots.delete(attached.surface.root);
+				const cleanups = [...attached.mounts.values()];
+				attached.mounts.clear();
+				for (const cleanup of cleanups) safely(cleanup);
+			};
+			return {
+				register(adapter) {
+					if (disposed) throw new Error("[dsh-better-sidebar] sidechat surface registry is disposed");
+					if (typeof adapter.id !== "string" || adapter.id.trim() === "" || typeof adapter.mount !== "function") throw new Error("[dsh-better-sidebar] invalid sidechat surface adapter");
+					if (adapters.has(adapter.id)) throw new Error(`[dsh-better-sidebar] sidechat surface adapter "${adapter.id}" already registered`);
+					const registration = {
+						adapter,
+						active: true
+					};
+					adapters.set(adapter.id, registration);
+					for (const attached of [...roots.values()]) mount(registration, attached);
+					return () => {
+						if (!registration.active) return;
+						registration.active = false;
+						if (adapters.get(adapter.id) === registration) adapters.delete(adapter.id);
+						for (const attached of [...roots.values()]) {
+							const cleanup = attached.mounts.get(registration);
+							attached.mounts.delete(registration);
+							if (cleanup !== void 0) safely(cleanup);
+						}
+					};
+				},
+				attach(surface) {
+					if (disposed || surface.source !== "dsh-better-sidebar/sidechat" || !isSidechatSurfaceIdentity(surface.threadId, surface.eventSeq, surface.contentBlockIndex) || typeof surface.text !== "string" || typeof surface.sendPrompt !== "function") return noop;
+					const Element = surface.root?.ownerDocument?.defaultView?.HTMLElement;
+					if (Element === void 0 || !(surface.root instanceof Element)) return noop;
+					const previous = roots.get(surface.root);
+					if (previous !== void 0) detach(previous);
+					const attached = {
+						surface,
+						active: true,
+						mounts: /* @__PURE__ */ new Map()
+					};
+					roots.set(surface.root, attached);
+					for (const registration of [...adapters.values()]) mount(registration, attached);
+					return () => {
+						detach(attached);
+					};
+				},
+				dispose() {
+					if (disposed) return;
+					disposed = true;
+					for (const registration of adapters.values()) registration.active = false;
+					adapters.clear();
+					for (const attached of [...roots.values()]) detach(attached);
+				}
+			};
+		}
+		/** Weak service ownership avoids adding attach/dispose to the public service. */
+		const registries = /* @__PURE__ */ new WeakMap();
+		/** @internal Bind once while the BetterSidebar service is being constructed. */
+		function bindSidechatSurfaces(service) {
+			const registry = createRegistry();
+			registries.set(service, registry);
+			return (adapter) => registry.register(adapter);
+		}
+		/** @internal Only SideChatView attaches real, visible settled Markdown roots. */
+		function attachSidechatSurface(service, surface) {
+			return service === void 0 ? noop : registries.get(service)?.attach(surface) ?? noop;
+		}
+		/** @internal Plugin teardown, even if a React row has not unmounted yet. */
+		function disposeSidechatSurfaces(service) {
+			registries.get(service)?.dispose();
+			registries.delete(service);
+		}
+		//#endregion
+		//#region src/client/line-target.ts
+		/**
+		* The one-shot landing RANGE that rides beside a line navigation.
+		*
+		* A file open carries a single 1-based line through the host's own navigation
+		* parameter (`#826`), so the viewer can land the reader. The quote chip needs
+		* two more facts: where the quoted span ENDS, and whether the click is a NEW
+		* navigation when it names the SAME line again. The host's parameter map
+		* declares only `line` for a file resource, and its tab adapter deliberately
+		* drops a navigation whose `line` did not move — so a second click on the same
+		* chip would otherwise be indistinguishable from the previous landing, and an
+		* arm left behind by it could flash a later ordinary open. Rather than smuggle
+		* undeclared keys through host-owned params (nothing validates them at run
+		* time, so it would work right up until upstream tightened the shape), both
+		* facts ride this module-level side channel:
+		*
+		* - the END line, armed by the code opening the file;
+		* - a NONCE bumped on every arm, so the editor's "already landed here" journal
+		*   treats a re-click as a new navigation instead of the same `path#line`.
+		*
+		* The key is `${path}#${line}` — deliberately the SAME key the editor's own
+		* landed-once journal uses. The arm is spent by the editor that hands the
+		* navigation to its viewer, so re-renders never replay it and a later ordinary
+		* open of the same line finds nothing. Core bundle only (no CodeMirror import):
+		* the flash itself lives in `quote-flash.ts`, which is bundled with the editor
+		* chunk.
+		*/
+		/** Max armed ranges held at once; the oldest is dropped (a stale arm only
+		*  loses a decoration, never the navigation). */
+		const MAX_ARMED = 32;
+		const armed = /* @__PURE__ */ new Map();
+		let nextNonce = 1;
+		function keyOf$2(path, line) {
+			return `${path}#${line}`;
+		}
+		/**
+		* Arm the flash end (and a fresh navigation identity) for the next landing on
+		* `path:line`.
+		* @param path - the file's path (the same spelling the open carries).
+		* @param line - the 1-based landing line.
+		* @param lineEnd - the 1-based last line of the range; `undefined` arms a
+		*   single-line landing (a fresh jump without a flash range).
+		* @returns the new navigation's nonce.
+		*/
+		function armLineEnd(path, line, lineEnd) {
+			const key = keyOf$2(path, line);
+			const nonce = nextNonce++;
+			armed.delete(key);
+			armed.set(key, lineEnd === void 0 ? { nonce } : {
+				nonce,
+				end: lineEnd
+			});
+			while (armed.size > MAX_ARMED) {
+				const oldest = armed.keys().next();
+				if (oldest.done === true) break;
+				armed.delete(oldest.value);
+			}
+			return nonce;
+		}
+		/**
+		* Read the pending navigation for `path:line` WITHOUT spending it. Render-safe
+		* (a pure map read): React may render twice, and a discarded render must not
+		* eat the arm the committed one still needs.
+		* @param path - the file's path.
+		* @param line - the 1-based landing line.
+		* @returns the pending arm, or `undefined` when this is not an armed open.
+		*/
+		function peekLineTarget(path, line) {
+			return armed.get(keyOf$2(path, line));
+		}
+		/**
+		* Spend the pending navigation for `path:line` once the editor has handed it
+		* to its viewer (idempotent). Only the editor that actually applied the
+		* navigation calls this, so a later ordinary open of the same line cannot
+		* inherit a stale flash.
+		* @param path - the file's path.
+		* @param line - the 1-based landing line.
+		*/
+		function consumeLineTarget(path, line) {
+			armed.delete(keyOf$2(path, line));
+		}
+		//#endregion
 		//#region src/client/service.ts
 		/**
 		* Reserved `exts` values that claim DIRECTORY rows instead of file
@@ -1331,7 +1537,7 @@ window.__ModuleLoader__.load({
 		* The plugin version this service instance reports. Keep in lockstep with
 		* `package.json`'s version — `tests/service.spec.ts` asserts the pair.
 		*/
-		const SIDEBAR_SERVICE_VERSION = "0.28.2";
+		const SIDEBAR_SERVICE_VERSION = "0.30.1";
 		/**
 		* Monotonic capability list consumers use to gate new API usage (features
 		* are never removed). Each string names a v0.12.0+ capability:
@@ -1501,7 +1707,7 @@ window.__ModuleLoader__.load({
 				}
 				return builtinFolderIcon(open, size);
 			};
-			const isTabEnabled = (id) => store.getPrefs().tabsEnabled[id] !== false;
+			const isTabEnabled = (id) => tabs.get(id)?.hidden === true || store.getPrefs().tabsEnabled[id] !== false;
 			const isViewerEnabled = (id) => store.getPrefs().viewersEnabled[id] !== false;
 			const matchFileViewer = (path, head) => {
 				const ext = extOf(path);
@@ -1728,16 +1934,25 @@ window.__ModuleLoader__.load({
 			*  a third-party type registered with a more specific pattern (a `.drawio`
 			*  canvas, say) renders its own tab, and the plugin's editor only takes
 			*  files nobody else claims. (This module holds no ctx, so the probe used
-			*  by the tree's own carriers lives in sidebar-file.ts instead.) */
-			const openFile = (scope, path, title) => {
+			*  by the tree's own carriers lives in sidebar-file.ts instead.)
+			*
+			*  `options.line` rides the seed's own landing line (#826) and
+			*  `options.lineEnd` arms the landing flash's span through the side channel
+			*  in line-target.ts — the host's resource parameter map declares `line`
+			*  only, and smuggling a second key through host-owned params would work
+			*  exactly until upstream tightened that shape. */
+			const openFile = (scope, path, title, options) => {
+				if (options?.line !== void 0) armLineEnd(path, options.line, options.lineEnd);
 				openTab({
 					type: "editor",
 					title: title ?? baseNameOf(path),
 					path,
-					id: `editor:${path}`
+					id: `editor:${path}`,
+					...options?.line === void 0 ? {} : { line: options.line }
 				}, scope);
 			};
-			return {
+			const service = {
+				registerSidechatSurfaceAdapter: (adapter) => registerSidechatSurfaceAdapter(adapter),
 				registerTab,
 				registerFileViewer,
 				registerFileIcon,
@@ -1769,6 +1984,8 @@ window.__ModuleLoader__.load({
 				nativePathTabs: () => surface?.pathTabs?.() ?? [],
 				clearUnread: clearUnreadFor
 			};
+			const registerSidechatSurfaceAdapter = bindSidechatSurfaces(service);
+			return service;
 		}
 		/**
 		* Apply dedup: if a tab whose `dedupeKey` matches an existing tab of the
@@ -2054,12 +2271,12 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var tab_icons_module_css_default = {
-			"files": "SyUHSa_files",
-			"changes": "SyUHSa_changes",
-			"sidechat": "SyUHSa_sidechat",
-			"browser": "SyUHSa_browser",
+			"tasks": "SyUHSa_tasks",
 			"terminal": "SyUHSa_terminal",
-			"tasks": "SyUHSa_tasks"
+			"changes": "SyUHSa_changes",
+			"files": "SyUHSa_files",
+			"sidechat": "SyUHSa_sidechat",
+			"browser": "SyUHSa_browser"
 		};
 		//#endregion
 		//#region node_modules/.pnpm/react-icons@5.7.0_react@18.2.0/node_modules/react-icons/lib/iconContext.mjs
@@ -2508,6 +2725,8 @@ window.__ModuleLoader__.load({
 			refresh: "刷新",
 			refreshUnsavedConfirm: "文件已在磁盘更新，刷新将丢弃未保存编辑。继续吗？",
 			closeUnsavedConfirm: "该文件有未保存的编辑，关闭后将丢弃。继续吗？",
+			draftRestoreConfirm: "检测到未保存的草稿，恢复吗？（选择取消将丢弃该草稿）",
+			switchUnsavedConfirm: "该文件有未保存的编辑，切换文件将丢弃这些内容。继续吗？",
 			save: "保存",
 			saved: "已保存",
 			unsaved: "未保存",
@@ -2654,6 +2873,7 @@ window.__ModuleLoader__.load({
 			openEditor: "打开编辑器",
 			referenceFile: "@文件",
 			addToConversation: "添加到对话",
+			quoteChip: "引用 {where}",
 			copyRelative: "复制相对地址",
 			copyAbsolute: "复制绝对地址",
 			rename: "重命名",
@@ -2780,6 +3000,7 @@ window.__ModuleLoader__.load({
 			sideChatSaveTitle: "把该线程提升为顶层会话，出现在主会话列表中",
 			sideChatArchive: "归档这条侧边对话（在会话列表的「显示已归档」里可找回）",
 			sideChatArchiveRunning: "该线程正在运行，停止后才能归档",
+			sideChatArchiveBlocked: "侧边对话归档后无法找回（宿主会话列表在任何筛选下都不显示侧边对话），因此已禁用归档；如需保留，请先「保存为新会话」",
 			sideChatSaved: "已保存为新会话",
 			sideChatNoTurn: "至少完成一轮对话后才能保存",
 			sideChatPendingDrop: "最后一条未完成的追问不会包含在新会话中",
@@ -2795,6 +3016,17 @@ window.__ModuleLoader__.load({
 			sideChatThinking: "正在深入…",
 			sideChatThink: "思考过程",
 			sideChatInjection: "已注入上下文",
+			sideChatAddImages: "添加图片",
+			sideChatRemoveImage: "移除 {name}",
+			sideChatImagesDisabled: "图片附件不可用",
+			sideChatImageFormat: "请选择 PNG、JPEG、WebP 或 GIF 图片",
+			sideChatImageLimit: "图片数量或大小超出限制",
+			sideChatImageReadError: "无法读取图片",
+			sideChatImageOwnerChanged: "发送时对话已切换",
+			sideChatSendUncertain: "连接已断开。消息可能已被接收。草稿已保留，请先查看对话再重试。",
+			sideChatImageLoading: "正在加载图片…",
+			sideChatImageUnavailable: "图片不可用",
+			sideChatImage: "图片",
 			sideChatSend: "发送",
 			sideChatCancelTitle: "中止当前回合（保留队列）",
 			sideChatError: "侧边对话出错：{message}",
@@ -3149,6 +3381,8 @@ window.__ModuleLoader__.load({
 			refresh: "Refresh",
 			refreshUnsavedConfirm: "The file changed on disk. Refreshing will discard unsaved edits. Continue?",
 			closeUnsavedConfirm: "This file has unsaved edits. Closing the tab will discard them. Continue?",
+			draftRestoreConfirm: "An unsaved draft was found. Restore it? (Cancel discards the draft.)",
+			switchUnsavedConfirm: "This file has unsaved edits. Switching files will discard them. Continue?",
 			save: "Save",
 			saved: "Saved",
 			unsaved: "Unsaved",
@@ -3295,6 +3529,7 @@ window.__ModuleLoader__.load({
 			openEditor: "Open editor",
 			referenceFile: "@file",
 			addToConversation: "Add to conversation",
+			quoteChip: "Quote {where}",
 			copyRelative: "Copy relative path",
 			copyAbsolute: "Copy absolute path",
 			rename: "Rename",
@@ -3421,6 +3656,7 @@ window.__ModuleLoader__.load({
 			sideChatSaveTitle: "Promote this thread to a top-level session in the main session list",
 			sideChatArchive: "Archive this side conversation (find it again via “Show archived” in the session list)",
 			sideChatArchiveRunning: "This thread is running — stop it before archiving",
+			sideChatArchiveBlocked: "A side conversation can never be found again once archived (the host session list hides side conversations in every filter), so archiving is disabled — use “Save as new session” first to keep it",
 			sideChatSaved: "Saved as a new session",
 			sideChatNoTurn: "Save is available after the first completed turn",
 			sideChatPendingDrop: "The last unanswered follow-up will not be included in the saved session",
@@ -3436,6 +3672,17 @@ window.__ModuleLoader__.load({
 			sideChatThinking: "Deep diving…",
 			sideChatThink: "Thinking",
 			sideChatInjection: "Context injected",
+			sideChatAddImages: "Add images",
+			sideChatRemoveImage: "Remove {name}",
+			sideChatImagesDisabled: "Image attachments are unavailable",
+			sideChatImageFormat: "Choose PNG, JPEG, WebP or GIF images",
+			sideChatImageLimit: "Image count or size limit exceeded",
+			sideChatImageReadError: "Could not read image",
+			sideChatImageOwnerChanged: "Conversation changed while sending",
+			sideChatSendUncertain: "Connection lost. The message may have been accepted. Your draft is kept; check the conversation before retrying.",
+			sideChatImageLoading: "Loading image…",
+			sideChatImageUnavailable: "Image unavailable",
+			sideChatImage: "Image",
 			sideChatSend: "Send",
 			sideChatCancelTitle: "Abort the running turn (queued work is kept)",
 			sideChatError: "Side Chat error: {message}",
@@ -3802,13 +4049,23 @@ window.__ModuleLoader__.load({
 		* POSIX keeps the path verbatim: there `\` is a legal file-name character, not
 		* a separator (the same reason `resolveSidebarPath` never folds on POSIX).
 		*
+		* A UNC prefix is NOT a separator run to fold: `\\server\share` is one path
+		* root, and folding its two leading separators into one turns an absolute
+		* network path into a drive-root-relative one. On Windows the host then runs
+		* `path.resolve()` on it, anchoring `\wsl.localhost\...` on the host process
+		* drive (`C:\wsl.localhost\...`, ENOENT) — every file opened from a
+		* `\\wsl.localhost\<distro>\...` workspace failed that way. Keep exactly the
+		* two leading separators and fold only the rest.
+		*
 		* @param base - the workspace root whose separator style decides the answer.
 		* @param path - an address path (relative to `base`) or an absolute path.
 		* @returns the resolved path in `base`'s separator style.
 		*/
 		function resolveAddressPath(base, path) {
 			const resolved = resolveSidebarPath(base, path);
-			return base !== void 0 && base.includes("\\") ? resolved.replace(/[/\\]+/g, "\\") : resolved;
+			if (base === void 0 || !base.includes("\\")) return resolved;
+			const folded = resolved.replace(/[/\\]+/g, "\\");
+			return /^[\\/]{2}/.test(resolved) ? `\\\\${folded.replace(/^\\+/, "")}` : folded;
 		}
 		//#endregion
 		//#region src/client/resource-address.ts
@@ -4062,15 +4319,6 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region src/client/api.ts
-		/**
-		* Typed fetch wrapper over the /sidebar JSON API. Every call posts through
-		* {@link hostRouteUrl} to `/sidebar/api/<method>` with the sessionId and —
-		* when known — the session's cwd from the client's own list summary (the
-		* route keeps a reverse-proxy prefix; see host-route-url.ts). The host prefers
-		* its attached session header and uses the summary cwd only while the session
-		* is still hydrating at page load (a detached session would otherwise fail the
-		* request). Failures surface as {@link SidebarApiError} with the wire code.
-		*/
 		/** One wire failure. */
 		var SidebarApiError = class extends Error {
 			code;
@@ -4422,9 +4670,10 @@ window.__ModuleLoader__.load({
 				question: question ?? ""
 			}),
 			/** Deliver one follow-up message to a Side Chat thread. */
-			sidechatPrompt: (childId, text) => call("sidechat.prompt", {
+			sidechatPrompt: (childId, text, images) => call("sidechat.prompt", {
 				childId,
-				text
+				text,
+				...images === void 0 || images.length === 0 ? {} : { images }
 			}),
 			/** Abort a Side Chat thread's running turn (queued work is preserved). */
 			sidechatCancel: (childId) => call("sidechat.cancel", { childId }),
@@ -4553,7 +4802,7 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region \0dsh-css:/home/runner/work/DSH-better-sidebar/DSH-better-sidebar/src/client/sidebar.module.css.mjs
-		const css$12 = "[data-dsh-panel-host]{z-index:25;pointer-events:none;height:100vh;position:fixed;inset:0;overflow:clip}html[data-platform] body>[data-dsh-better-sidebar],[data-dsh-panel-host]{-webkit-app-region:initial!important}[data-dsh-panel-host]>*{-webkit-app-region:no-drag}[data-dockkit-float-resize]{z-index:2}[data-dsh-panel-host][data-dsh-panel-host-degraded]{position:absolute;top:0;left:0}.nArs4W_dockFallback{z-index:40;align-items:center;gap:2px;display:inline-flex;position:fixed}.nArs4W_toggleButton{width:28px;height:28px;color:var(--dsw-alias-label-secondary);cursor:pointer;transition:background var(--ds-transition-duration-slow) var(--ds-ease-in-out), color var(--ds-transition-duration-slow) var(--ds-ease-in-out);background:0 0;border:none;border-radius:50%;justify-content:center;align-items:center;display:flex}.nArs4W_toggleButton:hover:not(:disabled):not([aria-disabled=true]){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_toggleButton:disabled,.nArs4W_toggleButton[aria-disabled=true]{opacity:.4;cursor:default}.nArs4W_panelBody{flex:1;min-width:0;min-height:0;display:flex}.nArs4W_bottomPanel{z-index:40;background:var(--dsw-alias-bg-layer-1);border-top:1px solid var(--dsw-alias-border-l2);pointer-events:auto;padding-bottom:env(safe-area-inset-bottom);transition:transform var(--ds-transition-duration-slow) var(--ds-ease-in-out), height var(--ds-transition-duration-slow) var(--ds-ease-in-out);flex-direction:column;display:flex;position:absolute;bottom:0}.nArs4W_bottomPanelHidden{pointer-events:none;visibility:hidden;transition:transform var(--ds-transition-duration-slow) var(--ds-ease-in-out), height var(--ds-transition-duration-slow) var(--ds-ease-in-out), visibility 0s linear var(--ds-transition-duration-slow);transform:translateY(102%)}.nArs4W_bottomPanel[data-dragging]{transition:none}.nArs4W_bottomPanel{contain:layout style}body[data-dsh-sidebar-dragging] .nArs4W_panel,body[data-dsh-sidebar-dragging] .nArs4W_bottomPanel{will-change:transform}.nArs4W_bottomResize{cursor:row-resize;z-index:2;touch-action:none;height:8px;position:absolute;top:-4px;left:0;right:0}.nArs4W_bottomResizeActive{background:var(--dsw-alias-interactive-bg-hover-accent)}.nArs4W_bottomClose{z-index:4;width:28px;height:28px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:50%;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex;position:absolute;top:3px;right:6px}.nArs4W_bottomClose:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_bottomPanel .nArs4W_tabBar{padding-right:40px}.nArs4W_toggleButton,.nArs4W_tabBar{-webkit-app-region:no-drag}.nArs4W_iconButton{width:28px;height:28px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:50%;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex}.nArs4W_iconButton:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_iconButton:disabled{opacity:.4;cursor:default}.nArs4W_workbench,.nArs4W_split{flex:1;min-width:0;min-height:0;display:flex}.nArs4W_splitRow{flex-direction:row}.nArs4W_splitCol{flex-direction:column}.nArs4W_splitChild{display:flex;position:relative;overflow:hidden}.nArs4W_divider{z-index:3;touch-action:none;flex:none;position:relative}.nArs4W_dividerRow:after,.nArs4W_dividerCol:after{content:\"\";background:var(--dsw-alias-border-l2);transition:background var(--ds-transition-duration-slow) var(--ds-ease-in-out);position:absolute}.nArs4W_dividerRow{cursor:col-resize;width:7px;margin:0 -2px}.nArs4W_dividerRow:after{width:1px;top:0;bottom:0;left:50%;transform:translate(-50%)}.nArs4W_dividerCol{cursor:row-resize;height:7px;margin:-2px 0}.nArs4W_dividerCol:after{height:1px;top:50%;left:0;right:0;transform:translateY(-50%)}.nArs4W_divider:hover:after,.nArs4W_dividerActive:after{background:var(--dsw-alias-interactive-bg-hover-accent)}.nArs4W_pane{background:var(--dsw-alias-bg-base);flex-direction:column;flex:1;min-width:0;min-height:0;display:flex;position:relative}.nArs4W_paneDrop{outline:1px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}.nArs4W_dropOverlay{z-index:6;pointer-events:none;background:var(--dsw-alias-interactive-bg-hover-accent);opacity:.5;position:absolute}.nArs4W_dropLeft{width:25%;top:0;bottom:0;left:0}.nArs4W_dropRight{width:25%;top:0;bottom:0;right:0}.nArs4W_dropUp{height:25%;top:0;left:0;right:0}.nArs4W_dropDown{height:25%;bottom:0;left:0;right:0}.nArs4W_dropCenter{outline:2px dashed var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-2px;background:0 0;inset:25%}.nArs4W_paneContent{flex-direction:column;flex:1;min-height:0;display:flex;overflow:hidden}.nArs4W_chipIcon{flex:none;align-items:center;margin-right:6px;display:inline-flex}.nArs4W_chipUnread{background:var(--dsw-alias-danger);vertical-align:middle;border-radius:50%;width:6px;height:6px;margin-left:6px;display:inline-block}.nArs4W_tabUnreadDot{background:var(--dsw-alias-danger);border-radius:50%;flex:none;width:7px;height:7px}.nArs4W_paneTab{flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_paneTabHidden{display:none}.nArs4W_paneEmptyCards{flex:1;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));align-content:start;gap:12px;min-height:0;padding:12px;display:grid;overflow:hidden}.nArs4W_paneCard{box-sizing:border-box;border:.5px solid var(--dsw-alias-border-l4);background:var(--dsw-alias-bg-layer-1);min-width:0;min-height:56px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-s-strong-14);cursor:pointer;text-align:left;border-radius:24px;flex-direction:row;justify-content:flex-start;align-items:center;gap:14px;padding:14px 20px;display:flex}.nArs4W_paneCard>svg{color:var(--dsw-alias-label-secondary);flex:none}.nArs4W_paneCard:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l4)}.nArs4W_paneCard:disabled{opacity:.45;cursor:default}.nArs4W_tabBar{border-bottom:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);flex:none;align-items:stretch;height:34px;display:flex}.nArs4W_tabBarDrop{outline:1px dashed var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}.nArs4W_tabList{scrollbar-width:none;flex:1;min-width:0;display:flex;overflow-x:auto}.nArs4W_tabList::-webkit-scrollbar{display:none}.nArs4W_tab{min-width:64px;max-width:160px;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-secondary);border-right:1px solid var(--dsw-alias-border-l1);cursor:pointer;user-select:none;background:0 0;flex:none;align-items:center;gap:4px;padding:0 4px 0 10px;display:flex}.nArs4W_tab:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_tabActive{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-active)}.nArs4W_tabTitle{text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;overflow:hidden}.nArs4W_tabBadge{min-width:16px;height:15px;font:var(--dsw-font-xxxs-strong-11);background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-brand-primary);border-radius:8px;flex:none;justify-content:center;align-items:center;padding:0 4px;display:inline-flex}.nArs4W_tabClose{width:18px;height:18px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:4px;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex}.nArs4W_tabClose:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_tabBarPlus{background:var(--dsw-alias-bg-layer-1);width:22px;height:22px;color:var(--dsw-alias-label-tertiary);cursor:pointer;border:none;border-radius:5px;flex:none;justify-content:center;align-self:center;align-items:center;margin:0 6px;padding:0;display:inline-flex;position:sticky;right:0}.nArs4W_tabBarPlus:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_tabBarRightActions{flex:0 auto;justify-content:flex-end;align-items:center;gap:2px;min-width:0;padding-right:4px;display:flex;overflow:hidden}.nArs4W_explorer{flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_explorerHeader{flex:none;justify-content:space-between;align-items:center;gap:8px;height:36px;padding:0 8px 0 12px;display:flex}.nArs4W_explorerRoot{font:var(--dsw-font-s-14);color:var(--dsw-alias-label-secondary);text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.nArs4W_explorerBody{flex:1;min-height:0;padding:4px 8px 8px;overflow:hidden auto}.nArs4W_explorerRow{box-sizing:border-box;width:100%;max-width:100%;height:28px;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer;white-space:nowrap;animation:nArs4W_dsh-row-in .15s var(--ds-ease-in-out);background:0 0;border:none;border-radius:4px;align-items:center;gap:6px;padding:0 8px;display:flex;position:relative}.nArs4W_explorerRow:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_explorerRowSelected{background:var(--dsw-alias-interactive-bg-active)}.nArs4W_explorerRowSelected:before{content:\"\";background:var(--dsw-alias-state-business-primary);border-radius:1px;width:2px;position:absolute;top:4px;bottom:4px;left:0}.nArs4W_explorerGitName[data-git-tone=modified]{color:var(--dsw-alias-state-warn-primary)}.nArs4W_explorerGitName[data-git-tone=added],.nArs4W_explorerGitName[data-git-tone=untracked]{color:var(--dsw-alias-state-success-primary)}.nArs4W_explorerGitName[data-git-tone=deleted]{color:var(--dsw-alias-state-error-primary)}.nArs4W_explorerGitName[data-git-tone=renamed]{color:var(--dsw-alias-state-business-primary)}.nArs4W_explorerGitName[data-git-tone=copied]{color:var(--dsw-alias-state-success-primary)}.nArs4W_explorerGitName[data-git-tone=conflict]{color:var(--dsw-alias-state-error-primary)}.nArs4W_explorerDirChanged{color:var(--dsw-alias-state-business-primary)}.nArs4W_explorerRowRevealed{background:var(--dsw-alias-state-business-tertiary)}.nArs4W_explorerRowRevealed+.nArs4W_explorerRowRevealed{border-top-left-radius:0;border-top-right-radius:0}.nArs4W_explorerRowRevealed:has(+.nArs4W_explorerRowRevealed){border-bottom-right-radius:0;border-bottom-left-radius:0}.nArs4W_explorerDir{font:var(--dsw-font-xxs-strong-12)}.nArs4W_explorerHidden{opacity:.45}.nArs4W_explorerSymlink{color:var(--dsw-alias-label-tertiary);flex:none}.nArs4W_explorerBroken .nArs4W_explorerName{color:var(--dsw-alias-state-error-primary)}.nArs4W_explorerName{text-overflow:ellipsis;white-space:nowrap;min-width:0;overflow:hidden}.nArs4W_explorerRenaming{cursor:text}.nArs4W_explorerRenameInput{box-sizing:border-box;border:1px solid var(--dsw-alias-state-business-primary);background:var(--dsw-alias-bg-layer-1);min-width:0;height:22px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:3px;flex:auto;padding:0 6px}.nArs4W_explorerRenameInput:focus{border-color:var(--dsw-alias-state-business-primary);outline:none}.nArs4W_explorerActionError{box-sizing:border-box;border:1px solid var(--dsw-alias-state-error-primary);background:var(--dsw-alias-bg-layer-1);border-radius:8px;align-items:flex-start;gap:6px;width:100%;margin-bottom:4px;padding:6px 8px;display:flex}.nArs4W_explorerActionErrorText{overflow-wrap:anywhere;min-width:0;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);flex:auto}.nArs4W_explorerSelectionBar{z-index:1;box-sizing:border-box;background:var(--dsw-alias-bg-layer-2);border-radius:4px;align-items:center;gap:6px;width:100%;min-height:28px;margin-top:4px;padding:2px 8px;display:flex;position:sticky;bottom:0}.nArs4W_explorerSelectionText{text-overflow:ellipsis;white-space:nowrap;min-width:0;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-secondary);flex:auto;overflow:hidden}.nArs4W_explorerSelectionActions{flex-wrap:wrap;flex:none;justify-content:flex-end;gap:4px;max-width:72%;display:flex}.nArs4W_explorerAppIcon{object-fit:contain;width:14px;height:14px;display:block}.nArs4W_explorerHiddenPane{display:none}.nArs4W_explorerRef,.nArs4W_explorerCopied{margin-left:auto}.nArs4W_explorerRef{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);height:20px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxxs-strong-11);cursor:pointer;border-radius:999px;flex:none;align-items:center;padding:0 8px;display:none}.nArs4W_explorerRef:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_explorerRow:hover .nArs4W_explorerRef,.nArs4W_explorerRow:focus-within .nArs4W_explorerRef{display:inline-flex}.nArs4W_explorerCopied{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary);flex:none}.nArs4W_explorerError{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);cursor:default}@keyframes nArs4W_dsh-row-in{0%{opacity:0}}.nArs4W_explorerEmpty{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);text-align:center;padding:16px}.nArs4W_explorerRowDropTarget{background:var(--dsw-alias-interactive-bg-hover-accent);outline:1px dashed var(--dsw-alias-state-business-primary);outline-offset:-1px}.nArs4W_uploadDropMask{z-index:1001;pointer-events:none;background:color-mix(in srgb, var(--dsw-alias-bg-base) 62%, transparent);animation:nArs4W_dsh-row-in .15s var(--ds-ease-in-out);position:fixed;inset:0}.nArs4W_uploadDropZone{z-index:1002;pointer-events:none;border:2px dashed var(--dsw-alias-border-l2);background:color-mix(in srgb, var(--dsw-alias-state-business-primary) 4%, transparent);animation:nArs4W_dsh-row-in .15s var(--ds-ease-in-out);border-radius:8px;justify-content:center;align-items:flex-start;padding:12px;display:flex;position:fixed}.nArs4W_uploadDropHero{flex-direction:column;align-items:center;gap:8px;max-width:100%;padding-top:8px;display:flex}.nArs4W_uploadDropArtPrimary{color:var(--dsw-alias-state-business-primary)}.nArs4W_uploadDropArtAccent{color:var(--dsw-alias-state-business-tertiary)}.nArs4W_uploadDropArtCut{color:var(--dsw-alias-bg-layer-1)}.nArs4W_uploadDropZonePill{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);max-width:100%;height:28px;box-shadow:var(--dsw-shadow-lv2);color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxxs-11);border-radius:999px;align-items:center;gap:6px;padding:0 12px;display:flex}.nArs4W_uploadDropZoneText{white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.nArs4W_uploadDropChatHint{z-index:1003;pointer-events:none;animation:nArs4W_dsh-row-in .15s var(--ds-ease-in-out);justify-content:center;align-items:center;padding:24px;display:flex;position:fixed;top:0;bottom:0;left:0}.nArs4W_uploadDropChatCard{text-align:center;max-width:100%;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-strong-12);flex-direction:column;align-items:center;gap:10px;display:flex}.nArs4W_uploadOverlay{z-index:30;background:var(--dsw-alias-bg-mask-1);backdrop-filter:var(--dsw-mask-blur);animation:nArs4W_dsh-row-in .15s var(--ds-ease-in-out);justify-content:center;align-items:center;display:flex;position:absolute;inset:0}.nArs4W_uploadOverlayCard{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);min-width:240px;max-width:min(420px,100% - 48px);box-shadow:var(--dsw-shadow-lv3);border-radius:8px;flex-direction:column;gap:10px;padding:16px;display:flex}.nArs4W_uploadOverlayTitle{font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary);align-items:center;gap:6px;display:flex}.nArs4W_uploadOverlayTitle>svg{flex:none}.nArs4W_uploadOverlayTitle>span{white-space:nowrap;text-overflow:ellipsis;min-width:0;overflow:hidden}.nArs4W_uploadOverlayProgress{background:var(--dsw-alias-border-l2);border-radius:3px;height:6px;overflow:hidden}.nArs4W_uploadOverlayProgressFill{background:var(--dsw-alias-interactive-bg-hover-accent);height:100%;transition:width .15s var(--ds-ease-in-out);border-radius:3px}.nArs4W_uploadOverlayStatus{min-height:1em;font:var(--dsw-font-xxxs-11);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary);white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.nArs4W_uploadOverlayCancel{border:1px solid var(--dsw-alias-border-l2);height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-strong-12);cursor:pointer;background:0 0;border-radius:4px;align-self:flex-end;padding:0 12px}.nArs4W_uploadOverlayCancel:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l2)}.nArs4W_uploadOverlayCancel:disabled{opacity:.4;cursor:default}.nArs4W_editor{flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_editorHeader{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:6px;padding:6px 8px;display:flex}.nArs4W_editorTitle{min-width:0;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-secondary);text-overflow:ellipsis;white-space:nowrap;flex:1;overflow:hidden}.nArs4W_editorPathInput{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);min-width:0;height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:6px;flex:1;padding:0 10px}.nArs4W_editorPathInput:focus{border-color:var(--dsw-alias-border-l2);outline:none}.nArs4W_editorTreeToggleActive{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-active)}.nArs4W_editorBody{flex:1;min-height:0;display:flex}.nArs4W_editorMain{flex-direction:column;flex:1;min-width:0;min-height:0;display:flex}.nArs4W_editorTreeDock{border-left:1px solid var(--dsw-alias-border-l1);flex:none;min-height:0;display:flex;position:relative}.nArs4W_editorTreeResize{cursor:col-resize;touch-action:none;z-index:3;width:6px;position:absolute;top:0;bottom:0;left:0}.nArs4W_editorTreeResize:hover{background:var(--dsw-alias-border-l2)}.nArs4W_editorTreePanel{flex-direction:column;flex:1;min-width:0;min-height:0;display:flex;position:relative}.nArs4W_editorTreePanelFull{flex:1}.nArs4W_editorTreeSearch{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:6px;padding:6px 8px;display:flex}.nArs4W_editorSearchInput{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);min-width:0;height:26px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:6px;flex:1;padding:0 10px}.nArs4W_editorSearchInput:focus{border-color:var(--dsw-alias-border-l2);outline:none}.nArs4W_editorSearchHint{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);padding:8px 12px}.nArs4W_editorSearchResult{box-sizing:border-box;width:100%;height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);text-align:left;cursor:pointer;background:0 0;border:none;border-radius:4px;align-items:center;gap:6px;padding:0 8px;line-height:28px;display:flex;overflow:hidden}.nArs4W_editorSearchResultDir{color:var(--dsw-alias-label-secondary)}.nArs4W_editorSearchResultLabel{text-overflow:ellipsis;white-space:nowrap;min-width:0;overflow:hidden}.nArs4W_editorSearchResult:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_editorStatus{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary)}.nArs4W_editorStatusError{color:var(--dsw-alias-state-error-primary)}.nArs4W_dirtyDot{background:var(--dsw-alias-state-warn-primary);border-radius:50%;flex:none;width:7px;height:7px}.nArs4W_editorPlaceholder{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);text-align:center;flex:1;justify-content:center;align-items:center;padding:16px;display:flex}.nArs4W_orphanedType{opacity:.7;overflow-wrap:anywhere;margin-top:8px;font-size:12px;display:block}.nArs4W_editorBinary{text-align:center;flex-direction:column;flex:1;justify-content:center;align-items:center;gap:12px;padding:24px 16px;display:flex}.nArs4W_editorBinaryNotice{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary)}.nArs4W_editorDownloadLink{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-strong-12);cursor:pointer;transition:background var(--ds-transition-duration-slow) var(--ds-ease-in-out), border-color var(--ds-transition-duration-slow) var(--ds-ease-in-out);border-radius:6px;align-items:center;gap:6px;padding:6px 14px;text-decoration:none;display:inline-flex}.nArs4W_editorDownloadLink:hover{background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l2)}.nArs4W_editorError{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);padding:12px 16px}.nArs4W_editorBanner{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-state-warn-label);background:var(--dsw-alias-state-warn-tertiary);flex:none;padding:4px 8px}.nArs4W_editorBannerAction{font:inherit;color:inherit;cursor:pointer;background:0 0;border:0;margin-left:8px;padding:0;text-decoration:underline}.nArs4W_editorGitAdd{color:var(--dsw-alias-state-success-primary)}.nArs4W_editorGitMod{color:var(--dsw-alias-state-warn-primary)}.nArs4W_editorGitDel{color:var(--dsw-alias-state-error-primary)}.nArs4W_editorGitBarGutter{width:2px;min-width:2px}.nArs4W_editorGitBar,.nArs4W_editorGitBarSpacer{width:2px;height:100%}.nArs4W_editorGitBarAdd{background:var(--dsw-alias-state-success-primary)}.nArs4W_editorGitBarMod{background:var(--dsw-alias-state-warn-primary)}.nArs4W_editorGitBarDel{background:var(--dsw-alias-state-error-primary)}.nArs4W_editorBlame{max-width:420px;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-primary);padding:4px 8px}.nArs4W_editorBlameHead{color:var(--dsw-alias-label-secondary)}.nArs4W_editorBlameSummary{color:var(--dsw-alias-label-primary);white-space:pre-wrap;overflow-wrap:anywhere;margin-top:2px}.nArs4W_sandboxStatus{font:var(--dsw-font-xxxs-11);flex:none;align-items:center;gap:8px;padding:4px 10px;display:flex}.nArs4W_sandboxStatusOn{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-1);border-bottom:1px solid var(--dsw-alias-border-l1)}.nArs4W_sandboxStatusOff{color:var(--dsw-alias-state-error-primary);background:color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent);border-bottom:1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 45%, transparent)}.nArs4W_sandboxDot{background:var(--dsw-alias-state-success-primary);border-radius:50%;flex:none;width:6px;height:6px}.nArs4W_sandboxStatusOff .nArs4W_sandboxDot{background:var(--dsw-alias-state-error-primary)}.nArs4W_sandboxStatusText{text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;overflow:hidden}.nArs4W_sandboxAction{border:1px solid var(--dsw-alias-border-l2);font:inherit;color:inherit;cursor:pointer;background:0 0;border-radius:6px;flex:none;padding:2px 8px}.nArs4W_sandboxAction:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_editorHtml{background:var(--dsw-alias-bg-base);border:none;flex:1;width:100%;min-height:0}.nArs4W_browser{flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_browserBar{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:4px;padding:6px 8px;display:flex}.nArs4W_browserInput{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);min-width:0;height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:6px;flex:1;padding:0 10px}.nArs4W_browserInput:focus{border-color:var(--dsw-alias-border-l2);outline:none}.nArs4W_browserMessage{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-state-warn-label);background:var(--dsw-alias-state-warn-tertiary);flex:none;padding:4px 12px}.nArs4W_browserFrame{background:var(--dsw-alias-bg-base);border:none;flex:1;width:100%;min-height:0}.nArs4W_browserStart{text-align:center;min-height:0;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-tertiary);flex:1;justify-content:center;align-items:center;padding:20px;display:flex}.nArs4W_browserBlocked{text-align:center;min-height:0;color:var(--dsw-alias-state-warn-primary);flex-direction:column;flex:1;justify-content:center;align-items:center;gap:6px;padding:24px;display:flex}.nArs4W_browserBlockedTitle{font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary)}.nArs4W_browserBlockedDesc{max-width:280px;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-secondary)}.nArs4W_browserBlockedActions{gap:8px;margin-top:6px;display:flex}.nArs4W_browserBlockedButton{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxxs-11);cursor:pointer;border-radius:6px;padding:4px 12px}.nArs4W_browserBlockedButton:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_editorCm{background:0 0;flex:1;min-height:0;overflow:hidden}.nArs4W_editorCmHidden{display:none}.nArs4W_editorCm .cm-editor{height:100%}.nArs4W_editorCm .cm-scroller{padding:12px 16px}.nArs4W_editorCm .cm-editor.cm-focused{outline:none}.nArs4W_editorModeToggle{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);border-radius:6px;flex:none;align-items:center;gap:2px;padding:2px;display:inline-flex}.nArs4W_editorModeButton{color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxxs-11);cursor:pointer;background:0 0;border:none;border-radius:4px;padding:2px 8px}.nArs4W_editorModeButton:hover{color:var(--dsw-alias-label-primary)}.nArs4W_editorModeActive{background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}.nArs4W_editorMd{min-height:0;font:var(--dsw-font-xs-13);flex:1;padding:12px 16px;overflow-y:auto}.nArs4W_editorMd .md-code-block:not([data-mermaid-processed])>div:first-child{z-index:auto;position:static}.nArs4W_mermaidWrap{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);border-radius:6px;margin:6px 0;overflow:hidden}.nArs4W_mermaidHeader{border-bottom:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);justify-content:space-between;align-items:center;gap:6px;padding:4px 8px;display:flex}.nArs4W_mermaidInfo{font:var(--dsw-font-xxxs-strong-11);color:var(--dsw-alias-label-tertiary)}.nArs4W_mermaidCopy{height:20px;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxxs-11);cursor:pointer;background:0 0;border:none;border-radius:4px;align-items:center;gap:4px;padding:0 6px;display:inline-flex}.nArs4W_mermaidCopy:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_mermaidBody{cursor:zoom-in;justify-content:center;padding:10px;display:flex;overflow:auto}.nArs4W_mermaidBody svg{max-width:100%;height:auto}.nArs4W_mermaidError{border-bottom:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-state-error-primary);font:var(--dsw-font-xxxs-11);padding:6px 10px}.nArs4W_mermaidCode{font:var(--dsw-font-xxxs-11);margin:0;padding:8px 10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow:auto}.nArs4W_mermaidMarkdown .md-code-block[data-mermaid-processed]{display:contents}.nArs4W_mermaidModal{z-index:1000;background:var(--dsw-alias-bg-mask-1);backdrop-filter:blur(2px);flex-direction:column;justify-content:center;align-items:center;display:flex;position:fixed;inset:0;-webkit-app-region:initial!important}.nArs4W_mermaidModalToolbar{z-index:10;gap:8px;display:flex;position:absolute;top:16px;right:16px}.nArs4W_mermaidModalButton{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);width:36px;height:36px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xs-strong-13);cursor:pointer;border-radius:8px;justify-content:center;align-items:center;display:inline-flex}.nArs4W_mermaidModalButton:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_mermaidModalStage{justify-content:center;align-items:center;width:90vw;height:80vh;display:flex;position:relative;overflow:hidden}.nArs4W_mermaidModalStage svg{cursor:grab;transform-origin:50%;user-select:none;-webkit-user-drag:none;background:var(--dsw-alias-bg-layer-1);border-radius:12px;max-width:none;max-height:none;padding:16px}.nArs4W_mermaidModalStage svg:active{cursor:grabbing}.nArs4W_mermaidModalHint{color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxxs-11);pointer-events:none;position:absolute;bottom:16px;left:50%;transform:translate(-50%)}.nArs4W_selectionPopup{z-index:60;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-specific-menu);height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxxs-strong-11);white-space:nowrap;cursor:pointer;border-radius:6px;align-items:center;padding:0 10px;display:inline-flex;position:fixed;transform:translate(-50%,calc(-100% - 8px))}.nArs4W_selectionPopup:hover{background:var(--dsw-alias-interactive-bg-hover-solid)}.nArs4W_editorPdf{background:var(--dsw-alias-bg-base);flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_editorPdfToolbar{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;justify-content:flex-end;padding:6px 8px;display:flex}.nArs4W_editorPdfStage{flex:1;min-height:0;display:flex;position:relative}.nArs4W_editorPdfFrame{background:var(--dsw-alias-bg-base);border:none;flex:1;width:100%;min-height:0}.nArs4W_editorPdfFrameBlocked{pointer-events:none}.nArs4W_editorPdfDragShield{z-index:4;pointer-events:none;background:0 0;position:absolute;inset:0}.nArs4W_editorPdfDragShieldActive{pointer-events:auto}body[data-dsh-tab-dragging] .nArs4W_editorPdfFrame{pointer-events:none!important}body[data-dsh-tab-dragging] .nArs4W_editorPdfDragShield{pointer-events:auto!important}.nArs4W_boundaryError{z-index:50;background:var(--dsw-alias-bg-layer-1);border-left:1px solid var(--dsw-alias-border-l2);font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);flex-direction:column;align-items:flex-start;gap:8px;padding:16px;display:flex;position:fixed;top:0;bottom:0;right:0;overflow:auto}.nArs4W_terminalRetry{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxxs-strong-11);cursor:pointer;border-radius:999px;flex:none;padding:1px 8px}.nArs4W_terminalRetry:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_tabBoundaryError{min-height:0;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);flex-direction:column;flex:1;align-items:flex-start;gap:8px;padding:12px 16px;display:flex;overflow:auto}.nArs4W_nativeTabHost{flex-direction:column;height:100%;min-height:0;display:flex}.nArs4W_gitEmpty{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);padding:4px 12px 8px}.nArs4W_gitPlaceholder{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);text-align:center;padding:16px}.nArs4W_gitError{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);white-space:pre-wrap;padding:8px 12px}.nArs4W_gitDiffTab{flex-direction:column;flex:1;min-width:0;min-height:0;display:flex;overflow:hidden auto}.nArs4W_gitDiffTabHeader{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:8px;height:36px;padding:0 8px 0 12px;display:flex}.nArs4W_gitDiffTabTitle{text-overflow:ellipsis;white-space:nowrap;min-width:0;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary);flex:1;overflow:hidden}.nArs4W_toggleButton:focus-visible,.nArs4W_bottomClose:focus-visible,.nArs4W_iconButton:focus-visible,.nArs4W_tab:focus-visible,.nArs4W_tabClose:focus-visible,.nArs4W_tabBarPlus:focus-visible,.nArs4W_paneCard:focus-visible,.nArs4W_explorerRow:focus-visible,.nArs4W_explorerRef:focus-visible,.nArs4W_terminalRetry:focus-visible,.nArs4W_editorModeButton:focus-visible,.nArs4W_editorDownloadLink:focus-visible,.nArs4W_editorPptxButton:focus-visible,.nArs4W_editorDocxZoomRange:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}@media (prefers-reduced-motion:reduce){.nArs4W_bottomPanel,.nArs4W_bottomPanelHidden,.nArs4W_toggleButton,.nArs4W_tab,.nArs4W_tabBarPlus,.nArs4W_paneCard,.nArs4W_explorerRow,.nArs4W_divider,.nArs4W_dividerRow:after,.nArs4W_dividerCol:after{transition:none;animation:none}}@media (width<=767px){.nArs4W_tab{min-width:48px;max-width:128px}}.nArs4W_openWithLabel{align-items:center;gap:8px;width:100%;min-width:0;display:flex}.nArs4W_openWithName{text-overflow:ellipsis;white-space:nowrap;flex:auto;min-width:0;overflow:hidden}.nArs4W_openWithChevron{color:var(--dsw-alias-label-tertiary);flex:none}.nArs4W_openWithPin{width:16px;height:16px;color:var(--dsw-alias-label-tertiary);cursor:pointer;border-radius:5px;flex:none;justify-content:center;align-items:center;display:inline-flex}.nArs4W_openWithPin:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_openWithPinActive{color:var(--dsw-alias-state-business-primary)}.nArs4W_editorHtmlBlock{margin:8px 0}.nArs4W_editorHtmlBlock img,.nArs4W_editorHtmlBlock video{max-width:100%}.nArs4W_editorHtmlBlock details{margin:4px 0;padding:4px 0}.nArs4W_editorHtmlBlock summary,.nArs4W_editorMd details>summary{cursor:pointer}.nArs4W_tocBar{z-index:7;pointer-events:none;justify-content:flex-end;height:0;display:flex;position:sticky;top:0}.nArs4W_tocButton{pointer-events:auto;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);width:26px;height:26px;color:var(--dsw-alias-label-secondary);cursor:pointer;border-radius:6px;justify-content:center;align-items:center;margin:4px 2px 0 0;padding:0;display:inline-flex}.nArs4W_tocButton:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_tocPanel{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);width:min(300px,82%);max-height:60vh;box-shadow:var(--dsw-shadow-lv2);pointer-events:auto;border-radius:8px;flex-direction:column;padding:4px;display:flex;position:absolute;top:32px;right:2px;overflow-y:auto}.nArs4W_tocItem{min-width:0;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxs-12);text-align:left;cursor:pointer;background:0 0;border:none;border-radius:6px;align-items:baseline;gap:8px;padding:4px 8px;display:flex}.nArs4W_tocItem:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_tocItem[data-level=\"2\"]{padding-left:18px}.nArs4W_tocItem[data-level=\"3\"]{padding-left:28px}.nArs4W_tocItem[data-level=\"4\"]{padding-left:38px}.nArs4W_tocItem[data-level=\"5\"]{padding-left:48px}.nArs4W_tocItem[data-level=\"6\"]{padding-left:58px}.nArs4W_tocItemLevel{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary);flex:none}.nArs4W_tocItemText{text-overflow:ellipsis;white-space:nowrap;flex:auto;min-width:0;overflow:hidden}@keyframes nArs4W_dsh-toc-flash{0%,60%{background:var(--dsw-alias-interactive-bg-hover)}to{background:0 0}}.nArs4W_tocFlash{border-radius:4px;animation:1.2s ease-out nArs4W_dsh-toc-flash}.nArs4W_largeFile{flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_largeFileNotice{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-state-warn-label);background:var(--dsw-alias-state-warn-tertiary);flex:none;align-items:baseline;gap:8px;padding:4px 8px;display:flex}.nArs4W_largeFileDownload{color:inherit;text-decoration:underline}.nArs4W_largeFileNoticeAction{font:inherit;color:inherit;cursor:pointer;background:0 0;border:1px solid;border-radius:4px;margin-left:auto;padding:0 6px}.nArs4W_largeFileNoticeAction:disabled{opacity:.5;cursor:default}.nArs4W_largeFileBody{flex:1;min-height:0;overflow:auto}.nArs4W_largeFileRecords{padding:4px 0}.nArs4W_largeFileList{margin:0;padding:0;list-style:none}.nArs4W_largeFileRecord{gap:8px;padding:2px 8px;display:flex}.nArs4W_largeFileRecordExpanded{background:var(--dsw-alias-bg-layer-1)}.nArs4W_largeFileRecordInvalid{color:var(--dsw-alias-state-error-primary)}.nArs4W_largeFileRecordNo{text-align:right;min-width:4ch;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary);user-select:none;flex:none}.nArs4W_largeFileRecordBody{flex:1;min-width:0}.nArs4W_largeFileRecordSummary{text-align:left;width:100%;font:var(--ds-font-family-code);color:var(--dsw-alias-label-primary);white-space:pre;text-overflow:ellipsis;cursor:pointer;background:0 0;border:0;padding:0;font-size:12px;display:block;overflow:hidden}.nArs4W_largeFileRecordSummary:disabled{cursor:default}.nArs4W_largeFileRecordRaw{font:var(--ds-font-family-code);white-space:pre-wrap;word-break:break-all;overflow-wrap:anywhere;margin:2px 0 0;font-size:12px}.nArs4W_largeFileRecordTree{font:var(--ds-font-family-code);margin-top:2px;font-size:12px}.nArs4W_largeFileLines{font:var(--ds-font-family-code);white-space:pre;padding:4px 0;font-size:12px}.nArs4W_largeFileLine{gap:8px;padding:0 8px;display:flex}.nArs4W_largeFileLineNo{text-align:right;min-width:5ch;color:var(--dsw-alias-label-tertiary);user-select:none;flex:none}.nArs4W_largeFileLineText{color:var(--dsw-alias-label-primary);flex:none}.nArs4W_largeFilePager{border-top:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);flex:none;align-items:center;gap:4px;padding:2px 8px;display:flex}.nArs4W_largeFilePageLabel{text-align:center;min-width:0;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-secondary);white-space:nowrap;text-overflow:ellipsis;flex:1;overflow:hidden}";
+		const css$12 = "[data-dsh-panel-host]{z-index:25;pointer-events:none;height:100dvh;position:fixed;inset:0;overflow:clip}html[data-platform] body>[data-dsh-better-sidebar],[data-dsh-panel-host]{-webkit-app-region:initial!important}[data-dsh-panel-host]>*{-webkit-app-region:no-drag}[data-dockkit-float-resize]{z-index:2}[data-dsh-panel-host][data-dsh-panel-host-degraded]{position:absolute;top:0;left:0}.nArs4W_dockFallback{z-index:40;align-items:center;gap:2px;display:inline-flex;position:fixed}.nArs4W_toggleButton{width:28px;height:28px;color:var(--dsw-alias-label-secondary);cursor:pointer;transition:background var(--ds-transition-duration-slow) var(--ds-ease-in-out), color var(--ds-transition-duration-slow) var(--ds-ease-in-out);background:0 0;border:none;border-radius:50%;justify-content:center;align-items:center;display:flex}.nArs4W_toggleButton:hover:not(:disabled):not([aria-disabled=true]){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_toggleButton:disabled,.nArs4W_toggleButton[aria-disabled=true]{opacity:.4;cursor:default}.nArs4W_panelBody{flex:1;min-width:0;min-height:0;display:flex}.nArs4W_bottomPanel{z-index:40;background:var(--dsw-alias-bg-layer-1);border-top:1px solid var(--dsw-alias-border-l2);pointer-events:auto;padding-bottom:env(safe-area-inset-bottom);transition:transform var(--ds-transition-duration-slow) var(--ds-ease-in-out), height var(--ds-transition-duration-slow) var(--ds-ease-in-out);flex-direction:column;display:flex;position:absolute;bottom:0}.nArs4W_bottomPanelHidden{pointer-events:none;visibility:hidden;transition:transform var(--ds-transition-duration-slow) var(--ds-ease-in-out), height var(--ds-transition-duration-slow) var(--ds-ease-in-out), visibility 0s linear var(--ds-transition-duration-slow);transform:translateY(102%)}.nArs4W_bottomPanel[data-dragging]{transition:none}.nArs4W_bottomPanel{contain:layout style}body[data-dsh-sidebar-dragging] .nArs4W_panel,body[data-dsh-sidebar-dragging] .nArs4W_bottomPanel{will-change:transform}.nArs4W_bottomResize{cursor:row-resize;z-index:2;touch-action:none;height:8px;position:absolute;top:-4px;left:0;right:0}.nArs4W_bottomResizeActive{background:var(--dsw-alias-interactive-bg-hover-accent)}.nArs4W_bottomClose{z-index:4;width:28px;height:28px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:50%;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex;position:absolute;top:3px;right:6px}.nArs4W_bottomClose:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_bottomPanel .nArs4W_tabBar{padding-right:40px}.nArs4W_toggleButton,.nArs4W_tabBar{-webkit-app-region:no-drag}.nArs4W_iconButton{width:28px;height:28px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:50%;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex}.nArs4W_iconButton:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_iconButton:disabled{opacity:.4;cursor:default}.nArs4W_workbench,.nArs4W_split{flex:1;min-width:0;min-height:0;display:flex}.nArs4W_splitRow{flex-direction:row}.nArs4W_splitCol{flex-direction:column}.nArs4W_splitChild{display:flex;position:relative;overflow:hidden}.nArs4W_divider{z-index:3;touch-action:none;flex:none;position:relative}.nArs4W_dividerRow:after,.nArs4W_dividerCol:after{content:\"\";background:var(--dsw-alias-border-l2);transition:background var(--ds-transition-duration-slow) var(--ds-ease-in-out);position:absolute}.nArs4W_dividerRow{cursor:col-resize;width:7px;margin:0 -2px}.nArs4W_dividerRow:after{width:1px;top:0;bottom:0;left:50%;transform:translate(-50%)}.nArs4W_dividerCol{cursor:row-resize;height:7px;margin:-2px 0}.nArs4W_dividerCol:after{height:1px;top:50%;left:0;right:0;transform:translateY(-50%)}.nArs4W_divider:hover:after,.nArs4W_dividerActive:after{background:var(--dsw-alias-interactive-bg-hover-accent)}.nArs4W_pane{background:var(--dsw-alias-bg-base);flex-direction:column;flex:1;min-width:0;min-height:0;display:flex;position:relative}.nArs4W_paneDrop{outline:1px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}.nArs4W_dropOverlay{z-index:6;pointer-events:none;background:var(--dsw-alias-interactive-bg-hover-accent);opacity:.5;position:absolute}.nArs4W_dropLeft{width:25%;top:0;bottom:0;left:0}.nArs4W_dropRight{width:25%;top:0;bottom:0;right:0}.nArs4W_dropUp{height:25%;top:0;left:0;right:0}.nArs4W_dropDown{height:25%;bottom:0;left:0;right:0}.nArs4W_dropCenter{outline:2px dashed var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-2px;background:0 0;inset:25%}.nArs4W_paneContent{flex-direction:column;flex:1;min-height:0;display:flex;overflow:hidden}.nArs4W_chipIcon{flex:none;align-items:center;margin-right:6px;display:inline-flex}.nArs4W_chipUnread{background:var(--dsw-alias-danger);vertical-align:middle;border-radius:50%;width:6px;height:6px;margin-left:6px;display:inline-block}.nArs4W_tabUnreadDot{background:var(--dsw-alias-danger);border-radius:50%;flex:none;width:7px;height:7px}.nArs4W_paneTab{flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_paneTabHidden{display:none}.nArs4W_paneEmptyCards{flex:1;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));align-content:start;gap:12px;min-height:0;padding:12px;display:grid;overflow:hidden}.nArs4W_paneCard{box-sizing:border-box;border:.5px solid var(--dsw-alias-border-l4);background:var(--dsw-alias-bg-layer-1);min-width:0;min-height:56px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-s-strong-14);cursor:pointer;text-align:left;border-radius:24px;flex-direction:row;justify-content:flex-start;align-items:center;gap:14px;padding:14px 20px;display:flex}.nArs4W_paneCard>svg{color:var(--dsw-alias-label-secondary);flex:none}.nArs4W_paneCard:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l4)}.nArs4W_paneCard:disabled{opacity:.45;cursor:default}.nArs4W_tabBar{border-bottom:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);flex:none;align-items:stretch;height:34px;display:flex}.nArs4W_tabBarDrop{outline:1px dashed var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}.nArs4W_tabList{scrollbar-width:none;flex:1;min-width:0;display:flex;overflow-x:auto}.nArs4W_tabList::-webkit-scrollbar{display:none}.nArs4W_tab{min-width:64px;max-width:160px;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-secondary);border-right:1px solid var(--dsw-alias-border-l1);cursor:pointer;user-select:none;background:0 0;flex:none;align-items:center;gap:4px;padding:0 4px 0 10px;display:flex}.nArs4W_tab:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_tabActive{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-active)}.nArs4W_tabTitle{text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;overflow:hidden}.nArs4W_tabBadge{min-width:16px;height:15px;font:var(--dsw-font-xxxs-strong-11);background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-brand-primary);border-radius:8px;flex:none;justify-content:center;align-items:center;padding:0 4px;display:inline-flex}.nArs4W_tabClose{width:18px;height:18px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:4px;flex:none;justify-content:center;align-items:center;padding:0;display:inline-flex}.nArs4W_tabClose:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_tabBarPlus{background:var(--dsw-alias-bg-layer-1);width:22px;height:22px;color:var(--dsw-alias-label-tertiary);cursor:pointer;border:none;border-radius:5px;flex:none;justify-content:center;align-self:center;align-items:center;margin:0 6px;padding:0;display:inline-flex;position:sticky;right:0}.nArs4W_tabBarPlus:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_tabBarRightActions{flex:0 auto;justify-content:flex-end;align-items:center;gap:2px;min-width:0;padding-right:4px;display:flex;overflow:hidden}.nArs4W_explorer{flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_explorerHeader{flex:none;justify-content:space-between;align-items:center;gap:8px;height:36px;padding:0 8px 0 12px;display:flex}.nArs4W_explorerRoot{font:var(--dsw-font-s-14);color:var(--dsw-alias-label-secondary);text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.nArs4W_explorerBody{flex:1;min-height:0;padding:4px 8px 8px;overflow:hidden auto}.nArs4W_explorerRow{box-sizing:border-box;width:100%;max-width:100%;height:28px;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer;white-space:nowrap;animation:nArs4W_dsh-row-in .15s var(--ds-ease-in-out);background:0 0;border:none;border-radius:4px;align-items:center;gap:6px;padding:0 8px;display:flex;position:relative}.nArs4W_explorerRow:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_explorerRowSelected{background:var(--dsw-alias-interactive-bg-active)}.nArs4W_explorerRowSelected:before{content:\"\";background:var(--dsw-alias-state-business-primary);border-radius:1px;width:2px;position:absolute;top:4px;bottom:4px;left:0}.nArs4W_explorerGitName[data-git-tone=modified]{color:var(--dsw-alias-state-warn-primary)}.nArs4W_explorerGitName[data-git-tone=added],.nArs4W_explorerGitName[data-git-tone=untracked]{color:var(--dsw-alias-state-success-primary)}.nArs4W_explorerGitName[data-git-tone=deleted]{color:var(--dsw-alias-state-error-primary)}.nArs4W_explorerGitName[data-git-tone=renamed]{color:var(--dsw-alias-state-business-primary)}.nArs4W_explorerGitName[data-git-tone=copied]{color:var(--dsw-alias-state-success-primary)}.nArs4W_explorerGitName[data-git-tone=conflict]{color:var(--dsw-alias-state-error-primary)}.nArs4W_explorerDirChanged{color:var(--dsw-alias-state-business-primary)}.nArs4W_explorerRowRevealed{background:var(--dsw-alias-state-business-tertiary)}.nArs4W_explorerRowRevealed+.nArs4W_explorerRowRevealed{border-top-left-radius:0;border-top-right-radius:0}.nArs4W_explorerRowRevealed:has(+.nArs4W_explorerRowRevealed){border-bottom-right-radius:0;border-bottom-left-radius:0}.nArs4W_explorerDir{font:var(--dsw-font-xxs-strong-12)}.nArs4W_explorerHidden{opacity:.45}.nArs4W_explorerSymlink{color:var(--dsw-alias-label-tertiary);flex:none}.nArs4W_explorerBroken .nArs4W_explorerName{color:var(--dsw-alias-state-error-primary)}.nArs4W_explorerName{text-overflow:ellipsis;white-space:nowrap;min-width:0;overflow:hidden}.nArs4W_explorerRenaming{cursor:text}.nArs4W_explorerRenameInput{box-sizing:border-box;border:1px solid var(--dsw-alias-state-business-primary);background:var(--dsw-alias-bg-layer-1);min-width:0;height:22px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:3px;flex:auto;padding:0 6px}.nArs4W_explorerRenameInput:focus{border-color:var(--dsw-alias-state-business-primary);outline:none}.nArs4W_explorerActionError{box-sizing:border-box;border:1px solid var(--dsw-alias-state-error-primary);background:var(--dsw-alias-bg-layer-1);border-radius:8px;align-items:flex-start;gap:6px;width:100%;margin-bottom:4px;padding:6px 8px;display:flex}.nArs4W_explorerActionErrorText{overflow-wrap:anywhere;min-width:0;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);flex:auto}.nArs4W_explorerSelectionBar{z-index:1;box-sizing:border-box;background:var(--dsw-alias-bg-layer-2);border-radius:4px;align-items:center;gap:6px;width:100%;min-height:28px;margin-top:4px;padding:2px 8px;display:flex;position:sticky;bottom:0}.nArs4W_explorerSelectionText{text-overflow:ellipsis;white-space:nowrap;min-width:0;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-secondary);flex:auto;overflow:hidden}.nArs4W_explorerSelectionActions{flex-wrap:wrap;flex:none;justify-content:flex-end;gap:4px;max-width:72%;display:flex}.nArs4W_explorerAppIcon{object-fit:contain;width:14px;height:14px;display:block}.nArs4W_explorerHiddenPane{display:none}.nArs4W_explorerRef,.nArs4W_explorerCopied{margin-left:auto}.nArs4W_explorerRef{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);height:20px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxxs-strong-11);cursor:pointer;border-radius:999px;flex:none;align-items:center;padding:0 8px;display:none}.nArs4W_explorerRef:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_explorerRow:hover .nArs4W_explorerRef,.nArs4W_explorerRow:focus-within .nArs4W_explorerRef{display:inline-flex}.nArs4W_explorerCopied{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary);flex:none}.nArs4W_explorerError{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);cursor:default}@keyframes nArs4W_dsh-row-in{0%{opacity:0}}.nArs4W_explorerEmpty{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);text-align:center;padding:16px}.nArs4W_explorerRowDropTarget{background:var(--dsw-alias-interactive-bg-hover-accent);outline:1px dashed var(--dsw-alias-state-business-primary);outline-offset:-1px}.nArs4W_uploadDropMask{z-index:1001;pointer-events:none;background:color-mix(in srgb, var(--dsw-alias-bg-base) 62%, transparent);animation:nArs4W_dsh-row-in .15s var(--ds-ease-in-out);position:fixed;inset:0}.nArs4W_uploadDropZone{z-index:1002;pointer-events:none;border:2px dashed var(--dsw-alias-border-l2);background:color-mix(in srgb, var(--dsw-alias-state-business-primary) 4%, transparent);animation:nArs4W_dsh-row-in .15s var(--ds-ease-in-out);border-radius:8px;justify-content:center;align-items:flex-start;padding:12px;display:flex;position:fixed}.nArs4W_uploadDropHero{flex-direction:column;align-items:center;gap:8px;max-width:100%;padding-top:8px;display:flex}.nArs4W_uploadDropArtPrimary{color:var(--dsw-alias-state-business-primary)}.nArs4W_uploadDropArtAccent{color:var(--dsw-alias-state-business-tertiary)}.nArs4W_uploadDropArtCut{color:var(--dsw-alias-bg-layer-1)}.nArs4W_uploadDropZonePill{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);max-width:100%;height:28px;box-shadow:var(--dsw-shadow-lv2);color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxxs-11);border-radius:999px;align-items:center;gap:6px;padding:0 12px;display:flex}.nArs4W_uploadDropZoneText{white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.nArs4W_uploadDropChatHint{z-index:1003;pointer-events:none;animation:nArs4W_dsh-row-in .15s var(--ds-ease-in-out);justify-content:center;align-items:center;padding:24px;display:flex;position:fixed;top:0;bottom:0;left:0}.nArs4W_uploadDropChatCard{text-align:center;max-width:100%;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-strong-12);flex-direction:column;align-items:center;gap:10px;display:flex}.nArs4W_uploadOverlay{z-index:30;background:var(--dsw-alias-bg-mask-1);backdrop-filter:var(--dsw-mask-blur);animation:nArs4W_dsh-row-in .15s var(--ds-ease-in-out);justify-content:center;align-items:center;display:flex;position:absolute;inset:0}.nArs4W_uploadOverlayCard{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);min-width:240px;max-width:min(420px,100% - 48px);box-shadow:var(--dsw-shadow-lv3);border-radius:8px;flex-direction:column;gap:10px;padding:16px;display:flex}.nArs4W_uploadOverlayTitle{font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary);align-items:center;gap:6px;display:flex}.nArs4W_uploadOverlayTitle>svg{flex:none}.nArs4W_uploadOverlayTitle>span{white-space:nowrap;text-overflow:ellipsis;min-width:0;overflow:hidden}.nArs4W_uploadOverlayProgress{background:var(--dsw-alias-border-l2);border-radius:3px;height:6px;overflow:hidden}.nArs4W_uploadOverlayProgressFill{background:var(--dsw-alias-interactive-bg-hover-accent);height:100%;transition:width .15s var(--ds-ease-in-out);border-radius:3px}.nArs4W_uploadOverlayStatus{min-height:1em;font:var(--dsw-font-xxxs-11);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary);white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.nArs4W_uploadOverlayCancel{border:1px solid var(--dsw-alias-border-l2);height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-strong-12);cursor:pointer;background:0 0;border-radius:4px;align-self:flex-end;padding:0 12px}.nArs4W_uploadOverlayCancel:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l2)}.nArs4W_uploadOverlayCancel:disabled{opacity:.4;cursor:default}.nArs4W_editor{flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_editorHeader{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:6px;padding:6px 8px;display:flex}.nArs4W_editorTitle{min-width:0;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-secondary);text-overflow:ellipsis;white-space:nowrap;flex:1;overflow:hidden}.nArs4W_editorPathInput{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);min-width:0;height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:6px;flex:1;padding:0 10px}.nArs4W_editorPathInput:focus{border-color:var(--dsw-alias-border-l2);outline:none}.nArs4W_editorTreeToggleActive{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-active)}.nArs4W_editorBody{flex:1;min-height:0;display:flex}.nArs4W_editorMain{flex-direction:column;flex:1;min-width:0;min-height:0;display:flex}.nArs4W_editorTreeDock{border-left:1px solid var(--dsw-alias-border-l1);flex:none;min-height:0;display:flex;position:relative}.nArs4W_editorTreeResize{cursor:col-resize;touch-action:none;z-index:3;width:6px;position:absolute;top:0;bottom:0;left:0}.nArs4W_editorTreeResize:hover{background:var(--dsw-alias-border-l2)}.nArs4W_editorTreePanel{flex-direction:column;flex:1;min-width:0;min-height:0;display:flex;position:relative}.nArs4W_editorTreePanelFull{flex:1}.nArs4W_editorTreeSearch{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:6px;padding:6px 8px;display:flex}.nArs4W_editorSearchInput{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);min-width:0;height:26px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:6px;flex:1;padding:0 10px}.nArs4W_editorSearchInput:focus{border-color:var(--dsw-alias-border-l2);outline:none}.nArs4W_editorSearchHint{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);padding:8px 12px}.nArs4W_editorSearchResult{box-sizing:border-box;width:100%;height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);text-align:left;cursor:pointer;background:0 0;border:none;border-radius:4px;align-items:center;gap:6px;padding:0 8px;line-height:28px;display:flex;overflow:hidden}.nArs4W_editorSearchResultDir{color:var(--dsw-alias-label-secondary)}.nArs4W_editorSearchResultLabel{text-overflow:ellipsis;white-space:nowrap;min-width:0;overflow:hidden}.nArs4W_editorSearchResult:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_editorStatus{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary)}.nArs4W_editorStatusError{color:var(--dsw-alias-state-error-primary)}.nArs4W_dirtyDot{background:var(--dsw-alias-state-warn-primary);border-radius:50%;flex:none;width:7px;height:7px}.nArs4W_editorPlaceholder{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);text-align:center;flex:1;justify-content:center;align-items:center;padding:16px;display:flex}.nArs4W_orphanedType{opacity:.7;overflow-wrap:anywhere;margin-top:8px;font-size:12px;display:block}.nArs4W_editorBinary{text-align:center;flex-direction:column;flex:1;justify-content:center;align-items:center;gap:12px;padding:24px 16px;display:flex}.nArs4W_editorBinaryNotice{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary)}.nArs4W_editorDownloadLink{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-strong-12);cursor:pointer;transition:background var(--ds-transition-duration-slow) var(--ds-ease-in-out), border-color var(--ds-transition-duration-slow) var(--ds-ease-in-out);border-radius:6px;align-items:center;gap:6px;padding:6px 14px;text-decoration:none;display:inline-flex}.nArs4W_editorDownloadLink:hover{background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l2)}.nArs4W_editorError{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);padding:12px 16px}.nArs4W_editorBanner{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-state-warn-label);background:var(--dsw-alias-state-warn-tertiary);flex:none;padding:4px 8px}.nArs4W_editorBannerAction{font:inherit;color:inherit;cursor:pointer;background:0 0;border:0;margin-left:8px;padding:0;text-decoration:underline}.nArs4W_editorGitAdd{color:var(--dsw-alias-state-success-primary)}.nArs4W_editorGitMod{color:var(--dsw-alias-state-warn-primary)}.nArs4W_editorGitDel{color:var(--dsw-alias-state-error-primary)}.nArs4W_editorGitBarGutter{width:2px;min-width:2px}.nArs4W_editorGitBar,.nArs4W_editorGitBarSpacer{width:2px;height:100%}.nArs4W_editorGitBarAdd{background:var(--dsw-alias-state-success-primary)}.nArs4W_editorGitBarMod{background:var(--dsw-alias-state-warn-primary)}.nArs4W_editorGitBarDel{background:var(--dsw-alias-state-error-primary)}.nArs4W_editorBlame{max-width:420px;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-primary);padding:4px 8px}.nArs4W_editorBlameHead{color:var(--dsw-alias-label-secondary)}.nArs4W_editorBlameSummary{color:var(--dsw-alias-label-primary);white-space:pre-wrap;overflow-wrap:anywhere;margin-top:2px}.nArs4W_sandboxStatus{font:var(--dsw-font-xxxs-11);flex:none;align-items:center;gap:8px;padding:4px 10px;display:flex}.nArs4W_sandboxStatusOn{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-1);border-bottom:1px solid var(--dsw-alias-border-l1)}.nArs4W_sandboxStatusOff{color:var(--dsw-alias-state-error-primary);background:color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent);border-bottom:1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 45%, transparent)}.nArs4W_sandboxDot{background:var(--dsw-alias-state-success-primary);border-radius:50%;flex:none;width:6px;height:6px}.nArs4W_sandboxStatusOff .nArs4W_sandboxDot{background:var(--dsw-alias-state-error-primary)}.nArs4W_sandboxStatusText{text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;overflow:hidden}.nArs4W_sandboxAction{border:1px solid var(--dsw-alias-border-l2);font:inherit;color:inherit;cursor:pointer;background:0 0;border-radius:6px;flex:none;padding:2px 8px}.nArs4W_sandboxAction:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_editorHtml{background:var(--dsw-alias-bg-base);border:none;flex:1;width:100%;min-height:0}.nArs4W_browser{flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_browserBar{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:4px;padding:6px 8px;display:flex}.nArs4W_browserInput{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);min-width:0;height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:6px;flex:1;padding:0 10px}.nArs4W_browserInput:focus{border-color:var(--dsw-alias-border-l2);outline:none}.nArs4W_browserMessage{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-state-warn-label);background:var(--dsw-alias-state-warn-tertiary);flex:none;padding:4px 12px}.nArs4W_browserFrame{background:var(--dsw-alias-bg-base);border:none;flex:1;width:100%;min-height:0}.nArs4W_browserStart{text-align:center;min-height:0;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-tertiary);flex:1;justify-content:center;align-items:center;padding:20px;display:flex}.nArs4W_browserBlocked{text-align:center;min-height:0;color:var(--dsw-alias-state-warn-primary);flex-direction:column;flex:1;justify-content:center;align-items:center;gap:6px;padding:24px;display:flex}.nArs4W_browserBlockedTitle{font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary)}.nArs4W_browserBlockedDesc{max-width:280px;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-secondary)}.nArs4W_browserBlockedActions{gap:8px;margin-top:6px;display:flex}.nArs4W_browserBlockedButton{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxxs-11);cursor:pointer;border-radius:6px;padding:4px 12px}.nArs4W_browserBlockedButton:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_editorCm{background:0 0;flex:1;min-height:0;overflow:hidden}.nArs4W_editorCmHidden{display:none}.nArs4W_editorCm .cm-editor{height:100%}.nArs4W_editorCm .cm-scroller{padding:12px 16px}.nArs4W_editorCm .cm-editor.cm-focused{outline:none}.nArs4W_editorModeToggle{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);border-radius:6px;flex:none;align-items:center;gap:2px;padding:2px;display:inline-flex}.nArs4W_editorModeButton{color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxxs-11);cursor:pointer;background:0 0;border:none;border-radius:4px;padding:2px 8px}.nArs4W_editorModeButton:hover{color:var(--dsw-alias-label-primary)}.nArs4W_editorModeActive{background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}.nArs4W_editorMd{min-height:0;font:var(--dsw-font-xs-13);flex:1;padding:12px 16px;overflow-y:auto}.nArs4W_editorMd .md-code-block:not([data-mermaid-processed])>div:first-child{z-index:auto;position:static}.nArs4W_mermaidWrap{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);content-visibility:auto;contain-intrinsic-size:auto 240px;contain:layout paint style;border-radius:6px;margin:6px 0;overflow:hidden}.nArs4W_mermaidHeader{border-bottom:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);justify-content:space-between;align-items:center;gap:6px;padding:4px 8px;display:flex}.nArs4W_mermaidInfo{font:var(--dsw-font-xxxs-strong-11);color:var(--dsw-alias-label-tertiary)}.nArs4W_mermaidCopy{height:20px;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxxs-11);cursor:pointer;background:0 0;border:none;border-radius:4px;align-items:center;gap:4px;padding:0 6px;display:inline-flex}.nArs4W_mermaidCopy:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_mermaidBody{cursor:zoom-in;justify-content:center;padding:10px;display:flex;overflow:auto}.nArs4W_mermaidBody svg{max-width:100%;height:auto}.nArs4W_mermaidPending{flex-direction:column;justify-content:center;align-items:center;gap:10px;padding:18px 24px;display:flex}.nArs4W_mermaidPendingBar{background:var(--dsw-alias-bg-layer-2);border-radius:5px;width:min(320px,70%);height:10px;animation:1.4s ease-in-out infinite nArs4W_mermaidPendingPulse;display:block}.nArs4W_mermaidPendingBar:nth-child(2){width:min(240px,55%);animation-delay:.15s}.nArs4W_mermaidPendingBar:nth-child(3){width:min(160px,40%);animation-delay:.3s}@keyframes nArs4W_mermaidPendingPulse{0%,to{opacity:.45}50%{opacity:1}}@media (prefers-reduced-motion:reduce){.nArs4W_mermaidPendingBar{animation:none}}.nArs4W_mermaidError{border-bottom:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-state-error-primary);font:var(--dsw-font-xxxs-11);padding:6px 10px}.nArs4W_mermaidErrorDetail{color:var(--dsw-alias-label-tertiary);white-space:pre-wrap;word-break:break-word;margin-top:2px;display:block}.nArs4W_mermaidCode{font:var(--dsw-font-xxxs-11);margin:0;padding:8px 10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow:auto}.nArs4W_mermaidMarkdown .md-code-block[data-mermaid-processed]{display:contents}.nArs4W_mermaidModal{z-index:1000;background:var(--dsw-alias-bg-mask-1);backdrop-filter:blur(2px);flex-direction:column;justify-content:center;align-items:center;display:flex;position:fixed;inset:0;-webkit-app-region:initial!important}.nArs4W_mermaidModalToolbar{z-index:10;gap:8px;display:flex;position:absolute;top:16px;right:16px}.nArs4W_mermaidModalButton{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);width:36px;height:36px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xs-strong-13);cursor:pointer;border-radius:8px;justify-content:center;align-items:center;display:inline-flex}.nArs4W_mermaidModalButton:hover{background:var(--dsw-alias-interactive-bg-hover)}.nArs4W_mermaidModalStage{justify-content:center;align-items:center;width:90vw;height:80vh;display:flex;position:relative;overflow:hidden}.nArs4W_mermaidModalStage svg{cursor:grab;transform-origin:50%;user-select:none;-webkit-user-drag:none;background:var(--dsw-alias-bg-layer-1);border-radius:12px;max-width:none;max-height:none;padding:16px}.nArs4W_mermaidModalStage svg:active{cursor:grabbing}.nArs4W_mermaidModalHint{color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxxs-11);pointer-events:none;position:absolute;bottom:16px;left:50%;transform:translate(-50%)}.nArs4W_selectionPopup{z-index:60;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-specific-menu);height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxxs-strong-11);white-space:nowrap;cursor:pointer;border-radius:6px;align-items:center;padding:0 10px;display:inline-flex;position:fixed;transform:translate(-50%,calc(-100% - 8px))}.nArs4W_selectionPopup:hover{background:var(--dsw-alias-interactive-bg-hover-solid)}.nArs4W_editorPdf{background:var(--dsw-alias-bg-base);flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_editorPdfToolbar{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;justify-content:flex-end;padding:6px 8px;display:flex}.nArs4W_editorPdfStage{flex:1;min-height:0;display:flex;position:relative}.nArs4W_editorPdfFrame{background:var(--dsw-alias-bg-base);border:none;flex:1;width:100%;min-height:0}.nArs4W_editorPdfFrameBlocked{pointer-events:none}.nArs4W_editorPdfDragShield{z-index:4;pointer-events:none;background:0 0;position:absolute;inset:0}.nArs4W_editorPdfDragShieldActive{pointer-events:auto}body[data-dsh-tab-dragging] .nArs4W_editorPdfFrame{pointer-events:none!important}body[data-dsh-tab-dragging] .nArs4W_editorPdfDragShield{pointer-events:auto!important}.nArs4W_boundaryError{z-index:50;background:var(--dsw-alias-bg-layer-1);border-left:1px solid var(--dsw-alias-border-l2);font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);flex-direction:column;align-items:flex-start;gap:8px;padding:16px;display:flex;position:fixed;top:0;bottom:0;right:0;overflow:auto}.nArs4W_terminalRetry{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxxs-strong-11);cursor:pointer;border-radius:999px;flex:none;padding:1px 8px}.nArs4W_terminalRetry:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_tabBoundaryError{min-height:0;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);flex-direction:column;flex:1;align-items:flex-start;gap:8px;padding:12px 16px;display:flex;overflow:auto}.nArs4W_nativeTabHost{flex-direction:column;height:100%;min-height:0;display:flex}.nArs4W_gitEmpty{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);padding:4px 12px 8px}.nArs4W_gitPlaceholder{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);text-align:center;padding:16px}.nArs4W_gitError{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-state-error-primary);white-space:pre-wrap;padding:8px 12px}.nArs4W_gitDiffTab{flex-direction:column;flex:1;min-width:0;min-height:0;display:flex;overflow:hidden auto}.nArs4W_gitDiffTabHeader{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:8px;height:36px;padding:0 8px 0 12px;display:flex}.nArs4W_gitDiffTabTitle{text-overflow:ellipsis;white-space:nowrap;min-width:0;font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary);flex:1;overflow:hidden}.nArs4W_toggleButton:focus-visible,.nArs4W_bottomClose:focus-visible,.nArs4W_iconButton:focus-visible,.nArs4W_tab:focus-visible,.nArs4W_tabClose:focus-visible,.nArs4W_tabBarPlus:focus-visible,.nArs4W_paneCard:focus-visible,.nArs4W_explorerRow:focus-visible,.nArs4W_explorerRef:focus-visible,.nArs4W_terminalRetry:focus-visible,.nArs4W_editorModeButton:focus-visible,.nArs4W_editorDownloadLink:focus-visible,.nArs4W_editorPptxButton:focus-visible,.nArs4W_editorDocxZoomRange:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}@media (prefers-reduced-motion:reduce){.nArs4W_bottomPanel,.nArs4W_bottomPanelHidden,.nArs4W_toggleButton,.nArs4W_tab,.nArs4W_tabBarPlus,.nArs4W_paneCard,.nArs4W_explorerRow,.nArs4W_divider,.nArs4W_dividerRow:after,.nArs4W_dividerCol:after{transition:none;animation:none}}@media (width<=767px){.nArs4W_tab{min-width:48px;max-width:128px}}.nArs4W_openWithLabel{align-items:center;gap:8px;width:100%;min-width:0;display:flex}.nArs4W_openWithName{text-overflow:ellipsis;white-space:nowrap;flex:auto;min-width:0;overflow:hidden}.nArs4W_openWithChevron{color:var(--dsw-alias-label-tertiary);flex:none}.nArs4W_openWithPin{width:16px;height:16px;color:var(--dsw-alias-label-tertiary);cursor:pointer;border-radius:5px;flex:none;justify-content:center;align-items:center;display:inline-flex}.nArs4W_openWithPin:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_openWithPinActive{color:var(--dsw-alias-state-business-primary)}.nArs4W_editorHtmlBlock{margin:8px 0}.nArs4W_editorHtmlBlock img,.nArs4W_editorHtmlBlock video{max-width:100%}.nArs4W_editorHtmlBlock details{margin:4px 0;padding:4px 0}.nArs4W_editorHtmlBlock summary,.nArs4W_editorMd details>summary{cursor:pointer}.nArs4W_tocBar{z-index:7;pointer-events:none;justify-content:flex-end;height:0;display:flex;position:sticky;top:0}.nArs4W_tocButton{pointer-events:auto;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);width:26px;height:26px;color:var(--dsw-alias-label-secondary);cursor:pointer;border-radius:6px;justify-content:center;align-items:center;margin:4px 2px 0 0;padding:0;display:inline-flex}.nArs4W_tocButton:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_tocPanel{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);width:min(300px,82%);max-height:60vh;box-shadow:var(--dsw-shadow-lv2);pointer-events:auto;border-radius:8px;flex-direction:column;padding:4px;display:flex;position:absolute;top:32px;right:2px;overflow-y:auto}.nArs4W_tocItem{min-width:0;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxs-12);text-align:left;cursor:pointer;background:0 0;border:none;border-radius:6px;align-items:baseline;gap:8px;padding:4px 8px;display:flex}.nArs4W_tocItem:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.nArs4W_tocItem[data-level=\"2\"]{padding-left:18px}.nArs4W_tocItem[data-level=\"3\"]{padding-left:28px}.nArs4W_tocItem[data-level=\"4\"]{padding-left:38px}.nArs4W_tocItem[data-level=\"5\"]{padding-left:48px}.nArs4W_tocItem[data-level=\"6\"]{padding-left:58px}.nArs4W_tocItemLevel{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary);flex:none}.nArs4W_tocItemText{text-overflow:ellipsis;white-space:nowrap;flex:auto;min-width:0;overflow:hidden}@keyframes nArs4W_dsh-toc-flash{0%,60%{background:var(--dsw-alias-interactive-bg-hover)}to{background:0 0}}.nArs4W_tocFlash{border-radius:4px;animation:1.2s ease-out nArs4W_dsh-toc-flash}.nArs4W_largeFile{flex-direction:column;flex:1;min-height:0;display:flex}.nArs4W_largeFileNotice{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-state-warn-label);background:var(--dsw-alias-state-warn-tertiary);flex:none;align-items:baseline;gap:8px;padding:4px 8px;display:flex}.nArs4W_largeFileDownload{color:inherit;text-decoration:underline}.nArs4W_largeFileNoticeAction{font:inherit;color:inherit;cursor:pointer;background:0 0;border:1px solid;border-radius:4px;margin-left:auto;padding:0 6px}.nArs4W_largeFileNoticeAction:disabled{opacity:.5;cursor:default}.nArs4W_largeFileBody{flex:1;min-height:0;overflow:auto}.nArs4W_largeFileRecords{padding:4px 0}.nArs4W_largeFileList{margin:0;padding:0;list-style:none}.nArs4W_largeFileRecord{gap:8px;padding:2px 8px;display:flex}.nArs4W_largeFileRecordExpanded{background:var(--dsw-alias-bg-layer-1)}.nArs4W_largeFileRecordInvalid{color:var(--dsw-alias-state-error-primary)}.nArs4W_largeFileRecordNo{text-align:right;min-width:4ch;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary);user-select:none;flex:none}.nArs4W_largeFileRecordBody{flex:1;min-width:0}.nArs4W_largeFileRecordSummary{text-align:left;width:100%;font:var(--ds-font-family-code);color:var(--dsw-alias-label-primary);white-space:pre;text-overflow:ellipsis;cursor:pointer;background:0 0;border:0;padding:0;font-size:12px;display:block;overflow:hidden}.nArs4W_largeFileRecordSummary:disabled{cursor:default}.nArs4W_largeFileRecordRaw{font:var(--ds-font-family-code);white-space:pre-wrap;word-break:break-all;overflow-wrap:anywhere;margin:2px 0 0;font-size:12px}.nArs4W_largeFileRecordTree{font:var(--ds-font-family-code);margin-top:2px;font-size:12px}.nArs4W_largeFileLines{font:var(--ds-font-family-code);white-space:pre;padding:4px 0;font-size:12px}.nArs4W_largeFileLine{gap:8px;padding:0 8px;display:flex}.nArs4W_largeFileLineNo{text-align:right;min-width:5ch;color:var(--dsw-alias-label-tertiary);user-select:none;flex:none}.nArs4W_largeFileLineText{color:var(--dsw-alias-label-primary);flex:none}.nArs4W_largeFilePager{border-top:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);flex:none;align-items:center;gap:4px;padding:2px 8px;display:flex}.nArs4W_largeFilePageLabel{text-align:center;min-width:0;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-secondary);white-space:nowrap;text-overflow:ellipsis;flex:1;overflow:hidden}";
 		const tagId$12 = "dsh-better-sidebar/sidebar.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$12) + "]") === null) {
 			const tag = document.createElement("style");
@@ -4563,229 +4812,233 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var sidebar_module_css_default = {
-			"dockFallback": "nArs4W_dockFallback",
-			"dsh-row-in": "nArs4W_dsh-row-in",
-			"explorerAppIcon": "nArs4W_explorerAppIcon",
-			"uploadOverlayCard": "nArs4W_uploadOverlayCard",
-			"uploadOverlayTitle": "nArs4W_uploadOverlayTitle",
-			"explorerName": "nArs4W_explorerName",
-			"editorBody": "nArs4W_editorBody",
-			"editorCm": "nArs4W_editorCm",
-			"uploadDropChatCard": "nArs4W_uploadDropChatCard",
-			"explorerDirChanged": "nArs4W_explorerDirChanged",
-			"uploadDropZone": "nArs4W_uploadDropZone",
-			"mermaidCode": "nArs4W_mermaidCode",
-			"uploadOverlayCancel": "nArs4W_uploadOverlayCancel",
-			"tabBadge": "nArs4W_tabBadge",
-			"dropDown": "nArs4W_dropDown",
-			"editorSearchResultLabel": "nArs4W_editorSearchResultLabel",
-			"dividerRow": "nArs4W_dividerRow",
-			"editorTreeToggleActive": "nArs4W_editorTreeToggleActive",
-			"dropOverlay": "nArs4W_dropOverlay",
-			"tabList": "nArs4W_tabList",
-			"editorTreePanel": "nArs4W_editorTreePanel",
-			"mermaidBody": "nArs4W_mermaidBody",
-			"mermaidMarkdown": "nArs4W_mermaidMarkdown",
-			"browserFrame": "nArs4W_browserFrame",
-			"mermaidModalToolbar": "nArs4W_mermaidModalToolbar",
-			"editorPdfFrameBlocked": "nArs4W_editorPdfFrameBlocked",
-			"nativeTabHost": "nArs4W_nativeTabHost",
-			"panel": "nArs4W_panel",
-			"tabTitle": "nArs4W_tabTitle",
-			"pane": "nArs4W_pane",
-			"explorerEmpty": "nArs4W_explorerEmpty",
+			"editorGitBarMod": "nArs4W_editorGitBarMod",
+			"dropLeft": "nArs4W_dropLeft",
+			"tabClose": "nArs4W_tabClose",
+			"mermaidModalHint": "nArs4W_mermaidModalHint",
+			"largeFileRecordTree": "nArs4W_largeFileRecordTree",
+			"largeFile": "nArs4W_largeFile",
 			"editorPdfStage": "nArs4W_editorPdfStage",
-			"explorerBody": "nArs4W_explorerBody",
-			"uploadDropChatHint": "nArs4W_uploadDropChatHint",
+			"editorSearchHint": "nArs4W_editorSearchHint",
+			"editorBlameHead": "nArs4W_editorBlameHead",
+			"browserFrame": "nArs4W_browserFrame",
+			"browserStart": "nArs4W_browserStart",
+			"largeFileNoticeAction": "nArs4W_largeFileNoticeAction",
+			"largeFileRecordExpanded": "nArs4W_largeFileRecordExpanded",
+			"chipUnread": "nArs4W_chipUnread",
+			"editorSearchResultLabel": "nArs4W_editorSearchResultLabel",
+			"uploadDropZoneText": "nArs4W_uploadDropZoneText",
+			"browserBlocked": "nArs4W_browserBlocked",
+			"sandboxAction": "nArs4W_sandboxAction",
+			"largeFileRecordNo": "nArs4W_largeFileRecordNo",
+			"tocButton": "nArs4W_tocButton",
+			"uploadOverlayCard": "nArs4W_uploadOverlayCard",
+			"editorGitBarAdd": "nArs4W_editorGitBarAdd",
+			"editorHtmlBlock": "nArs4W_editorHtmlBlock",
+			"editorGitMod": "nArs4W_editorGitMod",
+			"gitError": "nArs4W_gitError",
+			"dividerRow": "nArs4W_dividerRow",
+			"explorerSelectionActions": "nArs4W_explorerSelectionActions",
+			"mermaidPending": "nArs4W_mermaidPending",
+			"tabBarPlus": "nArs4W_tabBarPlus",
+			"largeFileNotice": "nArs4W_largeFileNotice",
+			"browserBlockedActions": "nArs4W_browserBlockedActions",
+			"explorerGitName": "nArs4W_explorerGitName",
+			"explorerRowSelected": "nArs4W_explorerRowSelected",
+			"uploadOverlayCancel": "nArs4W_uploadOverlayCancel",
+			"browserBar": "nArs4W_browserBar",
 			"mermaidHeader": "nArs4W_mermaidHeader",
-			"tabBoundaryError": "nArs4W_tabBoundaryError",
+			"splitRow": "nArs4W_splitRow",
+			"dropCenter": "nArs4W_dropCenter",
+			"dsh-row-in": "nArs4W_dsh-row-in",
+			"sandboxStatusOff": "nArs4W_sandboxStatusOff",
+			"explorerSelectionBar": "nArs4W_explorerSelectionBar",
+			"workbench": "nArs4W_workbench",
+			"paneDrop": "nArs4W_paneDrop",
+			"editorBinaryNotice": "nArs4W_editorBinaryNotice",
+			"editorSearchInput": "nArs4W_editorSearchInput",
+			"browserMessage": "nArs4W_browserMessage",
+			"openWithChevron": "nArs4W_openWithChevron",
+			"editorTitle": "nArs4W_editorTitle",
+			"dividerCol": "nArs4W_dividerCol",
+			"splitChild": "nArs4W_splitChild",
+			"paneTabHidden": "nArs4W_paneTabHidden",
+			"browser": "nArs4W_browser",
+			"dropOverlay": "nArs4W_dropOverlay",
+			"largeFilePageLabel": "nArs4W_largeFilePageLabel",
+			"sandboxStatus": "nArs4W_sandboxStatus",
+			"tocItemText": "nArs4W_tocItemText",
+			"uploadDropMask": "nArs4W_uploadDropMask",
+			"editorCmHidden": "nArs4W_editorCmHidden",
+			"divider": "nArs4W_divider",
+			"editorGitDel": "nArs4W_editorGitDel",
+			"gitEmpty": "nArs4W_gitEmpty",
+			"openWithPinActive": "nArs4W_openWithPinActive",
+			"editorMd": "nArs4W_editorMd",
+			"editorSearchResult": "nArs4W_editorSearchResult",
+			"sandboxStatusOn": "nArs4W_sandboxStatusOn",
+			"pane": "nArs4W_pane",
+			"tocPanel": "nArs4W_tocPanel",
+			"mermaidModalStage": "nArs4W_mermaidModalStage",
+			"tocItemLevel": "nArs4W_tocItemLevel",
+			"editorTreePanel": "nArs4W_editorTreePanel",
+			"editorTreeResize": "nArs4W_editorTreeResize",
+			"tabList": "nArs4W_tabList",
+			"uploadOverlay": "nArs4W_uploadOverlay",
+			"editorTreeToggleActive": "nArs4W_editorTreeToggleActive",
+			"editorPdfToolbar": "nArs4W_editorPdfToolbar",
+			"mermaidMarkdown": "nArs4W_mermaidMarkdown",
+			"explorerSymlink": "nArs4W_explorerSymlink",
+			"editorPathInput": "nArs4W_editorPathInput",
+			"tabActive": "nArs4W_tabActive",
+			"editorGitBarGutter": "nArs4W_editorGitBarGutter",
+			"mermaidErrorDetail": "nArs4W_mermaidErrorDetail",
+			"largeFileLineNo": "nArs4W_largeFileLineNo",
+			"dirtyDot": "nArs4W_dirtyDot",
+			"explorerBody": "nArs4W_explorerBody",
+			"explorerDir": "nArs4W_explorerDir",
+			"editorBanner": "nArs4W_editorBanner",
+			"largeFileRecordRaw": "nArs4W_largeFileRecordRaw",
+			"editorSearchResultDir": "nArs4W_editorSearchResultDir",
+			"orphanedType": "nArs4W_orphanedType",
+			"editorGitAdd": "nArs4W_editorGitAdd",
+			"editorHtml": "nArs4W_editorHtml",
+			"uploadDropArtCut": "nArs4W_uploadDropArtCut",
+			"gitDiffTabHeader": "nArs4W_gitDiffTabHeader",
+			"split": "nArs4W_split",
+			"mermaidWrap": "nArs4W_mermaidWrap",
+			"largeFileDownload": "nArs4W_largeFileDownload",
+			"explorer": "nArs4W_explorer",
+			"browserBlockedDesc": "nArs4W_browserBlockedDesc",
+			"explorerDirChanged": "nArs4W_explorerDirChanged",
+			"explorerSelectionText": "nArs4W_explorerSelectionText",
+			"editorTreeSearch": "nArs4W_editorTreeSearch",
+			"editorTreePanelFull": "nArs4W_editorTreePanelFull",
+			"explorerRowRevealed": "nArs4W_explorerRowRevealed",
+			"largeFileLines": "nArs4W_largeFileLines",
+			"dsh-toc-flash": "nArs4W_dsh-toc-flash",
+			"bottomResizeActive": "nArs4W_bottomResizeActive",
+			"panel": "nArs4W_panel",
+			"explorerHeader": "nArs4W_explorerHeader",
+			"explorerRenaming": "nArs4W_explorerRenaming",
+			"browserInput": "nArs4W_browserInput",
+			"explorerHiddenPane": "nArs4W_explorerHiddenPane",
+			"dividerActive": "nArs4W_dividerActive",
+			"tabBarDrop": "nArs4W_tabBarDrop",
+			"uploadOverlayProgressFill": "nArs4W_uploadOverlayProgressFill",
+			"largeFileRecordBody": "nArs4W_largeFileRecordBody",
+			"tocItem": "nArs4W_tocItem",
+			"tabUnreadDot": "nArs4W_tabUnreadDot",
+			"openWithLabel": "nArs4W_openWithLabel",
+			"tabBarRightActions": "nArs4W_tabBarRightActions",
+			"uploadDropHero": "nArs4W_uploadDropHero",
+			"bottomPanelHidden": "nArs4W_bottomPanelHidden",
+			"browserBlockedButton": "nArs4W_browserBlockedButton",
+			"editor": "nArs4W_editor",
+			"dropUp": "nArs4W_dropUp",
+			"dropRight": "nArs4W_dropRight",
+			"mermaidBody": "nArs4W_mermaidBody",
+			"mermaidModalButton": "nArs4W_mermaidModalButton",
+			"largeFilePager": "nArs4W_largeFilePager",
+			"editorPdfFrameBlocked": "nArs4W_editorPdfFrameBlocked",
+			"toggleButton": "nArs4W_toggleButton",
+			"editorPdfDragShieldActive": "nArs4W_editorPdfDragShieldActive",
+			"paneTab": "nArs4W_paneTab",
+			"dockFallback": "nArs4W_dockFallback",
+			"explorerRowDropTarget": "nArs4W_explorerRowDropTarget",
+			"dropDown": "nArs4W_dropDown",
+			"editorModeActive": "nArs4W_editorModeActive",
+			"editorBinary": "nArs4W_editorBinary",
+			"explorerEmpty": "nArs4W_explorerEmpty",
+			"chipIcon": "nArs4W_chipIcon",
+			"mermaidCopy": "nArs4W_mermaidCopy",
+			"explorerActionErrorText": "nArs4W_explorerActionErrorText",
 			"bottomResize": "nArs4W_bottomResize",
+			"paneContent": "nArs4W_paneContent",
+			"bottomPanel": "nArs4W_bottomPanel",
+			"mermaidError": "nArs4W_mermaidError",
+			"tabBadge": "nArs4W_tabBadge",
+			"uploadOverlayStatus": "nArs4W_uploadOverlayStatus",
+			"iconButton": "nArs4W_iconButton",
+			"selectionPopup": "nArs4W_selectionPopup",
+			"uploadOverlayProgress": "nArs4W_uploadOverlayProgress",
+			"browserBlockedTitle": "nArs4W_browserBlockedTitle",
+			"mermaidCode": "nArs4W_mermaidCode",
+			"editorPptxButton": "nArs4W_editorPptxButton",
+			"largeFileRecordInvalid": "nArs4W_largeFileRecordInvalid",
+			"explorerAppIcon": "nArs4W_explorerAppIcon",
+			"editorBlame": "nArs4W_editorBlame",
+			"editorPdf": "nArs4W_editorPdf",
+			"splitCol": "nArs4W_splitCol",
+			"editorBannerAction": "nArs4W_editorBannerAction",
+			"gitDiffTab": "nArs4W_gitDiffTab",
+			"explorerError": "nArs4W_explorerError",
+			"uploadOverlayTitle": "nArs4W_uploadOverlayTitle",
+			"tocFlash": "nArs4W_tocFlash",
+			"explorerRef": "nArs4W_explorerRef",
+			"sandboxDot": "nArs4W_sandboxDot",
+			"editorPdfFrame": "nArs4W_editorPdfFrame",
+			"mermaidModal": "nArs4W_mermaidModal",
+			"boundaryError": "nArs4W_boundaryError",
+			"explorerRoot": "nArs4W_explorerRoot",
+			"editorStatusError": "nArs4W_editorStatusError",
+			"explorerName": "nArs4W_explorerName",
+			"editorHeader": "nArs4W_editorHeader",
+			"explorerCopied": "nArs4W_explorerCopied",
+			"uploadDropZone": "nArs4W_uploadDropZone",
+			"editorBody": "nArs4W_editorBody",
+			"editorMain": "nArs4W_editorMain",
+			"sandboxStatusText": "nArs4W_sandboxStatusText",
+			"largeFileLine": "nArs4W_largeFileLine",
+			"tab": "nArs4W_tab",
+			"mermaidModalToolbar": "nArs4W_mermaidModalToolbar",
+			"mermaidInfo": "nArs4W_mermaidInfo",
+			"explorerBroken": "nArs4W_explorerBroken",
+			"explorerRow": "nArs4W_explorerRow",
+			"explorerActionError": "nArs4W_explorerActionError",
+			"largeFileList": "nArs4W_largeFileList",
+			"largeFileLineText": "nArs4W_largeFileLineText",
+			"editorPlaceholder": "nArs4W_editorPlaceholder",
+			"editorError": "nArs4W_editorError",
+			"editorGitBarDel": "nArs4W_editorGitBarDel",
+			"openWithPin": "nArs4W_openWithPin",
+			"tabBar": "nArs4W_tabBar",
+			"explorerHidden": "nArs4W_explorerHidden",
+			"editorTreeDock": "nArs4W_editorTreeDock",
+			"nativeTabHost": "nArs4W_nativeTabHost",
+			"gitDiffTabTitle": "nArs4W_gitDiffTabTitle",
+			"editorDocxZoomRange": "nArs4W_editorDocxZoomRange",
+			"uploadDropArtAccent": "nArs4W_uploadDropArtAccent",
+			"uploadDropChatHint": "nArs4W_uploadDropChatHint",
+			"tabBoundaryError": "nArs4W_tabBoundaryError",
+			"openWithName": "nArs4W_openWithName",
+			"largeFileRecordSummary": "nArs4W_largeFileRecordSummary",
+			"tocBar": "nArs4W_tocBar",
+			"largeFileRecord": "nArs4W_largeFileRecord",
+			"mermaidPendingBar": "nArs4W_mermaidPendingBar",
+			"largeFileRecords": "nArs4W_largeFileRecords",
+			"editorStatus": "nArs4W_editorStatus",
+			"bottomClose": "nArs4W_bottomClose",
+			"paneCard": "nArs4W_paneCard",
+			"tabTitle": "nArs4W_tabTitle",
+			"editorGitBarSpacer": "nArs4W_editorGitBarSpacer",
+			"editorPdfDragShield": "nArs4W_editorPdfDragShield",
+			"uploadDropZonePill": "nArs4W_uploadDropZonePill",
+			"editorCm": "nArs4W_editorCm",
+			"editorDownloadLink": "nArs4W_editorDownloadLink",
+			"paneEmptyCards": "nArs4W_paneEmptyCards",
+			"editorGitBar": "nArs4W_editorGitBar",
+			"gitPlaceholder": "nArs4W_gitPlaceholder",
+			"panelBody": "nArs4W_panelBody",
 			"editorModeButton": "nArs4W_editorModeButton",
 			"uploadDropArtPrimary": "nArs4W_uploadDropArtPrimary",
-			"paneCard": "nArs4W_paneCard",
-			"editorBlameSummary": "nArs4W_editorBlameSummary",
-			"explorerRowDropTarget": "nArs4W_explorerRowDropTarget",
-			"editorPdfToolbar": "nArs4W_editorPdfToolbar",
-			"uploadDropZonePill": "nArs4W_uploadDropZonePill",
-			"editorGitMod": "nArs4W_editorGitMod",
-			"gitEmpty": "nArs4W_gitEmpty",
-			"browserBlocked": "nArs4W_browserBlocked",
-			"tabBarPlus": "nArs4W_tabBarPlus",
-			"dropCenter": "nArs4W_dropCenter",
-			"editorPptxButton": "nArs4W_editorPptxButton",
-			"openWithChevron": "nArs4W_openWithChevron",
-			"explorerCopied": "nArs4W_explorerCopied",
-			"dsh-toc-flash": "nArs4W_dsh-toc-flash",
-			"explorerRenameInput": "nArs4W_explorerRenameInput",
-			"browserBlockedDesc": "nArs4W_browserBlockedDesc",
-			"editorDownloadLink": "nArs4W_editorDownloadLink",
-			"largeFileBody": "nArs4W_largeFileBody",
-			"editor": "nArs4W_editor",
-			"largeFileRecordNo": "nArs4W_largeFileRecordNo",
-			"tocPanel": "nArs4W_tocPanel",
-			"largeFileDownload": "nArs4W_largeFileDownload",
-			"editorDocxZoomRange": "nArs4W_editorDocxZoomRange",
-			"chipIcon": "nArs4W_chipIcon",
-			"uploadDropZoneText": "nArs4W_uploadDropZoneText",
-			"editorGitBarSpacer": "nArs4W_editorGitBarSpacer",
-			"editorGitAdd": "nArs4W_editorGitAdd",
-			"browserBlockedTitle": "nArs4W_browserBlockedTitle",
-			"largeFile": "nArs4W_largeFile",
-			"gitError": "nArs4W_gitError",
-			"gitDiffTab": "nArs4W_gitDiffTab",
-			"largeFilePageLabel": "nArs4W_largeFilePageLabel",
-			"openWithLabel": "nArs4W_openWithLabel",
-			"tocItemLevel": "nArs4W_tocItemLevel",
-			"tocFlash": "nArs4W_tocFlash",
-			"paneContent": "nArs4W_paneContent",
-			"toggleButton": "nArs4W_toggleButton",
-			"tab": "nArs4W_tab",
-			"paneDrop": "nArs4W_paneDrop",
-			"explorerActionErrorText": "nArs4W_explorerActionErrorText",
-			"editorGitDel": "nArs4W_editorGitDel",
-			"sandboxStatusOn": "nArs4W_sandboxStatusOn",
-			"tabActive": "nArs4W_tabActive",
-			"sandboxDot": "nArs4W_sandboxDot",
-			"paneTabHidden": "nArs4W_paneTabHidden",
 			"editorModeToggle": "nArs4W_editorModeToggle",
-			"editorBannerAction": "nArs4W_editorBannerAction",
-			"gitDiffTabHeader": "nArs4W_gitDiffTabHeader",
-			"explorerSelectionText": "nArs4W_explorerSelectionText",
-			"editorSearchInput": "nArs4W_editorSearchInput",
-			"gitDiffTabTitle": "nArs4W_gitDiffTabTitle",
-			"explorerDir": "nArs4W_explorerDir",
-			"dropLeft": "nArs4W_dropLeft",
-			"explorerHeader": "nArs4W_explorerHeader",
-			"uploadDropArtAccent": "nArs4W_uploadDropArtAccent",
-			"editorSearchResult": "nArs4W_editorSearchResult",
-			"uploadDropMask": "nArs4W_uploadDropMask",
-			"explorerRef": "nArs4W_explorerRef",
-			"uploadOverlay": "nArs4W_uploadOverlay",
-			"splitChild": "nArs4W_splitChild",
-			"tocBar": "nArs4W_tocBar",
-			"tabBarRightActions": "nArs4W_tabBarRightActions",
-			"largeFileRecord": "nArs4W_largeFileRecord",
+			"editorBlameSummary": "nArs4W_editorBlameSummary",
+			"uploadDropChatCard": "nArs4W_uploadDropChatCard",
+			"mermaidPendingPulse": "nArs4W_mermaidPendingPulse",
+			"explorerRenameInput": "nArs4W_explorerRenameInput",
 			"terminalRetry": "nArs4W_terminalRetry",
-			"explorerRowSelected": "nArs4W_explorerRowSelected",
-			"editorStatusError": "nArs4W_editorStatusError",
-			"mermaidError": "nArs4W_mermaidError",
-			"largeFileRecordBody": "nArs4W_largeFileRecordBody",
-			"largeFileLineNo": "nArs4W_largeFileLineNo",
-			"gitPlaceholder": "nArs4W_gitPlaceholder",
-			"largeFileRecordInvalid": "nArs4W_largeFileRecordInvalid",
-			"sandboxStatusText": "nArs4W_sandboxStatusText",
-			"orphanedType": "nArs4W_orphanedType",
-			"largeFileRecordTree": "nArs4W_largeFileRecordTree",
-			"editorGitBarDel": "nArs4W_editorGitBarDel",
-			"editorPdfDragShieldActive": "nArs4W_editorPdfDragShieldActive",
-			"largeFileLines": "nArs4W_largeFileLines",
-			"editorHtmlBlock": "nArs4W_editorHtmlBlock",
-			"largeFileRecords": "nArs4W_largeFileRecords",
-			"explorerRoot": "nArs4W_explorerRoot",
-			"largeFileRecordExpanded": "nArs4W_largeFileRecordExpanded",
-			"editorTreeDock": "nArs4W_editorTreeDock",
-			"largeFileLine": "nArs4W_largeFileLine",
-			"explorerBroken": "nArs4W_explorerBroken",
-			"explorerSymlink": "nArs4W_explorerSymlink",
-			"explorerError": "nArs4W_explorerError",
-			"explorerHidden": "nArs4W_explorerHidden",
-			"editorPdf": "nArs4W_editorPdf",
-			"mermaidInfo": "nArs4W_mermaidInfo",
-			"browserBar": "nArs4W_browserBar",
-			"bottomClose": "nArs4W_bottomClose",
-			"explorerRenaming": "nArs4W_explorerRenaming",
-			"tocItem": "nArs4W_tocItem",
-			"editorPlaceholder": "nArs4W_editorPlaceholder",
-			"paneTab": "nArs4W_paneTab",
-			"tabClose": "nArs4W_tabClose",
-			"largeFileNotice": "nArs4W_largeFileNotice",
-			"largeFileRecordRaw": "nArs4W_largeFileRecordRaw",
-			"editorModeActive": "nArs4W_editorModeActive",
-			"browserBlockedActions": "nArs4W_browserBlockedActions",
-			"explorer": "nArs4W_explorer",
-			"editorMd": "nArs4W_editorMd",
-			"openWithName": "nArs4W_openWithName",
-			"largeFileLineText": "nArs4W_largeFileLineText",
-			"dropUp": "nArs4W_dropUp",
-			"editorTitle": "nArs4W_editorTitle",
-			"bottomPanel": "nArs4W_bottomPanel",
-			"editorGitBarAdd": "nArs4W_editorGitBarAdd",
-			"tabUnreadDot": "nArs4W_tabUnreadDot",
-			"explorerRow": "nArs4W_explorerRow",
-			"editorHeader": "nArs4W_editorHeader",
-			"mermaidModalHint": "nArs4W_mermaidModalHint",
-			"tabBar": "nArs4W_tabBar",
-			"explorerSelectionBar": "nArs4W_explorerSelectionBar",
-			"chipUnread": "nArs4W_chipUnread",
-			"uploadDropArtCut": "nArs4W_uploadDropArtCut",
-			"dropRight": "nArs4W_dropRight",
-			"browserMessage": "nArs4W_browserMessage",
-			"browserStart": "nArs4W_browserStart",
-			"dirtyDot": "nArs4W_dirtyDot",
-			"editorCmHidden": "nArs4W_editorCmHidden",
-			"splitRow": "nArs4W_splitRow",
-			"openWithPin": "nArs4W_openWithPin",
-			"openWithPinActive": "nArs4W_openWithPinActive",
-			"bottomResizeActive": "nArs4W_bottomResizeActive",
-			"editorPdfFrame": "nArs4W_editorPdfFrame",
-			"tabBarDrop": "nArs4W_tabBarDrop",
-			"sandboxStatus": "nArs4W_sandboxStatus",
-			"mermaidModalStage": "nArs4W_mermaidModalStage",
-			"largeFileList": "nArs4W_largeFileList",
-			"editorBanner": "nArs4W_editorBanner",
-			"explorerRowRevealed": "nArs4W_explorerRowRevealed",
-			"boundaryError": "nArs4W_boundaryError",
-			"editorMain": "nArs4W_editorMain",
-			"largeFileNoticeAction": "nArs4W_largeFileNoticeAction",
-			"mermaidModal": "nArs4W_mermaidModal",
-			"tocItemText": "nArs4W_tocItemText",
-			"explorerHiddenPane": "nArs4W_explorerHiddenPane",
-			"explorerGitName": "nArs4W_explorerGitName",
-			"editorBlameHead": "nArs4W_editorBlameHead",
-			"mermaidCopy": "nArs4W_mermaidCopy",
-			"largeFileRecordSummary": "nArs4W_largeFileRecordSummary",
-			"editorBinaryNotice": "nArs4W_editorBinaryNotice",
-			"largeFilePager": "nArs4W_largeFilePager",
-			"browserInput": "nArs4W_browserInput",
-			"editorGitBar": "nArs4W_editorGitBar",
-			"editorTreeSearch": "nArs4W_editorTreeSearch",
-			"editorSearchResultDir": "nArs4W_editorSearchResultDir",
-			"editorTreePanelFull": "nArs4W_editorTreePanelFull",
-			"paneEmptyCards": "nArs4W_paneEmptyCards",
-			"uploadDropHero": "nArs4W_uploadDropHero",
-			"uploadOverlayProgress": "nArs4W_uploadOverlayProgress",
-			"editorTreeResize": "nArs4W_editorTreeResize",
-			"editorSearchHint": "nArs4W_editorSearchHint",
-			"editorGitBarGutter": "nArs4W_editorGitBarGutter",
-			"editorStatus": "nArs4W_editorStatus",
-			"browserBlockedButton": "nArs4W_browserBlockedButton",
-			"dividerCol": "nArs4W_dividerCol",
-			"mermaidModalButton": "nArs4W_mermaidModalButton",
-			"selectionPopup": "nArs4W_selectionPopup",
-			"iconButton": "nArs4W_iconButton",
-			"editorPdfDragShield": "nArs4W_editorPdfDragShield",
-			"tocButton": "nArs4W_tocButton",
-			"editorBlame": "nArs4W_editorBlame",
-			"editorPathInput": "nArs4W_editorPathInput",
-			"divider": "nArs4W_divider",
-			"splitCol": "nArs4W_splitCol",
-			"split": "nArs4W_split",
-			"editorError": "nArs4W_editorError",
-			"editorGitBarMod": "nArs4W_editorGitBarMod",
-			"uploadOverlayProgressFill": "nArs4W_uploadOverlayProgressFill",
-			"sandboxAction": "nArs4W_sandboxAction",
-			"editorHtml": "nArs4W_editorHtml",
-			"bottomPanelHidden": "nArs4W_bottomPanelHidden",
-			"dividerActive": "nArs4W_dividerActive",
-			"explorerActionError": "nArs4W_explorerActionError",
-			"panelBody": "nArs4W_panelBody",
-			"browser": "nArs4W_browser",
-			"mermaidWrap": "nArs4W_mermaidWrap",
-			"workbench": "nArs4W_workbench",
-			"explorerSelectionActions": "nArs4W_explorerSelectionActions",
-			"uploadOverlayStatus": "nArs4W_uploadOverlayStatus",
-			"editorBinary": "nArs4W_editorBinary",
-			"sandboxStatusOff": "nArs4W_sandboxStatusOff"
+			"largeFileBody": "nArs4W_largeFileBody"
 		};
 		//#endregion
 		//#region src/client/binary-download.tsx
@@ -4880,7 +5133,174 @@ window.__ModuleLoader__.load({
 			return { kind: "binary" };
 		}
 		//#endregion
+		//#region src/client/editor-draft-backup.ts
+		/**
+		* Durable backups of unsaved editor drafts.
+		*
+		* Why this exists: the two host-owned paths that can take an editor tab away
+		* without asking are not interceptable with a confirmation.
+		*
+		* - The native right column's tab strip (its × / middle click / context menu /
+		*   page.close) runs `ctx.sidebarRight.registerCloseHandler` before removing
+		*   the record, but that hook is a synchronous CLEANUP callback
+		*   ("Failure preserves the tab"), not a confirmation channel: vetoing means
+		*   throwing, which the host logs as "Sidebar tab close failed:" and which
+		*   escapes from `replaceTab` and the public `close()` callers. It may flush a
+		*   draft, never ask.
+		* - The Desktop shell quits on its own (Electron main intercepts `before-quit`
+		*   and the page receives no cancellable quit event), so Cmd+Q cannot show a
+		*   page-level prompt either.
+		*
+		* The remaining protection is to keep the draft somewhere that survives both:
+		* a small localStorage entry keyed by `sessionId::path`, offered back when the
+		* same file is opened again (TextEditor shows the restore prompt).
+		*
+		* Cost rules (steady-state):
+		* - Writing is a single trailing throttle armed only by an edit and disarmed
+		*   by the flush; idle tabs hold no timer and no polling is added.
+		* - At most {@link DRAFT_BACKUP_LIMIT} drafts and {@link DRAFT_BACKUP_TOTAL_CHARS}
+		*   characters live in storage; the oldest entry is evicted first (FIFO).
+		* - A draft larger than {@link DRAFT_BACKUP_CHARS} is not stored at all (a
+		*   single entry would evict the whole budget).
+		* - An entry is deleted the moment its draft stops being unsaved (save, or a
+		*   confirmed discard) and when the throttle is cleared.
+		*/
+		/** localStorage prefix; every key under it is one of our drafts. */
+		const STORAGE_PREFIX = "dsh-better-sidebar:draft:";
+		/**
+		* One mounted editor's live text reader, keyed by `sessionId::path`.
+		* Reading at flush time (rather than per keystroke) keeps the backup free of
+		* the O(document) stringification the editor deliberately avoids on every key.
+		*/
+		const sources = /* @__PURE__ */ new Map();
+		/** Keys whose draft changed since the last write. */
+		const pending = /* @__PURE__ */ new Set();
+		let timer$1 = null;
+		/** The map/storage key of one draft: ids and paths only mean something in a session. */
+		function keyOf$1(sessionId, path) {
+			return `${sessionId}::${path}`;
+		}
+		/** localStorage, when this runtime has it (specs, SSR). */
+		function storage() {
+			try {
+				return typeof localStorage === "undefined" ? void 0 : localStorage;
+			} catch {
+				return;
+			}
+		}
+		/** One stored entry; malformed values are treated as absent. */
+		function readStored(key) {
+			const raw = storage()?.getItem(STORAGE_PREFIX + key);
+			if (raw === void 0 || raw === null) return void 0;
+			try {
+				const parsed = JSON.parse(raw);
+				if (typeof parsed !== "object" || parsed === null) return void 0;
+				const { text, savedAt } = parsed;
+				if (typeof text !== "string" || typeof savedAt !== "number") return void 0;
+				return {
+					text,
+					savedAt
+				};
+			} catch {
+				return;
+			}
+		}
+		/** Every stored key with its timestamp, oldest first. */
+		function storedDrafts(store) {
+			const entries = [];
+			for (let index = 0; index < store.length; index += 1) {
+				const key = store.key(index);
+				if (key === null || !key.startsWith(STORAGE_PREFIX)) continue;
+				const entry = readStored(key.slice(25));
+				entries.push({
+					key,
+					savedAt: entry?.savedAt ?? 0,
+					chars: entry?.text.length ?? 0
+				});
+			}
+			return entries.sort((left, right) => left.savedAt - right.savedAt);
+		}
+		/** Evict the oldest entries until both budgets hold. */
+		function evict(store) {
+			const entries = storedDrafts(store);
+			let chars = entries.reduce((sum, entry) => sum + entry.chars, 0);
+			while (entries.length > 0 && (entries.length > 8 || chars > 6e5)) {
+				const oldest = entries.shift();
+				if (oldest === void 0) break;
+				store.removeItem(oldest.key);
+				chars -= oldest.chars;
+			}
+		}
+		/** Persist one draft, dropping older ones when storage is full. */
+		function writeDraft(key, text) {
+			const store = storage();
+			if (store === void 0) return;
+			if (text.length === 0 || text.length > 2e5) return;
+			if (readStored(key)?.text === text) return;
+			const payload = JSON.stringify({
+				text,
+				savedAt: Date.now()
+			});
+			try {
+				store.setItem(STORAGE_PREFIX + key, payload);
+			} catch {
+				const older = storedDrafts(store).filter((entry) => entry.key !== STORAGE_PREFIX + key);
+				for (const entry of older) store.removeItem(entry.key);
+				try {
+					store.setItem(STORAGE_PREFIX + key, payload);
+				} catch {
+					return;
+				}
+			}
+			evict(store);
+		}
+		/** Write every pending draft now (the close / unload flush). */
+		function flushDraftBackups() {
+			if (timer$1 !== null) {
+				clearTimeout(timer$1);
+				timer$1 = null;
+			}
+			const keys = [...pending];
+			pending.clear();
+			for (const key of keys) {
+				const text = sources.get(key)?.();
+				if (text !== null && text !== void 0) writeDraft(key, text);
+			}
+		}
+		/** Drop one file's backup (saved, discarded, or restored). Idempotent. */
+		function clearDraftBackup(sessionId, path) {
+			const key = keyOf$1(sessionId, path);
+			pending.delete(key);
+			storage()?.removeItem(STORAGE_PREFIX + key);
+		}
+		//#endregion
 		//#region src/client/editor-dirty.ts
+		/**
+		* Unsaved-edit registry: which editor tabs currently hold a draft that
+		* differs from disk. The editor host registers its tab's dirty state here
+		* (the toolbar report already carries it), so the flows that would silently
+		* drop the draft can ask first:
+		*
+		* - the sidebar's tab close (the X button, the middle click, the tab context
+		*   menu, and the tree's close-on-rename/delete path all land there),
+		* - the browser unload (refresh / close tab / navigate away) through a
+		*   `beforeunload` guard.
+		*
+		* A confirmed discard also drops the file's durable draft backup
+		* (`editor-draft-backup.ts`): that backup is the same draft and must not be
+		* offered back on the next open.
+		*
+		* Module-level and keyed by `sessionId::tabId`: a tab id is unique only WITHIN
+		* one session — the native right column counts its own `tab1`…, and the bottom
+		* workbench reuses `editor:<path>` for the same file in every session. Keyed by
+		* the bare tab id, session B's editor mounting over the same id DELETED session
+		* A's record (its mount reports `dirty === false`), so A's still-live draft
+		* outlived its guard and a refresh dropped it without a word. The native
+		* surface accounts the same way (`viewKey`, native/tab-adapter.tsx).
+		* An entry is written while a tab is dirty and deleted the moment it goes
+		* clean (save) or its host unmounts (tab closed, in-place path switch), so a
+		* stale entry can never keep a guard armed.
+		*/
 		const dirtyTabs = /* @__PURE__ */ new Map();
 		const listeners$1 = /* @__PURE__ */ new Set();
 		/** Monotonic change counter: a stable `useSyncExternalStore` snapshot. */
@@ -4908,6 +5328,7 @@ window.__ModuleLoader__.load({
 			if (previous !== void 0 && previous.path === path) return;
 			dirtyTabs.set(key, {
 				tabId,
+				sessionId,
 				path
 			});
 			notify$2();
@@ -4966,15 +5387,21 @@ window.__ModuleLoader__.load({
 		* it one commit later anyway.
 		*
 		* Shared by the sidebar's tab close and the file tree's close-on-delete so
-		* both paths warn exactly once, with the same copy.
+		* both paths warn exactly once, with the same copy, and drop the durable
+		* backup of every discarded draft.
 		* @param sessionId - the owning session (see {@link isEditorDirty} for the
 		*  omitted case).
 		*/
 		function confirmDiscardDraft(tabId, message, sessionId) {
-			if (!isEditorDirty(tabId, sessionId)) return true;
-			const confirmed = typeof window.confirm === "function" ? window.confirm(message) : true;
-			if (confirmed) clearEditorDirty(tabId, sessionId);
-			return confirmed;
+			const matches = [...dirtyTabs.entries()].filter(([key, entry]) => entry.tabId === tabId && (sessionId === void 0 || key === keyOf(sessionId, tabId)));
+			if (matches.length === 0) return true;
+			if (!(typeof window.confirm === "function" ? window.confirm(message) : true)) return false;
+			for (const [key, entry] of matches) {
+				dirtyTabs.delete(key);
+				clearDraftBackup(entry.sessionId, entry.path);
+			}
+			notify$2();
+			return true;
 		}
 		//#endregion
 		//#region node_modules/.pnpm/react-icons@5.7.0_react@18.2.0/node_modules/react-icons/si/index.mjs
@@ -5140,6 +5567,46 @@ window.__ModuleLoader__.load({
 				transform: "rotate(-90deg)"
 			},
 			children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPanelLeftOutlineRegular, { size })
+		});
+		/**
+		* Settings-navigation glyph for the "Side card" section. The shell asks for a
+		* square edge and tints the SVG with `currentColor`, so this stays a plain
+		* two-tone outline mark: the side panel plus the two rails it docks against.
+		*/
+		const IconSideCardNav = ({ size = 16, className }) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("svg", {
+			width: size,
+			height: size,
+			className,
+			viewBox: "0 0 24 24",
+			fill: "none",
+			xmlns: "http://www.w3.org/2000/svg",
+			children: [
+				/* @__PURE__ */ (0, react_jsx_runtime.jsx)("path", {
+					d: "M2 7v10",
+					stroke: "currentColor",
+					strokeWidth: "2",
+					strokeLinecap: "round",
+					strokeLinejoin: "round"
+				}),
+				/* @__PURE__ */ (0, react_jsx_runtime.jsx)("path", {
+					d: "M6 5v14",
+					stroke: "currentColor",
+					strokeWidth: "2",
+					strokeLinecap: "round",
+					strokeLinejoin: "round"
+				}),
+				/* @__PURE__ */ (0, react_jsx_runtime.jsx)("rect", {
+					x: "10",
+					y: "3",
+					width: "12",
+					height: "18",
+					rx: "2",
+					stroke: "currentColor",
+					strokeWidth: "2",
+					strokeLinecap: "round",
+					strokeLinejoin: "round"
+				})
+			]
 		});
 		/** Upload glyph in the app's outline style: an arrow rising into a tray
 		*  (the file-manager "upload into the workspace" action). */
@@ -5481,28 +5948,28 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var kit_module_css_default = {
-			"notice": "U62vHa_notice",
-			"iconButtonActive": "U62vHa_iconButtonActive",
-			"iconButtonMd": "U62vHa_iconButtonMd",
-			"iconButtonSm": "U62vHa_iconButtonSm",
-			"chip": "U62vHa_chip",
-			"sectionAction": "U62vHa_sectionAction",
-			"iconButton": "U62vHa_iconButton",
-			"iconButtonDanger": "U62vHa_iconButtonDanger",
-			"noticePage": "U62vHa_noticePage",
-			"noticeInline": "U62vHa_noticeInline",
-			"noticeError": "U62vHa_noticeError",
-			"sectionHeader": "U62vHa_sectionHeader",
-			"sectionCount": "U62vHa_sectionCount",
-			"noticeHint": "U62vHa_noticeHint",
-			"confirmDesc": "U62vHa_confirmDesc",
-			"chipCount": "U62vHa_chipCount",
 			"noticeWarn": "U62vHa_noticeWarn",
-			"sectionLabel": "U62vHa_sectionLabel",
+			"iconButton": "U62vHa_iconButton",
 			"chipLabel": "U62vHa_chipLabel",
-			"chipActive": "U62vHa_chipActive",
+			"noticePage": "U62vHa_noticePage",
+			"sectionLabel": "U62vHa_sectionLabel",
+			"iconButtonSm": "U62vHa_iconButtonSm",
 			"statusBadge": "U62vHa_statusBadge",
-			"noticeWell": "U62vHa_noticeWell"
+			"iconButtonMd": "U62vHa_iconButtonMd",
+			"chipActive": "U62vHa_chipActive",
+			"confirmDesc": "U62vHa_confirmDesc",
+			"iconButtonActive": "U62vHa_iconButtonActive",
+			"chipCount": "U62vHa_chipCount",
+			"sectionCount": "U62vHa_sectionCount",
+			"sectionAction": "U62vHa_sectionAction",
+			"iconButtonDanger": "U62vHa_iconButtonDanger",
+			"noticeWell": "U62vHa_noticeWell",
+			"noticeError": "U62vHa_noticeError",
+			"chip": "U62vHa_chip",
+			"noticeInline": "U62vHa_noticeInline",
+			"notice": "U62vHa_notice",
+			"noticeHint": "U62vHa_noticeHint",
+			"sectionHeader": "U62vHa_sectionHeader"
 		};
 		//#endregion
 		//#region src/client/ui/kit.tsx
@@ -10119,6 +10586,13 @@ window.__ModuleLoader__.load({
 				return false;
 			});
 		}
+		/** Ask before a reload/switch drops a draft. A host without confirm blocks
+		*  the action: refusing is recoverable, while silently discarding is not.
+		*  (The tab-close guard intentionally proceeds instead — an unclosable tab
+		*  is worse than one skipped prompt.) */
+		function confirmDiscard(message) {
+			return typeof window.confirm === "function" ? window.confirm(message) : false;
+		}
 		function EditorHost(props) {
 			const { ctx, store, scope, tab, expanded, revealed, onToggleDir, onReferenceFile } = props;
 			const visible = props.visible !== false;
@@ -10129,16 +10603,56 @@ window.__ModuleLoader__.load({
 			const [reloadSeq, setReloadSeq] = (0, react.useState)(0);
 			const [spentLine, setSpentLine] = (0, react.useState)(null);
 			const lineKey = tab.line === void 0 ? null : `${path}#${tab.line}`;
+			const peeked = tab.line === void 0 ? void 0 : peekLineTarget(path, tab.line);
+			const lineNavRef = (0, react.useRef)(null);
+			const previous = lineNavRef.current;
+			const nav = (0, react.useMemo)(() => {
+				if (lineKey === null) return null;
+				if (peeked !== void 0) return {
+					key: lineKey,
+					nonce: peeked.nonce,
+					...peeked.end === void 0 ? {} : { end: peeked.end }
+				};
+				return previous !== null && previous.key === lineKey ? previous : null;
+			}, [
+				lineKey,
+				peeked,
+				previous
+			]);
+			const isFreshLine = lineKey !== null && (spentLine === null || spentLine.key !== lineKey || nav !== null && nav.nonce !== spentLine.nonce);
+			const lineEnd = isFreshLine ? nav?.end : void 0;
+			const handedLineRef = (0, react.useRef)(null);
+			(0, react.useLayoutEffect)(() => {
+				if (isFreshLine && lineKey !== null) {
+					lineNavRef.current = nav ?? {
+						key: lineKey,
+						nonce: null
+					};
+					handedLineRef.current = {
+						key: lineKey,
+						nonce: lineNavRef.current.nonce
+					};
+					if (tab.line !== void 0) consumeLineTarget(path, tab.line);
+					return;
+				}
+				handedLineRef.current = null;
+				if (nav === null) lineNavRef.current = null;
+			}, [
+				nav,
+				isFreshLine,
+				lineKey,
+				path,
+				tab.line
+			]);
 			const onLineConsumed = (0, react.useCallback)(() => {
-				if (lineKey !== null) setSpentLine(lineKey);
-			}, [lineKey]);
+				if (handedLineRef.current !== null) setSpentLine(handedLineRef.current);
+			}, []);
 			(0, react.useEffect)(() => {
 				setSpentLine(null);
 			}, [path]);
 			const refreshFile = () => {
-				if (toolbar?.dirty === true) {
-					if (!(typeof window.confirm === "function" ? window.confirm(t("refreshUnsavedConfirm")) : false)) return;
-				}
+				if (toolbar?.dirty === true && !confirmDiscard(t("refreshUnsavedConfirm"))) return;
+				if (toolbar?.dirty === true) clearDraftBackup(scope.sessionId, path);
 				setReloadSeq((sequence) => sequence + 1);
 			};
 			const inPlace = (0, react.useSyncExternalStore)((0, react.useCallback)((callback) => store.subscribe(callback), [store]), (0, react.useCallback)(() => store.getSnapshot().prefs.editorExplorer, [store]));
@@ -10165,7 +10679,12 @@ window.__ModuleLoader__.load({
 			*/
 			const openFile = (absolute) => {
 				if (inPlace) {
-					if (!openClaimedNativeFile(ctx, scope.sessionId, scope.cwd, absolute)) ctx.get("betterSidebar")?.updateTab(tab.id, {
+					if (openClaimedNativeFile(ctx, scope.sessionId, scope.cwd, absolute)) return;
+					if (absolute !== path && isEditorDirty(tab.id, scope.sessionId)) {
+						if (!confirmDiscard(t("switchUnsavedConfirm"))) return;
+						clearDraftBackup(scope.sessionId, path);
+					}
+					ctx.get("betterSidebar")?.updateTab(tab.id, {
 						path: absolute,
 						title: baseName(absolute)
 					}, scope.sessionId);
@@ -10559,7 +11078,8 @@ window.__ModuleLoader__.load({
 								path,
 								title,
 								viewerId: load.viewer.id,
-								line: lineKey !== null && lineKey !== spentLine ? tab.line : void 0,
+								line: isFreshLine ? tab.line : void 0,
+								lineEnd,
 								onLineConsumed,
 								content: load.content,
 								size: load.size,
@@ -10666,80 +11186,80 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var SideCardSection_module_css_default = {
-			"versionBadge": "_2vuxea_versionBadge",
-			"switch": "_2vuxea_switch",
-			"popupRow": "_2vuxea_popupRow",
+			"pluginDesc": "_2vuxea_pluginDesc",
 			"pluginEntryHead": "_2vuxea_pluginEntryHead",
-			"pluginInstall": "_2vuxea_pluginInstall",
-			"openWithFamily": "_2vuxea_openWithFamily",
-			"pluginGroupHeading": "_2vuxea_pluginGroupHeading",
-			"pluginJumpBtn": "_2vuxea_pluginJumpBtn",
-			"rowText": "_2vuxea_rowText",
-			"popupDialog": "_2vuxea_popupDialog",
-			"switchTrack": "_2vuxea_switchTrack",
+			"pluginCopyBtn": "_2vuxea_pluginCopyBtn",
 			"cardOn": "_2vuxea_cardOn",
-			"typedInput": "_2vuxea_typedInput",
-			"switchThumb": "_2vuxea_switchThumb",
-			"selectAnchor": "_2vuxea_selectAnchor",
-			"patternsAdd": "_2vuxea_patternsAdd",
-			"control": "_2vuxea_control",
-			"desc": "_2vuxea_desc",
-			"selectAnchorText": "_2vuxea_selectAnchorText",
-			"pluginTopicBtn": "_2vuxea_pluginTopicBtn",
+			"pluginEmpty": "_2vuxea_pluginEmpty",
+			"pluginEntryActions": "_2vuxea_pluginEntryActions",
+			"patternsChip": "_2vuxea_patternsChip",
 			"openWithEditorTemplate": "_2vuxea_openWithEditorTemplate",
+			"openWithRemove": "_2vuxea_openWithRemove",
+			"pluginGroup": "_2vuxea_pluginGroup",
+			"patternsAdd": "_2vuxea_patternsAdd",
+			"card": "_2vuxea_card",
+			"pluginModal": "_2vuxea_pluginModal",
+			"pluginTopicBtn": "_2vuxea_pluginTopicBtn",
+			"pluginName": "_2vuxea_pluginName",
+			"switch": "_2vuxea_switch",
+			"selectAnchorIcon": "_2vuxea_selectAnchorIcon",
+			"grid": "_2vuxea_grid",
+			"cardSwitchTrack": "_2vuxea_cardSwitchTrack",
+			"done": "_2vuxea_done",
+			"intro": "_2vuxea_intro",
+			"cardMain": "_2vuxea_cardMain",
+			"addCard": "_2vuxea_addCard",
+			"switchInput": "_2vuxea_switchInput",
+			"patternsRow": "_2vuxea_patternsRow",
+			"pluginEntry": "_2vuxea_pluginEntry",
+			"pluginEntries": "_2vuxea_pluginEntries",
+			"patternsInput": "_2vuxea_patternsInput",
+			"openWithFamily": "_2vuxea_openWithFamily",
+			"cssTextArea": "_2vuxea_cssTextArea",
+			"count": "_2vuxea_count",
+			"typedInputNumber": "_2vuxea_typedInputNumber",
+			"cardTitle": "_2vuxea_cardTitle",
+			"row": "_2vuxea_row",
+			"pluginGroupHeading": "_2vuxea_pluginGroupHeading",
+			"selectOptionIcon": "_2vuxea_selectOptionIcon",
+			"versionBadgeTag": "_2vuxea_versionBadgeTag",
+			"selectOption": "_2vuxea_selectOption",
+			"versionBadge": "_2vuxea_versionBadge",
+			"selectAnchorText": "_2vuxea_selectAnchorText",
+			"patternsChips": "_2vuxea_patternsChips",
+			"cardIconChip": "_2vuxea_cardIconChip",
+			"cardSwitchThumb": "_2vuxea_cardSwitchThumb",
+			"pluginJumpBtn": "_2vuxea_pluginJumpBtn",
+			"patternsChipRemove": "_2vuxea_patternsChipRemove",
+			"group": "_2vuxea_group",
+			"rowText": "_2vuxea_rowText",
+			"switchTrack": "_2vuxea_switchTrack",
+			"control": "_2vuxea_control",
+			"percentInput": "_2vuxea_percentInput",
+			"typedInput": "_2vuxea_typedInput",
+			"selectOptionText": "_2vuxea_selectOptionText",
+			"popupRows": "_2vuxea_popupRows",
+			"versionBadgeName": "_2vuxea_versionBadgeName",
+			"openWithHint": "_2vuxea_openWithHint",
+			"cardDesc": "_2vuxea_cardDesc",
+			"section": "_2vuxea_section",
+			"cardTop": "_2vuxea_cardTop",
+			"selectAnchor": "_2vuxea_selectAnchor",
+			"desc": "_2vuxea_desc",
+			"suffix": "_2vuxea_suffix",
+			"error": "_2vuxea_error",
+			"cardSettings": "_2vuxea_cardSettings",
+			"title": "_2vuxea_title",
+			"openWithEditorRow": "_2vuxea_openWithEditorRow",
+			"popupDialog": "_2vuxea_popupDialog",
 			"pluginList": "_2vuxea_pluginList",
 			"groupHeading": "_2vuxea_groupHeading",
-			"count": "_2vuxea_count",
-			"pluginName": "_2vuxea_pluginName",
-			"cardDesc": "_2vuxea_cardDesc",
-			"pluginDesc": "_2vuxea_pluginDesc",
-			"openWithEditorRow": "_2vuxea_openWithEditorRow",
-			"selectOptionText": "_2vuxea_selectOptionText",
-			"title": "_2vuxea_title",
-			"cardSwitchTrack": "_2vuxea_cardSwitchTrack",
-			"patternsChipRemove": "_2vuxea_patternsChipRemove",
-			"pluginModal": "_2vuxea_pluginModal",
-			"patternsRow": "_2vuxea_patternsRow",
-			"typedInputNumber": "_2vuxea_typedInputNumber",
-			"section": "_2vuxea_section",
-			"cardTitle": "_2vuxea_cardTitle",
-			"pluginSearch": "_2vuxea_pluginSearch",
-			"pluginGroup": "_2vuxea_pluginGroup",
-			"patternsInput": "_2vuxea_patternsInput",
-			"cssTextArea": "_2vuxea_cssTextArea",
-			"cardTop": "_2vuxea_cardTop",
-			"selectOption": "_2vuxea_selectOption",
-			"cardSettings": "_2vuxea_cardSettings",
-			"card": "_2vuxea_card",
-			"patternsChips": "_2vuxea_patternsChips",
-			"openWithEditorInput": "_2vuxea_openWithEditorInput",
-			"cardIconChip": "_2vuxea_cardIconChip",
-			"selectOptionIcon": "_2vuxea_selectOptionIcon",
-			"suffix": "_2vuxea_suffix",
-			"selectAnchorIcon": "_2vuxea_selectAnchorIcon",
-			"pluginEmpty": "_2vuxea_pluginEmpty",
-			"pluginCopyBtn": "_2vuxea_pluginCopyBtn",
-			"cardSwitchThumb": "_2vuxea_cardSwitchThumb",
-			"switchInput": "_2vuxea_switchInput",
-			"pluginEntryActions": "_2vuxea_pluginEntryActions",
-			"openWithRemove": "_2vuxea_openWithRemove",
-			"versionBadgeTag": "_2vuxea_versionBadgeTag",
-			"group": "_2vuxea_group",
-			"done": "_2vuxea_done",
-			"pluginEntries": "_2vuxea_pluginEntries",
-			"error": "_2vuxea_error",
-			"percentInput": "_2vuxea_percentInput",
-			"pluginEntry": "_2vuxea_pluginEntry",
-			"openWithHint": "_2vuxea_openWithHint",
-			"patternsChip": "_2vuxea_patternsChip",
-			"cardMain": "_2vuxea_cardMain",
-			"popupRows": "_2vuxea_popupRows",
-			"addCard": "_2vuxea_addCard",
-			"versionBadgeName": "_2vuxea_versionBadgeName",
-			"intro": "_2vuxea_intro",
 			"cardSwitch": "_2vuxea_cardSwitch",
-			"row": "_2vuxea_row",
-			"grid": "_2vuxea_grid"
+			"pluginInstall": "_2vuxea_pluginInstall",
+			"popupRow": "_2vuxea_popupRow",
+			"pluginSearch": "_2vuxea_pluginSearch",
+			"switchThumb": "_2vuxea_switchThumb",
+			"openWithEditorInput": "_2vuxea_openWithEditorInput"
 		};
 		//#endregion
 		//#region src/client/open-with-settings.tsx
@@ -10892,7 +11412,7 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region \0dsh-css:/home/runner/work/DSH-better-sidebar/DSH-better-sidebar/src/client/changes/changes.module.css.mjs
-		const css$9 = ".bdiHEa_root{background:var(--dsw-alias-bg-base);height:100%;min-height:0;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);flex-direction:column;display:flex}.bdiHEa_head{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:stretch;gap:8px;height:36px;padding:0 8px 0 12px;display:flex}.bdiHEa_headAction{align-self:center;margin-left:auto}.bdiHEa_head .wSkVaW_tabs{gap:24px}.bdiHEa_lensBody{flex-direction:column;flex:1;min-height:0;display:flex}.bdiHEa_lensBody[hidden]{display:none}.bdiHEa_head .wSkVaW_tab:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-2px}.bdiHEa_git{flex-direction:column;flex:1;min-width:0;min-height:0;padding-top:6px;display:flex}.bdiHEa_gitScroll{flex-direction:column;flex:1;min-width:0;min-height:0;display:flex;overflow:hidden auto}.bdiHEa_changesSection{flex:none}.bdiHEa_graphSection{flex-direction:column;flex:1;min-height:248px;display:flex}.bdiHEa_graphArea{flex-direction:column;flex:1;min-height:0;display:flex}.bdiHEa_scmHeader{align-items:center;min-height:28px;padding:0 6px;display:flex}.bdiHEa_scmDisclosure{min-width:0;min-height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-strong-12);text-align:left;cursor:pointer;background:0 0;border:none;flex:1;align-items:center;gap:6px;padding:0;display:flex}.bdiHEa_scmActions{opacity:0;align-items:center;gap:2px;display:flex}.bdiHEa_scmHeader:hover .bdiHEa_scmActions,.bdiHEa_scmHeader:focus-within .bdiHEa_scmActions{opacity:1}@media (hover:none){.bdiHEa_scmActions{opacity:1}}.bdiHEa_gitFooter{border-top:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base);flex:none;min-width:0;position:sticky;bottom:0}.bdiHEa_footerRow{align-items:center;min-width:0;min-height:28px;display:flex}.bdiHEa_actionError{white-space:normal;align-items:flex-start;gap:6px;display:flex}.bdiHEa_actionErrorText{white-space:pre-wrap;overflow-wrap:anywhere;flex:1;min-width:0}.bdiHEa_branchMenu{flex:1;min-width:0;display:flex}.bdiHEa_branchButton,.bdiHEa_syncButton{min-width:0;min-height:28px;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxxs-11);cursor:pointer;background:0 0;border:none;align-items:center;gap:5px;padding:3px 8px;display:flex}.bdiHEa_branchButton{text-align:left;flex:1}.bdiHEa_syncButton{max-width:55%}.bdiHEa_branchButton svg,.bdiHEa_syncButton svg{flex:none}.bdiHEa_branchButton span,.bdiHEa_syncButton span{text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.bdiHEa_branchButton:hover:not(:disabled),.bdiHEa_syncButton:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.bdiHEa_branchButton:disabled,.bdiHEa_syncButton:disabled{opacity:.45;cursor:default}.bdiHEa_group{flex-direction:column;padding-bottom:2px;display:flex}.bdiHEa_group .bdiHEa_groupHeader{z-index:2;background:var(--dsw-alias-bg-base);gap:4px;position:sticky;top:0}.bdiHEa_countPill{border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-interactive-bg-hover);width:20px;height:20px;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxxs-strong-11);text-align:center;font-variant-numeric:tabular-nums;flex:none;font-size:10px;line-height:20px}.bdiHEa_group .bdiHEa_headerAction{opacity:0;transition:opacity .12s var(--ds-ease-in-out)}.bdiHEa_group .bdiHEa_groupHeader:hover .bdiHEa_headerAction,.bdiHEa_group .bdiHEa_groupHeader:focus-within .bdiHEa_headerAction{opacity:1}@media (hover:none){.bdiHEa_group .bdiHEa_headerAction{opacity:1}}.bdiHEa_tree{flex-direction:column;display:flex}.bdiHEa_dirRow{min-width:0;color:var(--dsw-alias-label-secondary);font:inherit;cursor:pointer;text-align:left;background:0 0;border:none;flex:1;align-items:center;gap:6px;padding:0;display:flex}.bdiHEa_dirRow:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}.bdiHEa_chevron{color:var(--dsw-alias-label-tertiary);transition:transform .14s var(--ds-ease-in-out);flex:none;display:inline-flex}.bdiHEa_chevron[data-open=true]{transform:rotate(90deg)}.bdiHEa_dirName{text-overflow:ellipsis;white-space:nowrap;min-width:0;font:var(--dsw-font-xxs-12);flex:1;overflow:hidden}.bdiHEa_row{min-height:28px;animation:bdiHEa_dsh-row-in .15s var(--ds-ease-in-out);align-items:center;gap:6px;padding:0 6px;display:flex;position:relative}.bdiHEa_row:hover{background:var(--dsw-alias-interactive-bg-hover)}.bdiHEa_row[data-selected=true],.bdiHEa_opRow[data-selected=true]{background:var(--dsw-alias-interactive-bg-active)}.bdiHEa_row[data-selected=true]:before,.bdiHEa_opRow[data-selected=true]:before{content:\"\";background:var(--dsw-alias-state-business-primary);border-radius:1px;width:2px;position:absolute;top:4px;bottom:4px;left:0}.bdiHEa_guide{border-left:1px solid var(--dsw-alias-border-l1);width:0;position:absolute;top:0;bottom:0}.bdiHEa_rowMain{cursor:pointer;text-align:left;background:0 0;border:none;flex:1;align-items:center;gap:6px;min-width:0;padding:0;display:flex}.bdiHEa_rowMain:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}.bdiHEa_rowIcon{flex:none;align-items:center;display:inline-flex}.bdiHEa_rowName{text-overflow:ellipsis;white-space:nowrap;min-width:0;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-primary);overflow:hidden}.bdiHEa_rowPath{text-overflow:ellipsis;white-space:nowrap;min-width:0;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary);flex:1;overflow:hidden}.bdiHEa_lineCounts{font:var(--dsw-font-xxxs-11);font-family:var(--ds-font-family-code,monospace);font-variant-numeric:tabular-nums;flex:none;gap:5px;display:inline-flex}.bdiHEa_lineNote{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary);white-space:nowrap;flex:none}.bdiHEa_row .bdiHEa_rowAction,.bdiHEa_group .bdiHEa_headerAction{width:20px;height:20px}.bdiHEa_row:not(:hover):not(:focus-within) .bdiHEa_rowAction{opacity:0}@media (hover:none){.bdiHEa_row:not(:hover):not(:focus-within) .bdiHEa_rowAction{opacity:1}}.bdiHEa_messageBox{padding:4px 8px 8px;display:flex}.bdiHEa_commitInputWrap{box-sizing:border-box;border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-1);flex:1;align-items:center;gap:6px;min-width:0;min-height:32px;padding:0 4px 0 8px;display:flex;position:relative}.bdiHEa_commitInputWrap:focus-within{border-color:var(--dsw-alias-state-business-primary)}.bdiHEa_commitInput{min-width:0;height:22px;min-height:22px;max-height:132px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-s-14);resize:none;background:0 0;border:none;outline:none;flex:1;margin:4px 0;padding:0;line-height:22px;overflow-y:hidden}.bdiHEa_commitInput::placeholder{color:var(--dsw-alias-label-dimmed)}.bdiHEa_commitInput:disabled{opacity:.5}.bdiHEa_commitInput[data-message-busy=true]{color:#0000;caret-color:#0000}.bdiHEa_commitBusyText{pointer-events:none;font:var(--dsw-font-s-14);background-image:linear-gradient(90deg, var(--dsw-alias-label-tertiary) 0%, var(--dsw-alias-label-primary) 50%, var(--dsw-alias-label-tertiary) 100%);color:#0000;background-size:200% 100%;-webkit-background-clip:text;background-clip:text;align-items:center;padding:0 8px;line-height:22px;animation:2.6s linear infinite bdiHEa_commitSweep;display:flex;position:absolute;inset:0 38px 0 0}@keyframes bdiHEa_commitSweep{0%{background-position:200% 0}to{background-position:-200% 0}}@media (prefers-reduced-motion:reduce){.bdiHEa_commitBusyText{animation:none}}.bdiHEa_suggestButton{width:24px;height:24px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:8px;flex:none;justify-content:center;align-self:flex-start;align-items:center;margin-top:3px;padding:0;display:inline-flex}.bdiHEa_suggestButton:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.bdiHEa_suggestButton:disabled{opacity:.45;cursor:default}.bdiHEa_suggestBusy{color:var(--dsw-alias-interactive-bg-hover-accent);animation:1.2s ease-in-out infinite bdiHEa_commitSuggestPulse}@keyframes bdiHEa_commitSuggestPulse{50%{opacity:.45}}@media (prefers-reduced-motion:reduce){.bdiHEa_suggestBusy{animation:none}}.bdiHEa_commitModel{flex-direction:column;gap:4px;padding:8px 12px;display:flex}.bdiHEa_commitModelTitle{font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary)}.bdiHEa_commitModelDesc{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary)}.bdiHEa_commitModelRow{justify-content:space-between;align-items:center;gap:8px;display:flex}.bdiHEa_commitModelSwitch{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-primary);cursor:pointer;align-items:center;gap:6px;display:inline-flex}.bdiHEa_commitModelSwitch input{accent-color:var(--dsw-alias-interactive-bg-hover-accent)}.bdiHEa_commitModelMenuRoot{width:100%;display:block}.bdiHEa_commitModelBox{display:block}.bdiHEa_commitModelCurrent{font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary);overflow-wrap:anywhere;margin-bottom:4px}.bdiHEa_commitModelInput{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);width:100%;height:26px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:6px;padding:0 6px}.bdiHEa_commitModelInput:disabled{opacity:.45;cursor:default}.bdiHEa_commitModelOption{box-sizing:border-box;width:100%;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);text-align:left;cursor:pointer;background:0 0;border:none;border-radius:4px;align-items:center;gap:8px;padding:4px 6px;display:flex}.bdiHEa_commitModelOption:hover{background:var(--dsw-alias-interactive-bg-hover)}.bdiHEa_commitModelOptionText{text-overflow:ellipsis;white-space:nowrap;flex:auto;min-width:0;overflow:hidden}.bdiHEa_commitModelOptionNote{white-space:nowrap;min-width:max-content;color:var(--dsw-alias-label-tertiary);flex:none}.bdiHEa_commitModelHint{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary)}.bdiHEa_graphSvg{flex:none;max-width:40%;height:22px;overflow:hidden}.bdiHEa_graphContent{flex:1;align-items:center;gap:6px;min-width:0;padding-right:4px;display:flex}.bdiHEa_logRefs{flex-shrink:1;gap:3px;min-width:0;max-width:45%;display:inline-flex;overflow:hidden}.bdiHEa_logRef{border:1px solid var(--dsw-alias-border-l2);font:var(--dsw-font-xxxs-strong-11);color:var(--dsw-alias-brand-primary);white-space:nowrap;border-radius:3px;flex:none;padding:0 4px}.bdiHEa_session{flex-direction:column;flex:1;min-height:0;display:flex}.bdiHEa_filterRow{flex-wrap:wrap;flex:none;gap:4px;padding:6px 12px;display:flex}.bdiHEa_sessionList{flex-direction:column;flex:1;gap:4px;min-height:0;margin-top:4px;padding:0 6px 10px;display:flex;overflow-y:auto}.bdiHEa_filePath{text-overflow:ellipsis;white-space:nowrap;min-width:0;color:var(--dsw-alias-label-tertiary);font-family:var(--ds-font-family-code,monospace);flex:1;font-size:11px;overflow:hidden}.bdiHEa_opRow{width:100%;min-height:24px;color:var(--dsw-alias-label-primary);font:inherit;cursor:pointer;text-align:left;background:0 0;border:0;border-radius:4px;align-items:center;gap:6px;padding:0 5px;font-size:11px;display:flex;position:relative}.bdiHEa_opRow:hover{background:var(--dsw-alias-interactive-bg-hover)}.bdiHEa_opRow[data-op-error=true]{box-shadow:inset 2px 0 0 var(--dsw-alias-state-error-primary)}.bdiHEa_opMeta{white-space:nowrap;flex:none;align-items:baseline;gap:8px;min-width:0;margin-left:auto;display:inline-flex}.bdiHEa_opTime{color:var(--dsw-alias-label-tertiary);flex:none;font-size:10px}.bdiHEa_opFlag{color:var(--dsw-alias-state-business-primary);flex:none;font-size:10px}.bdiHEa_opFlagError{color:var(--dsw-alias-state-error-primary);flex:none;font-size:10px}.bdiHEa_opSize{color:var(--dsw-alias-label-tertiary);font-size:10px;font-family:var(--ds-font-family-code,monospace);flex:none}.bdiHEa_redactBanner{font:var(--dsw-font-xxxs-strong-11);color:var(--dsw-alias-state-warn-primary);background:var(--dsw-alias-interactive-bg-hover);white-space:nowrap;border-radius:2px;flex:none;padding:2px 8px}.bdiHEa_mdBody{font:var(--dsw-font-xs-regular-13);min-height:0;padding:12px 16px 20px;line-height:1.6;overflow-y:auto}.bdiHEa_htmlPane{flex:1;min-height:0;display:flex}.bdiHEa_htmlFrame{background:var(--dsw-alias-bg-base);border:none;flex:1;width:100%}.bdiHEa_diffPane{border-top:1px solid var(--dsw-alias-border-l1);flex-direction:column;flex:none;min-height:0;display:flex}.bdiHEa_dragHandle{cursor:ns-resize;background:var(--dsw-alias-bg-base);flex:none;height:8px;position:relative}.bdiHEa_dragHandle:after{content:\"\";background:var(--dsw-alias-border-l2);border-radius:1px;width:36px;height:2px;position:absolute;top:3px;left:calc(50% - 18px)}.bdiHEa_dragHandle:hover:after,.bdiHEa_dragHandle:focus-visible:after{background:var(--dsw-alias-state-business-primary)}.bdiHEa_paneTabs{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:2px;height:28px;padding:0 8px;display:flex}.bdiHEa_paneTab{color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxxs-strong-11);cursor:pointer;background:0 0;border:none;border-bottom:2px solid #0000;align-self:stretch;align-items:center;padding:0 8px;display:inline-flex}.bdiHEa_paneTab:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.bdiHEa_paneTab[data-active=true]{color:var(--dsw-alias-label-primary);border-bottom-color:var(--dsw-alias-brand-primary)}.bdiHEa_paneTab:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-2px}.bdiHEa_altBody{flex-direction:column;flex:1;min-height:0;display:flex}.bdiHEa_diffHead{border-bottom:1px solid var(--dsw-alias-border-l1);align-items:center;gap:6px;padding:3px 8px 3px 10px;display:flex}.bdiHEa_diffPath{font-family:var(--ds-font-family-code,monospace);white-space:nowrap;text-overflow:ellipsis;color:var(--dsw-alias-label-primary);direction:rtl;flex:1;min-width:0;font-size:11px;overflow:hidden}.bdiHEa_diffStats{font-size:10px;font-family:var(--ds-font-family-code,monospace);flex:none;gap:5px;display:inline-flex}.bdiHEa_paneBody{flex:1;min-height:0;overflow-y:auto}.bdiHEa_readError{border-left:3px solid var(--dsw-alias-state-error-primary);word-break:break-word;margin:6px 8px;padding:6px 10px}.bdiHEa_paneGone{border-top:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:8px;padding:8px 12px;display:flex}@keyframes bdiHEa_dsh-row-in{0%{opacity:0}}.bdiHEa_opRow:focus-visible,.bdiHEa_scmDisclosure:focus-visible,.bdiHEa_branchButton:focus-visible,.bdiHEa_syncButton:focus-visible,.bdiHEa_suggestButton:focus-visible,.bdiHEa_select:focus-visible,.bdiHEa_dragHandle:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}@media (prefers-reduced-motion:reduce){.bdiHEa_row{animation:none}}";
+		const css$9 = ".bdiHEa_root{background:var(--dsw-alias-bg-base);height:100%;min-height:0;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);flex-direction:column;display:flex}.bdiHEa_head{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:stretch;gap:8px;height:36px;padding:0 8px 0 12px;display:flex}.bdiHEa_headAction{align-self:center;margin-left:auto}.bdiHEa_lensBody{flex-direction:column;flex:1;min-height:0;display:flex}.bdiHEa_lensBody[hidden]{display:none}.bdiHEa_git{flex-direction:column;flex:1;min-width:0;min-height:0;padding-top:6px;display:flex}.bdiHEa_gitScroll{flex-direction:column;flex:1;min-width:0;min-height:0;display:flex;overflow:hidden auto}.bdiHEa_changesSection{flex:none}.bdiHEa_graphSection{flex-direction:column;flex:1;min-height:248px;display:flex}.bdiHEa_graphArea{flex-direction:column;flex:1;min-height:0;display:flex}.bdiHEa_scmHeader{align-items:center;min-height:28px;padding:0 6px;display:flex}.bdiHEa_scmDisclosure{min-width:0;min-height:28px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-strong-12);text-align:left;cursor:pointer;background:0 0;border:none;flex:1;align-items:center;gap:6px;padding:0;display:flex}.bdiHEa_scmActions{opacity:0;align-items:center;gap:2px;display:flex}.bdiHEa_scmHeader:hover .bdiHEa_scmActions,.bdiHEa_scmHeader:focus-within .bdiHEa_scmActions{opacity:1}@media (hover:none){.bdiHEa_scmActions{opacity:1}}.bdiHEa_repoSwitcher{scrollbar-width:none;flex:none;align-items:center;gap:4px;min-width:0;padding:0 6px 2px;display:flex;overflow:auto hidden}.bdiHEa_repoSwitcher::-webkit-scrollbar{display:none}.bdiHEa_repoChip{border:1px solid var(--dsw-alias-border-l1);max-width:160px;min-height:22px;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxxs-11);text-align:left;white-space:nowrap;text-overflow:ellipsis;cursor:pointer;background:0 0;border-radius:3px;flex:none;padding:2px 8px;overflow:hidden}.bdiHEa_repoChip:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.bdiHEa_repoChip[data-active=true]{border-color:var(--dsw-alias-border-l2);background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-primary)}.bdiHEa_repoChip:disabled{opacity:.45;cursor:default}.bdiHEa_repoChip:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-2px}.bdiHEa_gitFooter{border-top:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base);flex:none;min-width:0;position:sticky;bottom:0}.bdiHEa_footerRow{align-items:center;min-width:0;min-height:28px;display:flex}.bdiHEa_actionError{white-space:normal;align-items:flex-start;gap:6px;display:flex}.bdiHEa_actionErrorText{white-space:pre-wrap;overflow-wrap:anywhere;flex:1;min-width:0}.bdiHEa_branchMenu{flex:1;min-width:0;display:flex}.bdiHEa_branchButton,.bdiHEa_syncButton{min-width:0;min-height:28px;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxxs-11);cursor:pointer;background:0 0;border:none;align-items:center;gap:5px;padding:3px 8px;display:flex}.bdiHEa_branchButton{text-align:left;flex:1}.bdiHEa_syncButton{max-width:55%}.bdiHEa_branchButton svg,.bdiHEa_syncButton svg{flex:none}.bdiHEa_branchButton span,.bdiHEa_syncButton span{text-overflow:ellipsis;white-space:nowrap;overflow:hidden}.bdiHEa_branchButton:hover:not(:disabled),.bdiHEa_syncButton:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.bdiHEa_branchButton:disabled,.bdiHEa_syncButton:disabled{opacity:.45;cursor:default}.bdiHEa_group{flex-direction:column;padding-bottom:2px;display:flex}.bdiHEa_group .bdiHEa_groupHeader{z-index:2;background:var(--dsw-alias-bg-base);gap:4px;position:sticky;top:0}.bdiHEa_countPill{border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-interactive-bg-hover);width:20px;height:20px;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxxs-strong-11);text-align:center;font-variant-numeric:tabular-nums;flex:none;font-size:10px;line-height:20px}.bdiHEa_group .bdiHEa_headerAction{opacity:0;transition:opacity .12s var(--ds-ease-in-out)}.bdiHEa_group .bdiHEa_groupHeader:hover .bdiHEa_headerAction,.bdiHEa_group .bdiHEa_groupHeader:focus-within .bdiHEa_headerAction{opacity:1}@media (hover:none){.bdiHEa_group .bdiHEa_headerAction{opacity:1}}.bdiHEa_tree{flex-direction:column;display:flex}.bdiHEa_dirRow{min-width:0;color:var(--dsw-alias-label-secondary);font:inherit;cursor:pointer;text-align:left;background:0 0;border:none;flex:1;align-items:center;gap:6px;padding:0;display:flex}.bdiHEa_dirRow:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}.bdiHEa_chevron{color:var(--dsw-alias-label-tertiary);transition:transform .14s var(--ds-ease-in-out);flex:none;display:inline-flex}.bdiHEa_chevron[data-open=true]{transform:rotate(90deg)}.bdiHEa_dirName{text-overflow:ellipsis;white-space:nowrap;min-width:0;font:var(--dsw-font-xxs-12);flex:1;overflow:hidden}.bdiHEa_row{min-height:28px;animation:bdiHEa_dsh-row-in .15s var(--ds-ease-in-out);align-items:center;gap:6px;padding:0 6px;display:flex;position:relative}.bdiHEa_row:hover{background:var(--dsw-alias-interactive-bg-hover)}.bdiHEa_row[data-selected=true],.bdiHEa_opRow[data-selected=true]{background:var(--dsw-alias-interactive-bg-active)}.bdiHEa_row[data-selected=true]:before,.bdiHEa_opRow[data-selected=true]:before{content:\"\";background:var(--dsw-alias-state-business-primary);border-radius:1px;width:2px;position:absolute;top:4px;bottom:4px;left:0}.bdiHEa_guide{border-left:1px solid var(--dsw-alias-border-l1);width:0;position:absolute;top:0;bottom:0}.bdiHEa_rowMain{cursor:pointer;text-align:left;background:0 0;border:none;flex:1;align-items:center;gap:6px;min-width:0;padding:0;display:flex}.bdiHEa_rowMain:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}.bdiHEa_rowIcon{flex:none;align-items:center;display:inline-flex}.bdiHEa_rowName{text-overflow:ellipsis;white-space:nowrap;min-width:0;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-primary);overflow:hidden}.bdiHEa_rowPath{text-overflow:ellipsis;white-space:nowrap;min-width:0;font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary);flex:1;overflow:hidden}.bdiHEa_lineCounts{font:var(--dsw-font-xxxs-11);font-family:var(--ds-font-family-code,monospace);font-variant-numeric:tabular-nums;flex:none;gap:5px;display:inline-flex}.bdiHEa_lineNote{font:var(--dsw-font-xxxs-11);color:var(--dsw-alias-label-tertiary);white-space:nowrap;flex:none}.bdiHEa_row .bdiHEa_rowAction,.bdiHEa_group .bdiHEa_headerAction{width:20px;height:20px}.bdiHEa_row:not(:hover):not(:focus-within) .bdiHEa_rowAction{opacity:0}@media (hover:none){.bdiHEa_row:not(:hover):not(:focus-within) .bdiHEa_rowAction{opacity:1}}.bdiHEa_messageBox{padding:4px 8px 8px;display:flex}.bdiHEa_commitInputWrap{box-sizing:border-box;border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-1);flex:1;align-items:center;gap:6px;min-width:0;min-height:32px;padding:0 4px 0 8px;display:flex;position:relative}.bdiHEa_commitInputWrap:focus-within{border-color:var(--dsw-alias-state-business-primary)}.bdiHEa_commitInput{min-width:0;height:22px;min-height:22px;max-height:132px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-s-14);resize:none;background:0 0;border:none;outline:none;flex:1;margin:4px 0;padding:0;line-height:22px;overflow-y:hidden}.bdiHEa_commitInput::placeholder{color:var(--dsw-alias-label-dimmed)}.bdiHEa_commitInput:disabled{opacity:.5}.bdiHEa_commitInput[data-message-busy=true]{color:#0000;caret-color:#0000}.bdiHEa_commitBusyText{pointer-events:none;font:var(--dsw-font-s-14);background-image:linear-gradient(90deg, var(--dsw-alias-label-tertiary) 0%, var(--dsw-alias-label-primary) 50%, var(--dsw-alias-label-tertiary) 100%);color:#0000;background-size:200% 100%;-webkit-background-clip:text;background-clip:text;align-items:center;padding:0 8px;line-height:22px;animation:2.6s linear infinite bdiHEa_commitSweep;display:flex;position:absolute;inset:0 38px 0 0}@keyframes bdiHEa_commitSweep{0%{background-position:200% 0}to{background-position:-200% 0}}@media (prefers-reduced-motion:reduce){.bdiHEa_commitBusyText{animation:none}}.bdiHEa_suggestButton{width:24px;height:24px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:8px;flex:none;justify-content:center;align-self:flex-start;align-items:center;margin-top:3px;padding:0;display:inline-flex}.bdiHEa_suggestButton:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.bdiHEa_suggestButton:disabled{opacity:.45;cursor:default}.bdiHEa_suggestBusy{color:var(--dsw-alias-interactive-bg-hover-accent);animation:1.2s ease-in-out infinite bdiHEa_commitSuggestPulse}@keyframes bdiHEa_commitSuggestPulse{50%{opacity:.45}}@media (prefers-reduced-motion:reduce){.bdiHEa_suggestBusy{animation:none}}.bdiHEa_commitModel{flex-direction:column;gap:4px;padding:8px 12px;display:flex}.bdiHEa_commitModelTitle{font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary)}.bdiHEa_commitModelDesc{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary)}.bdiHEa_commitModelRow{justify-content:space-between;align-items:center;gap:8px;display:flex}.bdiHEa_commitModelSwitch{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-primary);cursor:pointer;align-items:center;gap:6px;display:inline-flex}.bdiHEa_commitModelSwitch input{accent-color:var(--dsw-alias-interactive-bg-hover-accent)}.bdiHEa_commitModelMenuRoot{width:100%;display:block}.bdiHEa_commitModelBox{display:block}.bdiHEa_commitModelCurrent{font:var(--dsw-font-xxs-strong-12);color:var(--dsw-alias-label-primary);overflow-wrap:anywhere;margin-bottom:4px}.bdiHEa_commitModelInput{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);width:100%;height:26px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);border-radius:6px;padding:0 6px}.bdiHEa_commitModelInput:disabled{opacity:.45;cursor:default}.bdiHEa_commitModelOption{box-sizing:border-box;width:100%;color:var(--dsw-alias-label-primary);font:var(--dsw-font-xxs-12);text-align:left;cursor:pointer;background:0 0;border:none;border-radius:4px;align-items:center;gap:8px;padding:4px 6px;display:flex}.bdiHEa_commitModelOption:hover{background:var(--dsw-alias-interactive-bg-hover)}.bdiHEa_commitModelOptionText{text-overflow:ellipsis;white-space:nowrap;flex:auto;min-width:0;overflow:hidden}.bdiHEa_commitModelOptionNote{white-space:nowrap;min-width:max-content;color:var(--dsw-alias-label-tertiary);flex:none}.bdiHEa_commitModelHint{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary)}.bdiHEa_graphSvg{flex:none;max-width:40%;height:22px;overflow:hidden}.bdiHEa_graphContent{flex:1;align-items:center;gap:6px;min-width:0;padding-right:4px;display:flex}.bdiHEa_logRefs{flex-shrink:1;gap:3px;min-width:0;max-width:45%;display:inline-flex;overflow:hidden}.bdiHEa_logRef{border:1px solid var(--dsw-alias-border-l2);font:var(--dsw-font-xxxs-strong-11);color:var(--dsw-alias-brand-primary);white-space:nowrap;border-radius:3px;flex:none;padding:0 4px}.bdiHEa_session{flex-direction:column;flex:1;min-height:0;display:flex}.bdiHEa_filterRow{flex-wrap:wrap;flex:none;gap:4px;padding:6px 12px;display:flex}.bdiHEa_sessionList{flex-direction:column;flex:1;gap:4px;min-height:0;margin-top:4px;padding:0 6px 10px;display:flex;overflow-y:auto}.bdiHEa_filePath{text-overflow:ellipsis;white-space:nowrap;min-width:0;color:var(--dsw-alias-label-tertiary);font-family:var(--ds-font-family-code,monospace);flex:1;font-size:11px;overflow:hidden}.bdiHEa_opRow{width:100%;min-height:24px;color:var(--dsw-alias-label-primary);font:inherit;cursor:pointer;text-align:left;background:0 0;border:0;border-radius:4px;align-items:center;gap:6px;padding:0 5px;font-size:11px;display:flex;position:relative}.bdiHEa_opRow:hover{background:var(--dsw-alias-interactive-bg-hover)}.bdiHEa_opRow[data-op-error=true]{box-shadow:inset 2px 0 0 var(--dsw-alias-state-error-primary)}.bdiHEa_opMeta{white-space:nowrap;flex:none;align-items:baseline;gap:8px;min-width:0;margin-left:auto;display:inline-flex}.bdiHEa_opTime{color:var(--dsw-alias-label-tertiary);flex:none;font-size:10px}.bdiHEa_opFlag{color:var(--dsw-alias-state-business-primary);flex:none;font-size:10px}.bdiHEa_opFlagError{color:var(--dsw-alias-state-error-primary);flex:none;font-size:10px}.bdiHEa_opSize{color:var(--dsw-alias-label-tertiary);font-size:10px;font-family:var(--ds-font-family-code,monospace);flex:none}.bdiHEa_redactBanner{font:var(--dsw-font-xxxs-strong-11);color:var(--dsw-alias-state-warn-primary);background:var(--dsw-alias-interactive-bg-hover);white-space:nowrap;border-radius:2px;flex:none;padding:2px 8px}.bdiHEa_mdBody{font:var(--dsw-font-xs-regular-13);min-height:0;padding:12px 16px 20px;line-height:1.6;overflow-y:auto}.bdiHEa_htmlPane{flex:1;min-height:0;display:flex}.bdiHEa_htmlFrame{background:var(--dsw-alias-bg-base);border:none;flex:1;width:100%}.bdiHEa_diffPane{border-top:1px solid var(--dsw-alias-border-l1);flex-direction:column;flex:none;min-height:0;display:flex}.bdiHEa_dragHandle{cursor:ns-resize;background:var(--dsw-alias-bg-base);flex:none;height:8px;position:relative}.bdiHEa_dragHandle:after{content:\"\";background:var(--dsw-alias-border-l2);border-radius:1px;width:36px;height:2px;position:absolute;top:3px;left:calc(50% - 18px)}.bdiHEa_dragHandle:hover:after,.bdiHEa_dragHandle:focus-visible:after{background:var(--dsw-alias-state-business-primary)}.bdiHEa_paneTabs{border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:2px;height:28px;padding:0 8px;display:flex}.bdiHEa_paneTab{color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxxs-strong-11);cursor:pointer;background:0 0;border:none;border-bottom:2px solid #0000;align-self:stretch;align-items:center;padding:0 8px;display:inline-flex}.bdiHEa_paneTab:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.bdiHEa_paneTab[data-active=true]{color:var(--dsw-alias-label-primary);border-bottom-color:var(--dsw-alias-brand-primary)}.bdiHEa_paneTab:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-2px}.bdiHEa_altBody{flex-direction:column;flex:1;min-height:0;display:flex}.bdiHEa_diffHead{border-bottom:1px solid var(--dsw-alias-border-l1);align-items:center;gap:6px;padding:3px 8px 3px 10px;display:flex}.bdiHEa_diffPath{font-family:var(--ds-font-family-code,monospace);white-space:nowrap;text-overflow:ellipsis;color:var(--dsw-alias-label-primary);direction:rtl;flex:1;min-width:0;font-size:11px;overflow:hidden}.bdiHEa_diffStats{font-size:10px;font-family:var(--ds-font-family-code,monospace);flex:none;gap:5px;display:inline-flex}.bdiHEa_paneBody{flex:1;min-height:0;overflow-y:auto}.bdiHEa_readError{border-left:3px solid var(--dsw-alias-state-error-primary);word-break:break-word;margin:6px 8px;padding:6px 10px}.bdiHEa_paneGone{border-top:1px solid var(--dsw-alias-border-l1);flex:none;align-items:center;gap:8px;padding:8px 12px;display:flex}@keyframes bdiHEa_dsh-row-in{0%{opacity:0}}.bdiHEa_opRow:focus-visible,.bdiHEa_scmDisclosure:focus-visible,.bdiHEa_branchButton:focus-visible,.bdiHEa_syncButton:focus-visible,.bdiHEa_suggestButton:focus-visible,.bdiHEa_select:focus-visible,.bdiHEa_dragHandle:focus-visible{outline:2px solid var(--dsw-alias-interactive-bg-hover-accent);outline-offset:-1px}@media (prefers-reduced-motion:reduce){.bdiHEa_row{animation:none}}";
 		const tagId$9 = "dsh-better-sidebar/changes.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$9) + "]") === null) {
 			const tag = document.createElement("style");
@@ -10902,94 +11422,96 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var changes_module_css_default = {
-			"branchButton": "bdiHEa_branchButton",
-			"headerAction": "bdiHEa_headerAction",
-			"commitModel": "bdiHEa_commitModel",
-			"gitFooter": "bdiHEa_gitFooter",
-			"altBody": "bdiHEa_altBody",
-			"actionError": "bdiHEa_actionError",
-			"scmDisclosure": "bdiHEa_scmDisclosure",
-			"commitSweep": "bdiHEa_commitSweep",
-			"dsh-row-in": "bdiHEa_dsh-row-in",
-			"commitSuggestPulse": "bdiHEa_commitSuggestPulse",
-			"countPill": "bdiHEa_countPill",
-			"diffPane": "bdiHEa_diffPane",
-			"lineNote": "bdiHEa_lineNote",
-			"chevron": "bdiHEa_chevron",
-			"suggestButton": "bdiHEa_suggestButton",
-			"diffPath": "bdiHEa_diffPath",
+			"opFlagError": "bdiHEa_opFlagError",
+			"commitModelSwitch": "bdiHEa_commitModelSwitch",
+			"scmActions": "bdiHEa_scmActions",
 			"diffStats": "bdiHEa_diffStats",
-			"commitModelOptionText": "bdiHEa_commitModelOptionText",
-			"guide": "bdiHEa_guide",
-			"opSize": "bdiHEa_opSize",
-			"graphSection": "bdiHEa_graphSection",
-			"dirRow": "bdiHEa_dirRow",
-			"group": "bdiHEa_group",
-			"footerRow": "bdiHEa_footerRow",
-			"rowIcon": "bdiHEa_rowIcon",
-			"commitModelRow": "bdiHEa_commitModelRow",
-			"opMeta": "bdiHEa_opMeta",
-			"sessionList": "bdiHEa_sessionList",
-			"filterRow": "bdiHEa_filterRow",
-			"redactBanner": "bdiHEa_redactBanner",
-			"commitInputWrap": "bdiHEa_commitInputWrap",
+			"repoChip": "bdiHEa_repoChip",
+			"branchButton": "bdiHEa_branchButton",
+			"suggestButton": "bdiHEa_suggestButton",
+			"suggestBusy": "bdiHEa_suggestBusy",
+			"opFlag": "bdiHEa_opFlag",
+			"gitFooter": "bdiHEa_gitFooter",
+			"mdBody": "bdiHEa_mdBody",
 			"htmlFrame": "bdiHEa_htmlFrame",
 			"paneTab": "bdiHEa_paneTab",
-			"readError": "bdiHEa_readError",
-			"commitBusyText": "bdiHEa_commitBusyText",
-			"commitModelOption": "bdiHEa_commitModelOption",
-			"head": "bdiHEa_head",
-			"logRefs": "bdiHEa_logRefs",
-			"commitModelCurrent": "bdiHEa_commitModelCurrent",
-			"graphArea": "bdiHEa_graphArea",
-			"opRow": "bdiHEa_opRow",
-			"graphContent": "bdiHEa_graphContent",
-			"scmHeader": "bdiHEa_scmHeader",
-			"graphSvg": "bdiHEa_graphSvg",
-			"opFlag": "bdiHEa_opFlag",
-			"actionErrorText": "bdiHEa_actionErrorText",
-			"commitModelDesc": "bdiHEa_commitModelDesc",
-			"root": "bdiHEa_root",
-			"commitModelSwitch": "bdiHEa_commitModelSwitch",
-			"gitScroll": "bdiHEa_gitScroll",
-			"groupHeader": "bdiHEa_groupHeader",
-			"lineCounts": "bdiHEa_lineCounts",
-			"tree": "bdiHEa_tree",
-			"messageBox": "bdiHEa_messageBox",
-			"suggestBusy": "bdiHEa_suggestBusy",
-			"commitModelOptionNote": "bdiHEa_commitModelOptionNote",
-			"opFlagError": "bdiHEa_opFlagError",
-			"mdBody": "bdiHEa_mdBody",
-			"dragHandle": "bdiHEa_dragHandle",
-			"diffHead": "bdiHEa_diffHead",
-			"row": "bdiHEa_row",
-			"git": "bdiHEa_git",
-			"commitModelTitle": "bdiHEa_commitModelTitle",
-			"commitModelBox": "bdiHEa_commitModelBox",
-			"session": "bdiHEa_session",
-			"paneTabs": "bdiHEa_paneTabs",
-			"opTime": "bdiHEa_opTime",
-			"commitModelMenuRoot": "bdiHEa_commitModelMenuRoot",
-			"rowName": "bdiHEa_rowName",
-			"logRef": "bdiHEa_logRef",
 			"lensBody": "bdiHEa_lensBody",
-			"htmlPane": "bdiHEa_htmlPane",
-			"headAction": "bdiHEa_headAction",
-			"rowAction": "bdiHEa_rowAction",
-			"branchMenu": "bdiHEa_branchMenu",
-			"commitModelHint": "bdiHEa_commitModelHint",
-			"paneBody": "bdiHEa_paneBody",
-			"commitInput": "bdiHEa_commitInput",
-			"paneGone": "bdiHEa_paneGone",
+			"readError": "bdiHEa_readError",
+			"commitModelRow": "bdiHEa_commitModelRow",
 			"changesSection": "bdiHEa_changesSection",
-			"scmActions": "bdiHEa_scmActions",
 			"dirName": "bdiHEa_dirName",
-			"rowPath": "bdiHEa_rowPath",
-			"commitModelInput": "bdiHEa_commitModelInput",
-			"select": "bdiHEa_select",
+			"repoSwitcher": "bdiHEa_repoSwitcher",
+			"rowIcon": "bdiHEa_rowIcon",
+			"commitModelHint": "bdiHEa_commitModelHint",
+			"sessionList": "bdiHEa_sessionList",
+			"graphArea": "bdiHEa_graphArea",
+			"headerAction": "bdiHEa_headerAction",
+			"htmlPane": "bdiHEa_htmlPane",
+			"actionError": "bdiHEa_actionError",
+			"graphContent": "bdiHEa_graphContent",
+			"altBody": "bdiHEa_altBody",
+			"group": "bdiHEa_group",
+			"gitScroll": "bdiHEa_gitScroll",
+			"commitModelTitle": "bdiHEa_commitModelTitle",
+			"opRow": "bdiHEa_opRow",
+			"paneBody": "bdiHEa_paneBody",
+			"git": "bdiHEa_git",
 			"rowMain": "bdiHEa_rowMain",
+			"diffPane": "bdiHEa_diffPane",
+			"root": "bdiHEa_root",
+			"tree": "bdiHEa_tree",
+			"select": "bdiHEa_select",
+			"head": "bdiHEa_head",
+			"lineCounts": "bdiHEa_lineCounts",
+			"commitModelMenuRoot": "bdiHEa_commitModelMenuRoot",
+			"commitModelOption": "bdiHEa_commitModelOption",
+			"dragHandle": "bdiHEa_dragHandle",
+			"logRef": "bdiHEa_logRef",
+			"commitInputWrap": "bdiHEa_commitInputWrap",
+			"commitModelCurrent": "bdiHEa_commitModelCurrent",
+			"paneGone": "bdiHEa_paneGone",
+			"messageBox": "bdiHEa_messageBox",
+			"graphSection": "bdiHEa_graphSection",
+			"scmHeader": "bdiHEa_scmHeader",
+			"dsh-row-in": "bdiHEa_dsh-row-in",
+			"commitModelOptionNote": "bdiHEa_commitModelOptionNote",
+			"commitModelDesc": "bdiHEa_commitModelDesc",
+			"groupHeader": "bdiHEa_groupHeader",
+			"row": "bdiHEa_row",
+			"rowName": "bdiHEa_rowName",
+			"headAction": "bdiHEa_headAction",
+			"lineNote": "bdiHEa_lineNote",
+			"commitModelInput": "bdiHEa_commitModelInput",
+			"opSize": "bdiHEa_opSize",
+			"paneTabs": "bdiHEa_paneTabs",
+			"commitInput": "bdiHEa_commitInput",
+			"commitModel": "bdiHEa_commitModel",
+			"guide": "bdiHEa_guide",
+			"scmDisclosure": "bdiHEa_scmDisclosure",
+			"commitSweep": "bdiHEa_commitSweep",
+			"commitModelOptionText": "bdiHEa_commitModelOptionText",
+			"session": "bdiHEa_session",
+			"opTime": "bdiHEa_opTime",
+			"diffHead": "bdiHEa_diffHead",
+			"branchMenu": "bdiHEa_branchMenu",
+			"filePath": "bdiHEa_filePath",
+			"logRefs": "bdiHEa_logRefs",
+			"footerRow": "bdiHEa_footerRow",
+			"actionErrorText": "bdiHEa_actionErrorText",
+			"commitSuggestPulse": "bdiHEa_commitSuggestPulse",
+			"dirRow": "bdiHEa_dirRow",
+			"countPill": "bdiHEa_countPill",
+			"graphSvg": "bdiHEa_graphSvg",
+			"filterRow": "bdiHEa_filterRow",
+			"diffPath": "bdiHEa_diffPath",
+			"rowAction": "bdiHEa_rowAction",
+			"chevron": "bdiHEa_chevron",
 			"syncButton": "bdiHEa_syncButton",
-			"filePath": "bdiHEa_filePath"
+			"commitModelBox": "bdiHEa_commitModelBox",
+			"rowPath": "bdiHEa_rowPath",
+			"opMeta": "bdiHEa_opMeta",
+			"commitBusyText": "bdiHEa_commitBusyText",
+			"redactBanner": "bdiHEa_redactBanner"
 		};
 		//#endregion
 		//#region src/client/changes/CommitModelSettings.tsx
@@ -11596,33 +12118,33 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var graph_module_css_default = {
-			"select": "EKL9oq_select",
-			"refs": "EKL9oq_refs",
-			"graph": "EKL9oq_graph",
-			"parentChip": "EKL9oq_parentChip",
-			"scroll": "EKL9oq_scroll",
-			"hoverSubject": "EKL9oq_hoverSubject",
-			"hoverMeta": "EKL9oq_hoverMeta",
-			"dash": "EKL9oq_dash",
-			"parents": "EKL9oq_parents",
-			"root": "EKL9oq_root",
-			"detailRefs": "EKL9oq_detailRefs",
-			"metaRow": "EKL9oq_metaRow",
-			"messageBody": "EKL9oq_messageBody",
-			"metaLabel": "EKL9oq_metaLabel",
 			"details": "EKL9oq_details",
-			"notice": "EKL9oq_notice",
-			"card": "EKL9oq_card",
-			"subject": "EKL9oq_subject",
-			"ref": "EKL9oq_ref",
-			"detailSubject": "EKL9oq_detailSubject",
-			"hint": "EKL9oq_hint",
 			"refName": "EKL9oq_refName",
-			"metaGlyph": "EKL9oq_metaGlyph",
-			"metaValue": "EKL9oq_metaValue",
+			"refs": "EKL9oq_refs",
+			"dash": "EKL9oq_dash",
+			"metaLabel": "EKL9oq_metaLabel",
+			"hoverSubject": "EKL9oq_hoverSubject",
+			"parentChip": "EKL9oq_parentChip",
+			"graph": "EKL9oq_graph",
+			"hoverMeta": "EKL9oq_hoverMeta",
+			"detailRefs": "EKL9oq_detailRefs",
+			"card": "EKL9oq_card",
+			"hashChip": "EKL9oq_hashChip",
+			"hint": "EKL9oq_hint",
 			"row": "EKL9oq_row",
 			"toolbar": "EKL9oq_toolbar",
-			"hashChip": "EKL9oq_hashChip"
+			"metaRow": "EKL9oq_metaRow",
+			"metaGlyph": "EKL9oq_metaGlyph",
+			"metaValue": "EKL9oq_metaValue",
+			"messageBody": "EKL9oq_messageBody",
+			"scroll": "EKL9oq_scroll",
+			"select": "EKL9oq_select",
+			"ref": "EKL9oq_ref",
+			"root": "EKL9oq_root",
+			"parents": "EKL9oq_parents",
+			"notice": "EKL9oq_notice",
+			"detailSubject": "EKL9oq_detailSubject",
+			"subject": "EKL9oq_subject"
 		};
 		//#endregion
 		//#region src/client/changes/GitGraphSection.tsx
@@ -12313,34 +12835,34 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(tag);
 		}
 		var diff_module_css_default = {
-			"files": "sstWLa_files",
-			"sign": "sstWLa_sign",
-			"filePath": "sstWLa_filePath",
-			"rows": "sstWLa_rows",
+			"fileBlock": "sstWLa_fileBlock",
+			"statDel": "sstWLa_statDel",
 			"text": "sstWLa_text",
-			"inlineChange": "sstWLa_inlineChange",
-			"row": "sstWLa_row",
-			"tokComment": "sstWLa_tokComment",
-			"tokType": "sstWLa_tokType",
-			"tokString": "sstWLa_tokString",
+			"tokFunction": "sstWLa_tokFunction",
+			"files": "sstWLa_files",
+			"filePath": "sstWLa_filePath",
+			"fileChevron": "sstWLa_fileChevron",
 			"tokMacro": "sstWLa_tokMacro",
-			"tokNumber": "sstWLa_tokNumber",
-			"foldRow": "sstWLa_foldRow",
-			"file": "sstWLa_file",
+			"tokKeyword": "sstWLa_tokKeyword",
+			"rows": "sstWLa_rows",
+			"inlineChange": "sstWLa_inlineChange",
+			"tokComment": "sstWLa_tokComment",
 			"fileOld": "sstWLa_fileOld",
 			"fileTag": "sstWLa_fileTag",
-			"foldMarker": "sstWLa_foldMarker",
+			"sign": "sstWLa_sign",
+			"tokString": "sstWLa_tokString",
 			"fileStats": "sstWLa_fileStats",
-			"tokFunction": "sstWLa_tokFunction",
-			"fileChevronExpanded": "sstWLa_fileChevronExpanded",
-			"tokKeyword": "sstWLa_tokKeyword",
-			"fileBlock": "sstWLa_fileBlock",
-			"expand": "sstWLa_expand",
+			"tokNumber": "sstWLa_tokNumber",
+			"tokType": "sstWLa_tokType",
 			"statAdd": "sstWLa_statAdd",
-			"statDel": "sstWLa_statDel",
+			"expand": "sstWLa_expand",
+			"file": "sstWLa_file",
+			"row": "sstWLa_row",
+			"foldMarker": "sstWLa_foldMarker",
+			"fileChevronExpanded": "sstWLa_fileChevronExpanded",
 			"lineNo": "sstWLa_lineNo",
 			"metaText": "sstWLa_metaText",
-			"fileChevron": "sstWLa_fileChevron"
+			"foldRow": "sstWLa_foldRow"
 		};
 		//#endregion
 		//#region src/client/changes/GitLens.tsx
@@ -12382,6 +12904,21 @@ window.__ModuleLoader__.load({
 		*  this so non-Error rejections never render as '[object Object]'). */
 		function errorMessage(reason) {
 			return reason instanceof Error ? reason.message : String(reason);
+		}
+		/** One checkout root in the form comparisons use: `git rev-parse` reports
+		*  forward slashes, React state may carry the shell's backslashes, Windows
+		*  folds case, and a trailing separator means the same directory.
+		*
+		*  Case folds only for Windows spellings. POSIX keeps case: a container
+		*  workspace can legally hold `Foo` and `foo` as two different checkouts, and
+		*  folding would light up both chips. */
+		function rootKey(value) {
+			const key = (value ?? "").replaceAll("\\", "/").replace(/\/+$/, "");
+			return /^[a-zA-Z]:\//.test(key) ? key.toLowerCase() : key;
+		}
+		/** Whether two spellings name the SAME checkout root. */
+		function sameRepoRoot(left, right) {
+			return rootKey(left) === rootKey(right);
 		}
 		/**
 		* Whether two inventory listings say the same thing. Every listing pass answers
@@ -12672,7 +13209,17 @@ window.__ModuleLoader__.load({
 			const [graphRefresh, setGraphRefresh] = (0, react.useState)(0);
 			const [changesOpen, setChangesOpen] = (0, react.useState)(true);
 			const [graphOpen, setGraphOpen] = (0, react.useState)(true);
-			const [moreOpen, setMoreOpen] = (0, react.useState)(false);
+			/**
+			* The open More Actions menu: the trigger's viewport corner (null = closed).
+			* Its repo/worktree rows carry nested submenus, which the primitives anchor
+			* with static CSS growing RIGHT of the card — past the right edge of this
+			* docked panel. This menu is button-anchored (no cursor point to publish),
+			* so open/close keeps the measured corner and hands it to the same flip
+			* mechanism as the file-tree row menu.
+			*/
+			const [moreMenu, setMoreMenu] = (0, react.useState)(null);
+			const moreOpen = moreMenu !== null;
+			useSubmenuFlip(moreMenu);
 			const [branchOpen, setBranchOpen] = (0, react.useState)(false);
 			/** Commit drafts, one per scope: the Commit button asks only for a message
 			*  and a staged row, so a draft typed against another project would submit
@@ -12838,7 +13385,7 @@ window.__ModuleLoader__.load({
 				setFileMenu(null);
 				setHistoryMenu(null);
 				setConfirm(null);
-				setMoreOpen(false);
+				setMoreMenu(null);
 				setBranchOpen(false);
 			};
 			/** Load the branch choices of one checkout; its history is the commit
@@ -13329,6 +13876,28 @@ window.__ModuleLoader__.load({
 								kind: "warn",
 								children: t("statusTruncated")
 							}),
+							isRepo && repoChoices.length > 1 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+								className: changes_module_css_default.repoSwitcher,
+								"data-scm-repos": true,
+								role: "group",
+								"aria-label": t("gitRepository"),
+								children: repoChoices.map((root) => {
+									const isActive = sameRepoRoot(root, repoRoot ?? snapshot?.root);
+									return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+										type: "button",
+										className: changes_module_css_default.repoChip,
+										"data-scm-repo": root,
+										"data-active": isActive ? "true" : void 0,
+										"aria-pressed": isActive,
+										title: root,
+										disabled: busy || suggesting,
+										onClick: () => {
+											chooseRepo(root);
+										},
+										children: baseName$1(root)
+									}, root);
+								})
+							}),
 							isRepo && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("section", {
 								className: changes_module_css_default.changesSection,
 								"data-scm-section": "changes",
@@ -13370,7 +13939,7 @@ window.__ModuleLoader__.load({
 											/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Menu, {
 												open: moreOpen,
 												onClose: () => {
-													setMoreOpen(false);
+													setMoreMenu(null);
 												},
 												portal: true,
 												compact: true,
@@ -13381,8 +13950,16 @@ window.__ModuleLoader__.load({
 													icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEllipsisOutlineRegular, { size: 14 }),
 													label: t("gitMoreActions"),
 													active: moreOpen,
-													onClick: () => {
-														setMoreOpen((open) => !open);
+													onClick: (event) => {
+														if (moreOpen) {
+															setMoreMenu(null);
+															return;
+														}
+														const rect = event.currentTarget.getBoundingClientRect();
+														setMoreMenu({
+															x: rect.right,
+															y: rect.top
+														});
 													}
 												}),
 												items: [
@@ -13416,7 +13993,7 @@ window.__ModuleLoader__.load({
 													}] : []
 												],
 												onSelect: (id) => {
-													setMoreOpen(false);
+													setMoreMenu(null);
 													if (id === "push") push();
 													else if (id === "pull") pull();
 													else if (id.startsWith("repo:")) chooseRepo(id.slice(5));
@@ -16465,9 +17042,10 @@ window.__ModuleLoader__.load({
 		* @param docPath - the absolute path of the markdown document being rendered;
 		*   relative targets resolve against its directory. Absent for prose surfaces.
 		* @param cwd - the session workspace root, the base for prose surfaces.
+		* @param allLocalFiles - claim source files too, accepting only empty or line fragments.
 		* @returns the resolved target, or null for every link the plugin does not own.
 		*/
-		function markdownAnchorTarget(destination, docPath, cwd) {
+		function markdownAnchorTarget(destination, docPath, cwd, allLocalFiles = false) {
 			const raw = destination.trim();
 			if (raw === "") return null;
 			const separator = separatorOf(raw);
@@ -16479,8 +17057,9 @@ window.__ModuleLoader__.load({
 			};
 			if (SCHEME_RE.test(pathPart) && !DRIVE_RE.test(pathPart)) return null;
 			if (pathPart.startsWith("//")) return null;
+			if (pathPart.includes("?")) return null;
 			const path = decodePercent(pathPart);
-			if (!MARKDOWN_EXT_RE.test(path)) return null;
+			if (!MARKDOWN_EXT_RE.test(path) && (!allLocalFiles || fragment !== "" && !isHostLineFragment(fragment))) return null;
 			return {
 				kind: "file",
 				path: resolveTargetPath(path, docPath, cwd),
@@ -16529,11 +17108,11 @@ window.__ModuleLoader__.load({
 		* Idempotent: an already-rewritten `%23` destination, a line destination and a
 		* fragment-less link all come back untouched.
 		*/
-		function rewriteDestination(destination, docPath, cwd) {
+		function rewriteDestination(destination, docPath, cwd, allLocalFiles = false) {
 			const separator = separatorOf(destination);
 			const pathPart = separator === null ? destination : destination.slice(0, separator.at);
 			const fragment = separator === null ? "" : destination.slice(separator.at + separator.length);
-			if (markdownAnchorTarget(destination, docPath, cwd) === null) {
+			if (markdownAnchorTarget(destination, docPath, cwd, allLocalFiles) === null) {
 				if (!isLocalDestination(pathPart)) return destination;
 				const rest = separator === null ? "" : destination.slice(separator.at);
 				return `${markdownPathOf(pathPart)}?${rest}`;
@@ -16546,7 +17125,8 @@ window.__ModuleLoader__.load({
 		/**
 		* Make the host renderer able to SERVE the local links of one markdown text:
 		* a claimed `.md`/`.markdown` destination gets its heading fragment carried as
-		* `%23`, and every other local destination gets the `?` that keeps it inert.
+		* `%23`. Other local destinations stay inert unless `allLocalFiles` opts the
+		* surface into opening source files as well.
 		*
 		* Code regions are masked first (see `maskCodeRegions` — fenced blocks opened
 		* by ``` ``` ``` OR `~~~`, and inline code spans), so documentation that
@@ -16558,11 +17138,15 @@ window.__ModuleLoader__.load({
 		* @param cwd - the session workspace root, the base for prose surfaces.
 		* @returns the markdown with local link destinations rewritten in place.
 		*/
-		function rewriteLocalMarkdownLinks(text, docPath, cwd) {
+		function rewriteLocalMarkdownLinks(text, docPath, cwd, allLocalFiles = false) {
 			const { masked, restore } = maskCodeRegions(text);
-			return restore(masked.replace(/(?<!!)\[((?:[^[\]]|\[[^\]]*\])*)\]\(([^)\s]+)((?:\s+"[^"]*")?)\)/g, (_match, label, destination, title) => `[${label}](${rewriteDestination(destination, docPath, cwd)}${title})`).replace(/^(\s*\[([^\]]+)\]:\s*)(<[^>]+>|[^\s]+)/gm, (_match, head, _label, destination) => {
+			return restore(masked.replace(/(?<!!)\[((?:[^[\]]|\[[^\]]*\])*)\]\((<[^<>\n]*>|[^)\s]+)((?:\s+"[^"]*")?)\)/g, (_match, label, destination, title) => {
 				const bracketed = destination.startsWith("<") && destination.endsWith(">");
-				const rewritten = rewriteDestination(bracketed ? destination.slice(1, -1) : destination, docPath, cwd);
+				const rewritten = rewriteDestination(bracketed ? destination.slice(1, -1) : destination, docPath, cwd, allLocalFiles);
+				return `[${label}](${bracketed ? `<${rewritten}>` : rewritten}${title})`;
+			}).replace(/^(\s*\[([^\]]+)\]:\s*)(<[^>]+>|[^\s]+)/gm, (_match, head, _label, destination) => {
+				const bracketed = destination.startsWith("<") && destination.endsWith(">");
+				const rewritten = rewriteDestination(bracketed ? destination.slice(1, -1) : destination, docPath, cwd, allLocalFiles);
 				return `${head}${bracketed ? `<${rewritten}>` : rewritten}`;
 			}));
 		}
@@ -16694,6 +17278,43 @@ window.__ModuleLoader__.load({
 			return Date.now() - entry.at > PENDING_TTL_MS ? null : entry.fragment;
 		}
 		//#endregion
+		//#region src/client/path-line.ts
+		/**
+		* A trailing line spec: `:<line>`, `:<line>-<end>` or `:<line>:<column>`.
+		*
+		* Line numbers are 1-based with no leading zero, exactly as the host's own
+		* fragment rule (`^L([1-9]\d*)`) — so `version:0` and a bare `:0` are file
+		* names, not line references. The regex is anchored at the END of the string,
+		* which is what keeps `data:2024.csv` and `C:` intact.
+		*/
+		const TRAILING_LINE_SPEC = /:([1-9]\d{0,8})(?:-([1-9]\d{0,8}))?(?::([1-9]\d{0,8}))?$/u;
+		/**
+		* Split a trailing `path:line` spec off a path.
+		*
+		* Rejected on purpose, because stripping them would break a path that is
+		* already a valid file name: a spec with nothing in front of it (`:131`), a
+		* one-character remainder (`C:131`, where `C` could only be a drive letter),
+		* and an inverted range (`a.c:20-12`) — the host rejects that one too.
+		* @param path - a path as a caller holds it, in either separator spelling.
+		* @returns the path without the spec plus the line it named, or `undefined`
+		* when the path carries no trailing line spec.
+		*/
+		function splitTrailingLineSpec(path) {
+			const match = TRAILING_LINE_SPEC.exec(path);
+			if (match === null) return void 0;
+			const head = path.slice(0, match.index);
+			if (head.length < 2) return void 0;
+			const line = Number(match[1]);
+			const end = match[2] === void 0 ? line : Number(match[2]);
+			if (end < line) return void 0;
+			return {
+				path: head,
+				line,
+				end,
+				column: match[3] === void 0 ? void 0 : Number(match[3])
+			};
+		}
+		//#endregion
 		//#region src/client/use-markdown-surface.ts
 		/**
 		* React glue for ONE plugin-drawn markdown surface (the container that holds
@@ -16731,7 +17352,7 @@ window.__ModuleLoader__.load({
 		* @returns the container ref, the delegate handler and the source rewrite.
 		*/
 		function useMarkdownSurface(opts) {
-			const { ctx, sessionId, cwd, path } = opts;
+			const { ctx, sessionId, cwd, path, allLocalFiles = false } = opts;
 			const containerRef = (0, react.useRef)(null);
 			const detachRef = (0, react.useRef)(null);
 			/** The session workspace root: the caller's scope when it has one, else the
@@ -16755,17 +17376,19 @@ window.__ModuleLoader__.load({
 					resolveCwd
 				]),
 				openFile: (0, react.useCallback)((destination, options) => {
-					const target = markdownAnchorTarget(destination, path, resolveCwd());
+					const target = markdownAnchorTarget(destination, path, resolveCwd(), allLocalFiles);
 					if (target === null) return;
 					if (target.kind === "same-page") {
 						const container = containerRef.current;
 						if (container !== null) jumpToFragment(container, target.fragment);
 						return;
 					}
-					const line = options?.line ?? lineOfHostFragment(target.fragment);
-					if (line === void 0 && target.fragment !== "") rememberMarkdownAnchor(sessionId, resolveCwd(), target.path, target.fragment);
+					const spec = allLocalFiles ? splitTrailingLineSpec(target.path) : void 0;
+					const filePath = spec?.path ?? target.path;
+					const line = options?.line ?? lineOfHostFragment(target.fragment) ?? spec?.line;
+					if (line === void 0 && target.fragment !== "") rememberMarkdownAnchor(sessionId, resolveCwd(), filePath, target.fragment);
 					try {
-						openSidebarFile(ctx, sessionId, target.path, {
+						openSidebarFile(ctx, sessionId, filePath, {
 							line,
 							cwd: resolveCwd()
 						});
@@ -16776,9 +17399,14 @@ window.__ModuleLoader__.load({
 					ctx,
 					sessionId,
 					path,
-					resolveCwd
+					resolveCwd,
+					allLocalFiles
 				]),
-				rewrite: (0, react.useCallback)((text) => rewriteLocalMarkdownLinks(text, path, resolveCwd()), [path, resolveCwd])
+				rewrite: (0, react.useCallback)((text) => rewriteLocalMarkdownLinks(text, path, resolveCwd(), allLocalFiles), [
+					path,
+					resolveCwd,
+					allLocalFiles
+				])
 			};
 		}
 		/**
@@ -16797,15 +17425,14 @@ window.__ModuleLoader__.load({
 				if (pending !== null && jumpToFragment(container, pending)) pending = null;
 			};
 			if (pending !== null) queueMicrotask(applyPending);
-			let scheduled = false;
+			let scheduled;
 			const observer = new MutationObserver(() => {
-				if (scheduled) return;
-				scheduled = true;
-				queueMicrotask(() => {
-					scheduled = false;
+				if (scheduled !== void 0) return;
+				scheduled = window.setTimeout(() => {
+					scheduled = void 0;
 					prepareMarkdownAnchors(container);
 					applyPending();
-				});
+				}, 80);
 			});
 			observer.observe(container, {
 				childList: true,
@@ -16813,6 +17440,7 @@ window.__ModuleLoader__.load({
 			});
 			return () => {
 				observer.disconnect();
+				if (scheduled !== void 0) window.clearTimeout(scheduled);
 				container.removeAttribute(MARKDOWN_SURFACE_ATTR);
 			};
 		}
@@ -17064,9 +17692,8 @@ window.__ModuleLoader__.load({
 		* A compact tab strip — a real tablist with roving focus: the active tab is
 		* the only tab stop, and Left/Right/Home/End move focus AND selection (the
 		* standard automatic-activation model). Born as the bottom pane's strip
-		* (details / diff); the changes tab's header reuses it for the lens switcher
-		* so the page's two switchers read as one component. Rendered only when the
-		* caller hosts more than one view, so a diff-only preview never grows a strip.
+		* (details / diff). Rendered only when the caller hosts more than one view,
+		* so a diff-only preview never grows a strip.
 		*/
 		function PaneTabStrip(props) {
 			const buttons = (0, react.useRef)([]);
@@ -17663,7 +18290,7 @@ window.__ModuleLoader__.load({
 		* The unified changes tab: one tab, two lenses on "what changed?" — Git
 		* (repository truth: staged/unstaged files, commit box, history) and the
 		* session round (agent truth: every file the model read, wrote, or edited).
-		* A 36px header carries the host conversation Tabs and the current
+		* A 36px header carries the public SegmentedControl and the current
 		* lens's refresh action; both lenses preview their selections in a shared
 		* resizable bottom pane ({@link DiffPane}), and git targets expand into the
 		* dedicated diff tab docked in the workbench's diff pane. The bottom pane is
@@ -17844,33 +18471,18 @@ window.__ModuleLoader__.load({
 				children: [
 					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 						className: changes_module_css_default.head,
-						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-							className: "wSkVaW_tabs",
-							role: "tablist",
-							"aria-label": t("changes"),
-							children: ["git", "session"].map((value) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-								id: `${lensId}-${value}`,
-								type: "button",
-								role: "tab",
-								"aria-selected": lens === value,
-								"aria-controls": `${lensId}-${value}-panel`,
-								tabIndex: lens === value ? 0 : -1,
-								className: `wSkVaW_tab${lens === value ? " wSkVaW_tabActive" : ""}`,
-								onClick: () => {
-									chooseLens(value);
-								},
-								onKeyDown: (event) => {
-									let next;
-									if (event.key === "ArrowLeft" || event.key === "ArrowRight") next = value === "git" ? "session" : "git";
-									else if (event.key === "Home") next = "git";
-									else if (event.key === "End") next = "session";
-									else return;
-									event.preventDefault();
-									chooseLens(next);
-									event.currentTarget.parentElement?.querySelector(`[id="${lensId}-${next}"]`)?.focus();
-								},
-								children: t(value === "git" ? "changesGitLens" : "changesSessionLens")
-							}, value))
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.SegmentedControl, {
+							id: lensId,
+							value: lens === "session" ? "session" : "git",
+							options: [{
+								value: "git",
+								label: t("changesGitLens")
+							}, {
+								value: "session",
+								label: t("changesSessionLens")
+							}],
+							onChange: chooseLens,
+							label: t("changes")
 						}), lens === "session" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(IconButton, {
 							className: changes_module_css_default.headAction,
 							size: "sm",
@@ -18038,6 +18650,49 @@ window.__ModuleLoader__.load({
 				]
 			});
 		}
+		//#endregion
+		//#region src/sidechat-images.ts
+		/**
+		* Raster formats the Side Chat composer offers and the transcript projects.
+		* This is the host's `ImageMediaType` union; a deployment's own
+		* `imageLimits.mediaTypes` stays authoritative for what it accepts.
+		*/
+		const SIDECHAT_IMAGE_MEDIA_TYPES = [
+			"image/png",
+			"image/jpeg",
+			"image/webp",
+			"image/gif"
+		];
+		function projectSidechatContent(content, separator = "\n") {
+			if (typeof content === "string") return { text: content };
+			const texts = [];
+			const images = [];
+			if (Array.isArray(content)) content.forEach((block, blockIndex) => {
+				if (block === null || typeof block !== "object") return;
+				const value = block;
+				if (value.type === "text" && typeof value.text === "string") texts.push(value.text);
+				if (value.type === "image" && value.attachment !== null && typeof value.attachment === "object") {
+					const { mediaType, bytes, width, height, name } = value.attachment;
+					if (typeof mediaType !== "string" || !SIDECHAT_IMAGE_MEDIA_TYPES.includes(mediaType) || ![
+						bytes,
+						width,
+						height
+					].every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0) || name !== void 0 && typeof name !== "string") return;
+					images.push({
+						blockIndex,
+						mediaType,
+						bytes,
+						width,
+						height,
+						...name === void 0 ? {} : { name }
+					});
+				}
+			});
+			return {
+				text: texts.join(separator),
+				...images.length === 0 ? {} : { images }
+			};
+		}
 		/** The pinned label of a freshly created thread that no prompt has reached
 		*  yet (Codex-style immediate create: the tab opens an EMPTY thread, the
 		*  first composer message carries the boundary and earns the real label).
@@ -18099,11 +18754,15 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			if (source?.kind !== void 0 && source.kind !== "user") return true;
 			return messageLeadText(data).startsWith(SIDE_BOUNDARY_PREFIX);
 		}
-		/** The events a thread produced itself: everything after the LAST
-		*  `session/end-seed` marker (the fork-seed boundary). A log with no marker
-		*  (a thread created before seeding existed) is returned whole. */
+		/** The events a thread produced itself: everything after its last
+		*  `session/end-seed { inherited: true }` fork boundary. Untagged markers
+		*  delimit restore/replay lifecycles, not inherited history. A log with no
+		*  inherited marker (including an already-cut route payload) is returned whole. */
 		function threadOwnLogEvents(events) {
-			for (let index = events.length - 1; index >= 0; index--) if (events[index]?.type === "session/end-seed") return events.slice(index + 1);
+			for (let index = events.length - 1; index >= 0; index--) {
+				const event = events[index];
+				if (event?.type === "session/end-seed" && typeof event.data === "object" && event.data !== null && "inherited" in event.data && event.data.inherited === true) return events.slice(index + 1);
+			}
 			return [...events];
 		}
 		/** {@link threadOwnLogEvents} over history rows (the client cache shape). */
@@ -19152,14 +19811,14 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			document.head.appendChild(tag);
 		}
 		var context_diagnostics_module_css_default = {
-			"alert": "MFPsMa_alert",
-			"headerButton": "MFPsMa_headerButton",
-			"alertIcon": "MFPsMa_alertIcon",
-			"alertTitle": "MFPsMa_alertTitle",
 			"alertText": "MFPsMa_alertText",
-			"alertClose": "MFPsMa_alertClose",
 			"alertReason": "MFPsMa_alertReason",
-			"alertLayer": "MFPsMa_alertLayer"
+			"alertClose": "MFPsMa_alertClose",
+			"alertTitle": "MFPsMa_alertTitle",
+			"alert": "MFPsMa_alert",
+			"alertIcon": "MFPsMa_alertIcon",
+			"alertLayer": "MFPsMa_alertLayer",
+			"headerButton": "MFPsMa_headerButton"
 		};
 		//#endregion
 		//#region src/client/context-diagnostics-ui.tsx
@@ -20199,160 +20858,160 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			document.head.appendChild(tag);
 		}
 		var tasks_graph_module_css_default = {
-			"taskState": "d2hvtW_taskState",
-			"popTitle": "d2hvtW_popTitle",
-			"kindBadge": "d2hvtW_kindBadge",
-			"popListLabel": "d2hvtW_popListLabel",
-			"jobsBigNum": "d2hvtW_jobsBigNum",
-			"edgeTeam": "d2hvtW_edgeTeam",
-			"teamTaskRow": "d2hvtW_teamTaskRow",
-			"liveTool": "d2hvtW_liveTool",
-			"cardTop": "d2hvtW_cardTop",
-			"treeChip": "d2hvtW_treeChip",
-			"popGlyph": "d2hvtW_popGlyph",
-			"taskDangerArmed": "d2hvtW_taskDangerArmed",
 			"nodeSettled": "d2hvtW_nodeSettled",
-			"treeDot": "d2hvtW_treeDot",
-			"edgeWorkflow": "d2hvtW_edgeWorkflow",
-			"popActivity": "d2hvtW_popActivity",
-			"cardBadges": "d2hvtW_cardBadges",
-			"taskOwnerPill": "d2hvtW_taskOwnerPill",
-			"taskLabel": "d2hvtW_taskLabel",
-			"nodeHeader": "d2hvtW_nodeHeader",
-			"canvasInner": "d2hvtW_canvasInner",
-			"phase2": "d2hvtW_phase2",
-			"canvasDragging": "d2hvtW_canvasDragging",
-			"popList": "d2hvtW_popList",
-			"popActionIcon": "d2hvtW_popActionIcon",
-			"treeTitle": "d2hvtW_treeTitle",
-			"taskMore": "d2hvtW_taskMore",
-			"controls": "d2hvtW_controls",
-			"teamNote": "d2hvtW_teamNote",
-			"jobsRow": "d2hvtW_jobsRow",
-			"jobsKillError": "d2hvtW_jobsKillError",
-			"popValueMono": "d2hvtW_popValueMono",
-			"cardMeta": "d2hvtW_cardMeta",
-			"barState": "d2hvtW_barState",
-			"cardText": "d2hvtW_cardText",
-			"phaseBadge": "d2hvtW_phaseBadge",
-			"barFold": "d2hvtW_barFold",
-			"kindChip": "d2hvtW_kindChip",
-			"depth0": "d2hvtW_depth0",
-			"liveGlyph": "d2hvtW_liveGlyph",
-			"jobPopFollow": "d2hvtW_jobPopFollow",
-			"controlBtnActive": "d2hvtW_controlBtnActive",
-			"jumpMoreButton": "d2hvtW_jumpMoreButton",
-			"liveText": "d2hvtW_liveText",
-			"taskInput": "d2hvtW_taskInput",
-			"teamBoardIcon": "d2hvtW_teamBoardIcon",
-			"jobsDrawerBody": "d2hvtW_jobsDrawerBody",
-			"phase0": "d2hvtW_phase0",
-			"popActivityBlock": "d2hvtW_popActivityBlock",
-			"popHead": "d2hvtW_popHead",
-			"jumpMore": "d2hvtW_jumpMore",
-			"popHint": "d2hvtW_popHint",
-			"teamMembers": "d2hvtW_teamMembers",
-			"popGroup": "d2hvtW_popGroup",
-			"jumpMenuItem": "d2hvtW_jumpMenuItem",
-			"phaseFrame": "d2hvtW_phaseFrame",
-			"taskOwnerRow": "d2hvtW_taskOwnerRow",
-			"nodeMeta": "d2hvtW_nodeMeta",
-			"popRows": "d2hvtW_popRows",
-			"nodeFold": "d2hvtW_nodeFold",
-			"teamEmpty": "d2hvtW_teamEmpty",
-			"treeView": "d2hvtW_treeView",
-			"teamBoardChev": "d2hvtW_teamBoardChev",
-			"taskTextarea": "d2hvtW_taskTextarea",
-			"taskMarkdown": "d2hvtW_taskMarkdown",
-			"jobsDrawerBar": "d2hvtW_jobsDrawerBar",
-			"controlZoomLevel": "d2hvtW_controlZoomLevel",
-			"depth3": "d2hvtW_depth3",
-			"popKey": "d2hvtW_popKey",
-			"controlBtn": "d2hvtW_controlBtn",
-			"jobPopKillArmed": "d2hvtW_jobPopKillArmed",
-			"phaseLabel": "d2hvtW_phaseLabel",
-			"treeGlyph": "d2hvtW_treeGlyph",
-			"dsh-pop-in": "d2hvtW_dsh-pop-in",
-			"jobsDrawer": "d2hvtW_jobsDrawer",
-			"jumpMenu": "d2hvtW_jumpMenu",
-			"phase1": "d2hvtW_phase1",
-			"popFoot": "d2hvtW_popFoot",
-			"edgeFold": "d2hvtW_edgeFold",
-			"treeContent": "d2hvtW_treeContent",
-			"treeRowSettled": "d2hvtW_treeRowSettled",
-			"treeFoldRow": "d2hvtW_treeFoldRow",
-			"barFoldGlyph": "d2hvtW_barFoldGlyph",
-			"treeMeta": "d2hvtW_treeMeta",
-			"popTitleRow": "d2hvtW_popTitleRow",
-			"live": "d2hvtW_live",
-			"jobsDrawerChev": "d2hvtW_jobsDrawerChev",
-			"treeChild": "d2hvtW_treeChild",
-			"popSection": "d2hvtW_popSection",
-			"depth2": "d2hvtW_depth2",
-			"treeChildLast": "d2hvtW_treeChildLast",
-			"phase3": "d2hvtW_phase3",
-			"liveArgs": "d2hvtW_liveArgs",
-			"teamActions": "d2hvtW_teamActions",
-			"depth1": "d2hvtW_depth1",
-			"teamBoardCount": "d2hvtW_teamBoardCount",
-			"canvas": "d2hvtW_canvas",
-			"taskForm": "d2hvtW_taskForm",
-			"barDot": "d2hvtW_barDot",
-			"nodeWorkflow": "d2hvtW_nodeWorkflow",
-			"nodeCurrent": "d2hvtW_nodeCurrent",
-			"teamTaskOwner": "d2hvtW_teamTaskOwner",
 			"node": "d2hvtW_node",
-			"popError": "d2hvtW_popError",
-			"jobPopTitle": "d2hvtW_jobPopTitle",
-			"jobsAutoNote": "d2hvtW_jobsAutoNote",
-			"barAction": "d2hvtW_barAction",
-			"edge": "d2hvtW_edge",
-			"popValue": "d2hvtW_popValue",
-			"jobsLabel": "d2hvtW_jobsLabel",
-			"dsh-tasks-bar-sweep": "d2hvtW_dsh-tasks-bar-sweep",
-			"dsh-card-in": "d2hvtW_dsh-card-in",
-			"controlText": "d2hvtW_controlText",
-			"jobsKill": "d2hvtW_jobsKill",
-			"cardName": "d2hvtW_cardName",
-			"teamBoard": "d2hvtW_teamBoard",
-			"edges": "d2hvtW_edges",
-			"nodeTeam": "d2hvtW_nodeTeam",
-			"nodeError": "d2hvtW_nodeError",
-			"jobPopActions": "d2hvtW_jobPopActions",
-			"cardBar": "d2hvtW_cardBar",
-			"jobPopFollowLabel": "d2hvtW_jobPopFollowLabel",
-			"jobPopValue": "d2hvtW_jobPopValue",
-			"taskOwnerPillActive": "d2hvtW_taskOwnerPillActive",
-			"jobsMeta": "d2hvtW_jobsMeta",
-			"jobsKillSlot": "d2hvtW_jobsKillSlot",
-			"viewEmptyHint": "d2hvtW_viewEmptyHint",
-			"taskField": "d2hvtW_taskField",
-			"teamMemberName": "d2hvtW_teamMemberName",
-			"treeDisclosure": "d2hvtW_treeDisclosure",
-			"taskDanger": "d2hvtW_taskDanger",
-			"barActivity": "d2hvtW_barActivity",
-			"treeRow": "d2hvtW_treeRow",
-			"taskBody": "d2hvtW_taskBody",
-			"jobsDrawerCount": "d2hvtW_jobsDrawerCount",
-			"cardNamePlain": "d2hvtW_cardNamePlain",
-			"jobsRowMain": "d2hvtW_jobsRowMain",
-			"nodeDot": "d2hvtW_nodeDot",
-			"taskGlyph": "d2hvtW_taskGlyph",
-			"taskSubject": "d2hvtW_taskSubject",
-			"treeRowActive": "d2hvtW_treeRowActive",
-			"jobPopMeta": "d2hvtW_jobPopMeta",
+			"cardText": "d2hvtW_cardText",
+			"cardMeta": "d2hvtW_cardMeta",
 			"teamTasks": "d2hvtW_teamTasks",
-			"graphView": "d2hvtW_graphView",
-			"taskHeadRow": "d2hvtW_taskHeadRow",
+			"phase0": "d2hvtW_phase0",
+			"jobsRowMain": "d2hvtW_jobsRowMain",
+			"treeTitle": "d2hvtW_treeTitle",
+			"popHint": "d2hvtW_popHint",
+			"jobsKillError": "d2hvtW_jobsKillError",
+			"phaseLabel": "d2hvtW_phaseLabel",
+			"nodeTeam": "d2hvtW_nodeTeam",
+			"live": "d2hvtW_live",
+			"popValueMono": "d2hvtW_popValueMono",
+			"cardName": "d2hvtW_cardName",
+			"jobsBigNum": "d2hvtW_jobsBigNum",
+			"barState": "d2hvtW_barState",
+			"phaseBadge": "d2hvtW_phaseBadge",
+			"controlBtnActive": "d2hvtW_controlBtnActive",
+			"edges": "d2hvtW_edges",
+			"jobPopValue": "d2hvtW_jobPopValue",
 			"teamBoardBar": "d2hvtW_teamBoardBar",
-			"nodeGlyph": "d2hvtW_nodeGlyph",
-			"popListRow": "d2hvtW_popListRow",
-			"taskLine": "d2hvtW_taskLine",
-			"treeKids": "d2hvtW_treeKids",
-			"teamTaskSubject": "d2hvtW_teamTaskSubject",
+			"nodeWorkflow": "d2hvtW_nodeWorkflow",
+			"kindChip": "d2hvtW_kindChip",
+			"treeGlyph": "d2hvtW_treeGlyph",
+			"barActivity": "d2hvtW_barActivity",
+			"popTitleRow": "d2hvtW_popTitleRow",
+			"taskMarkdown": "d2hvtW_taskMarkdown",
+			"nodeHeader": "d2hvtW_nodeHeader",
+			"liveTool": "d2hvtW_liveTool",
+			"treeContent": "d2hvtW_treeContent",
+			"jobsKill": "d2hvtW_jobsKill",
+			"popSection": "d2hvtW_popSection",
+			"jumpMore": "d2hvtW_jumpMore",
+			"jumpMenu": "d2hvtW_jumpMenu",
 			"popCard": "d2hvtW_popCard",
+			"liveArgs": "d2hvtW_liveArgs",
+			"treeDisclosure": "d2hvtW_treeDisclosure",
+			"treeRowSettled": "d2hvtW_treeRowSettled",
+			"jobsDrawerChev": "d2hvtW_jobsDrawerChev",
+			"cardBadges": "d2hvtW_cardBadges",
+			"teamActions": "d2hvtW_teamActions",
+			"taskGlyph": "d2hvtW_taskGlyph",
+			"dsh-pop-in": "d2hvtW_dsh-pop-in",
+			"taskForm": "d2hvtW_taskForm",
+			"controlZoomLevel": "d2hvtW_controlZoomLevel",
+			"taskOwnerPillActive": "d2hvtW_taskOwnerPillActive",
+			"popGroup": "d2hvtW_popGroup",
+			"canvas": "d2hvtW_canvas",
+			"teamBoard": "d2hvtW_teamBoard",
+			"controls": "d2hvtW_controls",
+			"taskDanger": "d2hvtW_taskDanger",
+			"jobPopFollowLabel": "d2hvtW_jobPopFollowLabel",
+			"popListLabel": "d2hvtW_popListLabel",
+			"treeChip": "d2hvtW_treeChip",
+			"jumpMenuItem": "d2hvtW_jumpMenuItem",
+			"jobsAutoNote": "d2hvtW_jobsAutoNote",
+			"phase3": "d2hvtW_phase3",
+			"taskInput": "d2hvtW_taskInput",
+			"teamTaskRow": "d2hvtW_teamTaskRow",
+			"phase2": "d2hvtW_phase2",
+			"edgeFold": "d2hvtW_edgeFold",
+			"popActivity": "d2hvtW_popActivity",
+			"treeDot": "d2hvtW_treeDot",
+			"taskMore": "d2hvtW_taskMore",
+			"nodeCurrent": "d2hvtW_nodeCurrent",
+			"taskBody": "d2hvtW_taskBody",
+			"popGlyph": "d2hvtW_popGlyph",
+			"taskSubject": "d2hvtW_taskSubject",
+			"liveGlyph": "d2hvtW_liveGlyph",
+			"taskLabel": "d2hvtW_taskLabel",
+			"jobsKillSlot": "d2hvtW_jobsKillSlot",
+			"teamTask": "d2hvtW_teamTask",
+			"kindBadge": "d2hvtW_kindBadge",
+			"popListRow": "d2hvtW_popListRow",
+			"barAction": "d2hvtW_barAction",
+			"jobPopTitle": "d2hvtW_jobPopTitle",
+			"phaseFrame": "d2hvtW_phaseFrame",
+			"edgeWorkflow": "d2hvtW_edgeWorkflow",
+			"jobPopMeta": "d2hvtW_jobPopMeta",
+			"popKey": "d2hvtW_popKey",
+			"nodeFold": "d2hvtW_nodeFold",
+			"teamBoardChev": "d2hvtW_teamBoardChev",
+			"liveText": "d2hvtW_liveText",
+			"treeKids": "d2hvtW_treeKids",
+			"taskHeadRow": "d2hvtW_taskHeadRow",
+			"treeChildLast": "d2hvtW_treeChildLast",
+			"taskOwnerPill": "d2hvtW_taskOwnerPill",
+			"depth1": "d2hvtW_depth1",
+			"jumpMoreButton": "d2hvtW_jumpMoreButton",
+			"treeChild": "d2hvtW_treeChild",
+			"edgeTeam": "d2hvtW_edgeTeam",
+			"dsh-card-in": "d2hvtW_dsh-card-in",
+			"treeView": "d2hvtW_treeView",
+			"popActionIcon": "d2hvtW_popActionIcon",
+			"depth2": "d2hvtW_depth2",
+			"jobsMeta": "d2hvtW_jobsMeta",
+			"popActivityBlock": "d2hvtW_popActivityBlock",
+			"popList": "d2hvtW_popList",
+			"popTitle": "d2hvtW_popTitle",
+			"popFoot": "d2hvtW_popFoot",
+			"taskLine": "d2hvtW_taskLine",
+			"taskState": "d2hvtW_taskState",
+			"teamNote": "d2hvtW_teamNote",
+			"cardTop": "d2hvtW_cardTop",
+			"teamMemberName": "d2hvtW_teamMemberName",
+			"barFold": "d2hvtW_barFold",
+			"nodeError": "d2hvtW_nodeError",
+			"barFoldGlyph": "d2hvtW_barFoldGlyph",
+			"treeRowActive": "d2hvtW_treeRowActive",
+			"jobsDrawerBody": "d2hvtW_jobsDrawerBody",
+			"dsh-tasks-bar-sweep": "d2hvtW_dsh-tasks-bar-sweep",
+			"barDot": "d2hvtW_barDot",
+			"treeRow": "d2hvtW_treeRow",
+			"teamTaskOwner": "d2hvtW_teamTaskOwner",
+			"popError": "d2hvtW_popError",
+			"graphView": "d2hvtW_graphView",
+			"nodeMeta": "d2hvtW_nodeMeta",
+			"jobPopFollow": "d2hvtW_jobPopFollow",
+			"edge": "d2hvtW_edge",
+			"jobsDrawerCount": "d2hvtW_jobsDrawerCount",
+			"taskField": "d2hvtW_taskField",
+			"phase1": "d2hvtW_phase1",
+			"teamBoardCount": "d2hvtW_teamBoardCount",
+			"teamBoardIcon": "d2hvtW_teamBoardIcon",
+			"popValue": "d2hvtW_popValue",
+			"jobsDrawerBar": "d2hvtW_jobsDrawerBar",
+			"depth3": "d2hvtW_depth3",
+			"cardBar": "d2hvtW_cardBar",
+			"jobsLabel": "d2hvtW_jobsLabel",
+			"nodeGlyph": "d2hvtW_nodeGlyph",
+			"depth0": "d2hvtW_depth0",
+			"cardNamePlain": "d2hvtW_cardNamePlain",
+			"popHead": "d2hvtW_popHead",
+			"jobsRow": "d2hvtW_jobsRow",
+			"controlBtn": "d2hvtW_controlBtn",
+			"jobsDrawer": "d2hvtW_jobsDrawer",
+			"nodeDot": "d2hvtW_nodeDot",
+			"canvasInner": "d2hvtW_canvasInner",
+			"viewEmptyHint": "d2hvtW_viewEmptyHint",
+			"popRows": "d2hvtW_popRows",
+			"treeFoldRow": "d2hvtW_treeFoldRow",
+			"taskDangerArmed": "d2hvtW_taskDangerArmed",
+			"teamTaskSubject": "d2hvtW_teamTaskSubject",
 			"barError": "d2hvtW_barError",
-			"teamTask": "d2hvtW_teamTask"
+			"taskTextarea": "d2hvtW_taskTextarea",
+			"controlText": "d2hvtW_controlText",
+			"teamEmpty": "d2hvtW_teamEmpty",
+			"jobPopActions": "d2hvtW_jobPopActions",
+			"treeMeta": "d2hvtW_treeMeta",
+			"canvasDragging": "d2hvtW_canvasDragging",
+			"jobPopKillArmed": "d2hvtW_jobPopKillArmed",
+			"taskOwnerRow": "d2hvtW_taskOwnerRow",
+			"teamMembers": "d2hvtW_teamMembers"
 		};
 		//#endregion
 		//#region src/client/tasks-shared.tsx
@@ -20815,9 +21474,9 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		}
 		var tasks_canvas_module_css_default = {
 			"loadingGlyph": "ck4neW_loadingGlyph",
-			"nodeTitle": "ck4neW_nodeTitle",
+			"nodeTitlePlain": "ck4neW_nodeTitlePlain",
 			"loading": "ck4neW_loading",
-			"nodeTitlePlain": "ck4neW_nodeTitlePlain"
+			"nodeTitle": "ck4neW_nodeTitle"
 		};
 		//#endregion
 		//#region src/client/TasksGraph.tsx
@@ -22682,18 +23341,18 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			document.head.appendChild(tag);
 		}
 		var FloatingWindow_module_css_default = {
-			"title": "ao083W_title",
+			"handleCorner": "ao083W_handleCorner",
+			"bodyFill": "ao083W_bodyFill",
 			"titleActions": "ao083W_titleActions",
+			"titleBar": "ao083W_titleBar",
+			"title": "ao083W_title",
+			"footer": "ao083W_footer",
+			"handle": "ao083W_handle",
 			"handleBottom": "ao083W_handleBottom",
 			"handleRight": "ao083W_handleRight",
-			"bodyFill": "ao083W_bodyFill",
-			"body": "ao083W_body",
 			"close": "ao083W_close",
-			"handle": "ao083W_handle",
-			"window": "ao083W_window",
-			"titleBar": "ao083W_titleBar",
-			"footer": "ao083W_footer",
-			"handleCorner": "ao083W_handleCorner"
+			"body": "ao083W_body",
+			"window": "ao083W_window"
 		};
 		//#endregion
 		//#region src/client/FloatingWindow.tsx
@@ -23415,18 +24074,6 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			const whole = Math.round(seconds);
 			return `${Math.floor(whole / 60)}m${whole % 60}s`;
 		}
-		/** Extract the visible text of a content-block list (`text` blocks verbatim,
-		*  joined by blank lines); empty reads `…` so rows never render blank. */
-		function blockText(content) {
-			const parts = [];
-			for (const block of content) {
-				if (block === null || typeof block !== "object") continue;
-				const candidate = block;
-				if (candidate.type === "text" && typeof candidate.text === "string") parts.push(candidate.text);
-			}
-			const text = parts.join("\n\n");
-			return text === "" ? "…" : text;
-		}
 		/** Cap for a tool row's one-line argument summary (display only). */
 		const ARGS_SUMMARY_MAX = 80;
 		/** The most identifying argument keys, in priority order (bash's command,
@@ -23489,11 +24136,6 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				if (textItem.type === "text" && typeof textItem.text === "string") parts.push(textItem.text);
 			}
 			return parts.join("\n");
-		}
-		/** Index of the last `session/end-seed` event (fork seed marker), or -1. */
-		function lastSeedEnd(events) {
-			for (let index = events.length - 1; index >= 0; index--) if (events[index]?.type === "session/end-seed") return index;
-			return -1;
 		}
 		/** Parse the tool's raw arguments JSON to an object, or undefined. */
 		function parseArgsObject(args) {
@@ -23741,8 +24383,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		* @returns display rows in log order.
 		*/
 		function transcriptRows(entries, prev) {
-			const events = entries.map((entry) => entry.event);
-			const seedEnd = lastSeedEnd(events);
+			const events = threadOwnLogEvents(entries.map((entry) => entry.event));
 			const rows = [];
 			/** (turn, step, index, kind) key → index of its accumulating stream row. */
 			const streamRows = /* @__PURE__ */ new Map();
@@ -23763,7 +24404,6 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			*  context re-sent, so summing would double-count). */
 			const turnUsage = /* @__PURE__ */ new Map();
 			for (let index = 0; index < events.length; index++) {
-				if (index <= seedEnd) continue;
 				const event = events[index];
 				if (event === void 0) continue;
 				const data = event.data;
@@ -23816,7 +24456,8 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 						break;
 					}
 					case "user/message": {
-						const text = blockText(Array.isArray(data.content) ? data.content : []);
+						const projected = projectSidechatContent(data.content, "\n\n");
+						const text = projected.text === "" && projected.images === void 0 ? "…" : projected.text;
 						const messageId = typeof data.id === "string" && data.id !== "" ? data.id : void 0;
 						if (isContextInjectionMessage(data)) {
 							if (data.source?.kind === "user" && text.startsWith(`${SIDE_BOUNDARY_PROMPT}\n\n`)) {
@@ -23844,6 +24485,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 						rows.push({
 							kind: "user",
 							seq: event.seq,
+							...projected,
 							text,
 							...messageId !== void 0 ? { messageId } : {}
 						});
@@ -23871,7 +24513,8 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 								kind,
 								seq: event.seq,
 								text: chunk.text,
-								settled: false
+								settled: false,
+								...typeof blockIndex === "number" && Number.isSafeInteger(blockIndex) && blockIndex >= 0 ? { contentBlockIndex: blockIndex } : {}
 							});
 						}
 						break;
@@ -23897,20 +24540,22 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 						const prefix = `${String(data.turn)}:${String(data.step)}:`;
 						const streamed = [...streamRows.entries()].filter(([key]) => key.startsWith(prefix)).map(([, rowIndex]) => rowIndex);
 						for (const key of [...streamRows.keys()]) if (key.startsWith(prefix)) streamRows.delete(key);
-						const settled = (Array.isArray(data.message?.content) ? data.message.content : []).flatMap((block) => {
+						const settled = (Array.isArray(data.message?.content) ? data.message.content : []).flatMap((block, contentBlockIndex) => {
 							if (block === null || typeof block !== "object") return [];
 							const candidate = block;
 							if (candidate.type === "reasoning" && typeof candidate.text === "string" && candidate.text !== "") return [{
 								kind: "reasoning",
 								seq: event.seq,
 								text: candidate.text,
-								settled: true
+								settled: true,
+								contentBlockIndex
 							}];
 							if (candidate.type === "text" && typeof candidate.text === "string" && candidate.text !== "") return [{
 								kind: "assistant",
 								seq: event.seq,
 								text: candidate.text,
-								settled: true
+								settled: true,
+								contentBlockIndex
 							}];
 							return [];
 						});
@@ -24035,6 +24680,11 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			}
 			return reuseRows(rows, prev);
 		}
+		/** A single assistant event can have multiple text/reasoning blocks. Keep the
+		* original block index (including skipped blocks), not a filtered row index. */
+		function sidechatRowKey(row) {
+			return row.kind === "assistant" || row.kind === "reasoning" ? `${row.kind}:${row.seq}:${row.contentBlockIndex ?? "unknown"}` : `${row.kind}:${row.seq}`;
+		}
 		/** Whether two rows carry identical display content (identity fields plus
 		*  every rendered field of their kind). */
 		function rowsEqual(a, b) {
@@ -24042,7 +24692,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			switch (a.kind) {
 				case "user": {
 					const other = b;
-					return a.text === other.text && a.messageId === other.messageId;
+					return a.text === other.text && a.messageId === other.messageId && JSON.stringify(a.images) === JSON.stringify(other.images);
 				}
 				case "injection":
 				case "error": {
@@ -24052,7 +24702,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				case "assistant":
 				case "reasoning": {
 					const other = b;
-					return a.text === other.text && a.settled === other.settled;
+					return a.text === other.text && a.settled === other.settled && a.contentBlockIndex === other.contentBlockIndex;
 				}
 				case "tool": {
 					const other = b;
@@ -25136,18 +25786,18 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			document.head.appendChild(tag);
 		}
 		var SubagentView_module_css_default = {
-			"subagentEmptyHint": "wxwsGW_subagentEmptyHint",
 			"subagentError": "wxwsGW_subagentError",
+			"subagentEmpty": "wxwsGW_subagentEmpty",
 			"subagentErrorRetry": "wxwsGW_subagentErrorRetry",
-			"subagentRefresh": "wxwsGW_subagentRefresh",
 			"subagentSep": "wxwsGW_subagentSep",
-			"subagent": "wxwsGW_subagent",
-			"subagentHeading": "wxwsGW_subagentHeading",
 			"subagentCount": "wxwsGW_subagentCount",
-			"subagentSubject": "wxwsGW_subagentSubject",
-			"subagentTitle": "wxwsGW_subagentTitle",
+			"subagentEmptyHint": "wxwsGW_subagentEmptyHint",
 			"subagentHeader": "wxwsGW_subagentHeader",
-			"subagentEmpty": "wxwsGW_subagentEmpty"
+			"subagent": "wxwsGW_subagent",
+			"subagentSubject": "wxwsGW_subagentSubject",
+			"subagentHeading": "wxwsGW_subagentHeading",
+			"subagentTitle": "wxwsGW_subagentTitle",
+			"subagentRefresh": "wxwsGW_subagentRefresh"
 		};
 		//#endregion
 		//#region src/client/SubagentView.tsx
@@ -25809,6 +26459,289 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			});
 		}
 		//#endregion
+		//#region \0dsh-css:/home/runner/work/DSH-better-sidebar/DSH-better-sidebar/src/client/SideChatView.module.css.mjs
+		const css$1 = "._4BEzFa_sidechat{flex-direction:column;flex:1;min-height:0;display:flex}._4BEzFa_sidechatIconBtn{width:26px;height:26px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:6px;flex:none;justify-content:center;align-items:center;padding:0;transition:background-color .1s ease-out,color .1s ease-out;display:inline-flex}._4BEzFa_sidechatIconBtn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}._4BEzFa_sidechatIconBtn:disabled{opacity:.4;cursor:default}._4BEzFa_sidechatModelBtn{border:1px solid var(--dsw-alias-hairline);min-width:0;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxs-12);cursor:pointer;background:0 0;border-radius:999px;flex:0 auto;padding:1px 8px;transition:background-color .1s ease-out,color .1s ease-out}._4BEzFa_sidechatModelBtn:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}._4BEzFa_sidechatModelName{text-overflow:ellipsis;white-space:nowrap;display:block;overflow:hidden}._4BEzFa_sidechatHero{min-height:0;color:var(--dsw-alias-label-tertiary);text-align:center;flex-direction:column;flex:1;justify-content:center;align-items:center;gap:8px;padding:24px 20px;animation:.2s ease-out _4BEzFa_sidechatFadeIn;display:flex}._4BEzFa_sidechatHeroTitle{font:var(--dsw-font-s-14);color:var(--dsw-alias-label-primary);font-weight:500}._4BEzFa_sidechatHeroDesc{max-width:300px;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);line-height:1.6}._4BEzFa_sidechatPrimaryBtn{background:var(--dsw-alias-button-info-fill,var(--dsw-alias-accent));color:var(--dsw-alias-button-info-label,var(--dsw-alias-accent-ink,#fff));font:var(--dsw-font-s-13);cursor:pointer;border:none;border-radius:999px;flex:none;margin-top:4px;padding:6px 14px;transition:opacity .1s ease-out}._4BEzFa_sidechatPrimaryBtn:hover:not(:disabled){opacity:.88}._4BEzFa_sidechatPrimaryBtn:disabled{opacity:.4;cursor:default}._4BEzFa_sidechatHint{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);flex:none;padding:4px 12px}._4BEzFa_sidechatError{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-danger);flex:none;padding:4px 12px}._4BEzFa_sidechatErrorRow{border:1px solid var(--dsw-alias-danger);font:var(--dsw-font-xxs-12);color:var(--dsw-alias-danger);white-space:pre-wrap;overflow-wrap:anywhere;border-radius:8px;align-self:stretch;padding:6px 10px}._4BEzFa_sidechatScroll{flex-direction:column;flex:1;gap:10px;min-height:0;padding:10px 12px;display:flex;overflow-y:auto}._4BEzFa_sidechatScroll>*{animation:.18s ease-out _4BEzFa_sidechatRowIn}._4BEzFa_sidechatUser{background:var(--dsw-specific-bubble,var(--dsw-alias-bg-base));max-width:88%;font:var(--dsw-font-s-14);color:var(--dsw-alias-label-primary);overflow-wrap:anywhere;border-radius:18px;align-self:flex-end;padding:8px 14px}._4BEzFa_sidechatAssistant{font:var(--dsw-font-s-14);color:var(--dsw-alias-label-primary);overflow-wrap:anywhere;align-self:stretch}._4BEzFa_sidechatPending{background:var(--dsw-specific-bubble,var(--dsw-alias-bg-base));max-width:88%;font:var(--dsw-font-s-14);color:var(--dsw-alias-label-primary);overflow-wrap:anywhere;border-radius:18px;flex-direction:column;align-self:flex-end;gap:2px;padding:8px 10px 6px 14px;display:flex}._4BEzFa_sidechatPendingText{white-space:pre-wrap;min-width:0}._4BEzFa_sidechatPendingMeta{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);user-select:none;align-self:flex-end;align-items:center;gap:6px;display:flex}._4BEzFa_sidechatDequeueBtn{width:16px;height:16px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:4px;flex:none;justify-content:center;align-items:center;padding:0;transition:background-color .1s ease-out,color .1s ease-out;display:inline-flex}._4BEzFa_sidechatDequeueBtn:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}._4BEzFa_sidechatRow{align-self:stretch}._4BEzFa_sidechatRowLine{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);align-items:center;gap:6px;padding:1px 0;display:flex}._4BEzFa_sidechatRowSummary{cursor:pointer;user-select:none;list-style:none}._4BEzFa_sidechatRowSummary::-webkit-details-marker{display:none}._4BEzFa_sidechatRowSummary:hover{color:var(--dsw-alias-label-secondary)}._4BEzFa_sidechatRowStatic{cursor:default}._4BEzFa_sidechatRowChevron{flex:none;align-items:center;transition:transform .1s ease-out;display:inline-flex}._4BEzFa_sidechatRow[open] ._4BEzFa_sidechatRowChevron{transform:rotate(90deg)}._4BEzFa_sidechatRowIcon{width:16px;height:16px;color:var(--dsw-alias-label-tertiary);flex:none;justify-content:center;align-items:center;display:inline-flex}._4BEzFa_sidechatRowLabel{text-overflow:ellipsis;white-space:nowrap;max-width:60%;color:var(--dsw-alias-label-secondary);flex:none;overflow:hidden}._4BEzFa_sidechatRowMono{font-family:var(--dsw-font-mono)}._4BEzFa_sidechatRowMeta{text-overflow:ellipsis;white-space:nowrap;min-width:0;font-family:var(--dsw-font-mono);color:var(--dsw-alias-label-tertiary);flex:1;overflow:hidden}._4BEzFa_sidechatRowFailed ._4BEzFa_sidechatRowLabel,._4BEzFa_sidechatRowFailed ._4BEzFa_sidechatRowMeta{color:var(--dsw-alias-danger)}._4BEzFa_sidechatRowBody{border-left:1px solid var(--dsw-alias-hairline);margin:2px 0 4px 7px;padding:2px 0 2px 10px}._4BEzFa_sidechatRowProse{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow-y:auto}._4BEzFa_sidechatRowCode{font:var(--dsw-font-xxs-12);font-family:var(--dsw-font-mono);color:var(--dsw-alias-label-secondary);white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;margin:0;padding:4px 0;overflow-y:auto}._4BEzFa_sidechatRowCode+._4BEzFa_sidechatRowCode{border-top:1px solid var(--dsw-alias-hairline)}._4BEzFa_sidechatRowBody>*{margin-top:2px}._4BEzFa_sidechatTurnSummary{max-width:88%;font:var(--dsw-font-xxs-12);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary);user-select:none;align-self:flex-end;padding:0 2px}._4BEzFa_sidechatDeliverables{border:1px solid var(--dsw-alias-border-l1);border-radius:8px;flex-direction:column;align-self:stretch;gap:4px;padding:6px 8px;display:flex}._4BEzFa_sidechatDeliverablesHead{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);user-select:none}._4BEzFa_sidechatDeliverablesList{flex-direction:column;gap:2px;margin:0;padding:0;list-style:none;display:flex}._4BEzFa_sidechatDeliverableItem{min-width:0}._4BEzFa_sidechatDeliverable{width:100%;min-width:0;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-secondary);text-align:left;cursor:pointer;background:0 0;border:none;border-radius:6px;align-items:center;gap:6px;padding:3px 4px;transition:background-color .1s ease-out,color .1s ease-out;display:flex}._4BEzFa_sidechatDeliverable:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}._4BEzFa_sidechatDeliverableThumb{object-fit:cover;background:var(--dsw-alias-bg-base);border-radius:4px;flex:none;width:28px;height:28px}._4BEzFa_sidechatDeliverableName{text-overflow:ellipsis;white-space:nowrap;max-width:55%;color:var(--dsw-alias-label-primary);flex:none;overflow:hidden}._4BEzFa_sidechatDeliverableDesc{text-overflow:ellipsis;white-space:nowrap;min-width:0;color:var(--dsw-alias-label-tertiary);flex:1;overflow:hidden}._4BEzFa_sidechatShimmerText{background-image:linear-gradient(90deg, var(--dsw-alias-label-tertiary) 0%, var(--dsw-alias-label-primary) 50%, var(--dsw-alias-label-tertiary) 100%);color:#0000;background-size:200% 100%;-webkit-background-clip:text;background-clip:text;animation:2.6s linear infinite _4BEzFa_sidechatSweep}._4BEzFa_sidechatStatus{flex:none;align-items:center;gap:8px;padding:2px 14px 6px;animation:.16s ease-out _4BEzFa_sidechatFadeIn;display:flex}._4BEzFa_sidechatStatusText{font:var(--dsw-font-xxs-12);background-image:linear-gradient(90deg, var(--dsw-alias-label-tertiary) 0%, var(--dsw-alias-label-primary) 50%, var(--dsw-alias-label-tertiary) 100%);color:#0000;background-size:200% 100%;-webkit-background-clip:text;background-clip:text;animation:2.6s linear infinite _4BEzFa_sidechatSweep}._4BEzFa_sidechatComposer{border:1px solid var(--dsw-alias-border-l2-darkmode-thin,var(--dsw-alias-hairline));background:var(--dsw-specific-input-major,var(--dsw-alias-bg-base));box-shadow:var(--dsw-shadow-lv2,none);border-radius:16px;flex-direction:column;flex:none;gap:4px;margin:0 8px 8px;padding:8px 8px 6px 14px;display:flex}._4BEzFa_sidechatComposerInput{box-sizing:border-box;width:100%;color:var(--dsw-alias-label-primary);font:var(--dsw-font-s-14);resize:none;background:0 0;border:none;outline:none;max-height:132px;padding:2px 0;line-height:22px}._4BEzFa_sidechatComposerInput::placeholder{color:var(--dsw-alias-label-tertiary)}._4BEzFa_sidechatComposerBar{flex:none;align-items:center;gap:4px;min-height:28px;display:flex}._4BEzFa_sidechatComposerTools{flex:none;align-items:center;gap:2px;min-width:0;display:flex}._4BEzFa_sidechatComposerSpacer{flex:1;min-width:0}._4BEzFa_sidechatTipAnchor{align-items:center;display:inline-flex}._4BEzFa_sidechatTipShrink{flex:0 auto;min-width:0}._4BEzFa_sidechatSendBtn{background:var(--dsw-alias-button-info-fill,var(--dsw-alias-accent));width:28px;height:28px;color:var(--dsw-alias-button-info-label,var(--dsw-alias-accent-ink,#fff));cursor:pointer;border:none;border-radius:50%;flex:none;justify-content:center;align-items:center;padding:0;transition:opacity .1s ease-out;animation:.12s ease-out _4BEzFa_sidechatBtnIn;display:inline-flex}._4BEzFa_sidechatSendBtn:hover:not(:disabled){opacity:.88}._4BEzFa_sidechatSendBtn:disabled{opacity:.35;cursor:default}@keyframes _4BEzFa_sidechatRowIn{0%{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}@keyframes _4BEzFa_sidechatFadeIn{0%{opacity:0}to{opacity:1}}@keyframes _4BEzFa_sidechatBtnIn{0%{opacity:0;transform:scale(.85)}to{opacity:1;transform:scale(1)}}@keyframes _4BEzFa_sidechatSweep{0%{background-position:200% 0}to{background-position:-200% 0}}@media (prefers-reduced-motion:reduce){._4BEzFa_sidechatScroll>*,._4BEzFa_sidechatHero,._4BEzFa_sidechatStatus,._4BEzFa_sidechatSendBtn,._4BEzFa_sidechatModelBtn,._4BEzFa_sidechatDequeueBtn{transition:none;animation:none}._4BEzFa_sidechatStatusText,._4BEzFa_sidechatShimmerText{color:var(--dsw-alias-label-tertiary);background-image:none;animation:none}._4BEzFa_sidechatRowChevron{transition:none}}._4BEzFa_sidechatImages{flex-wrap:wrap;gap:8px;padding:8px;display:flex}._4BEzFa_sidechatImagePreview{border:1px solid var(--dsw-alias-hairline);border-radius:8px;align-items:flex-start;display:flex}._4BEzFa_sidechatImage{object-fit:contain;border-radius:6px;max-width:180px;max-height:140px;display:block}";
+		const tagId$1 = "dsh-better-sidebar/SideChatView.module.css";
+		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$1) + "]") === null) {
+			const tag = document.createElement("style");
+			tag.dataset.plugin = "dsh-better-sidebar";
+			tag.dataset.pluginCss = tagId$1;
+			tag.textContent = css$1;
+			document.head.appendChild(tag);
+		}
+		var SideChatView_module_css_default = {
+			"sidechatComposerSpacer": "_4BEzFa_sidechatComposerSpacer",
+			"sidechatRowIcon": "_4BEzFa_sidechatRowIcon",
+			"sidechatIconBtn": "_4BEzFa_sidechatIconBtn",
+			"sidechatTipShrink": "_4BEzFa_sidechatTipShrink",
+			"sidechatRowSummary": "_4BEzFa_sidechatRowSummary",
+			"sidechatAssistant": "_4BEzFa_sidechatAssistant",
+			"sidechatRowBody": "_4BEzFa_sidechatRowBody",
+			"sidechatRowMeta": "_4BEzFa_sidechatRowMeta",
+			"sidechatImage": "_4BEzFa_sidechatImage",
+			"sidechatPendingText": "_4BEzFa_sidechatPendingText",
+			"sidechatErrorRow": "_4BEzFa_sidechatErrorRow",
+			"sidechatRowStatic": "_4BEzFa_sidechatRowStatic",
+			"sidechatHeroTitle": "_4BEzFa_sidechatHeroTitle",
+			"sidechatError": "_4BEzFa_sidechatError",
+			"sidechatRowLine": "_4BEzFa_sidechatRowLine",
+			"sidechatHero": "_4BEzFa_sidechatHero",
+			"sidechatTurnSummary": "_4BEzFa_sidechatTurnSummary",
+			"sidechatShimmerText": "_4BEzFa_sidechatShimmerText",
+			"sidechatDeliverablesHead": "_4BEzFa_sidechatDeliverablesHead",
+			"sidechatRowCode": "_4BEzFa_sidechatRowCode",
+			"sidechatScroll": "_4BEzFa_sidechatScroll",
+			"sidechatSendBtn": "_4BEzFa_sidechatSendBtn",
+			"sidechatRowMono": "_4BEzFa_sidechatRowMono",
+			"sidechatModelBtn": "_4BEzFa_sidechatModelBtn",
+			"sidechatTipAnchor": "_4BEzFa_sidechatTipAnchor",
+			"sidechatSweep": "_4BEzFa_sidechatSweep",
+			"sidechatRowProse": "_4BEzFa_sidechatRowProse",
+			"sidechatDeliverable": "_4BEzFa_sidechatDeliverable",
+			"sidechatBtnIn": "_4BEzFa_sidechatBtnIn",
+			"sidechatRow": "_4BEzFa_sidechatRow",
+			"sidechatComposerInput": "_4BEzFa_sidechatComposerInput",
+			"sidechatDeliverableName": "_4BEzFa_sidechatDeliverableName",
+			"sidechatComposer": "_4BEzFa_sidechatComposer",
+			"sidechatDeliverableItem": "_4BEzFa_sidechatDeliverableItem",
+			"sidechatRowIn": "_4BEzFa_sidechatRowIn",
+			"sidechatRowLabel": "_4BEzFa_sidechatRowLabel",
+			"sidechatImagePreview": "_4BEzFa_sidechatImagePreview",
+			"sidechatDeliverableThumb": "_4BEzFa_sidechatDeliverableThumb",
+			"sidechatImages": "_4BEzFa_sidechatImages",
+			"sidechatComposerBar": "_4BEzFa_sidechatComposerBar",
+			"sidechatStatus": "_4BEzFa_sidechatStatus",
+			"sidechatComposerTools": "_4BEzFa_sidechatComposerTools",
+			"sidechatHint": "_4BEzFa_sidechatHint",
+			"sidechatModelName": "_4BEzFa_sidechatModelName",
+			"sidechatPrimaryBtn": "_4BEzFa_sidechatPrimaryBtn",
+			"sidechatRowFailed": "_4BEzFa_sidechatRowFailed",
+			"sidechat": "_4BEzFa_sidechat",
+			"sidechatHeroDesc": "_4BEzFa_sidechatHeroDesc",
+			"sidechatDeliverables": "_4BEzFa_sidechatDeliverables",
+			"sidechatDeliverablesList": "_4BEzFa_sidechatDeliverablesList",
+			"sidechatDequeueBtn": "_4BEzFa_sidechatDequeueBtn",
+			"sidechatFadeIn": "_4BEzFa_sidechatFadeIn",
+			"sidechatPending": "_4BEzFa_sidechatPending",
+			"sidechatUser": "_4BEzFa_sidechatUser",
+			"sidechatStatusText": "_4BEzFa_sidechatStatusText",
+			"sidechatPendingMeta": "_4BEzFa_sidechatPendingMeta",
+			"sidechatRowChevron": "_4BEzFa_sidechatRowChevron",
+			"sidechatDeliverableDesc": "_4BEzFa_sidechatDeliverableDesc"
+		};
+		//#endregion
+		//#region src/client/SidechatImages.tsx
+		function SavedImage({ childId, messageId, image, visible }) {
+			const [state, setState] = (0, react.useState)(null);
+			(0, react.useEffect)(() => {
+				if (!visible) return;
+				const controller = new AbortController();
+				let url;
+				setState(null);
+				const params = new URLSearchParams({
+					childId,
+					messageId,
+					blockIndex: String(image.blockIndex)
+				});
+				fetch(hostRouteUrl(`sidebar/sidechat-image?${params}`).href, {
+					credentials: "include",
+					signal: controller.signal
+				}).then(async (response) => {
+					if (!response.ok) throw new Error("Image unavailable");
+					const blob = await response.blob();
+					if (controller.signal.aborted) return;
+					url = URL.createObjectURL(blob);
+					setState({ url });
+				}).catch(() => {
+					if (!controller.signal.aborted) setState({ unavailable: true });
+				});
+				return () => {
+					controller.abort();
+					if (url !== void 0) URL.revokeObjectURL(url);
+				};
+			}, [
+				childId,
+				messageId,
+				image.blockIndex,
+				visible
+			]);
+			if (state === null) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t("sideChatImageLoading") });
+			if ("unavailable" in state) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				role: "status",
+				children: t("sideChatImageUnavailable")
+			});
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("a", {
+				href: state.url,
+				target: "_blank",
+				rel: "noreferrer",
+				children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("img", {
+					className: SideChatView_module_css_default.sidechatImage,
+					src: state.url,
+					alt: image.name ?? t("sideChatImage"),
+					onError: () => {
+						setState({ unavailable: true });
+					}
+				})
+			});
+		}
+		function SidechatImages({ childId, messageId, images, visible }) {
+			if (images === void 0 || images.length === 0) return null;
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+				className: SideChatView_module_css_default.sidechatImages,
+				children: images.map((image) => childId === void 0 || messageId === void 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t("sideChatImageUnavailable") }, image.blockIndex) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)(SavedImage, {
+					childId,
+					messageId,
+					image,
+					visible
+				}, `${messageId}:${image.blockIndex}`))
+			});
+		}
+		//#endregion
+		//#region src/client/sidechat-draft.ts
+		function useSidechatDraft(childId) {
+			const [, redraw] = (0, react.useReducer)((value) => value + 1, 0);
+			const owner = (0, react.useMemo)(() => ({
+				childId,
+				active: true,
+				revision: 0,
+				text: "",
+				images: []
+			}), [childId]);
+			(0, react.useLayoutEffect)(() => {
+				owner.active = true;
+				return () => {
+					owner.active = false;
+					owner.images.forEach((image) => URL.revokeObjectURL(image.preview));
+					owner.images = [];
+				};
+			}, [owner]);
+			const changed = () => {
+				owner.revision++;
+				redraw();
+			};
+			return {
+				owner,
+				setText(text) {
+					owner.text = text;
+					changed();
+				},
+				add(files, limits) {
+					if (limits === void 0) throw new Error(t("sideChatImagesDisabled"));
+					if (owner.images.length + files.length > limits.maxImagesPerMessage) throw new Error(t("sideChatImageLimit"));
+					let bytes = owner.images.reduce((sum, image) => sum + image.file.size, 0);
+					for (const file of files) {
+						if (!limits.mediaTypes.includes(file.type)) throw new Error(t("sideChatImageFormat"));
+						bytes += file.size;
+						if (file.size === 0 || file.size > limits.maxImageBytes || bytes > limits.maxMessageImageBytes) throw new Error(t("sideChatImageLimit"));
+					}
+					const added = [];
+					try {
+						for (const file of files) added.push({
+							id: ++owner.revision,
+							file,
+							preview: URL.createObjectURL(file)
+						});
+					} catch (error) {
+						added.forEach((image) => URL.revokeObjectURL(image.preview));
+						throw error;
+					}
+					owner.images = [...owner.images, ...added];
+					changed();
+				},
+				remove(id) {
+					owner.images = owner.images.filter((image) => {
+						if (image.id !== id) return true;
+						URL.revokeObjectURL(image.preview);
+						return false;
+					});
+					changed();
+				},
+				capture() {
+					return {
+						owner,
+						revision: owner.revision,
+						text: owner.text.trim(),
+						images: [...owner.images]
+					};
+				},
+				accept(attempt) {
+					if (!owner.active || attempt.owner !== owner) return;
+					const sent = new Set(attempt.images.map((image) => image.id));
+					owner.images = owner.images.filter((image) => {
+						if (!sent.has(image.id)) return true;
+						URL.revokeObjectURL(image.preview);
+						return false;
+					});
+					if (attempt.revision === owner.revision) owner.text = "";
+					changed();
+				}
+			};
+		}
+		async function encodeSidechatImages(attempt) {
+			const images = [];
+			for (const image of attempt.images) {
+				const data = await new Promise((resolve, reject) => {
+					const reader = new FileReader();
+					reader.onerror = () => {
+						reject(new Error(t("sideChatImageReadError")));
+					};
+					reader.onload = () => {
+						resolve(String(reader.result).split(",")[1] ?? "");
+					};
+					reader.readAsDataURL(image.file);
+				});
+				if (!attempt.owner.active) throw new Error(t("sideChatImageOwnerChanged"));
+				images.push({
+					mediaType: image.file.type,
+					name: image.file.name,
+					data
+				});
+			}
+			return images;
+		}
+		//#endregion
+		//#region src/client/SidechatAssistantRow.tsx
+		/** Keep the host Markdown renderer as the default; a registered consumer may
+		* enhance only this real row root while it is visible and durably identified. */
+		function SidechatAssistantRow(props) {
+			const rootRef = (0, react.useRef)(null);
+			const { row, labels, rewrite, surface } = props;
+			const { service, threadId, visible, sendPrompt } = surface;
+			const renderedText = rewrite(row);
+			(0, react.useLayoutEffect)(() => {
+				const root = rootRef.current;
+				if (!visible || !row.settled || root === null || threadId === void 0 || row.contentBlockIndex === void 0 || !isSidechatSurfaceIdentity(threadId, row.seq, row.contentBlockIndex)) return;
+				return attachSidechatSurface(service, {
+					root,
+					source: "dsh-better-sidebar/sidechat",
+					threadId,
+					eventSeq: row.seq,
+					contentBlockIndex: row.contentBlockIndex,
+					text: row.text,
+					sendPrompt
+				});
+			}, [
+				service,
+				threadId,
+				visible,
+				sendPrompt,
+				row.settled,
+				row.seq,
+				row.contentBlockIndex,
+				row.text,
+				renderedText
+			]);
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+				ref: rootRef,
+				className: SideChatView_module_css_default.sidechatAssistant,
+				"data-genui-surface": "dsh-better-sidebar/sidechat",
+				children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, {
+					...markdownTextProps(renderedText, labels),
+					streaming: !row.settled
+				})
+			});
+		}
+		//#endregion
 		//#region src/client/use-sidechat-push.ts
 		/**
 		* Live invalidation push for Side Chat transcripts.
@@ -25923,74 +26856,6 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				for (const id of wantedRef.current) invalidateRef.current(id);
 			}, [subscribed]);
 		}
-		//#endregion
-		//#region \0dsh-css:/home/runner/work/DSH-better-sidebar/DSH-better-sidebar/src/client/SideChatView.module.css.mjs
-		const css$1 = "._4BEzFa_sidechat{flex-direction:column;flex:1;min-height:0;display:flex}._4BEzFa_sidechatIconBtn{width:26px;height:26px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;border-radius:6px;flex:none;justify-content:center;align-items:center;padding:0;transition:background-color .1s ease-out,color .1s ease-out;display:inline-flex}._4BEzFa_sidechatIconBtn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}._4BEzFa_sidechatIconBtn:disabled{opacity:.4;cursor:default}._4BEzFa_sidechatModelBtn{border:1px solid var(--dsw-alias-hairline);min-width:0;color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxs-12);cursor:pointer;background:0 0;border-radius:999px;flex:0 auto;padding:1px 8px;transition:background-color .1s ease-out,color .1s ease-out}._4BEzFa_sidechatModelBtn:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}._4BEzFa_sidechatModelName{text-overflow:ellipsis;white-space:nowrap;display:block;overflow:hidden}._4BEzFa_sidechatHero{min-height:0;color:var(--dsw-alias-label-tertiary);text-align:center;flex-direction:column;flex:1;justify-content:center;align-items:center;gap:8px;padding:24px 20px;animation:.2s ease-out _4BEzFa_sidechatFadeIn;display:flex}._4BEzFa_sidechatHeroTitle{font:var(--dsw-font-s-14);color:var(--dsw-alias-label-primary);font-weight:500}._4BEzFa_sidechatHeroDesc{max-width:300px;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);line-height:1.6}._4BEzFa_sidechatPrimaryBtn{background:var(--dsw-alias-button-info-fill,var(--dsw-alias-accent));color:var(--dsw-alias-button-info-label,var(--dsw-alias-accent-ink,#fff));font:var(--dsw-font-s-13);cursor:pointer;border:none;border-radius:999px;flex:none;margin-top:4px;padding:6px 14px;transition:opacity .1s ease-out}._4BEzFa_sidechatPrimaryBtn:hover:not(:disabled){opacity:.88}._4BEzFa_sidechatPrimaryBtn:disabled{opacity:.4;cursor:default}._4BEzFa_sidechatHint{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);flex:none;padding:4px 12px}._4BEzFa_sidechatError{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-danger);flex:none;padding:4px 12px}._4BEzFa_sidechatErrorRow{border:1px solid var(--dsw-alias-danger);font:var(--dsw-font-xxs-12);color:var(--dsw-alias-danger);white-space:pre-wrap;overflow-wrap:anywhere;border-radius:8px;align-self:stretch;padding:6px 10px}._4BEzFa_sidechatScroll{flex-direction:column;flex:1;gap:10px;min-height:0;padding:10px 12px;display:flex;overflow-y:auto}._4BEzFa_sidechatScroll>*{animation:.18s ease-out _4BEzFa_sidechatRowIn}._4BEzFa_sidechatUser{background:var(--dsw-specific-bubble,var(--dsw-alias-bg-base));max-width:88%;font:var(--dsw-font-s-14);color:var(--dsw-alias-label-primary);overflow-wrap:anywhere;border-radius:18px;align-self:flex-end;padding:8px 14px}._4BEzFa_sidechatAssistant{font:var(--dsw-font-s-14);color:var(--dsw-alias-label-primary);overflow-wrap:anywhere;align-self:stretch}._4BEzFa_sidechatPending{background:var(--dsw-specific-bubble,var(--dsw-alias-bg-base));max-width:88%;font:var(--dsw-font-s-14);color:var(--dsw-alias-label-primary);overflow-wrap:anywhere;border-radius:18px;flex-direction:column;align-self:flex-end;gap:2px;padding:8px 10px 6px 14px;display:flex}._4BEzFa_sidechatPendingText{white-space:pre-wrap;min-width:0}._4BEzFa_sidechatPendingMeta{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);user-select:none;align-self:flex-end;align-items:center;gap:6px;display:flex}._4BEzFa_sidechatDequeueBtn{width:16px;height:16px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:4px;flex:none;justify-content:center;align-items:center;padding:0;transition:background-color .1s ease-out,color .1s ease-out;display:inline-flex}._4BEzFa_sidechatDequeueBtn:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}._4BEzFa_sidechatRow{align-self:stretch}._4BEzFa_sidechatRowLine{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);align-items:center;gap:6px;padding:1px 0;display:flex}._4BEzFa_sidechatRowSummary{cursor:pointer;user-select:none;list-style:none}._4BEzFa_sidechatRowSummary::-webkit-details-marker{display:none}._4BEzFa_sidechatRowSummary:hover{color:var(--dsw-alias-label-secondary)}._4BEzFa_sidechatRowStatic{cursor:default}._4BEzFa_sidechatRowChevron{flex:none;align-items:center;transition:transform .1s ease-out;display:inline-flex}._4BEzFa_sidechatRow[open] ._4BEzFa_sidechatRowChevron{transform:rotate(90deg)}._4BEzFa_sidechatRowIcon{width:16px;height:16px;color:var(--dsw-alias-label-tertiary);flex:none;justify-content:center;align-items:center;display:inline-flex}._4BEzFa_sidechatRowLabel{text-overflow:ellipsis;white-space:nowrap;max-width:60%;color:var(--dsw-alias-label-secondary);flex:none;overflow:hidden}._4BEzFa_sidechatRowMono{font-family:var(--dsw-font-mono)}._4BEzFa_sidechatRowMeta{text-overflow:ellipsis;white-space:nowrap;min-width:0;font-family:var(--dsw-font-mono);color:var(--dsw-alias-label-tertiary);flex:1;overflow:hidden}._4BEzFa_sidechatRowFailed ._4BEzFa_sidechatRowLabel,._4BEzFa_sidechatRowFailed ._4BEzFa_sidechatRowMeta{color:var(--dsw-alias-danger)}._4BEzFa_sidechatRowBody{border-left:1px solid var(--dsw-alias-hairline);margin:2px 0 4px 7px;padding:2px 0 2px 10px}._4BEzFa_sidechatRowProse{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow-y:auto}._4BEzFa_sidechatRowCode{font:var(--dsw-font-xxs-12);font-family:var(--dsw-font-mono);color:var(--dsw-alias-label-secondary);white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;margin:0;padding:4px 0;overflow-y:auto}._4BEzFa_sidechatRowCode+._4BEzFa_sidechatRowCode{border-top:1px solid var(--dsw-alias-hairline)}._4BEzFa_sidechatRowBody>*{margin-top:2px}._4BEzFa_sidechatTurnSummary{max-width:88%;font:var(--dsw-font-xxs-12);font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary);user-select:none;align-self:flex-end;padding:0 2px}._4BEzFa_sidechatDeliverables{border:1px solid var(--dsw-alias-border-l1);border-radius:8px;flex-direction:column;align-self:stretch;gap:4px;padding:6px 8px;display:flex}._4BEzFa_sidechatDeliverablesHead{font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-tertiary);user-select:none}._4BEzFa_sidechatDeliverablesList{flex-direction:column;gap:2px;margin:0;padding:0;list-style:none;display:flex}._4BEzFa_sidechatDeliverableItem{min-width:0}._4BEzFa_sidechatDeliverable{width:100%;min-width:0;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-secondary);text-align:left;cursor:pointer;background:0 0;border:none;border-radius:6px;align-items:center;gap:6px;padding:3px 4px;transition:background-color .1s ease-out,color .1s ease-out;display:flex}._4BEzFa_sidechatDeliverable:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}._4BEzFa_sidechatDeliverableThumb{object-fit:cover;background:var(--dsw-alias-bg-base);border-radius:4px;flex:none;width:28px;height:28px}._4BEzFa_sidechatDeliverableName{text-overflow:ellipsis;white-space:nowrap;max-width:55%;color:var(--dsw-alias-label-primary);flex:none;overflow:hidden}._4BEzFa_sidechatDeliverableDesc{text-overflow:ellipsis;white-space:nowrap;min-width:0;color:var(--dsw-alias-label-tertiary);flex:1;overflow:hidden}._4BEzFa_sidechatShimmerText{background-image:linear-gradient(90deg, var(--dsw-alias-label-tertiary) 0%, var(--dsw-alias-label-primary) 50%, var(--dsw-alias-label-tertiary) 100%);color:#0000;background-size:200% 100%;-webkit-background-clip:text;background-clip:text;animation:2.6s linear infinite _4BEzFa_sidechatSweep}._4BEzFa_sidechatStatus{flex:none;align-items:center;gap:8px;padding:2px 14px 6px;animation:.16s ease-out _4BEzFa_sidechatFadeIn;display:flex}._4BEzFa_sidechatStatusText{font:var(--dsw-font-xxs-12);background-image:linear-gradient(90deg, var(--dsw-alias-label-tertiary) 0%, var(--dsw-alias-label-primary) 50%, var(--dsw-alias-label-tertiary) 100%);color:#0000;background-size:200% 100%;-webkit-background-clip:text;background-clip:text;animation:2.6s linear infinite _4BEzFa_sidechatSweep}._4BEzFa_sidechatComposer{border:1px solid var(--dsw-alias-border-l2-darkmode-thin,var(--dsw-alias-hairline));background:var(--dsw-specific-input-major,var(--dsw-alias-bg-base));box-shadow:var(--dsw-shadow-lv2,none);border-radius:16px;flex-direction:column;flex:none;gap:4px;margin:0 8px 8px;padding:8px 8px 6px 14px;display:flex}._4BEzFa_sidechatComposerInput{box-sizing:border-box;width:100%;color:var(--dsw-alias-label-primary);font:var(--dsw-font-s-14);resize:none;background:0 0;border:none;outline:none;max-height:132px;padding:2px 0;line-height:22px}._4BEzFa_sidechatComposerInput::placeholder{color:var(--dsw-alias-label-tertiary)}._4BEzFa_sidechatComposerBar{flex:none;align-items:center;gap:4px;min-height:28px;display:flex}._4BEzFa_sidechatComposerTools{flex:none;align-items:center;gap:2px;min-width:0;display:flex}._4BEzFa_sidechatComposerSpacer{flex:1;min-width:0}._4BEzFa_sidechatTipAnchor{align-items:center;display:inline-flex}._4BEzFa_sidechatTipShrink{flex:0 auto;min-width:0}._4BEzFa_sidechatSendBtn{background:var(--dsw-alias-button-info-fill,var(--dsw-alias-accent));width:28px;height:28px;color:var(--dsw-alias-button-info-label,var(--dsw-alias-accent-ink,#fff));cursor:pointer;border:none;border-radius:50%;flex:none;justify-content:center;align-items:center;padding:0;transition:opacity .1s ease-out;animation:.12s ease-out _4BEzFa_sidechatBtnIn;display:inline-flex}._4BEzFa_sidechatSendBtn:hover:not(:disabled){opacity:.88}._4BEzFa_sidechatSendBtn:disabled{opacity:.35;cursor:default}@keyframes _4BEzFa_sidechatRowIn{0%{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}@keyframes _4BEzFa_sidechatFadeIn{0%{opacity:0}to{opacity:1}}@keyframes _4BEzFa_sidechatBtnIn{0%{opacity:0;transform:scale(.85)}to{opacity:1;transform:scale(1)}}@keyframes _4BEzFa_sidechatSweep{0%{background-position:200% 0}to{background-position:-200% 0}}@media (prefers-reduced-motion:reduce){._4BEzFa_sidechatScroll>*,._4BEzFa_sidechatHero,._4BEzFa_sidechatStatus,._4BEzFa_sidechatSendBtn,._4BEzFa_sidechatModelBtn,._4BEzFa_sidechatDequeueBtn{transition:none;animation:none}._4BEzFa_sidechatStatusText,._4BEzFa_sidechatShimmerText{color:var(--dsw-alias-label-tertiary);background-image:none;animation:none}._4BEzFa_sidechatRowChevron{transition:none}}";
-		const tagId$1 = "dsh-better-sidebar/SideChatView.module.css";
-		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$1) + "]") === null) {
-			const tag = document.createElement("style");
-			tag.dataset.plugin = "dsh-better-sidebar";
-			tag.dataset.pluginCss = tagId$1;
-			tag.textContent = css$1;
-			document.head.appendChild(tag);
-		}
-		var SideChatView_module_css_default = {
-			"sidechatAssistant": "_4BEzFa_sidechatAssistant",
-			"sidechatDeliverableName": "_4BEzFa_sidechatDeliverableName",
-			"sidechatRowMono": "_4BEzFa_sidechatRowMono",
-			"sidechatRowStatic": "_4BEzFa_sidechatRowStatic",
-			"sidechatError": "_4BEzFa_sidechatError",
-			"sidechatSweep": "_4BEzFa_sidechatSweep",
-			"sidechatRowFailed": "_4BEzFa_sidechatRowFailed",
-			"sidechatStatusText": "_4BEzFa_sidechatStatusText",
-			"sidechatErrorRow": "_4BEzFa_sidechatErrorRow",
-			"sidechatDequeueBtn": "_4BEzFa_sidechatDequeueBtn",
-			"sidechatModelName": "_4BEzFa_sidechatModelName",
-			"sidechatRowLine": "_4BEzFa_sidechatRowLine",
-			"sidechatRowCode": "_4BEzFa_sidechatRowCode",
-			"sidechatComposerBar": "_4BEzFa_sidechatComposerBar",
-			"sidechatHint": "_4BEzFa_sidechatHint",
-			"sidechatPrimaryBtn": "_4BEzFa_sidechatPrimaryBtn",
-			"sidechatHero": "_4BEzFa_sidechatHero",
-			"sidechatUser": "_4BEzFa_sidechatUser",
-			"sidechatComposerTools": "_4BEzFa_sidechatComposerTools",
-			"sidechatBtnIn": "_4BEzFa_sidechatBtnIn",
-			"sidechatRowChevron": "_4BEzFa_sidechatRowChevron",
-			"sidechatScroll": "_4BEzFa_sidechatScroll",
-			"sidechatRowIn": "_4BEzFa_sidechatRowIn",
-			"sidechatRow": "_4BEzFa_sidechatRow",
-			"sidechatRowSummary": "_4BEzFa_sidechatRowSummary",
-			"sidechatShimmerText": "_4BEzFa_sidechatShimmerText",
-			"sidechatHeroDesc": "_4BEzFa_sidechatHeroDesc",
-			"sidechatIconBtn": "_4BEzFa_sidechatIconBtn",
-			"sidechatComposer": "_4BEzFa_sidechatComposer",
-			"sidechatTipAnchor": "_4BEzFa_sidechatTipAnchor",
-			"sidechatTipShrink": "_4BEzFa_sidechatTipShrink",
-			"sidechatFadeIn": "_4BEzFa_sidechatFadeIn",
-			"sidechatDeliverableDesc": "_4BEzFa_sidechatDeliverableDesc",
-			"sidechatPendingText": "_4BEzFa_sidechatPendingText",
-			"sidechatPending": "_4BEzFa_sidechatPending",
-			"sidechatHeroTitle": "_4BEzFa_sidechatHeroTitle",
-			"sidechatRowLabel": "_4BEzFa_sidechatRowLabel",
-			"sidechatPendingMeta": "_4BEzFa_sidechatPendingMeta",
-			"sidechatRowMeta": "_4BEzFa_sidechatRowMeta",
-			"sidechatComposerInput": "_4BEzFa_sidechatComposerInput",
-			"sidechatStatus": "_4BEzFa_sidechatStatus",
-			"sidechatRowProse": "_4BEzFa_sidechatRowProse",
-			"sidechatDeliverablesHead": "_4BEzFa_sidechatDeliverablesHead",
-			"sidechatDeliverablesList": "_4BEzFa_sidechatDeliverablesList",
-			"sidechatDeliverables": "_4BEzFa_sidechatDeliverables",
-			"sidechatModelBtn": "_4BEzFa_sidechatModelBtn",
-			"sidechatComposerSpacer": "_4BEzFa_sidechatComposerSpacer",
-			"sidechatSendBtn": "_4BEzFa_sidechatSendBtn",
-			"sidechat": "_4BEzFa_sidechat",
-			"sidechatRowBody": "_4BEzFa_sidechatRowBody",
-			"sidechatDeliverable": "_4BEzFa_sidechatDeliverable",
-			"sidechatDeliverableItem": "_4BEzFa_sidechatDeliverableItem",
-			"sidechatDeliverableThumb": "_4BEzFa_sidechatDeliverableThumb",
-			"sidechatRowIcon": "_4BEzFa_sidechatRowIcon",
-			"sidechatTurnSummary": "_4BEzFa_sidechatTurnSummary"
-		};
 		//#endregion
 		//#region src/client/SideChatView.tsx
 		/**
@@ -26298,20 +27163,28 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		/** One row renderer (React keys ride the source event seq). `surface` is the
 		*  markdown prose pass the rows run before rendering — the rows are model
 		*  prose, so a relative destination resolves against the session cwd (see
-		*  use-markdown-surface) — plus the delivered-file open and media helpers. */
-		function renderRow(row, labels, surface) {
+		*  use-markdown-surface) — plus the delivered-file open and media helpers.
+		*  `genui` binds the rows to the owning child thread: the key remounts every
+		*  row when the tab switches threads, and a registered GenUI consumer may
+		*  claim a visible, settled assistant row (see SidechatAssistantRow). */
+		function renderRow(row, labels, surface, genui) {
+			const key = `${genui.threadId ?? "unbound"}:${sidechatRowKey(row)}`;
 			switch (row.kind) {
-				case "user": return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+				case "user": return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 					className: SideChatView_module_css_default.sidechatUser,
-					children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { ...markdownTextProps(surface.rewrite(row), labels) })
-				}, `${row.kind}:${row.seq}`);
-				case "assistant": return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-					className: SideChatView_module_css_default.sidechatAssistant,
-					children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, {
-						...markdownTextProps(surface.rewrite(row), labels),
-						streaming: !row.settled
-					})
-				}, `${row.kind}:${row.seq}`);
+					children: [row.text !== "" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { ...markdownTextProps(surface.rewrite(row), labels) }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(SidechatImages, {
+						visible: genui.visible,
+						childId: genui.threadId,
+						messageId: row.messageId,
+						images: row.images
+					})]
+				}, key);
+				case "assistant": return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(SidechatAssistantRow, {
+					row,
+					labels,
+					rewrite: surface.rewrite,
+					surface: genui
+				}, key);
 				case "reasoning": return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(CollapsibleRow, {
 					label: labels.thinkLabel,
 					streaming: !row.settled,
@@ -26319,18 +27192,18 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 						className: SideChatView_module_css_default.sidechatRowProse,
 						children: row.text
 					})
-				}, `${row.kind}:${row.seq}`);
+				}, key);
 				case "injection": return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(CollapsibleRow, {
 					label: labels.injectionLabel,
 					children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						className: SideChatView_module_css_default.sidechatRowProse,
 						children: row.text
 					})
-				}, `${row.kind}:${row.seq}`);
+				}, key);
 				case "error": return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 					className: SideChatView_module_css_default.sidechatErrorRow,
 					children: t("sideChatRunError", { message: row.text })
-				}, `${row.kind}:${row.seq}`);
+				}, key);
 				case "turnSummary": {
 					const parts = [];
 					if (row.inputTokens !== void 0 && row.outputTokens !== void 0) parts.push(t("sideChatTurnUsage", {
@@ -26342,7 +27215,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						className: SideChatView_module_css_default.sidechatTurnSummary,
 						children: parts.join(" · ")
-					}, `${row.kind}:${row.seq}`);
+					}, key);
 				}
 				case "deliverables": return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 					className: SideChatView_module_css_default.sidechatDeliverables,
@@ -26405,7 +27278,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 						streaming: row.executing === true,
 						failed: row.failed,
 						...row.args === void 0 && row.resultText === void 0 && row.card === void 0 ? {} : { children: body }
-					}, `${row.kind}:${row.seq}`);
+					}, key);
 				}
 			}
 		}
@@ -26482,7 +27355,10 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			}, [list, scope.sessionId]);
 			const threadId = sidechatThreadIdOf(tab);
 			const autoCreate = tab.meta?.autoCreate === true;
-			const [composer, setComposer] = (0, react.useState)("");
+			const draft = useSidechatDraft(threadId);
+			const composer = draft.owner.text;
+			const setComposer = draft.setText;
+			const fileInputRef = (0, react.useRef)(null);
 			const [busy, setBusy] = (0, react.useState)(null);
 			const [error, setError] = (0, react.useState)(null);
 			const [saved, setSaved] = (0, react.useState)(false);
@@ -26491,10 +27367,6 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			const [menuOpen, setMenuOpen] = (0, react.useState)(false);
 			const [modelMenuOpen, setModelMenuOpen] = (0, react.useState)(false);
 			const [catalog, setCatalog] = (0, react.useState)(null);
-			/** Local echo of the message just sent: shown until the host reports it
-			*  pending or logs it durably (see the drop effect below). `seq` is the
-			*  transcript tail at send time, so an OLDER identical message cannot
-			*  retire the echo. */
 			const [echo, setEcho] = (0, react.useState)(null);
 			const cacheRef = (0, react.useRef)({
 				entries: [],
@@ -26506,13 +27378,14 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			/** The pending push-driven pull (one per burst of host frames). */
 			const invalidateRef = (0, react.useRef)(void 0);
 			const scrollRef = (0, react.useRef)(null);
-			/** Heading slugs, anchor jumps and `.md` link claiming for the transcript (a
+			/** Heading slugs, anchor jumps and local file links for the transcript (a
 			*  prose surface: it renders no file of its own, so a relative link target
 			*  resolves against the session cwd). */
 			const { surfaceRef: chatSurfaceRef, openFile: openChatFile, rewrite: rewriteChatLinks } = useMarkdownSurface({
 				ctx,
 				sessionId: scope.sessionId,
-				cwd: scope.cwd
+				cwd: scope.cwd,
+				allLocalFiles: true
 			});
 			/**
 			* The prose pass every row runs before rendering: LOCAL image destinations
@@ -26589,6 +27462,20 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			const composerRef = (0, react.useRef)(null);
 			const summary = threadId === void 0 ? void 0 : list.byId[threadId];
 			const running = summary?.running === true;
+			/**
+			* Whether the host's own session list can ever show the bound session again
+			* after archiving it. It cannot for a subagent-origin row: the host's
+			* `sessionVisible()` returns false for `origin === 'subagent'` BEFORE the
+			* archived filter runs, and the only "unarchive" control lives on that list,
+			* so archiving a side thread is a one-way door (issue #949). Every thread
+			* this view binds is such a row; an absent summary is treated the same way —
+			* this view must not archive a session it cannot classify. The composer tip
+			* says why the action is disabled.
+			*/
+			const archiveBlocked = summary === void 0 || summary.origin === "subagent";
+			/** The archive control's hover text: the blocked reason wins over the
+			*  running hint — stopping the thread would not make archiving recoverable. */
+			const archiveTip = archiveBlocked ? t("sideChatArchiveBlocked") : running ? t("sideChatArchiveRunning") : t("sideChatArchive");
 			const connectionState = (0, react.useSyncExternalStore)((0, react.useMemo)(() => (callback) => ctx.connection?.state.subscribe(callback) ?? (() => {}), [ctx]), (0, react.useCallback)(() => ctx.connection?.state.getSnapshot(), [ctx]));
 			/** The agent-identity badge of the composer bar (preset · model). */
 			const agentBadge = (0, react.useMemo)(() => {
@@ -26631,13 +27518,13 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				threads
 			]);
 			(0, react.useEffect)(() => {
-				if (threadId !== void 0 || !autoCreate || !visible) return;
+				if (threadId !== void 0 || !visible) return;
 				const reattach = reattachTarget();
 				if (reattach !== void 0) {
 					ctx.get("betterSidebar")?.updateTab(tab.id, { meta: { threadId: reattach } }, scope.sessionId);
 					return;
 				}
-				startThread();
+				if (autoCreate) startThread();
 			}, [
 				threadId,
 				autoCreate,
@@ -26669,13 +27556,15 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			*  (first attach = the whole seed-cut slice; polls = afterSeq deltas),
 			*  merged by seq. */
 			const fetchThread = (0, react.useCallback)(async (childId) => {
+				const cache = cacheRef.current;
+				if (cache.threadId !== childId) return;
 				controllerRef.current?.abort();
 				const controller = new AbortController();
 				controllerRef.current = controller;
 				try {
-					const cache = cacheRef.current;
 					const afterSeq = cache.entries.at(-1)?.event.seq;
 					const { events, live, pending } = await api.sidechatEvents(childId, afterSeq, controller.signal);
+					if (controller.signal.aborted || cacheRef.current !== cache) return;
 					cache.live = live ?? [];
 					cache.pending = pending ?? [];
 					if (events.length > 0) {
@@ -26688,11 +27577,14 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			/** The composer-bar badge pull (live state + preset/model identity). */
 			const fetchInfo = (0, react.useCallback)(async (childId) => {
 				try {
-					setInfo(await api.sidechatInfo(childId));
+					const cache = cacheRef.current;
+					const result = await api.sidechatInfo(childId);
+					if (cache === cacheRef.current && cache.threadId === childId) setInfo(result);
 				} catch {}
 			}, []);
 			(0, react.useEffect)(() => {
 				cacheRef.current = {
+					threadId,
 					entries: [],
 					live: [],
 					pending: []
@@ -26707,6 +27599,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				setSaved(false);
 				setInfo(null);
 				setEcho(null);
+				setBusy(null);
 				if (threadId !== void 0) {
 					fetchInfo(threadId);
 					window.setTimeout(() => composerRef.current?.focus(), 0);
@@ -26780,7 +27673,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					return `${String(data.turn)}:${String(data.step)}`;
 				}));
 				const live = cache.live.filter((event) => !settled.has(`${String(event.data.turn)}:${String(event.data.step)}`)).map((event) => ({ event }));
-				const next = threadId === void 0 ? [] : transcriptRows([...cache.entries, ...live], prevRowsRef.current);
+				const next = threadId === void 0 || cache.threadId !== threadId ? [] : transcriptRows([...cache.entries, ...live], prevRowsRef.current);
 				prevRowsRef.current = next;
 				return next;
 			}, [threadId, revision]);
@@ -26800,21 +27693,18 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			const echoText = echo?.text ?? "";
 			(0, react.useEffect)(() => {
 				if (echo === null || busy === "sending") return;
-				if (pendingRows.some((item) => item.text === echo.text)) {
+				if (pendingRows.some((item) => item.id === echo.messageId)) {
 					setEcho(null);
 					return;
 				}
-				if (rows.some((row) => row.kind === "user" && row.seq > echo.seq && row.text === echo.text)) setEcho(null);
+				if (rows.some((row) => row.kind === "user" && row.messageId === echo.messageId)) setEcho(null);
 			}, [
 				echo,
 				busy,
 				pendingRows,
 				rows
 			]);
-			/** The echo is hidden the moment the inbox already carries the same text
-			*  (the retire effect above then drops the state) so the message never shows
-			*  twice for a frame. */
-			const showEcho = echo !== null && !pendingRows.some((item) => item.text === echo.text);
+			const showEcho = echo !== null && !pendingRows.some((item) => item.id === echo.messageId) && !rows.some((row) => row.kind === "user" && row.messageId === echo.messageId);
 			const canSave = threadId !== void 0 && threadHasCompletedTurn(cacheRef.current.entries);
 			const trailingPending = threadId !== void 0 && threadTrailingPending(cacheRef.current.entries);
 			const freshThread = threadId !== void 0 && rows.length === 0;
@@ -26823,7 +27713,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			*  reports it running. A RUNNING thread keeps the row regardless (the
 			*  long-tool-call window has no streaming text to show progress). */
 			const hasOutputRow = rows.some((row) => row.kind === "assistant" || row.kind === "reasoning");
-			const showThinking = threadId !== void 0 && (running || echo !== null && !hasOutputRow);
+			const showThinking = threadId !== void 0 && (running || (echo !== null || busy === "sending") && !hasOutputRow);
 			(0, react.useEffect)(() => {
 				const scroller = scrollRef.current;
 				if (scroller === null) return;
@@ -26974,27 +27864,72 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				field.style.height = "0px";
 				field.style.height = `${Math.min(field.scrollHeight, COMPOSER_MAX_HEIGHT)}px`;
 			};
+			const surfaceBinding = (0, react.useMemo)(() => ({
+				childId: threadId,
+				active: visible
+			}), [threadId, visible]);
+			(0, react.useLayoutEffect)(() => {
+				surfaceBinding.active = visible;
+				return () => {
+					surfaceBinding.active = false;
+				};
+			}, [surfaceBinding, visible]);
+			const sendSurfacePrompt = (0, react.useCallback)(async (text) => {
+				try {
+					const childId = surfaceBinding.childId;
+					if (!surfaceBinding.active || childId === void 0 || childId.trim() === "" || text.trim() === "") throw new Error("Sidechat surface is no longer active or the prompt is empty");
+					setError(null);
+					await api.sidechatPrompt(childId, text);
+					if (surfaceBinding.active) {
+						fetchThread(childId);
+						fetchInfo(childId);
+					}
+				} catch (cause) {
+					if (surfaceBinding.active) setError(cause instanceof Error ? cause.message : String(cause));
+					throw cause;
+				}
+			}, [
+				surfaceBinding,
+				fetchThread,
+				fetchInfo
+			]);
+			const genuiRowSurface = {
+				service: ctx.get("betterSidebar"),
+				threadId,
+				visible,
+				sendPrompt: sendSurfacePrompt
+			};
+			const addImages = (files) => {
+				try {
+					draft.add(files, info?.images?.available === true ? info.images.limits : void 0);
+					setError(null);
+				} catch (cause) {
+					setError(cause instanceof Error ? cause.message : String(cause));
+				}
+			};
 			const handleSend = async () => {
-				const text = composer.trim();
-				if (text === "" || threadId === void 0 || busy !== null) return;
+				const attempt = draft.capture();
+				const childId = attempt.owner.childId;
+				if (attempt.text === "" && attempt.images.length === 0 || childId === void 0 || busy !== null) return;
 				setBusy("sending");
 				setError(null);
-				setEcho({
-					text,
-					seq: cacheRef.current.entries.at(-1)?.event.seq ?? 0
-				});
 				try {
-					await api.sidechatPrompt(threadId, text);
-					setComposer("");
-					const field = composerRef.current;
-					if (field !== null) field.style.height = "";
-					fetchThread(threadId);
-					fetchInfo(threadId);
+					const images = await encodeSidechatImages(attempt);
+					if (!attempt.owner.active) return;
+					const result = await api.sidechatPrompt(childId, attempt.text, images);
+					if (!attempt.owner.active) return;
+					setEcho({
+						text: attempt.text,
+						messageId: result.messageId,
+						hasImages: images.length > 0
+					});
+					draft.accept(attempt);
+					fetchThread(childId);
+					fetchInfo(childId);
 				} catch (cause) {
-					setEcho(null);
-					setError(cause instanceof Error ? cause.message : String(cause));
+					if (attempt.owner.active) setError(cause instanceof SidebarApiError && cause.code === "network" ? t("sideChatSendUncertain") : cause instanceof Error ? cause.message : String(cause));
 				} finally {
-					setBusy(null);
+					if (attempt.owner.active) setBusy(null);
 				}
 			};
 			/** Drop one unclaimed inbox message: the row leaves the queue immediately,
@@ -27048,11 +27983,14 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			};
 			/** Archive the bound thread on the host (the same capability the session
 			*  list's own archive action uses; `stopActivity` settles a running agent
-			*  first). The tab then moves to another live thread: leaving it bound to an
-			*  archived session would dead-end the panel, because the host refuses to
-			*  open archived sessions. */
+			*  first). Disabled for a side thread: the host session list never lists a
+			*  subagent-origin row, so no "unarchive" entry could ever recover it (issue
+			*  #949) — the guard below makes that a hard rule, not just a disabled
+			*  styling. For a recoverable binding the tab then moves to another live
+			*  thread: leaving it bound to an archived session would dead-end the panel,
+			*  because the host refuses to open archived sessions. */
 			const handleArchive = async () => {
-				if (threadId === void 0 || busy !== null) return;
+				if (threadId === void 0 || busy !== null || archiveBlocked) return;
 				setBusy("archiving");
 				setError(null);
 				setSaved(false);
@@ -27112,15 +28050,21 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						ref: transcriptRef,
 						className: SideChatView_module_css_default.sidechatScroll,
+						"data-genui-surface": "dsh-better-sidebar/sidechat",
 						children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(_deepseek_ai_dsh_client_ui_primitives.MarkdownDelegateProvider, {
 							openFile: openChatFile,
 							children: [
-								rows.map((row) => renderRow(row, rowLabels, rowSurface)),
+								rows.map((row) => renderRow(row, rowLabels, rowSurface, genuiRowSurface)),
 								pendingRows.map((item) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 									className: SideChatView_module_css_default.sidechatPending,
-									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 										className: SideChatView_module_css_default.sidechatPendingText,
-										children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { ...markdownTextProps(rewriteChatText(item.text), rowLabels) })
+										children: [item.text !== "" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { ...markdownTextProps(rewriteChatText(item.text), rowLabels) }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(SidechatImages, {
+											visible,
+											childId: threadId,
+											messageId: item.id,
+											images: item.images
+										})]
 									}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 										className: SideChatView_module_css_default.sidechatPendingMeta,
 										children: [
@@ -27133,6 +28077,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 												type: "button",
 												className: SideChatView_module_css_default.sidechatDequeueBtn,
 												onClick: () => void handleDequeue(item.id),
+												disabled: item.removable === false,
 												title: t("sideChatDequeue"),
 												"aria-label": t("sideChatDequeue"),
 												children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCloseFillRegular, { size: 12 })
@@ -27142,9 +28087,12 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 								}, `pending:${item.id}`)),
 								showEcho && echo !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 									className: SideChatView_module_css_default.sidechatPending,
-									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 										className: SideChatView_module_css_default.sidechatPendingText,
-										children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { ...markdownTextProps(rewriteChatText(echo.text), rowLabels) })
+										children: [echo.text !== "" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { ...markdownTextProps(rewriteChatText(echo.text), rowLabels) }), echo.hasImages && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+											role: "status",
+											children: t("sideChatImageLoading")
+										})]
 									}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 										className: SideChatView_module_css_default.sidechatPendingMeta,
 										children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.StateDot, {
@@ -27184,143 +28132,204 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					}),
 					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 						className: SideChatView_module_css_default.sidechatComposer,
-						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("textarea", {
-							ref: composerRef,
-							className: SideChatView_module_css_default.sidechatComposerInput,
-							value: composer,
-							placeholder: freshThread ? t("sideChatFirstPlaceholder") : t("sideChatComposerPlaceholder"),
-							rows: 1,
-							onChange: (event) => {
-								setComposer(event.target.value);
-								growComposer();
-							},
-							onKeyDown: (event) => {
-								if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
-								event.preventDefault();
-								handleSend();
-							}
-						}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-							className: SideChatView_module_css_default.sidechatComposerBar,
-							children: [
-								/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-									className: SideChatView_module_css_default.sidechatComposerTools,
-									children: [
-										/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ComposerTip, {
-											label: t("sideChatNew"),
-											children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-												type: "button",
-												className: SideChatView_module_css_default.sidechatIconBtn,
-												onClick: () => void openNewThread(),
-												disabled: busy !== null,
-												"aria-label": t("sideChatNew"),
-												children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlusOutlineRegular, { size: 16 })
-											})
-										}),
-										/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ComposerTip, {
-											label: t("sideChatThreads"),
-											children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Menu, {
-												open: menuOpen,
-												anchor: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						children: [
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+								ref: fileInputRef,
+								type: "file",
+								accept: SIDECHAT_IMAGE_MEDIA_TYPES.join(","),
+								multiple: true,
+								hidden: true,
+								"aria-label": t("sideChatAddImages"),
+								onChange: (event) => {
+									addImages(Array.from(event.target.files ?? []));
+									event.target.value = "";
+								}
+							}),
+							draft.owner.images.length > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+								className: SideChatView_module_css_default.sidechatImages,
+								children: draft.owner.images.map((image) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+									className: SideChatView_module_css_default.sidechatImagePreview,
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("img", {
+										className: SideChatView_module_css_default.sidechatImage,
+										src: image.preview,
+										alt: image.file.name
+									}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+										type: "button",
+										className: SideChatView_module_css_default.sidechatIconBtn,
+										"aria-label": t("sideChatRemoveImage", { name: image.file.name }),
+										onClick: () => {
+											draft.remove(image.id);
+										},
+										children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCloseFillRegular, { size: 14 })
+									})]
+								}, image.id))
+							}),
+							busy === "sending" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+								role: "status",
+								children: t("sideChatSending")
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("textarea", {
+								ref: composerRef,
+								className: SideChatView_module_css_default.sidechatComposerInput,
+								value: composer,
+								placeholder: freshThread ? t("sideChatFirstPlaceholder") : t("sideChatComposerPlaceholder"),
+								rows: 1,
+								onChange: (event) => {
+									setComposer(event.target.value);
+									growComposer();
+								},
+								onPaste: (event) => {
+									const files = Array.from(event.clipboardData.items).filter((item) => item.kind === "file" && item.type.startsWith("image/")).flatMap((item) => {
+										const file = item.getAsFile();
+										return file === null ? [] : [file];
+									});
+									if (files.length === 0) return;
+									event.preventDefault();
+									event.stopPropagation();
+									addImages(files);
+								},
+								onKeyDown: (event) => {
+									if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+									event.preventDefault();
+									handleSend();
+								}
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+								className: SideChatView_module_css_default.sidechatComposerBar,
+								children: [
+									/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+										className: SideChatView_module_css_default.sidechatComposerTools,
+										children: [
+											/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ComposerTip, {
+												label: info?.images?.available === true ? t("sideChatAddImages") : t("sideChatImagesDisabled"),
+												children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 													type: "button",
 													className: SideChatView_module_css_default.sidechatIconBtn,
+													"aria-label": t("sideChatAddImages"),
+													disabled: info?.images?.available !== true,
 													onClick: () => {
-														setMenuOpen((value) => !value);
+														fileInputRef.current?.click();
 													},
-													"aria-label": t("sideChatThreads"),
-													children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(IconHistoryOutline16, {})
-												}),
-												items: menuItems,
-												selectedId: threadId,
-												onSelect: (id) => {
-													if (id === "$new") openNewThread();
-													else openExistingThread(id);
-												},
-												onClose: () => {
-													setMenuOpen(false);
-												},
-												align: "end",
-												portal: true,
-												dense: true
+													children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPaperclipOutlineRegular, { size: 16 })
+												})
+											}),
+											/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ComposerTip, {
+												label: t("sideChatNew"),
+												children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+													type: "button",
+													className: SideChatView_module_css_default.sidechatIconBtn,
+													onClick: () => void openNewThread(),
+													disabled: busy !== null,
+													"aria-label": t("sideChatNew"),
+													children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlusOutlineRegular, { size: 16 })
+												})
+											}),
+											/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ComposerTip, {
+												label: t("sideChatThreads"),
+												children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Menu, {
+													open: menuOpen,
+													anchor: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+														type: "button",
+														className: SideChatView_module_css_default.sidechatIconBtn,
+														onClick: () => {
+															setMenuOpen((value) => !value);
+														},
+														"aria-label": t("sideChatThreads"),
+														children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(IconHistoryOutline16, {})
+													}),
+													items: menuItems,
+													selectedId: threadId,
+													onSelect: (id) => {
+														if (id === "$new") openNewThread();
+														else openExistingThread(id);
+													},
+													onClose: () => {
+														setMenuOpen(false);
+													},
+													align: "end",
+													portal: true,
+													dense: true
+												})
+											}),
+											/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ComposerTip, {
+												label: `${t("sideChatSave")} — ${t("sideChatSaveTitle")}`,
+												children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+													type: "button",
+													className: SideChatView_module_css_default.sidechatIconBtn,
+													onClick: () => void handleSave(),
+													disabled: !canSave || busy !== null,
+													"aria-label": t("sideChatSave"),
+													children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(IconSaveOutline16, {})
+												})
+											}),
+											/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ComposerTip, {
+												label: archiveTip,
+												children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+													type: "button",
+													className: SideChatView_module_css_default.sidechatIconBtn,
+													onClick: () => void handleArchive(),
+													disabled: archiveBlocked || running || busy !== null,
+													"aria-label": t("sideChatArchive"),
+													children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconArchiveOutlineRegular, { size: 16 })
+												})
 											})
-										}),
-										/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ComposerTip, {
-											label: `${t("sideChatSave")} — ${t("sideChatSaveTitle")}`,
-											children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+										]
+									}),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { className: SideChatView_module_css_default.sidechatComposerSpacer }),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ComposerTip, {
+										label: agentBadge === "" ? t("sideChatModel") : `${t("sideChatModel")} — ${agentBadge}`,
+										className: SideChatView_module_css_default.sidechatTipShrink,
+										children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Menu, {
+											open: modelMenuOpen,
+											anchor: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 												type: "button",
-												className: SideChatView_module_css_default.sidechatIconBtn,
-												onClick: () => void handleSave(),
-												disabled: !canSave || busy !== null,
-												"aria-label": t("sideChatSave"),
-												children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(IconSaveOutline16, {})
-											})
-										}),
-										/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ComposerTip, {
-											label: running ? t("sideChatArchiveRunning") : t("sideChatArchive"),
-											children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-												type: "button",
-												className: SideChatView_module_css_default.sidechatIconBtn,
-												onClick: () => void handleArchive(),
-												disabled: running || busy !== null,
-												"aria-label": t("sideChatArchive"),
-												children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconArchiveOutlineRegular, { size: 16 })
-											})
-										})
-									]
-								}),
-								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { className: SideChatView_module_css_default.sidechatComposerSpacer }),
-								/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ComposerTip, {
-									label: agentBadge === "" ? t("sideChatModel") : `${t("sideChatModel")} — ${agentBadge}`,
-									className: SideChatView_module_css_default.sidechatTipShrink,
-									children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Menu, {
-										open: modelMenuOpen,
-										anchor: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-											type: "button",
-											className: SideChatView_module_css_default.sidechatModelBtn,
-											onClick: () => {
-												setModelMenuOpen((value) => !value);
+												className: SideChatView_module_css_default.sidechatModelBtn,
+												onClick: () => {
+													setModelMenuOpen((value) => !value);
+												},
+												"aria-label": t("sideChatModel"),
+												children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+													className: SideChatView_module_css_default.sidechatModelName,
+													children: info?.model ?? info?.provider ?? t("sideChatModel")
+												})
+											}),
+											items: modelItems,
+											selectedIds: [selectedModelId, selectedEffortId].filter((id) => id !== void 0),
+											onSelect: (id) => {
+												handleModelSelect(id);
 											},
-											"aria-label": t("sideChatModel"),
-											children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-												className: SideChatView_module_css_default.sidechatModelName,
-												children: info?.model ?? info?.provider ?? t("sideChatModel")
-											})
-										}),
-										items: modelItems,
-										selectedIds: [selectedModelId, selectedEffortId].filter((id) => id !== void 0),
-										onSelect: (id) => {
-											handleModelSelect(id);
-										},
-										onClose: () => {
-											setModelMenuOpen(false);
-										},
-										align: "end",
-										portal: true,
-										dense: true
+											onClose: () => {
+												setModelMenuOpen(false);
+											},
+											align: "end",
+											portal: true,
+											dense: true
+										})
+									}),
+									running ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ComposerTip, {
+										label: t("sideChatCancelTitle"),
+										children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+											type: "button",
+											className: SideChatView_module_css_default.sidechatSendBtn,
+											onClick: () => void handleCancel(),
+											disabled: busy !== null,
+											"aria-label": t("sideChatCancelTitle"),
+											children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconStopFillRegular, {})
+										}, "stop")
+									}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ComposerTip, {
+										label: t("sideChatSend"),
+										children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+											type: "button",
+											className: SideChatView_module_css_default.sidechatSendBtn,
+											onClick: () => void handleSend(),
+											disabled: composer.trim() === "" && draft.owner.images.length === 0 || busy !== null,
+											"aria-label": t("sideChatSend"),
+											children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconSendOutlineRegular, { size: 16 })
+										}, "send")
 									})
-								}),
-								running ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ComposerTip, {
-									label: t("sideChatCancelTitle"),
-									children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-										type: "button",
-										className: SideChatView_module_css_default.sidechatSendBtn,
-										onClick: () => void handleCancel(),
-										disabled: busy !== null,
-										"aria-label": t("sideChatCancelTitle"),
-										children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconStopFillRegular, {})
-									}, "stop")
-								}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ComposerTip, {
-									label: t("sideChatSend"),
-									children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-										type: "button",
-										className: SideChatView_module_css_default.sidechatSendBtn,
-										onClick: () => void handleSend(),
-										disabled: composer.trim() === "" || busy !== null,
-										"aria-label": t("sideChatSend"),
-										children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconSendOutlineRegular, { size: 16 })
-									}, "send")
-								})
-							]
-						})]
+								]
+							})
+						]
 					})
 				]
 			});
@@ -27892,8 +28901,8 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					start = at + 1;
 				}
 				const chip = {
-					source: "reference",
-					ref: reference.text,
+					source: reference.source ?? "reference",
+					ref: reference.ref ?? reference.text,
 					label: reference.label,
 					...reference.appearance === void 0 ? {} : { appearance: reference.appearance },
 					clipboardText: reference.clipboardText ?? reference.label
@@ -29942,6 +30951,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			(0, react.useEffect)(() => {
 				const onBeforeUnload = (event) => {
 					if (dirtyCount() === 0) return;
+					flushDraftBackups();
 					event.preventDefault();
 					event.returnValue = "";
 				};
@@ -30813,43 +31823,6 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			});
 		}
 		//#endregion
-		//#region src/client/path-line.ts
-		/**
-		* A trailing line spec: `:<line>`, `:<line>-<end>` or `:<line>:<column>`.
-		*
-		* Line numbers are 1-based with no leading zero, exactly as the host's own
-		* fragment rule (`^L([1-9]\d*)`) — so `version:0` and a bare `:0` are file
-		* names, not line references. The regex is anchored at the END of the string,
-		* which is what keeps `data:2024.csv` and `C:` intact.
-		*/
-		const TRAILING_LINE_SPEC = /:([1-9]\d{0,8})(?:-([1-9]\d{0,8}))?(?::([1-9]\d{0,8}))?$/u;
-		/**
-		* Split a trailing `path:line` spec off a path.
-		*
-		* Rejected on purpose, because stripping them would break a path that is
-		* already a valid file name: a spec with nothing in front of it (`:131`), a
-		* one-character remainder (`C:131`, where `C` could only be a drive letter),
-		* and an inverted range (`a.c:20-12`) — the host rejects that one too.
-		* @param path - a path as a caller holds it, in either separator spelling.
-		* @returns the path without the spec plus the line it named, or `undefined`
-		* when the path carries no trailing line spec.
-		*/
-		function splitTrailingLineSpec(path) {
-			const match = TRAILING_LINE_SPEC.exec(path);
-			if (match === null) return void 0;
-			const head = path.slice(0, match.index);
-			if (head.length < 2) return void 0;
-			const line = Number(match[1]);
-			const end = match[2] === void 0 ? line : Number(match[2]);
-			if (end < line) return void 0;
-			return {
-				path: head,
-				line,
-				end,
-				column: match[3] === void 0 ? void 0 : Number(match[3])
-			};
-		}
-		//#endregion
 		//#region src/client/native/index.ts
 		/**
 		* Extensions DSH's own previews own, and this plugin therefore refuses.
@@ -31026,10 +31999,19 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		function registerNativeSurface(deps) {
 			const { ctx, store, service, records, reportFailure, diagnostics } = deps;
 			records.attachStore(store);
-			const seat = ctx.inject(["sidebarRightTabs"], (injected) => {
+			const seat = ctx.inject(["sidebarRightTabs", "sidebarRight"], (injected) => {
 				const tabs = injected.get("sidebarRightTabs");
 				if (tabs === void 0) return;
+				const right = injected.get("sidebarRight");
 				const live = /* @__PURE__ */ new Map();
+				let disposeClose;
+				if (typeof right?.registerCloseHandler === "function") try {
+					disposeClose = right.registerCloseHandler(EDITOR_KIND, () => {
+						flushDraftBackups();
+					});
+				} catch (error) {
+					reportFailure?.("register editor close handler", error);
+				}
 				const fileSessionIdOf = (info) => {
 					const address = parseFileAddress(info.tab.contentId);
 					return address !== void 0 && address.scope === "session" ? address.sessionId : void 0;
@@ -31196,6 +32178,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 					for (const registration of live.values()) disposeSafely(() => registration.dispose(), "a native tab registration");
 					live.clear();
 					for (const dispose of disposeSubscriptions.reverse()) disposeSafely(dispose, "a native tab subscription");
+					if (disposeClose !== void 0) disposeSafely(disposeClose, "the editor close handler");
 				};
 			});
 			return () => {
@@ -31322,63 +32305,169 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			};
 		}
 		//#endregion
-		//#region src/client/settings-nav-icon.ts
+		//#region src/client/selection-quote.ts
+		/** The input-trigger source name the quote chips route by. */
+		const QUOTE_SOURCE = "betterSidebarQuote";
+		/** localStorage key for the quote record store (FIFO, see module doc). */
+		const QUOTE_STORE_KEY = "dsh-better-sidebar:quote-refs";
+		const records = /* @__PURE__ */ new Map();
+		/** Monotonic chip numbering; restored from the store so numbers keep growing
+		*  across reloads instead of colliding with chips still in old drafts. */
+		let nextN = 1;
+		let storeLoaded = false;
 		/**
-		* Mark this plugin's row in the DSH settings navigation so its bundled CSS
-		* can replace the shell's fallback gear with the Side card glyph.
-		*
-		* DSH 0.1.x projects only `id`, `order`, and `label` from a
-		* `settings.section` registration, then chooses icons inside the settings
-		* shell from a closed list of built-in ids. Until that public contract grows
-		* an icon field, the plugin identifies only its own localized row after the
-		* dialog mounts. The marker owns no shell structure and is removed on fiber
-		* disposal, so the adaptation remains HMR-safe.
-		*
-		* Mutation bursts are coalesced into one sync per animation frame: the
-		* observer watches the whole body, so chat streaming would otherwise run the
-		* document-wide row query at microtask cadence.
+		* Read the persisted store into memory. Safe to call repeatedly: the merge is
+		* idempotent and `nextN` never moves backwards.
 		*/
-		const SETTINGS_NAV_MARKER = "data-dsh-better-sidebar-settings-nav";
+		function readStoreIntoMemory() {
+			try {
+				if (typeof localStorage === "undefined") return;
+				const raw = localStorage.getItem(QUOTE_STORE_KEY);
+				if (raw === null) return;
+				const parsed = JSON.parse(raw);
+				if (!Array.isArray(parsed)) return;
+				for (const entry of parsed) {
+					if (!isQuoteRecord(entry)) continue;
+					if (!records.has(entry.id)) records.set(entry.id, entry);
+					if (entry.n >= nextN) nextN = entry.n + 1;
+				}
+			} catch {}
+		}
+		/** First-load wrapper (startup and insert paths). */
+		function loadStore() {
+			if (storeLoaded) return;
+			storeLoaded = true;
+			readStoreIntoMemory();
+		}
+		function isQuoteRecord(value) {
+			if (typeof value !== "object" || value === null) return false;
+			const record = value;
+			return typeof record.id === "string" && typeof record.sessionId === "string" && typeof record.n === "number" && typeof record.path === "string" && typeof record.text === "string" && typeof record.label === "string" && typeof record.clipboardText === "string";
+		}
 		/**
-		* Keep the marker on the settings-nav button whose visible text is this
-		* plugin's current localized section label.
-		* @param label - locale-aware label resolver used by the section registration.
-		* @returns disposer that disconnects observation and removes owned markers.
+		* Resolve one quote record by chip `ref`. The persisted store is re-read on
+		* every resolve: the record may have been written by the other bundle
+		* instance, whose in-memory map this instance never sees directly.
+		* @param ref - the chip's reference id.
+		* @returns the record, or `undefined` when it is not (or no longer) stored.
 		*/
-		function registerSettingsNavIcon(label) {
+		function resolveQuote(ref) {
+			loadStore();
+			readStoreIntoMemory();
+			return records.get(ref);
+		}
+		/** Build the source object the host registers (one per module instance). */
+		function createQuoteSource(ctx) {
+			return {
+				trigger: "@",
+				name: QUOTE_SOURCE,
+				showGroupTitle: false,
+				candidates: () => Promise.resolve([]),
+				onPick: () => "handled",
+				openReference: (session, reference) => {
+					try {
+						const record = resolveQuote(reference.ref);
+						if (record === void 0 || record.sessionId !== session.sessionId) return false;
+						ctx.betterSidebar.openFile({
+							sessionId: session.sessionId,
+							...record.cwd === void 0 ? {} : { cwd: record.cwd }
+						}, record.path, void 0, record.lines === void 0 ? void 0 : {
+							line: record.lines.start,
+							lineEnd: record.lines.end
+						});
+						return true;
+					} catch (error) {
+						console.warn("[dsh-better-sidebar] quote open failed:", error);
+						return false;
+					}
+				},
+				codec: {
+					clipboardText: (ref) => resolveQuote(ref)?.clipboardText ?? ref,
+					serialize: async (ref) => {
+						const record = resolveQuote(ref);
+						if (record === void 0) throw new Error(`[dsh-better-sidebar] quote reference "${ref}" is no longer available`);
+						return record.text;
+					}
+				}
+			};
+		}
+		/** Whether a quote source is live (ours or the other bundle instance's). */
+		let sourceReady = false;
+		/** The disposer of the source THIS instance registered. `undefined` while the
+		*  live source is BORROWED (the other module instance owns it — duplicate
+		*  registration is a real error in the host, see `tryRegisterOnce`). */
+		let registeredDisposer;
+		/** Whether the live source is the other instance's (readiness is a borrow,
+		*  and every commit re-probes for the moment that owner releases it). */
+		let borrowed = false;
+		/**
+		* One synchronous registration attempt. Duplicate tolerance here is about the
+		* BORROWED case, not about calling `registerSource` twice: this module ships
+		* in both the core bundle and the editor chunk (two independent module
+		* instances), so the host's "already registered" error usually means the other
+		* instance owns the live source — inserts and click routing work identically
+		* either way. But the borrowing instance holds no disposer, so it cannot learn
+		* when that owner unregisters (a fiber disposal does not reach it): readiness
+		* is therefore re-probed on every commit that does not own the source, and a
+		* released slot is taken over instead of leaving a dead chip behind. Every
+		* outcome logs; nothing stays silent.
+		*/
+		function tryRegisterOnce(ctx) {
+			if (sourceReady && registeredDisposer !== void 0) return true;
+			try {
+				const triggers = ctx.get("inputTriggers");
+				if (triggers === void 0) return false;
+				registeredDisposer = triggers.registerSource(createQuoteSource(ctx));
+				sourceReady = true;
+				borrowed = false;
+				console.info("[dsh-better-sidebar] quote chips ready");
+				return true;
+			} catch (error) {
+				if (error instanceof Error && /already registered|duplicate/i.test(error.message)) {
+					sourceReady = true;
+					if (!borrowed) {
+						borrowed = true;
+						console.info("[dsh-better-sidebar] quote chips ready (source already registered by the other bundle instance)");
+					}
+					return true;
+				}
+				console.warn("[dsh-better-sidebar] quote source registration failed:", error);
+				return false;
+			}
+		}
+		/**
+		* Register the quote-chip input-trigger source once the host service shows up,
+		* retrying briefly because the plugin's apply can run before the host package
+		* provides the service. Returns the disposer (idempotent). A commit that finds
+		* the source unregistered re-attempts on the spot (see
+		* {@link insertQuoteChip}) — the self-heal covers fiber disposals (session
+		* switch, socket reconnect, HMR) that never get a re-apply.
+		* @param ctx - the client context.
+		* @returns the disposer.
+		*/
+		function registerQuoteSource(ctx) {
+			let retries = 0;
+			let timer;
 			let disposed = false;
-			let frame = null;
-			const sync = () => {
+			const attempt = () => {
 				if (disposed) return;
-				const currentLabel = label().trim();
-				const buttons = document.querySelectorAll("[role=\"dialog\"] nav button");
-				for (const button of buttons) if (currentLabel.length > 0 && button.textContent?.trim() === currentLabel) button.setAttribute(SETTINGS_NAV_MARKER, "");
-				else button.removeAttribute(SETTINGS_NAV_MARKER);
+				if (tryRegisterOnce(ctx)) return;
+				if (++retries > 20) {
+					console.info("[dsh-better-sidebar] quote chips unavailable: no input-trigger service");
+					return;
+				}
+				timer = setTimeout(attempt, 500);
 			};
-			/** One sync per frame at most: the first mutation of a burst schedules it. */
-			const schedule = () => {
-				if (disposed || frame !== null) return;
-				frame = requestAnimationFrame(() => {
-					frame = null;
-					sync();
-				});
-			};
-			sync();
-			const observer = new MutationObserver(schedule);
-			observer.observe(document.body, {
-				childList: true,
-				subtree: true
-			});
+			attempt();
 			return () => {
 				disposed = true;
-				observer.disconnect();
-				if (frame !== null) {
-					cancelAnimationFrame(frame);
-					frame = null;
+				if (timer !== void 0) clearTimeout(timer);
+				if (registeredDisposer !== void 0) {
+					sourceReady = false;
+					registeredDisposer();
+					registeredDisposer = void 0;
+					console.info("[dsh-better-sidebar] quote source unregistered (fiber disposed; the next commit re-registers)");
 				}
-				document.querySelectorAll(`[${SETTINGS_NAV_MARKER}]`).forEach((element) => {
-					element.removeAttribute(SETTINGS_NAV_MARKER);
-				});
 			};
 		}
 		//#endregion
@@ -31817,7 +32906,11 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		*  - 侧边栏内容: one SMALL CARD per REGISTERED tab type (built-ins and
 		*    external plugins alike), laid out in a responsive grid that wraps
 		*    several cards per row — icon chip + title + type id, clicked to toggle
-		*    the switch persisted in `prefs.tabsEnabled[id]`.
+		*    the switch persisted in `prefs.tabsEnabled[id]`. Programmatic-only
+		*    types (`hidden: true`, e.g. the built-in diff page or dsh-remote's
+		*    `dsh-remote:file`) are NOT listed: they have no + menu row and no
+		*    native guide entry, so a switch could only break their opens without
+		*    hiding anything (#1009).
 		*  - 文件预览: one SMALL CARD per REGISTERED file viewer — icon chip + title
 		*    + the extensions it covers, clicked to toggle `prefs.viewersEnabled[id]`.
 		*
@@ -31861,10 +32954,17 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			if (icon === void 0) return null;
 			return typeof icon === "function" ? icon(size) : icon;
 		}
-		/** Tab inventory order: hidden types (editor/diff) last, then + menu order. */
-		function tabOrder(a, b) {
-			if (a.hidden !== b.hidden) return a.hidden === true ? 1 : -1;
-			return (a.order ?? 100) - (b.order ?? 100);
+		/**
+		* The tab inventory: the types that actually reach the side card, in + menu
+		* order. `hidden` types are programmatic-only (no + menu row, no native
+		* guide entry), so they have no side-card presence to switch — listing them
+		* produced switches whose only observable effect was to refuse their own
+		* opens (#1009).
+		* @param tabs - the service's whole registry.
+		* @returns a sorted copy without the hidden types.
+		*/
+		function tabInventory(tabs) {
+			return tabs.filter((tab) => tab.hidden !== true).sort((a, b) => (a.order ?? 100) - (b.order ?? 100));
 		}
 		/** Viewer inventory order: priority desc (the catch-all `code` comes last). */
 		function viewerOrder(a, b) {
@@ -32326,10 +33426,10 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			(0, react.useEffect)(() => {
 				optimisticRef.current = prefs;
 			}, [prefs]);
-			const [tabs, setTabs] = (0, react.useState)(() => [...service.getTabs()].sort(tabOrder));
+			const [tabs, setTabs] = (0, react.useState)(() => tabInventory(service.getTabs()));
 			const [viewers, setViewers] = (0, react.useState)(() => [...service.getFileViewers()].sort(viewerOrder));
 			(0, react.useEffect)(() => service.subscribe(() => {
-				setTabs([...service.getTabs()].sort(tabOrder));
+				setTabs(tabInventory(service.getTabs()));
 				setViewers([...service.getFileViewers()].sort(viewerOrder));
 			}), [service]);
 			const revisionRef = (0, react.useRef)(void 0);
@@ -32762,7 +33862,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 		}
 		//#endregion
 		//#region \0dsh-css:/home/runner/work/DSH-better-sidebar/DSH-better-sidebar/src/client/layout.css.mjs
-		const css = "/**\n * Layout push: the bottom workbench occupies layout instead of floating over\n * the conversation. The right column belongs to DSH's native Sidebar, so this\n * stylesheet pushes no width — only the workbench's height.\n *\n * The workbench squeezes only the conversation column. The anchor is the\n * [data-dsh-center-col] tag the Sidebar shell's locator writes on the\n * frame's measured center grid item (Sidebar.tsx locate — not a positional\n * path: the frame also contains an overlay layer and drag handles). A\n * stretched grid item shrinks by its bottom margin, so the conversation\n * output and composer lift without touching either sidebar.\n *\n * The size rides a CSS variable updated by the Sidebar shell (0 while\n * collapsed). Expand/collapse uses the host theme duration; drags disable\n * transitions so the reserved edge tracks the pointer.\n */\n/* The AppFrame's center column. The Sidebar shell's locator (Sidebar.tsx\n   locate/measureCenter, resolving via center-column.ts) tags the measured\n   column node with [data-dsh-center-col] — one attribute write per node\n   lifetime. The locator anchors on the conversation slot host\n   (`main.conversation` on DSH 0.1.5-alpha.2+, `conversation` on alpha.1)\n   and skips the transparent display:contents slot hosts above it. The rule\n   used to anchor on a structural has()-selector over the conversation slot\n   wrapper, whose match cache invalidates on every #root subtree mutation\n   (the streaming chat mutates it constantly), re-evaluating the selector\n   against the whole document; the tag is evaluated once per node instead.\n   A stretched grid item shrinks by its margins, so the conversation\n   content (output + input bar) lifts without touching the sidebars. */\n#root [data-dsh-center-col] {\n  margin-bottom: var(--dsh-sidebar-height, 0px);\n  /* Grid/flex items default to min-height:auto. A long unbreakable token\n     (OAuth URL) then grows this column past the viewport and clips the\n     composer + left-rail Settings row. min-height:0 lets the cell shrink;\n     overflow-wrap lets the token wrap instead of forcing its intrinsic\n     size. The host's own descendants remain responsible for scrolling. */\n  min-height: 0;\n  overflow-wrap: anywhere;\n  transition: margin-bottom var(--ds-transition-duration-slow) var(--ds-ease-in-out);\n}\n\n/* When the sidebar is collapsed, the toggle cluster reclaims the top-right\n   corner. Push the DSH session header's right padding out so its right-aligned\n   utilities (the \"Session log\" download capsule) yield the corner instead of\n   hiding under the cluster. The header default right-pads 28px; the 2-button\n   cluster spans right 10→70px, so 78px clears it with an 8px gap. Anchor on\n   the header's slot host wrapper ([data-slot=\"conversation.session.header\"])\n   rather than a positional path: DSH 0.1.x nests the header several levels\n   under the center column. The Sidebar shell toggles the body attribute with\n   the panel open state. */\nbody[data-dsh-sidebar-collapsed] [data-slot=\"conversation.session.header\"] > header {\n  padding-right: 78px;\n}\n\nbody[data-dsh-sidebar-dragging] #root [data-dsh-center-col] {\n  transition: none;\n}\n\n/* DSH 0.1.x gives external settings sections a generic gear and exposes no\n   icon field in the settings.section contract. settings-nav-icon.ts marks\n   only this plugin's localized row; render the requested Lucide\n   gallery-horizontal-end SVG as a currentColor mask so it follows the native\n   nav hover/active colors without changing the shell's 16px icon rhythm. */\n[data-dsh-better-sidebar-settings-nav] > svg:first-child {\n  display: none;\n}\n\n[data-dsh-better-sidebar-settings-nav]::before {\n  content: '';\n  flex: none;\n  width: 16px;\n  height: 16px;\n  background: currentColor;\n  -webkit-mask: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 7v10'/%3E%3Cpath d='M6 5v14'/%3E%3Crect width='12' height='18' x='10' y='3' rx='2'/%3E%3C/svg%3E\") center / contain no-repeat;\n  mask: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 7v10'/%3E%3Cpath d='M6 5v14'/%3E%3Crect width='12' height='18' x='10' y='3' rx='2'/%3E%3C/svg%3E\") center / contain no-repeat;\n}\n\n@media (prefers-reduced-motion: reduce) {\n  #root [data-dsh-center-col] {\n    transition: none;\n  }\n\n/* Context-menu submenu flip (viewport clamping for the portaled menus).\n *\n * The ui-primitives Menu clamps its main portal list into the viewport but\n * positions nested submenus with static CSS only — anchored at the parent\n * row's bottom, growing UP and to the RIGHT — with no clamp whatsoever.\n * Both defaults are the worst case for our menus: a tall \"open with\" submenu\n * escapes past the viewport top when the row menu opens near the top, and\n * past the right edge in a narrow workbench pane (a pane can be far narrower\n * than the card 218 + gap + submenu 165 a submenu needs).\n *\n * menu-flip.ts publishes `data-dsh-sidebar-submenu` on <body> — with the\n * words \"down\" and/or \"left\" — for exactly the lifetime of one of OUR\n * submenu-bearing menus (FileTree row menu, TabBar tab menu). The tokens\n * flip the growth direction; the attribute's absence restores the\n * primitive's own geometry untouched, and host-owned menus are never\n * affected because they never open while the attribute exists (each side\n * closes on the other's outside pointerdown).\n *\n * No max-height/overflow scroll cap here on purpose: overflow clipping\n * would cut the submenu's ::before hover bridge (the corridor that keeps\n * itemWrap's mouseleave from closing the card mid-crossing). */\n\n/* Visual tether, part 1 — the parent row stays lit while its submenu is\n * open. The primitive only styles :hover, so once the pointer crossed into\n * the side card the parent row's fill cleared and the floating card read as\n * unrelated. The Menu marks the open parent row with aria-expanded=\"true\"\n * (host-rendered, stable), so the same hover token re-applies for the\n * submenu's whole lifetime. */\nbody[data-dsh-sidebar-submenu] div[role=\"menu\"] button[aria-expanded=\"true\"] {\n  background: var(--dsw-alias-interactive-bg-hover);\n}\n\n/* Visual tether, part 2 — the side card hugs its parent (10px → 4px gap),\n * with the ::before hover corridor narrowed to match. Ordered BEFORE the\n * flip overrides below so their left/right flips still win. */\nbody[data-dsh-sidebar-submenu] div[role=\"menu\"] div[role=\"menu\"] {\n  left: calc(100% + 4px);\n}\n\nbody[data-dsh-sidebar-submenu] div[role=\"menu\"] div[role=\"menu\"]::before {\n  left: -4px;\n  width: 4px;\n}\n\nbody[data-dsh-sidebar-submenu~=\"down\"] div[role=\"menu\"] div[role=\"menu\"] {\n  top: -4px;\n  bottom: auto;\n}\n\nbody[data-dsh-sidebar-submenu~=\"left\"] div[role=\"menu\"] div[role=\"menu\"] {\n  left: auto;\n  right: calc(100% + 4px);\n}\n\n/* The hover bridge follows the card to the left side of the parent row. */\nbody[data-dsh-sidebar-submenu~=\"left\"] div[role=\"menu\"] div[role=\"menu\"]::before {\n  left: auto;\n  right: -4px;\n}\n";
+		const css = "/**\n * Layout push: the bottom workbench occupies layout instead of floating over\n * the conversation. The right column belongs to DSH's native Sidebar, so this\n * stylesheet pushes no width — only the workbench's height.\n *\n * The workbench squeezes only the conversation column. The anchor is the\n * [data-dsh-center-col] tag the Sidebar shell's locator writes on the\n * frame's measured center grid item (Sidebar.tsx locate — not a positional\n * path: the frame also contains an overlay layer and drag handles). A\n * stretched grid item shrinks by its bottom margin, so the conversation\n * output and composer lift without touching either sidebar.\n *\n * The size rides a CSS variable updated by the Sidebar shell (0 while\n * collapsed). Expand/collapse uses the host theme duration; drags disable\n * transitions so the reserved edge tracks the pointer.\n */\n/* The AppFrame's center column. The Sidebar shell's locator (Sidebar.tsx\n   locate/measureCenter, resolving via center-column.ts) tags the measured\n   column node with [data-dsh-center-col] — one attribute write per node\n   lifetime. The locator anchors on the conversation slot host\n   (`main.conversation` on DSH 0.1.5-alpha.2+, `conversation` on alpha.1)\n   and skips the transparent display:contents slot hosts above it. The rule\n   used to anchor on a structural has()-selector over the conversation slot\n   wrapper, whose match cache invalidates on every #root subtree mutation\n   (the streaming chat mutates it constantly), re-evaluating the selector\n   against the whole document; the tag is evaluated once per node instead.\n   A stretched grid item shrinks by its margins, so the conversation\n   content (output + input bar) lifts without touching the sidebars. */\n#root [data-dsh-center-col] {\n  margin-bottom: var(--dsh-sidebar-height, 0px);\n  /* Grid/flex items default to min-height:auto. A long unbreakable token\n     (OAuth URL) then grows this column past the viewport and clips the\n     composer + left-rail Settings row. min-height:0 lets the cell shrink;\n     overflow-wrap lets the token wrap instead of forcing its intrinsic\n     size. The host's own descendants remain responsible for scrolling. */\n  min-height: 0;\n  overflow-wrap: anywhere;\n  transition: margin-bottom var(--ds-transition-duration-slow) var(--ds-ease-in-out);\n}\n\n/* When the sidebar is collapsed, the toggle cluster reclaims the top-right\n   corner. Push the DSH session header's right padding out so its right-aligned\n   utilities (the \"Session log\" download capsule) yield the corner instead of\n   hiding under the cluster. The header default right-pads 28px; the 2-button\n   cluster spans right 10→70px, so 78px clears it with an 8px gap. Anchor on\n   the header's slot host wrapper ([data-slot=\"conversation.session.header\"])\n   rather than a positional path: DSH 0.1.x nests the header several levels\n   under the center column. The Sidebar shell toggles the body attribute with\n   the panel open state. */\nbody[data-dsh-sidebar-collapsed] [data-slot=\"conversation.session.header\"] > header {\n  padding-right: 78px;\n}\n\nbody[data-dsh-sidebar-dragging] #root [data-dsh-center-col] {\n  transition: none;\n}\n\n@media (prefers-reduced-motion: reduce) {\n  #root [data-dsh-center-col] {\n    transition: none;\n  }\n}\n\n/* Context-menu submenu flip (viewport clamping for the portaled menus).\n *\n * The ui-primitives Menu clamps its main portal list into the viewport but\n * positions nested submenus with static CSS only — anchored at the parent\n * row's bottom, growing UP and to the RIGHT — with no clamp whatsoever.\n * Both defaults are the worst case for our menus: a tall \"open with\" submenu\n * escapes past the viewport top when the row menu opens near the top, and\n * past the right edge in a narrow workbench pane (a pane can be far narrower\n * than the card 218 + gap + submenu 165 a submenu needs).\n *\n * menu-flip.ts publishes `data-dsh-sidebar-submenu` on <body> — with the\n * words \"down\" and/or \"left\" — for exactly the lifetime of one of OUR\n * submenu-bearing menus (FileTree row menu, Git panel's More Actions menu).\n * The tokens flip the growth direction; the attribute's absence restores the\n * primitive's own geometry untouched, and host-owned menus are never\n * affected because they never open while the attribute exists (each side\n * closes on the other's outside pointerdown).\n *\n * No max-height/overflow scroll cap here on purpose: overflow clipping\n * would cut the submenu's ::before hover bridge (the corridor that keeps\n * itemWrap's mouseleave from closing the card mid-crossing). */\n\n/* Visual tether, part 1 — the parent row stays lit while its submenu is\n * open. The primitive only styles :hover, so once the pointer crossed into\n * the side card the parent row's fill cleared and the floating card read as\n * unrelated. The Menu marks the open parent row with aria-expanded=\"true\"\n * (host-rendered, stable), so the same hover token re-applies for the\n * submenu's whole lifetime. */\nbody[data-dsh-sidebar-submenu] div[role=\"menu\"] button[aria-expanded=\"true\"] {\n  background: var(--dsw-alias-interactive-bg-hover);\n}\n\n/* Visual tether, part 2 — the side card hugs its parent (10px → 4px gap),\n * with the ::before hover corridor narrowed to match. Ordered BEFORE the\n * flip overrides below so their left/right flips still win. */\nbody[data-dsh-sidebar-submenu] div[role=\"menu\"] div[role=\"menu\"] {\n  left: calc(100% + 4px);\n}\n\nbody[data-dsh-sidebar-submenu] div[role=\"menu\"] div[role=\"menu\"]::before {\n  left: -4px;\n  width: 4px;\n}\n\nbody[data-dsh-sidebar-submenu~=\"down\"] div[role=\"menu\"] div[role=\"menu\"] {\n  top: -4px;\n  bottom: auto;\n}\n\nbody[data-dsh-sidebar-submenu~=\"left\"] div[role=\"menu\"] div[role=\"menu\"] {\n  left: auto;\n  right: calc(100% + 4px);\n}\n\n/* The hover bridge follows the card to the left side of the parent row. */\nbody[data-dsh-sidebar-submenu~=\"left\"] div[role=\"menu\"] div[role=\"menu\"]::before {\n  left: auto;\n  right: -4px;\n}\n";
 		const tagId = "dsh-better-sidebar/layout.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
 			const tag = document.createElement("style");
@@ -32865,6 +33965,9 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 			const sidebarStore = createSidebarStore();
 			const service = createBetterSidebarService(sidebarStore);
 			ctx.provide("betterSidebar", service);
+			ctx.effect(() => () => {
+				disposeSidechatSurfaces(service);
+			}, "dsh-better-sidebar: sidechat surface adapters");
 			const nativeRecords = createNativeTabRecords();
 			const nativeSurface = createNativeSurface(ctx, nativeRecords);
 			service.setSurface(nativeSurface);
@@ -32889,6 +33992,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 				diagnostics.dispose();
 			}, "dsh-better-sidebar: context diagnostics controller");
 			ctx.effect(() => registerBuiltins(ctx, service), "dsh-better-sidebar: register built-in tabs and viewers");
+			ctx.effect(() => registerQuoteSource(ctx), "dsh-better-sidebar: quote-chip input-trigger source");
 			try {
 				setChunkModuleSystem(ctx.modules);
 				revalidateChunksOnReactivate();
@@ -32934,8 +34038,16 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 							hostCheckFrame = null;
 							const layer = host?.querySelector("[data-dsh-panel-host]");
 							if (layer === null || layer === void 0) return;
+							const expectedHeight = () => {
+								let zoom = 1;
+								for (let node = layer; node !== null; node = node.parentElement) {
+									const value = Number.parseFloat(getComputedStyle(node).zoom);
+									if (Number.isFinite(value) && value > 0) zoom *= value;
+								}
+								return window.innerHeight * zoom;
+							};
 							const rect = layer.getBoundingClientRect();
-							if (!(Math.abs(rect.left) > 8 || Math.abs(rect.top) > 8 || Math.abs(rect.width - window.innerWidth) > 8 || Math.abs(rect.height - window.innerHeight) > 8)) {
+							if (!(Math.abs(rect.left) > 8 || Math.abs(rect.top) > 8 || Math.abs(rect.width - window.innerWidth) > 8 || Math.abs(rect.height - expectedHeight()) > 8)) {
 								layer.removeAttribute("data-dsh-panel-host-degraded");
 								layer.style.transform = "";
 								return;
@@ -32950,7 +34062,7 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 								const r = layer.getBoundingClientRect();
 								const rawLeft = r.left - applied.x;
 								const rawTop = r.top - applied.y;
-								if (Math.abs(rawLeft) <= 1 && Math.abs(rawTop) <= 1 && Math.abs(r.width - window.innerWidth) <= 1 && Math.abs(r.height - window.innerHeight) <= 1) {
+								if (Math.abs(rawLeft) <= 1 && Math.abs(rawTop) <= 1 && Math.abs(r.width - window.innerWidth) <= 1 && Math.abs(r.height - expectedHeight()) <= 1) {
 									layer.removeAttribute("data-dsh-panel-host-degraded");
 									layer.style.transform = "";
 									return;
@@ -33046,7 +34158,12 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
 						return () => {};
 					}
 				}, "dsh-better-sidebar: IME composition guard");
-				ctx.effect(() => registerSettingsNavIcon(() => t("settingsNav")), "dsh-better-sidebar: settings navigation icon");
+				ctx.slots.inject("settings.section.icon", () => ctx.slots.register({
+					name: "settings.section.icon",
+					id: "better-sidebar",
+					order: 100,
+					label: () => t("settingsNav")
+				}, ({ size }) => (0, react.createElement)(IconSideCardNav, { size })));
 				ctx.slots.inject("settings.section", () => ctx.slots.register({
 					name: "settings.section",
 					id: "better-sidebar",

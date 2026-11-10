@@ -18,6 +18,8 @@ export interface MarkdownSurfaceOptions {
      *  directory. Prose surfaces (transcript, task note) omit it — their
      *  relative targets resolve against the session cwd instead. */
     path?: string;
+    /** Prose such as Side Chat can open source files as well as Markdown documents. */
+    allLocalFiles?: boolean;
 }
 /** What a surface wires into its markup. */
 export interface MarkdownSurfaceBinding {

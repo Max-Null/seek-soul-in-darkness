@@ -13226,6 +13226,8 @@ globalThis.__dshChunks__["terminal"] = (require) => {
 		refresh: "刷新",
 		refreshUnsavedConfirm: "文件已在磁盘更新，刷新将丢弃未保存编辑。继续吗？",
 		closeUnsavedConfirm: "该文件有未保存的编辑，关闭后将丢弃。继续吗？",
+		draftRestoreConfirm: "检测到未保存的草稿，恢复吗？（选择取消将丢弃该草稿）",
+		switchUnsavedConfirm: "该文件有未保存的编辑，切换文件将丢弃这些内容。继续吗？",
 		save: "保存",
 		saved: "已保存",
 		unsaved: "未保存",
@@ -13372,6 +13374,7 @@ globalThis.__dshChunks__["terminal"] = (require) => {
 		openEditor: "打开编辑器",
 		referenceFile: "@文件",
 		addToConversation: "添加到对话",
+		quoteChip: "引用 {where}",
 		copyRelative: "复制相对地址",
 		copyAbsolute: "复制绝对地址",
 		rename: "重命名",
@@ -13498,6 +13501,7 @@ globalThis.__dshChunks__["terminal"] = (require) => {
 		sideChatSaveTitle: "把该线程提升为顶层会话，出现在主会话列表中",
 		sideChatArchive: "归档这条侧边对话（在会话列表的「显示已归档」里可找回）",
 		sideChatArchiveRunning: "该线程正在运行，停止后才能归档",
+		sideChatArchiveBlocked: "侧边对话归档后无法找回（宿主会话列表在任何筛选下都不显示侧边对话），因此已禁用归档；如需保留，请先「保存为新会话」",
 		sideChatSaved: "已保存为新会话",
 		sideChatNoTurn: "至少完成一轮对话后才能保存",
 		sideChatPendingDrop: "最后一条未完成的追问不会包含在新会话中",
@@ -13513,6 +13517,17 @@ globalThis.__dshChunks__["terminal"] = (require) => {
 		sideChatThinking: "正在深入…",
 		sideChatThink: "思考过程",
 		sideChatInjection: "已注入上下文",
+		sideChatAddImages: "添加图片",
+		sideChatRemoveImage: "移除 {name}",
+		sideChatImagesDisabled: "图片附件不可用",
+		sideChatImageFormat: "请选择 PNG、JPEG、WebP 或 GIF 图片",
+		sideChatImageLimit: "图片数量或大小超出限制",
+		sideChatImageReadError: "无法读取图片",
+		sideChatImageOwnerChanged: "发送时对话已切换",
+		sideChatSendUncertain: "连接已断开。消息可能已被接收。草稿已保留，请先查看对话再重试。",
+		sideChatImageLoading: "正在加载图片…",
+		sideChatImageUnavailable: "图片不可用",
+		sideChatImage: "图片",
 		sideChatSend: "发送",
 		sideChatCancelTitle: "中止当前回合（保留队列）",
 		sideChatError: "侧边对话出错：{message}",
@@ -13867,6 +13882,8 @@ globalThis.__dshChunks__["terminal"] = (require) => {
 		refresh: "Refresh",
 		refreshUnsavedConfirm: "The file changed on disk. Refreshing will discard unsaved edits. Continue?",
 		closeUnsavedConfirm: "This file has unsaved edits. Closing the tab will discard them. Continue?",
+		draftRestoreConfirm: "An unsaved draft was found. Restore it? (Cancel discards the draft.)",
+		switchUnsavedConfirm: "This file has unsaved edits. Switching files will discard them. Continue?",
 		save: "Save",
 		saved: "Saved",
 		unsaved: "Unsaved",
@@ -14013,6 +14030,7 @@ globalThis.__dshChunks__["terminal"] = (require) => {
 		openEditor: "Open editor",
 		referenceFile: "@file",
 		addToConversation: "Add to conversation",
+		quoteChip: "Quote {where}",
 		copyRelative: "Copy relative path",
 		copyAbsolute: "Copy absolute path",
 		rename: "Rename",
@@ -14139,6 +14157,7 @@ globalThis.__dshChunks__["terminal"] = (require) => {
 		sideChatSaveTitle: "Promote this thread to a top-level session in the main session list",
 		sideChatArchive: "Archive this side conversation (find it again via “Show archived” in the session list)",
 		sideChatArchiveRunning: "This thread is running — stop it before archiving",
+		sideChatArchiveBlocked: "A side conversation can never be found again once archived (the host session list hides side conversations in every filter), so archiving is disabled — use “Save as new session” first to keep it",
 		sideChatSaved: "Saved as a new session",
 		sideChatNoTurn: "Save is available after the first completed turn",
 		sideChatPendingDrop: "The last unanswered follow-up will not be included in the saved session",
@@ -14154,6 +14173,17 @@ globalThis.__dshChunks__["terminal"] = (require) => {
 		sideChatThinking: "Deep diving…",
 		sideChatThink: "Thinking",
 		sideChatInjection: "Context injected",
+		sideChatAddImages: "Add images",
+		sideChatRemoveImage: "Remove {name}",
+		sideChatImagesDisabled: "Image attachments are unavailable",
+		sideChatImageFormat: "Choose PNG, JPEG, WebP or GIF images",
+		sideChatImageLimit: "Image count or size limit exceeded",
+		sideChatImageReadError: "Could not read image",
+		sideChatImageOwnerChanged: "Conversation changed while sending",
+		sideChatSendUncertain: "Connection lost. The message may have been accepted. Your draft is kept; check the conversation before retrying.",
+		sideChatImageLoading: "Loading image…",
+		sideChatImageUnavailable: "Image unavailable",
+		sideChatImage: "Image",
 		sideChatSend: "Send",
 		sideChatCancelTitle: "Abort the running turn (queued work is kept)",
 		sideChatError: "Side Chat error: {message}",
@@ -14498,7 +14528,7 @@ globalThis.__dshChunks__["terminal"] = (require) => {
 	}
 	//#endregion
 	//#region \0dsh-css:/home/runner/work/DSH-better-sidebar/DSH-better-sidebar/src/client/terminal.module.css.mjs
-	const css = ".dMhp9G_root{box-sizing:border-box;height:100%;min-height:0;color:var(--dsw-alias-label-primary);flex-direction:column;flex:1;display:flex}.dMhp9G_screen{min-width:0;min-height:0;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);font-family:var(--ds-font-family-code,monospace);flex:1;padding:8px;overflow:hidden}.dMhp9G_screen .dMhp9G_xterm{height:100%}.dMhp9G_screen .dMhp9G_xterm-viewport{background:var(--dsw-alias-bg-base)}.dMhp9G_status{color:var(--dsw-alias-label-secondary,var(--dsw-alias-label-primary));background:var(--dsw-alias-bg-l2);flex-wrap:wrap;align-items:center;gap:8px;padding:5px 12px;display:flex}.dMhp9G_noticeBlock{flex-direction:column;flex:1;justify-content:center;align-items:center;gap:16px;min-height:0;padding:24px;display:flex;overflow:auto}.dMhp9G_notice{text-align:center;overflow-wrap:anywhere;max-width:32ch;color:var(--dsw-alias-label-primary);margin:0;line-height:1.6}.dMhp9G_error{overflow-wrap:anywhere;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-l2);margin:0;padding:10px 12px}.dMhp9G_action{border:.5px solid var(--dsw-alias-border-l4);cursor:pointer;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-1);border-radius:6px;flex:none;padding:3px 10px}.dMhp9G_action:hover{background:var(--dsw-alias-bg-l2)}";
+	const css = ".dMhp9G_root{box-sizing:border-box;height:100%;min-height:0;color:var(--dsw-alias-label-primary);flex-direction:column;flex:1;display:flex}.dMhp9G_screen{min-width:0;min-height:0;color:var(--dsw-alias-label-primary);font-family:var(--ds-font-family-code,monospace);background:0 0;flex:1;padding:8px;overflow:hidden}.dMhp9G_screen .dMhp9G_xterm{height:100%}.dMhp9G_screen .xterm .xterm-viewport{background:0 0}.dMhp9G_status{color:var(--dsw-alias-label-secondary,var(--dsw-alias-label-primary));background:var(--dsw-alias-bg-l2);flex-wrap:wrap;align-items:center;gap:8px;padding:5px 12px;display:flex}.dMhp9G_noticeBlock{flex-direction:column;flex:1;justify-content:center;align-items:center;gap:16px;min-height:0;padding:24px;display:flex;overflow:auto}.dMhp9G_notice{text-align:center;overflow-wrap:anywhere;max-width:32ch;color:var(--dsw-alias-label-primary);margin:0;line-height:1.6}.dMhp9G_error{overflow-wrap:anywhere;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-l2);margin:0;padding:10px 12px}.dMhp9G_action{border:.5px solid var(--dsw-alias-border-l4);cursor:pointer;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-1);border-radius:6px;flex:none;padding:3px 10px}.dMhp9G_action:hover{background:var(--dsw-alias-bg-l2)}";
 	const tagId = "dsh-better-sidebar/terminal.module.css";
 	if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
 		const tag = document.createElement("style");
@@ -14508,15 +14538,14 @@ globalThis.__dshChunks__["terminal"] = (require) => {
 		document.head.appendChild(tag);
 	}
 	var terminal_module_css_default = {
-		"screen": "dMhp9G_screen",
-		"notice": "dMhp9G_notice",
+		"noticeBlock": "dMhp9G_noticeBlock",
 		"root": "dMhp9G_root",
-		"action": "dMhp9G_action",
 		"error": "dMhp9G_error",
+		"action": "dMhp9G_action",
 		"status": "dMhp9G_status",
-		"xterm-viewport": "dMhp9G_xterm-viewport",
 		"xterm": "dMhp9G_xterm",
-		"noticeBlock": "dMhp9G_noticeBlock"
+		"screen": "dMhp9G_screen",
+		"notice": "dMhp9G_notice"
 	};
 	//#endregion
 	//#region src/client/TerminalView.tsx

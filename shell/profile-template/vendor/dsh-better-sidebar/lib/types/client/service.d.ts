@@ -24,6 +24,8 @@ import type { Context } from '../context-types.ts';
 import { type SidebarSnapshot, type SidebarState, type SidebarStore, type SidebarTab, type TabType } from './state.ts';
 import type { SessionScope } from './api.ts';
 import type { SidebarPrefs } from '../prefs-shared.ts';
+import { type SidechatSurfaceAdapter } from './sidechat-surface.ts';
+export type { SidechatSurface, SidechatSurfaceAdapter } from './sidechat-surface.ts';
 /**
  * Public state vocabulary re-exported for consumers (type-only; the values
  * stay internal). External plugins name these types in their descriptors —
@@ -287,6 +289,13 @@ export interface FileViewerProps {
      *  positions the reader there once, on arrival; every other viewer ignores
      *  it. Absent on an ordinary open. */
     line?: number;
+    /** The last 1-based line of the landing RANGE, with {@link
+     *  FileViewerProps.line} — a quote chip's click-through carries the quoted
+     *  span, and the text viewer flashes `line..lineEnd` so the span is visible
+     *  at a glance rather than a caret somewhere. It rides the plugin's own
+     *  side channel (`line-target.ts`), not the host's resource parameters,
+     *  which declare `line` only. Absent = a single-line landing. */
+    lineEnd?: number;
     /** The viewer reports that it has APPLIED the `line` it was handed (or that
      *  the line does not apply to it), and the host stops handing it out: the
      *  line is one navigation, not a mode of the file. The host has to own that
@@ -605,6 +614,8 @@ export interface SidebarSurface {
  * The registry service published as `ctx.betterSidebar`.
  */
 export interface BetterSidebarService {
+    /** Proposed opt-in bridge for settled assistant Markdown in sidechat only. */
+    registerSidechatSurfaceAdapter(adapter: SidechatSurfaceAdapter): () => void;
     registerTab(descriptor: TabDescriptor): () => void;
     registerFileViewer(descriptor: FileViewerDescriptor): () => void;
     registerFileIcon(descriptor: FileIconDescriptor): () => void;
@@ -658,6 +669,13 @@ export interface BetterSidebarService {
      * `tabsEnabled[id]` entry means enabled — only an explicit `false`
      * disables the type (hidden from the + menu, `openTab` refuses, and
      * derived flows gate on it).
+     *
+     * A `hidden: true` type is ALWAYS enabled: it has no + menu row and no
+     * native guide entry, so the side-card inventory offers no switch for it —
+     * and none of the paths that open it (a diff's "expand to page", a remote
+     * plugin's file open) has a visible state the user could read. The entry is
+     * ignored rather than honoured so a value written by an older build cannot
+     * keep silently refusing those opens (#1009).
      */
     isTabEnabled(id: string): boolean;
     /** Whether a file viewer is enabled (absent `viewersEnabled[id]` = enabled). */
@@ -750,8 +768,16 @@ export interface BetterSidebarService {
      * (v0.12.0+) rides to the callback like `closeTab`'s.
      */
     activateTab(tabId: string, scope?: SessionScope): void;
-    /** Open a file in the sidebar editor of `scope`'s session (title defaults to the file name). */
-    openFile(scope: SessionScope, path: string, title?: string): void;
+    /**
+     * Open a file in the sidebar editor of `scope`'s session (title defaults to
+     * the file name). `options.line` lands the viewer on that 1-based source
+     * line (a quote chip's click-through); `options.lineEnd` extends the
+     * landing flash through that line, so the quoted span reads at a glance.
+     */
+    openFile(scope: SessionScope, path: string, title?: string, options?: {
+        line?: number;
+        lineEnd?: number;
+    }): void;
     /**
      * Resolve one of the plugin's own host routes (`sidebar/api/fs.read`) into
      * an absolute URL the page can fetch even when the GUI is served under a
@@ -805,7 +831,7 @@ export declare function matchUrlTarget(tabs: readonly TabDescriptor[], url: URL)
  * The plugin version this service instance reports. Keep in lockstep with
  * `package.json`'s version — `tests/service.spec.ts` asserts the pair.
  */
-export declare const SIDEBAR_SERVICE_VERSION = "0.28.2";
+export declare const SIDEBAR_SERVICE_VERSION = "0.30.1";
 /**
  * Monotonic capability list consumers use to gate new API usage (features
  * are never removed). Each string names a v0.12.0+ capability:

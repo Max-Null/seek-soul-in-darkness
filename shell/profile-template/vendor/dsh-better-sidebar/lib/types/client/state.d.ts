@@ -194,9 +194,10 @@ export declare function patchTab(state: SidebarState, tabId: string, patch: {
  * @returns the next state, with the bottom panel open.
  */
 export declare function openTabInBottomPane(state: SidebarState, tab: SidebarTab): SidebarState;
-/** Move a tab from one pane to another (insert at index; -1 appends).
- *  The panes may live in DIFFERENT trees — dragging a tab between the two
- *  panels removes it from its own tree and lands it in the other one. */
+/**
+ * 在底部工作台窗格之间移动标签，或在同一窗格内重排。
+ * index 对应移动前的目标标签位置，-1 表示追加。
+ */
 export declare function moveTab(state: SidebarState, fromPane: string, tabId: string, toPane: string, index?: number): SidebarState;
 /** Split the active pane (or the pane containing the active tab). */
 export declare function splitPane(state: SidebarState, dir: 'row' | 'col'): SidebarState;

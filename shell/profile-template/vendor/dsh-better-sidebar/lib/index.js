@@ -15,7 +15,7 @@ import { SettingsConflictError } from "@deepseek-ai/dsh-settings";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { foldSurface, isSurfaceEligibleType } from "@deepseek-ai/dsh-session/surface";
 import { BlockAssembler, ReasoningEffortId, createUserMessage } from "@deepseek-ai/dsh-llm";
-import { installModelSelection } from "@deepseek-ai/dsh-agent";
+import "@deepseek-ai/dsh-agent";
 import { snapshotSubagentDescriptor } from "@deepseek-ai/dsh-subagent";
 //#region src/prefs-shared.ts
 /**
@@ -1163,14 +1163,24 @@ var SidebarError = class extends Error {
 };
 /** Body size bound of one JSON request (defense against unbounded reads). */
 const MAX_BODY_BYTES = 1 << 20;
-/** Read and parse the JSON request body (bounded; malformed → bad-request). */
-async function readJsonBody(req) {
+/**
+* Read and parse the JSON request body (bounded; malformed → bad-request).
+*
+* @param req - the request face (async-iterable body).
+* @param limit - maximum accepted body size in bytes.
+* @param onBytes - optional per-chunk observer of the cumulative size. Callers
+*   that must account for a LARGE body before the whole read finishes (the
+*   Side Chat image admission gate) use it; a throw from the callback aborts
+*   the read and propagates like any other route failure.
+*/
+async function readJsonBody(req, limit = MAX_BODY_BYTES, onBytes) {
 	const chunks = [];
 	let total = 0;
 	for await (const chunk of req) {
 		const buffer = Buffer.from(chunk);
 		total += buffer.length;
-		if (total > MAX_BODY_BYTES) throw new SidebarError("bad-request", "request body too large");
+		if (total > limit) throw new SidebarError("too-large", "request body too large", 413);
+		onBytes?.(total);
 		chunks.push(buffer);
 	}
 	const text = Buffer.concat(chunks).toString("utf8");
@@ -2224,12 +2234,72 @@ function assertSingleSegmentName(name) {
 	if (name === "" || name === "." || name === ".." || name.includes("/") || name.includes("\\")) throw new SidebarError("bad-request", "name must be a single path segment", 400);
 }
 /**
+* Windows refuses a rename with one of these codes when another rename is
+* landing on the same destination at that instant. The refusal says nothing
+* about the destination — it is contention, not a verdict — and it is
+* transient: every refused rename in the measurements below landed on the very
+* next attempt.
+*/
+const RENAME_CONTENTION = /* @__PURE__ */ new Set([
+	"EPERM",
+	"EACCES",
+	"EBUSY"
+]);
+/**
+* How many refusals ONE upload absorbs before the failure is reported.
+*
+* The losers of one instant retry into each other, so this has to be a budget
+* rather than a single retry. Measured on Windows with barrier-started renames
+* onto a single destination (UV_THREADPOOL_SIZE=64, so they really run in
+* parallel):
+*
+*   simultaneous renames   losers per round
+*   2                      at most 1
+*   8                      1–5, never 0
+*   32                     19–31, never 0
+*
+* At 8 parties 5 attempts already sufficed (500/500 rounds clean); at 32
+* parties 5 was NOT enough (197/200 rounds still reported a failure) while 10
+* was (200/200 rounds clean, the worst single upload absorbing 8 refusals in a
+* row). 10 is sized for far more contention than this seam can meet in
+* practice — the client uploads through `uploadToDir` one file at a time, so
+* same-target contention comes from separate clients and stays in the low
+* single digits.
+*/
+const RENAME_ATTEMPT_LIMIT = 10;
+/**
+* Rename `from` onto `to`, retrying ONLY the contention refusals above.
+*
+* A unique temp name keeps concurrent uploads from crossing each other, but it
+* does not make their renames independent: renames naming the same destination
+* at the same instant are mutually exclusive on Windows, and every rename that
+* does not win is refused rather than queued. Retrying here is what keeps the
+* seam's promise ("the last rename wins") for the caller. Every other errno —
+* ENOENT, EXDEV, EROFS… — is a real answer and propagates on the first throw.
+*
+* The retry is bounded, so a destination that is genuinely held (rather than
+* contended for a moment) still fails the upload instead of hanging it.
+*/
+async function renameIntoPlace(from, to) {
+	for (let attempt = 1;; attempt++) try {
+		await rename(from, to);
+		return;
+	} catch (error) {
+		const code = error.code;
+		if (attempt >= RENAME_ATTEMPT_LIMIT || code === void 0 || !RENAME_CONTENTION.has(code)) throw error;
+		await new Promise((resolve) => {
+			setImmediate(resolve);
+		});
+	}
+}
+/**
 * Stream `chunks` into `dir/relativePath` atomically: a uniquely named temp
 * sibling receives the bytes, then is renamed over the target. The parent
 * directory is created on demand (recursive), so folder uploads work before
 * any level exists. The unique temp name keeps concurrent uploads to the same
-* target independent (each writes and renames its own file; the last rename
-* wins) and never blocks later uploads after a crashed process.
+* target from crossing each other — each writes its own file, the last rename
+* to land wins — and never blocks later uploads after a crashed process. The
+* renames themselves are not independent (see {@link renameIntoPlace}).
 *
 * There is NO size cap: the bytes flow through a bounded write stream, so a
 * 100 GB upload costs the host the same memory as a 1 KB one. A failed or
@@ -2266,7 +2336,7 @@ async function writeWorkspaceUpload(input) {
 			stream.end((error) => error === void 0 || error === null ? resolve() : reject(error));
 		});
 		if (streamError !== void 0) throw streamError;
-		await rename(tmp, safeTarget);
+		await renameIntoPlace(tmp, safeTarget);
 		const info = await stat(safeTarget);
 		invalidateDirectoryCache(dirname(safeTarget));
 		return {
@@ -2672,6 +2742,7 @@ function candidates(engine) {
 function verify(binary) {
 	return new Promise((resolve) => {
 		let settled = false;
+		let timer = void 0;
 		const finish = (ok) => {
 			if (settled) return;
 			settled = true;
@@ -2685,7 +2756,7 @@ function verify(binary) {
 			finish(false);
 			return;
 		}
-		const timer = setTimeout(() => {
+		timer = setTimeout(() => {
 			child.kill();
 			finish(false);
 		}, PROBE_TIMEOUT_MS$1);
@@ -5079,6 +5150,51 @@ function registerOpenTool(ctx, registry, resolveCwd, readPrefs) {
 	}));
 }
 //#endregion
+//#region src/sidechat-images.ts
+/**
+* Raster formats the Side Chat composer offers and the transcript projects.
+* This is the host's `ImageMediaType` union; a deployment's own
+* `imageLimits.mediaTypes` stays authoritative for what it accepts.
+*/
+const SIDECHAT_IMAGE_MEDIA_TYPES = [
+	"image/png",
+	"image/jpeg",
+	"image/webp",
+	"image/gif"
+];
+const SIDECHAT_MAX_IMAGE_BYTES = 10485760;
+const SIDECHAT_MAX_MESSAGE_IMAGE_BYTES = 20971520;
+function projectSidechatContent(content, separator = "\n") {
+	if (typeof content === "string") return { text: content };
+	const texts = [];
+	const images = [];
+	if (Array.isArray(content)) content.forEach((block, blockIndex) => {
+		if (block === null || typeof block !== "object") return;
+		const value = block;
+		if (value.type === "text" && typeof value.text === "string") texts.push(value.text);
+		if (value.type === "image" && value.attachment !== null && typeof value.attachment === "object") {
+			const { mediaType, bytes, width, height, name } = value.attachment;
+			if (typeof mediaType !== "string" || !SIDECHAT_IMAGE_MEDIA_TYPES.includes(mediaType) || ![
+				bytes,
+				width,
+				height
+			].every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0) || name !== void 0 && typeof name !== "string") return;
+			images.push({
+				blockIndex,
+				mediaType,
+				bytes,
+				width,
+				height,
+				...name === void 0 ? {} : { name }
+			});
+		}
+	});
+	return {
+		text: texts.join(separator),
+		...images.length === 0 ? {} : { images }
+	};
+}
+//#endregion
 //#region src/sidechat-core.ts
 /** The durable thread-label prefix (also the row filter in the client list). */
 const SIDE_LABEL_PREFIX = "Side: ";
@@ -5815,6 +5931,14 @@ function rebaseEvent(event, seq, rebase, turnOffset, firstKeptTurn) {
 			shadowedSeqs: mapped
 		};
 	}
+	if (event.type === "session-log-deepseek/delivery-accepted" && typeof sourceData.throughSeq === "number") {
+		const mapped = rebase.get(sourceData.throughSeq);
+		if (mapped === void 0) return DROPPED;
+		seed.data = {
+			...seed.data,
+			throughSeq: mapped
+		};
+	}
 	const headerSeq = sourceData.headerSeq;
 	if (event.type === "developer/message" && typeof headerSeq === "number") {
 		const mapped = rebase.get(headerSeq);
@@ -6076,19 +6200,6 @@ function messageLeadText(data) {
 	const first = Array.isArray(content) ? content[0] : content;
 	return typeof first === "string" ? first : typeof first === "object" && first !== null && "text" in first ? String(first.text) : "";
 }
-/** Flatten one pending message's content into the text the bubble shows. */
-function pendingText(message) {
-	const content = message?.content;
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return "";
-	const parts = [];
-	for (const block of content) {
-		if (block === null || typeof block !== "object") continue;
-		const item = block;
-		if (item.type === "text" && typeof item.text === "string") parts.push(item.text);
-	}
-	return parts.join("\n");
-}
 /** The identity one inbox message carries (`MessageId`, a branded string). */
 function pendingInputId(message) {
 	const id = message?.id;
@@ -6108,7 +6219,7 @@ function pendingInputs(nextStep, nextTurn) {
 		rows.push({
 			id,
 			target,
-			text: pendingText(message)
+			...projectSidechatContent(message.content)
 		});
 	};
 	for (const message of nextStep) add(message, "next-step");
@@ -6130,7 +6241,7 @@ function pendingInputs(nextStep, nextTurn) {
 *   prefix length, or the whole log).
 * @returns the ids of messages still pending after the folded events.
 */
-function pendingIdsInLog(events, limit) {
+function inboxInLog(events, limit) {
 	const nextTurn = [];
 	const nextStep = [];
 	const end = limit === void 0 ? events.length : Math.min(limit, events.length);
@@ -6145,6 +6256,13 @@ function pendingIdsInLog(events, limit) {
 		const inserted = Array.isArray(data.inserted) ? data.inserted : [];
 		target.splice(Math.max(0, Math.min(start, target.length)), Math.max(0, removed), ...inserted);
 	}
+	return {
+		nextStep,
+		nextTurn
+	};
+}
+function pendingIdsInLog(events, limit) {
+	const { nextStep, nextTurn } = inboxInLog(events, limit);
 	const ids = [];
 	for (const message of [...nextStep, ...nextTurn]) {
 		const id = pendingInputId(message);
@@ -6165,6 +6283,16 @@ function pendingIdsInLog(events, limit) {
 function inheritedPendingIds(events, inheritedEventCount) {
 	return pendingIdsInLog(events, Math.max(0, Math.trunc(inheritedEventCount)));
 }
+function coldPendingMessages(events, inheritedEventCount) {
+	const boundary = inheritedEventCount ?? events.findLastIndex((event) => event.type === "session/end-seed" && event.data.inherited === true);
+	const ghosts = new Set(inheritedPendingIds(events, Math.max(0, boundary)));
+	const inbox = inboxInLog(events);
+	const owned = (message) => !ghosts.has(pendingInputId(message) ?? "");
+	return {
+		nextStep: inbox.nextStep.filter(owned),
+		nextTurn: inbox.nextTurn.filter(owned)
+	};
+}
 /**
 * The thread's effective model selection: `pending ?? lastUsed` of its own
 * `model/selection` / `request/header` fold (see {@link parentModelSelection},
@@ -6174,11 +6302,15 @@ function inheritedPendingIds(events, inheritedEventCount) {
 function effectiveModelSelection(events) {
 	return parentModelSelection(events);
 }
-/** The events a thread produced itself: everything after the LAST
-*  `session/end-seed` marker (the fork-seed boundary). A log with no marker
-*  (a thread created before seeding existed) is returned whole. */
+/** The events a thread produced itself: everything after its last
+*  `session/end-seed { inherited: true }` fork boundary. Untagged markers
+*  delimit restore/replay lifecycles, not inherited history. A log with no
+*  inherited marker (including an already-cut route payload) is returned whole. */
 function threadOwnLogEvents(events) {
-	for (let index = events.length - 1; index >= 0; index--) if (events[index]?.type === "session/end-seed") return events.slice(index + 1);
+	for (let index = events.length - 1; index >= 0; index--) {
+		const event = events[index];
+		if (event?.type === "session/end-seed" && typeof event.data === "object" && event.data !== null && "inherited" in event.data && event.data.inherited === true) return events.slice(index + 1);
+	}
 	return [...events];
 }
 /**
@@ -6853,6 +6985,110 @@ function buildWorkflowsApi(ctx) {
 	} };
 }
 //#endregion
+//#region src/sidechat-image-admission.ts
+const SIDECHAT_METADATA_BYTES = 1 << 20;
+function sidechatAttachments(ctx) {
+	const store = ctx.get("attachments");
+	return typeof store?.admitPromptContent === "function" && typeof store.readImage === "function" && typeof store.isAttachmentError === "function" ? store : void 0;
+}
+function sidechatImageLimits(ctx) {
+	const limits = sidechatAttachments(ctx)?.imageLimits;
+	if (limits === void 0) return void 0;
+	return {
+		maxImagesPerMessage: Math.min(8, limits.maxImagesPerMessage),
+		maxImageBytes: Math.min(SIDECHAT_MAX_IMAGE_BYTES, limits.maxImageBytes),
+		maxMessageImageBytes: Math.min(SIDECHAT_MAX_MESSAGE_IMAGE_BYTES, limits.maxMessageImageBytes),
+		mediaTypes: limits.mediaTypes
+	};
+}
+function sidechatPromptBodyLimit(ctx) {
+	const limits = sidechatImageLimits(ctx);
+	return SIDECHAT_METADATA_BYTES + (limits === void 0 ? 0 : 4 * Math.ceil(limits.maxMessageImageBytes / 3) + 4 * limits.maxImagesPerMessage);
+}
+/**
+* Host attachment codes that mean the caller proposed an OVERSIZED image.
+* `isAttachmentError` covers caller-correctable admission failures AND
+* storage faults, so the wire mapping routes on the stable code: oversize is
+* 413 `too-large`, everything else (including ATTACHMENT_WRITE_FAILED and
+* friends) is a server-side 500 `sidechat-error`. Pixels and intrinsic
+* dimensions are the live cases the plugin cannot pre-check without decoding.
+*/
+const IMAGE_TOO_LARGE_CODES = /* @__PURE__ */ new Set([
+	"TOO_MANY_IMAGES",
+	"IMAGES_TOO_LARGE",
+	"IMAGE_TOO_LARGE",
+	"IMAGE_TOO_MANY_PIXELS",
+	"IMAGE_DIMENSION_TOO_LARGE"
+]);
+/**
+* Map one `admitPromptContent` rejection onto the sidebar wire error, keeping
+* the host's message: an oversized image is the caller's input problem (413),
+* a storage fault is not (500).
+*/
+function sidechatAdmissionError(store, error) {
+	const message = error instanceof Error ? error.message : String(error);
+	const code = error.code;
+	if (store.isAttachmentError(error) && typeof code === "string" && IMAGE_TOO_LARGE_CODES.has(code)) return new SidebarError("too-large", message, 413);
+	return new SidebarError("sidechat-error", message, 500);
+}
+function parseSidechatPrompt(payload, limits) {
+	if (payload === null || typeof payload !== "object" || Array.isArray(payload)) throw new SidebarError("bad-request", "prompt must be an object");
+	const value = payload;
+	if (Object.keys(value).some((key) => ![
+		"childId",
+		"text",
+		"images"
+	].includes(key))) throw new SidebarError("bad-request", "Unknown prompt field");
+	if (typeof value.childId !== "string" || value.childId.trim() === "") throw new SidebarError("bad-request", "childId is required");
+	if (typeof value.text !== "string") throw new SidebarError("bad-request", "text is required");
+	const text = value.text.trim();
+	const uploads = value.images ?? [];
+	if (!Array.isArray(uploads)) throw new SidebarError("bad-request", "images must be an array");
+	if (uploads.length > 0 && limits === void 0) throw new SidebarError("unavailable", "Image attachments are unavailable", 503);
+	if (uploads.length > (limits?.maxImagesPerMessage ?? 0)) throw new SidebarError("too-large", "Too many images", 413);
+	const content = text === "" ? [] : [{
+		type: "text",
+		text
+	}];
+	const metadata = [];
+	let bytes = 0;
+	for (const raw of uploads) {
+		if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new SidebarError("bad-request", "Invalid image upload");
+		const image = raw;
+		if (Object.keys(image).some((key) => ![
+			"mediaType",
+			"data",
+			"name"
+		].includes(key)) || typeof image.mediaType !== "string" || !limits.mediaTypes.includes(image.mediaType) || typeof image.data !== "string" || image.name !== void 0 && (typeof image.name !== "string" || image.name.length > 256)) throw new SidebarError("bad-request", "Images must contain encoded bytes, a supported media type and an optional name");
+		const data = image.data;
+		const size = Math.floor(data.length / 4) * 3 - (data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0);
+		if (size > limits.maxImageBytes || (bytes += size) > limits.maxMessageImageBytes) throw new SidebarError("too-large", "Image byte limit exceeded", 413);
+		if (data.length === 0 || data.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(data)) throw new SidebarError("bad-request", "Invalid image base64");
+		const name = image.name;
+		metadata.push({
+			...image,
+			data: ""
+		});
+		content.push({
+			type: "image",
+			mediaType: image.mediaType,
+			data,
+			...name === void 0 ? {} : { name }
+		});
+	}
+	if (Buffer.byteLength(JSON.stringify({
+		...value,
+		images: metadata
+	})) > 1048576) throw new SidebarError("too-large", "Prompt metadata exceeds 1 MiB", 413);
+	if (content.length === 0) throw new SidebarError("bad-request", "text or images are required");
+	return {
+		childId: value.childId,
+		text,
+		content,
+		hasImages: uploads.length > 0
+	};
+}
+//#endregion
 //#region src/session-store.ts
 /**
 * Read one persisted session's header and full event log.
@@ -6891,29 +7127,6 @@ async function readPersistedSessionOf(ctx, sessionId) {
 }
 //#endregion
 //#region src/sidechat-routes.ts
-/**
-* Side Chat routes of the /sidebar JSON API ('sidechat.start' /
-* 'sidechat.prompt' / 'sidechat.cancel' / 'sidechat.dispose' /
-* 'sidechat.info' / 'sidechat.events').
-*
-* A side thread is a child session the plugin creates ITSELF with a custom
-* seed — the parent's full event log up to the click moment, honestly closed
-* at an in-progress turn (see sidechat-core.ts). The child is marked
-* `origin: 'subagent'` so the main session list hides it, and EVERY
-* operation goes through these routes because the generic session RPCs are
-* fenced away from subagent-origin identities (the api-remotes
-* agent-lookup ownership fence). No DSH source is touched:
-*
-* - creation uses the public AgentRegistry.create seam (the same one
-*   api-proxy's session.fork and the subagent fork provider use), with the
-*   parent's preset composition and provider/model selection so the child's
-*   first request shares the parent's token prefix (provider-side prefix
-*   cache reuse);
-* - the first prompt (boundary + question) and every follow-up are admitted
-*   with the stock `agent.followup`;
-* - a cold thread (DSH restart, or a closed thread) is resumed with
-*   AgentRegistry.resume, composing the preset the child recorded.
-*/
 /** Timeout guarding the create call (the registry detaches it before the
 *  handle becomes visible, so the child is never cancelled by it). */
 const CREATE_TIMEOUT_MS = 15e3;
@@ -6929,13 +7142,6 @@ const threadDisposers = /* @__PURE__ */ new Map();
 *  waiting to ride the first prompt (lost on a host restart — the boundary
 *  prompt is then delivered alone, a logged degradation). */
 const pendingSnapshots = /* @__PURE__ */ new Map();
-/** Per-thread model-selection refs installed on the live agent. The host's
-*  own composer commits a model switch by appending `model/selection` AND
-*  installing this agent-scoped ref (`SessionController.selectForNextRequest`);
-*  the ref is what prompt assembly and request routing actually read, because
-*  the controller caches one selection object per agent and never re-reads the
-*  projection. A subagent-origin thread never passes through the controller's
-*  fence, so the plugin installs the same seam itself. */
 const threadModelRefs = /* @__PURE__ */ new Map();
 /** Resolve the parent's preset and build the child's composition setup
 *  (mirror of api-proxy's composeAgent minus the model-selection install —
@@ -6956,7 +7162,7 @@ async function composeChildSetup(ctx, presetId) {
 async function composePersistedSetup(ctx, childId) {
 	const persistence = ctx.get("sessionPersistence");
 	if (persistence === void 0) return () => Promise.resolve();
-	const inspected = await readPersistedSession(persistence, childId);
+	const inspected = await readColdThreadSession(persistence, childId);
 	const presetId = resolvePresetId(inspected.header, inspected.events);
 	const presets = ctx.get("agentPresets");
 	if (presets === void 0 || presetId === void 0) return () => Promise.resolve();
@@ -6972,6 +7178,14 @@ function textPrompt(text) {
 		text
 	}];
 }
+function tryRenameThread(ctx, agent, label) {
+	const titles = ctx.get("sessionTitle");
+	try {
+		titles?.rename(agent.session, label);
+	} catch {
+		return;
+	}
+}
 /** Admit one user message to a live agent through the stock followup path. */
 function admitFollowup(agent, blocks) {
 	const message = createUserMessage({
@@ -6979,6 +7193,7 @@ function admitFollowup(agent, blocks) {
 		source: { kind: "user" }
 	});
 	agent.followup(message);
+	return message.id;
 }
 /**
 * Deliver the thread's FIRST contact as TWO log-separated messages: the
@@ -6994,60 +7209,66 @@ function admitFollowup(agent, blocks) {
 * is structural; its text still opens with SIDE_BOUNDARY_PREFIX, keeping
 * boundaryDelivered intact.
 */
-function admitFirstContact(agent, injectionText, question) {
-	agent.inject(createUserMessage({
+function admitFirstContact(agent, injectionText, content) {
+	const boundary = createUserMessage({
 		content: textPrompt(injectionText),
 		source: { kind: SIDE_INJECTION_SOURCE_KIND }
-	}));
-	admitFollowup(agent, textPrompt(question));
+	});
+	agent.inject(boundary);
+	try {
+		return admitFollowup(agent, typeof content === "string" ? textPrompt(content) : content);
+	} catch (error) {
+		agent.inbox.remove(boundary.id);
+		throw error;
+	}
 }
 /** The live thread agent, or undefined (cold — the caller resumes). */
 function liveThreadAgent(ctx, childId) {
 	return ctx.get("agents")?.get(childId);
 }
-/**
-* Cold-thread log memo: how many THREADS keep their decoded log. The
-* transcript polls `sidechat.events` per open thread (15 s fallback, plus one
-* pull per push frame), so a handful of threads is the whole working set.
-*/
 const COLD_LOG_MEMO_MAX = 16;
-const coldLogMemo = /* @__PURE__ */ new Map();
-/**
-* Read one COLD thread's persisted log, memoized by the stored artifact's
-* IDENTITY: `childId` plus the host's change token (dev/ino/size/mtimeNs/
-* ctimeNs) and the physical size.
-*
-* Why: a cold thread is re-read on every poll, and each read opens the handle,
-* decodes the ENTIRE persisted log and scans it back to `session/end-seed` —
-* O(thread history) per tick for an answer that only changes when the artifact
-* does. With the memo a repeat poll costs one `stat`.
-*
-* Only the RESULT is memoized, never the handle:
-* {@link readPersistedSession} still opens and closes it (its `finally`), so a
-* concurrent writer is unaffected. A host without `stat`, or a session whose
-* stat is unreadable, reads uncached — the read itself then reports the real
-* error (404 for a gone thread) exactly as before.
-*/
-async function readColdThreadLog(persistence, childId) {
+const coldThreadCaches = /* @__PURE__ */ new WeakMap();
+async function readColdThreadSession(persistence, childId) {
+	let cache = coldThreadCaches.get(persistence);
+	if (cache === void 0) {
+		cache = {
+			memo: /* @__PURE__ */ new Map(),
+			flights: /* @__PURE__ */ new Map()
+		};
+		coldThreadCaches.set(persistence, cache);
+	}
 	const identity = await storedIdentityOf(persistence, childId);
-	if (identity === void 0) return (await readPersistedSession(persistence, childId)).events;
-	const key = `${childId}\0${identity}`;
-	const hit = coldLogMemo.get(key);
-	if (hit !== void 0) {
-		coldLogMemo.delete(key);
-		coldLogMemo.set(key, hit);
-		return hit;
+	const hit = cache.memo.get(childId);
+	if (identity !== void 0 && hit?.identity === identity) {
+		cache.memo.delete(childId);
+		cache.memo.set(childId, hit);
+		return hit.snapshot;
 	}
-	const events = (await readPersistedSession(persistence, childId)).events;
-	const prefix = `${childId}\0`;
-	for (const existing of coldLogMemo.keys()) if (existing.startsWith(prefix)) coldLogMemo.delete(existing);
-	coldLogMemo.set(key, events);
-	while (coldLogMemo.size > COLD_LOG_MEMO_MAX) {
-		const oldest = coldLogMemo.keys().next().value;
-		if (oldest === void 0) break;
-		coldLogMemo.delete(oldest);
-	}
-	return events;
+	const key = `${childId}\0${identity ?? ""}`;
+	const pending = cache.flights.get(key);
+	if (pending !== void 0) return pending;
+	const promise = readPersistedSession(persistence, childId).then((snapshot) => {
+		if (identity !== void 0) {
+			cache.memo.delete(childId);
+			cache.memo.set(childId, {
+				identity,
+				snapshot
+			});
+			while (cache.memo.size > COLD_LOG_MEMO_MAX) {
+				const oldest = cache.memo.keys().next().value;
+				if (oldest === void 0) break;
+				cache.memo.delete(oldest);
+			}
+		}
+		return snapshot;
+	}).finally(() => {
+		cache.flights.delete(key);
+	});
+	cache.flights.set(key, promise);
+	return promise;
+}
+async function readColdThreadLog(persistence, childId) {
+	return (await readColdThreadSession(persistence, childId)).events;
 }
 /** The stored artifact's change identity, or undefined when unavailable. */
 async function storedIdentityOf(persistence, childId) {
@@ -7164,29 +7385,29 @@ function brandedSelection(selection) {
 	};
 }
 /**
-* Hand the agent the model-selection seam, once per live agent: the ref prompt
-* assembly snapshots and request routing applies. Seeded from the thread's
-* recorded selection, so a resumed thread keeps the model the user picked
-* instead of reverting to the deployment default.
+* Claim the thread's model seam once per live agent. DSH 0.2.2 hands every agent
+* its own `AgentModel` (`agent.model`), whose `select()` records the choice in
+* the log AND applies it to the next step — there is nothing to install, only a
+* handle to remember. Claiming SEEDS it from the thread's recorded selection so
+* a resumed thread keeps the model the user picked instead of reverting to the
+* deployment default; `select()` is a no-op when that choice is already the
+* recorded one, so re-seeding never appends a duplicate.
 * @param agent - the live thread agent.
-* @param childId - thread identity (the ref's key).
-* @returns the installed (or already installed) ref.
+* @param childId - thread identity (the map key).
+* @returns the agent's model handle.
 */
 function ensureModelSelection(agent, childId) {
 	const existing = threadModelRefs.get(childId);
 	if (existing !== void 0) return existing;
+	const model = agent.model;
 	const selection = selectionOf(agent);
-	const ref = {
-		current: selection === void 0 ? void 0 : brandedSelection(selection),
-		assembled: void 0
-	};
-	installModelSelection(agent.ctx, ref);
-	threadModelRefs.set(childId, ref);
-	return ref;
+	if (selection !== void 0) model.select(brandedSelection(selection));
+	threadModelRefs.set(childId, model);
+	return model;
 }
 /** Resolve the thread's live agent, cold-resuming the persisted session under
 *  its recorded composition. Every context-delivering route shares this. */
-async function ensureLiveThread(ctx, childId) {
+async function resumeThread(ctx, childId, cancelled) {
 	const live = liveThreadAgent(ctx, childId);
 	if (live !== void 0) return live;
 	const agents = ctx.get("agents");
@@ -7197,6 +7418,10 @@ async function ensureLiveThread(ctx, childId) {
 			resumeSessionId: childId,
 			setup
 		});
+		if (cancelled()) {
+			await handle.dispose();
+			throw new SidebarError("sidechat-error", "Thread was closed while resuming", 409);
+		}
 		threadDisposers.set(childId, () => handle.dispose());
 		dropInheritedGhosts(handle.agent);
 		ensureModelSelection(handle.agent, childId);
@@ -7204,6 +7429,42 @@ async function ensureLiveThread(ctx, childId) {
 	} catch (error) {
 		throw new SidebarError("sidechat-error", `thread resume failed: ${error instanceof Error ? error.message : String(error)}`, 500);
 	}
+}
+const resuming = /* @__PURE__ */ new WeakMap();
+async function ensureLiveThread(ctx, childId) {
+	const live = liveThreadAgent(ctx, childId);
+	if (live !== void 0) return live;
+	let flights = resuming.get(ctx);
+	if (flights === void 0) {
+		flights = /* @__PURE__ */ new Map();
+		resuming.set(ctx, flights);
+	}
+	const pending = flights.get(childId);
+	if (pending !== void 0) return pending.promise;
+	let cancelled = false;
+	const promise = resumeThread(ctx, childId, () => cancelled).finally(() => {
+		flights.delete(childId);
+	});
+	flights.set(childId, {
+		promise,
+		cancel() {
+			cancelled = true;
+		}
+	});
+	return promise;
+}
+async function assertImageModel(ctx, agent) {
+	const llm = ctx.get("llm");
+	if (llm?.resolveModelInfo === void 0) return JSON.stringify(selectionOf(agent));
+	for (let attempt = 0; attempt < 4; attempt++) {
+		const selection = selectionOf(agent);
+		if (selection === void 0) return;
+		const info = await llm.resolveModelInfo(selection.provider, selection.model);
+		if (JSON.stringify(selection) !== JSON.stringify(selectionOf(agent))) continue;
+		if (info.inputModalities !== void 0 && !info.inputModalities.includes("image")) throw new SidebarError("bad-request", "The selected model does not accept images");
+		return JSON.stringify(selection);
+	}
+	throw new SidebarError("sidechat-error", "Model selection changed during image admission; try again", 409);
 }
 /** Reject a wire selection the deployment cannot route. Mirrors the
 *  controller's own `selectModel` validation when the LLM service exposes it;
@@ -7266,7 +7527,11 @@ async function modelCatalogOf(ctx) {
 *  @param ctx - host plugin context.
 *  @param live - the live assistant stream buffer; absent only in tests that
 *    never exercise streaming (then every `live` response is empty). */
-function buildSidechatApi(ctx, live) {
+function buildSidechatApi(ctx, live, signal) {
+	const admissions = /* @__PURE__ */ new Map();
+	signal?.addEventListener("abort", () => {
+		for (const flight of resuming.get(ctx)?.values() ?? []) flight.cancel();
+	}, { once: true });
 	return {
 		"sidechat.start": async (payload) => {
 			const sessionId = requireString(payload, "sessionId");
@@ -7362,23 +7627,45 @@ function buildSidechatApi(ctx, live) {
 			return { childId };
 		},
 		"sidechat.prompt": async (payload) => {
-			const childId = requireString(payload, "childId");
-			const text = requireString(payload, "text").trim();
-			if (text === "") throw new SidebarError("bad-request", "text is required");
-			const agent = await ensureLiveThread(ctx, childId);
-			if (boundaryDelivered(agent.session.snapshotEvents()) || boundaryPending(agent)) admitFollowup(agent, textPrompt(text));
-			else {
-				const parts = [SIDE_BOUNDARY_PROMPT];
-				const snapshot = pendingSnapshots.get(childId);
-				pendingSnapshots.delete(childId);
-				if (snapshot !== void 0) parts.push(snapshot);
-				admitFirstContact(agent, parts.join("\n\n"), text);
-				const titles = ctx.get("sessionTitle");
-				if (titles !== void 0) try {
-					titles.rename(agent.session, sideLabel(text));
-				} catch {}
+			if (signal?.aborted) throw new SidebarError("unavailable", "Side Chat is unavailable", 503);
+			const { childId, text, content, hasImages } = parseSidechatPrompt(payload, sidechatImageLimits(ctx));
+			const activation = { disposed: false };
+			let attempts = admissions.get(childId);
+			if (attempts === void 0) {
+				attempts = /* @__PURE__ */ new Set();
+				admissions.set(childId, attempts);
 			}
-			return { accepted: true };
+			attempts.add(activation);
+			try {
+				if (hasImages) await ownedThread(ctx, childId);
+				const agent = await ensureLiveThread(ctx, childId);
+				let blocks = content;
+				if (hasImages) {
+					await assertImageModel(ctx, agent);
+					const attachments = sidechatAttachments(ctx);
+					try {
+						blocks = await attachments.admitPromptContent(content);
+					} catch (error) {
+						throw sidechatAdmissionError(attachments, error);
+					}
+					if (await assertImageModel(ctx, agent) !== JSON.stringify(selectionOf(agent))) throw new SidebarError("sidechat-error", "Model selection changed during image admission; try again", 409);
+				}
+				if (signal?.aborted || activation.disposed) throw new SidebarError("sidechat-error", "Thread was closed while sending", 409);
+				const first = !boundaryDelivered(agent.session.snapshotEvents()) && !boundaryPending(agent);
+				const snapshot = pendingSnapshots.get(childId);
+				const messageId = first ? admitFirstContact(agent, [SIDE_BOUNDARY_PROMPT, ...snapshot === void 0 ? [] : [snapshot]].join("\n\n"), blocks) : admitFollowup(agent, blocks);
+				if (first) {
+					pendingSnapshots.delete(childId);
+					tryRenameThread(ctx, agent, sideLabel(text || "Image"));
+				}
+				return {
+					accepted: true,
+					messageId
+				};
+			} finally {
+				attempts.delete(activation);
+				if (attempts.size === 0) admissions.delete(childId);
+			}
 		},
 		"sidechat.cancel": async (payload) => {
 			const agent = liveThreadAgent(ctx, requireString(payload, "childId"));
@@ -7387,6 +7674,8 @@ function buildSidechatApi(ctx, live) {
 		},
 		"sidechat.dispose": async (payload) => {
 			const childId = requireString(payload, "childId");
+			for (const attempt of admissions.get(childId) ?? []) attempt.disposed = true;
+			resuming.get(ctx)?.get(childId)?.cancel();
 			pendingSnapshots.delete(childId);
 			threadModelRefs.delete(childId);
 			const dispose = threadDisposers.get(childId);
@@ -7400,12 +7689,18 @@ function buildSidechatApi(ctx, live) {
 		},
 		"sidechat.info": async (payload) => {
 			const childId = requireString(payload, "childId");
+			const limits = sidechatImageLimits(ctx);
+			const images = {
+				available: limits !== void 0,
+				...limits === void 0 ? {} : { limits }
+			};
 			const agent = liveThreadAgent(ctx, childId);
 			if (agent !== void 0) {
 				const preset = agent.session.header.agentPreset;
 				const selection = selectionOf(agent);
 				return {
 					live: true,
+					images,
 					status: agent.status,
 					...selection === void 0 ? {} : selectionFields(selection),
 					...preset === void 0 ? {} : { preset }
@@ -7413,29 +7708,38 @@ function buildSidechatApi(ctx, live) {
 			}
 			const persistence = ctx.get("sessionPersistence");
 			if (persistence !== void 0) try {
-				const inspected = await readPersistedSession(persistence, childId);
+				const inspected = await readColdThreadSession(persistence, childId);
 				const preset = resolvePresetId(inspected.header, inspected.events);
 				const selection = effectiveModelSelection(inspected.events);
 				return {
 					live: false,
+					images,
 					...preset === void 0 ? {} : { preset },
 					...selection === void 0 ? {} : selectionFields(selection)
 				};
 			} catch {}
-			return { live: false };
+			return {
+				live: false,
+				images
+			};
 		},
 		"sidechat.events": async (payload) => {
 			const childId = requireString(payload, "childId");
 			const rawAfter = payload.afterSeq;
 			if (rawAfter !== void 0 && (typeof rawAfter !== "number" || !Number.isSafeInteger(rawAfter) || rawAfter < 0)) throw new SidebarError("bad-request", "afterSeq must be a non-negative integer");
-			const own = threadOwnLogEvents(await threadLogEvents(ctx, childId));
+			const events = await threadLogEvents(ctx, childId);
+			const own = threadOwnLogEvents(events);
 			const fresh = rawAfter === void 0 ? own : own.filter((event) => event.seq > rawAfter);
 			const tailSeq = own.at(-1)?.seq ?? -1;
 			const agent = liveThreadAgent(ctx, childId);
+			const cold = agent === void 0 ? coldPendingMessages(events) : void 0;
 			return {
 				events: fresh.length > EVENTS_CAP$1 ? fresh.slice(fresh.length - EVENTS_CAP$1) : fresh,
 				live: liveEventsOf(live?.chunksFor(childId) ?? [], tailSeq),
-				pending: agent === void 0 ? [] : pendingOf(agent)
+				pending: agent === void 0 ? pendingInputs(cold.nextStep, cold.nextTurn).map((row) => ({
+					...row,
+					removable: false
+				})) : pendingOf(agent)
 			};
 		},
 		"sidechat.dequeue": async (payload) => {
@@ -7472,15 +7776,52 @@ function buildSidechatApi(ctx, live) {
 				model,
 				...rawEffort === void 0 ? {} : { reasoningEffort: rawEffort }
 			});
-			const agent = await ensureLiveThread(ctx, childId);
-			agent.session.append("model/selection", brandedSelection(selection));
-			ensureModelSelection(agent, childId).current = brandedSelection(selection);
+			ensureModelSelection(await ensureLiveThread(ctx, childId), childId).select(brandedSelection(selection));
 			return {
 				accepted: true,
 				selection
 			};
 		}
 	};
+}
+async function ownedThread(ctx, childId) {
+	const agent = liveThreadAgent(ctx, childId);
+	const persistence = ctx.get("sessionPersistence");
+	const record = agent === void 0 ? persistence === void 0 ? void 0 : await readColdThreadSession(persistence, childId) : {
+		header: agent.session.header,
+		events: agent.session.snapshotEvents(),
+		inheritedEventCount: Number(agent.session.inheritedEventCount)
+	};
+	if (record === void 0) throw new SidebarError("not-found", "Thread is unavailable", 404);
+	const events = record.events;
+	const creation = events[record.inheritedEventCount - 1];
+	const data = (creation?.type === "subagent/descriptor" ? creation : threadOwnLogEvents(events).find((event) => event.type === "subagent/descriptor"))?.data;
+	if (record.header.origin !== "subagent" || typeof record.header.parentSession !== "string" || data?.provider !== "sidechat" || data.mode !== "continuable") throw new SidebarError("forbidden", "Image operations require a side conversation", 403);
+	return {
+		events,
+		inheritedEventCount: record.inheritedEventCount
+	};
+}
+async function readSidechatImage(ctx, childId, messageId, blockIndex) {
+	if (!Number.isSafeInteger(blockIndex) || blockIndex < 0) throw new SidebarError("bad-request", "Invalid image block index");
+	const store = sidechatAttachments(ctx);
+	if (store === void 0) throw new SidebarError("unavailable", "Image attachments are unavailable", 503);
+	const record = await ownedThread(ctx, childId);
+	const agent = liveThreadAgent(ctx, childId);
+	const events = agent === void 0 ? record.events : agent.session.snapshotEvents();
+	const inheritedEventCount = agent === void 0 ? record.inheritedEventCount : Number(agent.session.inheritedEventCount);
+	const inbox = agent === void 0 ? coldPendingMessages(events, inheritedEventCount) : agent.inbox;
+	const own = events.slice(inheritedEventCount).filter((event) => event.type === "user/message").map((event) => event.data);
+	const ghosts = new Set(inheritedPendingIds(events, inheritedEventCount));
+	const queued = [...inbox.nextStep, ...inbox.nextTurn];
+	const message = [...own, ...queued.filter((message) => !ghosts.has(message.id ?? ""))].find((item) => item.id === messageId && item.source?.kind === "user");
+	const block = Array.isArray(message?.content) ? message.content[blockIndex] : void 0;
+	if (block?.type !== "image" || block.attachment === void 0) throw new SidebarError("not-found", "Image is not in this conversation", 404);
+	try {
+		return await store.readImage(block.attachment);
+	} catch {
+		throw new SidebarError("not-found", "Image bytes are unavailable", 404);
+	}
 }
 /** The wire fields of one model selection (shared by info's live/cold arms). */
 function selectionFields(selection) {
@@ -7908,8 +8249,9 @@ const FS_TREES_MAX_PATHS = 64;
 * (#952). Outside the workspace any linked worktree is adopted, which is PR
 * #802's cross-repository case. The highest-scoring adoptable worktree of the
 * newest event that has one wins, but only evidence after the last committed
-* working-directory/change is eligible. When there is no evidence the cwd is
-* kept (lifted to the repository top level for subdirectory sessions).
+* working-directory/change is eligible. With no such evidence the session cwd
+* itself is kept, a session living in a subdirectory of its repository
+* included: the repository top level is never a root on its own.
 *
 * Resolutions are cached process-wide ({@link ACTIVE_ROOT_TTL_MS}), concurrent
 * callers share one in-flight resolution AND one in-flight base probe, and
@@ -8269,7 +8611,8 @@ async function sessionEventsOf(ctx, sessionId) {
 * @param ctx - host plugin context.
 * @param sessionId - session whose tool calls are inspected.
 * @param base - the authoritative session cwd (already resolved by the caller).
-* @returns the active linked worktree, the repository top level, or `base`.
+* @returns the linked worktree the session moved into, or the session cwd's
+*   own (real) path — never the repository top level.
 */
 async function activeWorktreeRootOf(ctx, sessionId, base) {
 	if (base === "") return base;
@@ -8305,11 +8648,30 @@ async function activeWorktreeRootOf(ctx, sessionId, base) {
 	activeRootInFlight.set(flightKey, promise);
 	return promise;
 }
+/**
+* The session cwd as the filesystem spells it, without ever substituting the
+* repository top level.
+*
+* This value is the base a relative link path resolves against, so lifting a
+* subdirectory session to `<repo>` would resolve `<subdir>/tools/a.md` as
+* `<repo>/tools/a.md` (#1024 / #1080). Canonicalizing instead of returning the
+* caller's spelling keeps the value comparable with the canonical paths
+* `git rev-parse` reports: the workspace-containment decision in
+* {@link isAdoptableTop} must still see a nested worktree as INSIDE the
+* workspace when the cwd was reached through a symlink (macOS's `/var` vs
+* `/private/var` is the #952 layout).
+*/
+async function sessionRootOf(base) {
+	try {
+		return await realpath(base);
+	} catch {
+		return base;
+	}
+}
 /** One uncached resolution (see {@link activeWorktreeRootOf}). */
 async function resolveActiveWorktreeRoot(ctx, sessionId, base, directoryEpoch) {
 	const eventSeq = ctx.sessions.get(sessionId)?.seq;
-	const top = await topLevelOf(base);
-	if (top === void 0) {
+	if (await topLevelOf(base) === void 0) {
 		cachePut(activeWorktreeRootCache, sessionId, {
 			root: base,
 			base,
@@ -8320,9 +8682,8 @@ async function resolveActiveWorktreeRoot(ctx, sessionId, base, directoryEpoch) {
 		}, ACTIVE_ROOT_CACHE_MAX);
 		return base;
 	}
-	const canonicalTop = requireAbsolute(top);
-	const effectiveBase = pathUnderOf(base, canonicalTop) ? base : canonicalTop;
-	const root = await activeRootFromEvents(await sessionEventsOf(ctx, sessionId), effectiveBase) ?? effectiveBase;
+	const canonicalBase = await sessionRootOf(base);
+	const root = await activeRootFromEvents(await sessionEventsOf(ctx, sessionId), canonicalBase) ?? canonicalBase;
 	cachePut(activeWorktreeRootCache, sessionId, {
 		root,
 		base,
@@ -8404,7 +8765,7 @@ const inject = [
 	"connection",
 	"tools"
 ];
-/** Content types for the media route, by extension. */
+/** Content types for media files and HTML preview resources, by extension. */
 const MEDIA_TYPES = {
 	".png": "image/png",
 	".jpg": "image/jpeg",
@@ -8417,9 +8778,18 @@ const MEDIA_TYPES = {
 	".avif": "image/avif",
 	".pdf": "application/pdf",
 	".html": "text/html",
-	".htm": "text/html"
+	".htm": "text/html",
+	".css": "text/css",
+	".js": "text/javascript",
+	".mjs": "text/javascript",
+	".json": "application/json",
+	".woff": "font/woff",
+	".woff2": "font/woff2",
+	".ttf": "font/ttf",
+	".otf": "font/otf",
+	".wasm": "application/wasm"
 };
-/** Content type served by /sidebar/file (binary-safe fallback for unknowns). */
+/** Content type served by /sidebar/file and /sidebar/html; unknowns use a binary-safe fallback. */
 function mediaTypeForPath(path) {
 	return MEDIA_TYPES[extname(path).toLowerCase()] ?? "application/octet-stream";
 }
@@ -8836,7 +9206,7 @@ async function readPage(path, offset) {
 		await handle.close();
 	}
 }
-function buildApi(ctx, resolved, getSettings, assistantLive, archiveTasks) {
+function buildApi(ctx, resolved, getSettings, assistantLive, archiveTasks, sidechatSignal) {
 	/**
 	* Same-key sharing for the shared cwd path. Every file/Git route below
 	* resolves the session cwd through here, and a session switch fires them at
@@ -9212,7 +9582,7 @@ function buildApi(ctx, resolved, getSettings, assistantLive, archiveTasks) {
 			});
 		},
 		"archive.status": (payload) => archiveTasks.status(requireString(payload, "id"), requireString(payload, "sessionId")),
-		...buildSidechatApi(ctx, assistantLive)
+		...buildSidechatApi(ctx, assistantLive, sidechatSignal)
 	};
 }
 /** The npm package name of this plugin, exactly as its Loader row declares it. */
@@ -9350,10 +9720,32 @@ function apply(ctx, config) {
 			const value = viewOf().value;
 			return value !== null && typeof value === "object" ? value : SIDEBAR_PREFS_DEFAULTS;
 		};
+		/**
+		* The live `agentOpenTools` switch, or `undefined` when the form cannot be
+		* read right now. The host's settings service only lists entries whose
+		* fiber is ACTIVE, so a row missing from `describe()` is a NORMAL state
+		* during (re)mount and live-commit windows; a thrown read is the same
+		* unknown. `prefsOf()` maps that absence to the schema default (`false`),
+		* which is right for consumers but WRONG for this gate: it would read
+		* "unknown" as "the user turned the tool off" and unregister a live tool
+		* mid-session (issue #951). Only an explicit boolean is a user decision.
+		*/
+		const openToolsSetting = () => {
+			let value;
+			try {
+				value = viewOf().value;
+			} catch {
+				return;
+			}
+			if (value === null || typeof value !== "object") return void 0;
+			const flag = value.agentOpenTools;
+			return typeof flag === "boolean" ? flag : void 0;
+		};
 		const syncOpenToolsGate = () => {
-			if (prefsOf().agentOpenTools === true) {
+			const enabled = openToolsSetting();
+			if (enabled === true) {
 				if (openToolsDisposers === null) openToolsDisposers = registerOpenTool(ctx, agentOpenRegistry, (sessionId) => sessionCwdOf(ctx, sessionId), prefsOf);
-			} else if (openToolsDisposers !== null) {
+			} else if (enabled === false && openToolsDisposers !== null) {
 				openToolsDisposers();
 				openToolsDisposers = null;
 				agentOpenRegistry.drainAll();
@@ -9367,11 +9759,16 @@ function apply(ctx, config) {
 			externalDisable,
 			update: async (patch, expectedRevision) => {
 				await sctx.settings.update(ns, patch, expectedRevision);
+				syncOpenToolsGate();
 				return viewOf();
 			}
 		};
 		syncOpenToolsGate();
-		Promise.resolve(ctx.loader?.await?.()).then(() => importLegacyPrefs(ctx, sctx.settings, ns)).then((outcome) => {
+		Promise.resolve(ctx.loader?.await?.()).then(async () => {
+			const outcome = await importLegacyPrefs(ctx, sctx.settings, ns);
+			syncOpenToolsGate();
+			return outcome;
+		}).then((outcome) => {
 			if (outcome === "no-profile-home" || outcome === "no-form") {
 				ctx.logger.warn("dsh-better-sidebar: legacy preference import could not run (%s)", outcome);
 				return;
@@ -9390,7 +9787,24 @@ function apply(ctx, config) {
 	ctx.effect(() => () => {
 		archiveTasks.dispose();
 	}, "dsh-better-sidebar: archive task table");
-	const api = buildApi(ctx, resolved, () => settingsFace, assistantLive, archiveTasks);
+	const sidechatLifetime = new AbortController();
+	ctx.effect(() => () => {
+		sidechatLifetime.abort();
+	}, "dsh-better-sidebar: sidechat admissions");
+	const api = buildApi(ctx, resolved, () => settingsFace, assistantLive, archiveTasks, sidechatLifetime.signal);
+	const SIDECHAT_LARGE_PROMPT_ADMISSIONS = 2;
+	let largePromptAdmissions = 0;
+	const reserveLargePrompt = () => {
+		if (largePromptAdmissions >= SIDECHAT_LARGE_PROMPT_ADMISSIONS) throw new SidebarError("too-large", "Too many image admissions; try again", 413);
+		largePromptAdmissions++;
+		let released = false;
+		return () => {
+			if (!released) {
+				released = true;
+				largePromptAdmissions--;
+			}
+		};
+	};
 	ctx.effect(() => ctx.webServer.register({
 		kind: "prefix",
 		path: "/sidebar/api",
@@ -9421,6 +9835,11 @@ function apply(ctx, config) {
 				writeError(res, new SidebarError("not-found", "unknown sidebar API method", 404));
 				return;
 			}
+			const imagePrompt = method === "sidechat.prompt";
+			let releaseImagePrompt;
+			const admitLargePrompt = () => {
+				releaseImagePrompt ??= reserveLargePrompt();
+			};
 			const controller = method === "changes.ops" ? new AbortController() : void 0;
 			const response = controller === void 0 ? void 0 : res;
 			const abort = () => {
@@ -9428,7 +9847,13 @@ function apply(ctx, config) {
 			};
 			response?.once("close", abort);
 			try {
-				const payload = await readJsonBody(req);
+				if (imagePrompt) {
+					const declared = Number(req.headers["content-length"]);
+					if (Number.isFinite(declared) && declared > 1048576) admitLargePrompt();
+				}
+				const payload = await readJsonBody(req, imagePrompt ? sidechatPromptBodyLimit(ctx) : void 0, imagePrompt ? (total) => {
+					if (total > 1048576) admitLargePrompt();
+				} : void 0);
 				const handler = Object.hasOwn(api, method) ? api[method] : void 0;
 				if (typeof handler !== "function") throw new SidebarError("not-found", `unknown sidebar API method "${method}"`, 404);
 				const result = await handler(payload, controller?.signal);
@@ -9436,10 +9861,41 @@ function apply(ctx, config) {
 			} catch (error) {
 				if (controller?.signal.aborted !== true) writeError(res, error);
 			} finally {
+				releaseImagePrompt?.();
 				response?.off("close", abort);
 			}
 		}
 	}), "dsh-better-sidebar: /sidebar/api routes");
+	ctx.effect(() => ctx.webServer.register({
+		kind: "exact",
+		path: "/sidebar/sidechat-image",
+		handler: async (req, res) => {
+			if (!fence(req)) {
+				writeError(res, new SidebarError("forbidden", "forbidden", 403));
+				return;
+			}
+			if (req.method !== "GET") {
+				writeError(res, new SidebarError("method-error", "method not allowed", 405));
+				return;
+			}
+			try {
+				const params = new URL(req.url ?? "/", "http://dsh.internal").searchParams;
+				const childId = params.get("childId");
+				const messageId = params.get("messageId");
+				const index = params.get("blockIndex");
+				if (!childId || !messageId || index === null || !/^\d+$/.test(index)) throw new SidebarError("bad-request", "childId, messageId and blockIndex are required");
+				const image = await readSidechatImage(ctx, childId, messageId, Number(index));
+				res.writeHead(200, {
+					"content-type": image.ref.mediaType,
+					"x-content-type-options": "nosniff",
+					"cache-control": "private, no-store"
+				});
+				res.end(image.data);
+			} catch (error) {
+				writeError(res, error);
+			}
+		}
+	}), "dsh-better-sidebar: sidechat image route");
 	ctx.effect(() => ctx.webServer.register({
 		kind: "exact",
 		path: "/sidebar/upload",

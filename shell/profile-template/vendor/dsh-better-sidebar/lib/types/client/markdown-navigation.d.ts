@@ -77,13 +77,15 @@ export declare function prepareMarkdownAnchors(root: ParentNode): void;
  * @param docPath - the absolute path of the markdown document being rendered;
  *   relative targets resolve against its directory. Absent for prose surfaces.
  * @param cwd - the session workspace root, the base for prose surfaces.
+ * @param allLocalFiles - claim source files too, accepting only empty or line fragments.
  * @returns the resolved target, or null for every link the plugin does not own.
  */
-export declare function markdownAnchorTarget(destination: string, docPath: string | undefined, cwd: string | undefined): MarkdownAnchorTarget | null;
+export declare function markdownAnchorTarget(destination: string, docPath: string | undefined, cwd: string | undefined, allLocalFiles?: boolean): MarkdownAnchorTarget | null;
 /**
  * Make the host renderer able to SERVE the local links of one markdown text:
  * a claimed `.md`/`.markdown` destination gets its heading fragment carried as
- * `%23`, and every other local destination gets the `?` that keeps it inert.
+ * `%23`. Other local destinations stay inert unless `allLocalFiles` opts the
+ * surface into opening source files as well.
  *
  * Code regions are masked first (see `maskCodeRegions` — fenced blocks opened
  * by ``` ``` ``` OR `~~~`, and inline code spans), so documentation that
@@ -95,7 +97,7 @@ export declare function markdownAnchorTarget(destination: string, docPath: strin
  * @param cwd - the session workspace root, the base for prose surfaces.
  * @returns the markdown with local link destinations rewritten in place.
  */
-export declare function rewriteLocalMarkdownLinks(text: string, docPath: string | undefined, cwd: string | undefined): string;
+export declare function rewriteLocalMarkdownLinks(text: string, docPath: string | undefined, cwd: string | undefined, allLocalFiles?: boolean): string;
 /**
  * Land `fragment` inside `container`: open a collapsed `<details>` ancestor
  * (the same courtesy the preview's own outline pays) and scroll the surface's

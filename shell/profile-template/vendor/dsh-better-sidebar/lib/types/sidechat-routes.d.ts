@@ -1,3 +1,27 @@
+/**
+ * Side Chat routes of the /sidebar JSON API ('sidechat.start' /
+ * 'sidechat.prompt' / 'sidechat.cancel' / 'sidechat.dispose' /
+ * 'sidechat.info' / 'sidechat.events').
+ *
+ * A side thread is a child session the plugin creates ITSELF with a custom
+ * seed — the parent's full event log up to the click moment, honestly closed
+ * at an in-progress turn (see sidechat-core.ts). The child is marked
+ * `origin: 'subagent'` so the main session list hides it, and EVERY
+ * operation goes through these routes because the generic session RPCs are
+ * fenced away from subagent-origin identities (the api-remotes
+ * agent-lookup ownership fence). No DSH source is touched:
+ *
+ * - creation uses the public AgentRegistry.create seam (the same one
+ *   api-proxy's session.fork and the subagent fork provider use), with the
+ *   parent's preset composition and provider/model selection so the child's
+ *   first request shares the parent's token prefix (provider-side prefix
+ *   cache reuse);
+ * - the first prompt (boundary + question) and every follow-up are admitted
+ *   with the stock `agent.followup`;
+ * - a cold thread (DSH restart, or a closed thread) is resumed with
+ *   AgentRegistry.resume, composing the preset the child recorded.
+ */
+import type { StoredImageAttachment } from '@deepseek-ai/dsh-attachment';
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm';
 import type { Context } from './context-types.ts';
 import { SIDE_INJECTION_SOURCE_KIND, type SidechatLiveEvent, type SidechatLogEvent, type SidechatModelCatalog, type SidechatModelSelection, type SidechatPendingInput, type SidechatThreadInfo } from './sidechat-core.ts';
@@ -49,6 +73,7 @@ export interface SidechatRoutes {
     /** Deliver one follow-up message to a thread (live, or cold-resumed). */
     'sidechat.prompt'(payload: unknown): Promise<{
         accepted: true;
+        messageId: string;
     }>;
     /** Abort the thread's running turn (queued work is preserved). */
     'sidechat.cancel'(payload: unknown): Promise<{
@@ -97,4 +122,5 @@ export interface SidechatRoutes {
  *  @param ctx - host plugin context.
  *  @param live - the live assistant stream buffer; absent only in tests that
  *    never exercise streaming (then every `live` response is empty). */
-export declare function buildSidechatApi(ctx: Context, live?: AssistantLiveBuffer): SidechatRoutes;
+export declare function buildSidechatApi(ctx: Context, live?: AssistantLiveBuffer, signal?: AbortSignal): SidechatRoutes;
+export declare function readSidechatImage(ctx: Context, childId: string, messageId: string, blockIndex: number): Promise<StoredImageAttachment>;

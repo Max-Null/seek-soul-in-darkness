@@ -168,6 +168,8 @@ export declare const zh: {
     refresh: string;
     refreshUnsavedConfirm: string;
     closeUnsavedConfirm: string;
+    draftRestoreConfirm: string;
+    switchUnsavedConfirm: string;
     save: string;
     saved: string;
     unsaved: string;
@@ -314,6 +316,7 @@ export declare const zh: {
     openEditor: string;
     referenceFile: string;
     addToConversation: string;
+    quoteChip: string;
     copyRelative: string;
     copyAbsolute: string;
     rename: string;
@@ -440,6 +443,7 @@ export declare const zh: {
     sideChatSaveTitle: string;
     sideChatArchive: string;
     sideChatArchiveRunning: string;
+    sideChatArchiveBlocked: string;
     sideChatSaved: string;
     sideChatNoTurn: string;
     sideChatPendingDrop: string;
@@ -455,6 +459,17 @@ export declare const zh: {
     sideChatThinking: string;
     sideChatThink: string;
     sideChatInjection: string;
+    sideChatAddImages: string;
+    sideChatRemoveImage: string;
+    sideChatImagesDisabled: string;
+    sideChatImageFormat: string;
+    sideChatImageLimit: string;
+    sideChatImageReadError: string;
+    sideChatImageOwnerChanged: string;
+    sideChatSendUncertain: string;
+    sideChatImageLoading: string;
+    sideChatImageUnavailable: string;
+    sideChatImage: string;
     sideChatSend: string;
     sideChatCancelTitle: string;
     sideChatError: string;

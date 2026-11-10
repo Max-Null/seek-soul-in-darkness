@@ -38,8 +38,12 @@ SHA256**；桌宠那份更新时人工判断是否合并。注意版本号在这
 第三方侧边栏底座（上游 `omdsh-dev/DSH-better-sidebar`）的 vendor 固化
 （`file:./vendor/dsh-better-sidebar`）。
 
-**当前状态（2026-10-28）：基线 = npm `dsh-better-sidebar@0.28.2` 整包，与本目录逐字节相同
-（477 文件、逐文件 SHA256 全等），即本目录当前没有本地定制。**
+**当前状态（2026-11-11）：基线 = npm `dsh-better-sidebar@0.30.1` 整包，与本目录逐字节相同
+（503 文件），即本目录当前没有本地定制。** 随内核 `0.2.2-rc.1` 升级一并抬升：0.30.1 的 host 侧
+`inject` 已是 `["webServer","sessions","connection","tools"]`（`webRuntime` 已由上游换成
+`connection`），`peerDependencies` 声明的 `@huanlin/dsh-plugin-better-locale` 只是可选 peer，
+不在 `dsh.client.inject` 里，故未随包引入。0.30.1 的 `package.json` 没有 `prepare` /
+`prepublishOnly`，放进 vendor 不会触发安装期构建。
 
 **本地第三处修复（并发同名上传的 rename 争用）不在其中。** 实测：
 

@@ -30,8 +30,17 @@ export interface SidebarErr {
         message: string;
     };
 }
-/** Read and parse the JSON request body (bounded; malformed → bad-request). */
-export declare function readJsonBody(req: SidebarHttpRequest): Promise<unknown>;
+/**
+ * Read and parse the JSON request body (bounded; malformed → bad-request).
+ *
+ * @param req - the request face (async-iterable body).
+ * @param limit - maximum accepted body size in bytes.
+ * @param onBytes - optional per-chunk observer of the cumulative size. Callers
+ *   that must account for a LARGE body before the whole read finishes (the
+ *   Side Chat image admission gate) use it; a throw from the callback aborts
+ *   the read and propagates like any other route failure.
+ */
+export declare function readJsonBody(req: SidebarHttpRequest, limit?: number, onBytes?: (total: number) => void): Promise<unknown>;
 /**
  * Read a raw text request body (the editor save route).
  *

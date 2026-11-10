@@ -9,6 +9,7 @@ import type { Context } from './context-types.ts';
  * @param ctx - host plugin context.
  * @param sessionId - session whose tool calls are inspected.
  * @param base - the authoritative session cwd (already resolved by the caller).
- * @returns the active linked worktree, the repository top level, or `base`.
+ * @returns the linked worktree the session moved into, or the session cwd's
+ *   own (real) path — never the repository top level.
  */
 export declare function activeWorktreeRootOf(ctx: Context, sessionId: string, base: string): Promise<string>;

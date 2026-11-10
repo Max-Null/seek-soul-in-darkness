@@ -21,6 +21,7 @@
  * a structured text snapshot inside the boundary prompt.
  */
 import type { SidebarHistoryEntry, SidebarSessionSummary } from './context-types.ts';
+import { type SidechatImageLimits, type SidechatImageOccurrence } from './sidechat-images.ts';
 import type { AssistantLiveChunk } from './assistant-live.ts';
 /** The durable thread-label prefix (also the row filter in the client list). */
 export declare const SIDE_LABEL_PREFIX = "Side: ";
@@ -190,6 +191,10 @@ export declare function boundaryDelivered(events: readonly SidechatLogEvent[]): 
 export declare function isContextInjectionMessage(data: Record<string, unknown>): boolean;
 /** The info the thread header shows (live runtime state + agent identity). */
 export interface SidechatThreadInfo {
+    images?: {
+        available: boolean;
+        limits?: SidechatImageLimits;
+    };
     /** A live agent drives the thread right now (false = cold/persisted). */
     live: boolean;
     /** Live lifecycle state; absent on cold threads. */
@@ -211,6 +216,8 @@ export interface SidechatThreadInfo {
  * invisible until a claim logs it as a durable `user/message`.
  */
 export interface SidechatPendingInput {
+    images?: SidechatImageOccurrence[];
+    removable?: boolean;
     /** Durable message identity — the `sidechat.dequeue` key. */
     id: string;
     /** Which boundary will claim it; `next-step` entries are claimed first. */
@@ -284,6 +291,10 @@ export declare function pendingInputs(nextStep: readonly unknown[], nextTurn: re
  *   prefix length, or the whole log).
  * @returns the ids of messages still pending after the folded events.
  */
+export declare function inboxInLog(events: readonly SidechatLogEvent[], limit?: number): {
+    nextStep: unknown[];
+    nextTurn: unknown[];
+};
 export declare function pendingIdsInLog(events: readonly SidechatLogEvent[], limit?: number): string[];
 /**
  * The message ids a seeded thread INHERITED as still-pending but never
@@ -296,6 +307,10 @@ export declare function pendingIdsInLog(events: readonly SidechatLogEvent[], lim
  * @returns the ghost message ids present in the prefix fold.
  */
 export declare function inheritedPendingIds(events: readonly SidechatLogEvent[], inheritedEventCount: number): string[];
+export declare function coldPendingMessages(events: readonly SidechatLogEvent[], inheritedEventCount?: number): {
+    nextStep: unknown[];
+    nextTurn: unknown[];
+};
 /**
  * The thread's effective model selection: `pending ?? lastUsed` of its own
  * `model/selection` / `request/header` fold (see {@link parentModelSelection},
@@ -303,9 +318,10 @@ export declare function inheritedPendingIds(events: readonly SidechatLogEvent[],
  * thread will actually request with.
  */
 export declare function effectiveModelSelection(events: readonly SidechatLogEvent[]): SidechatModelSelection | undefined;
-/** The events a thread produced itself: everything after the LAST
- *  `session/end-seed` marker (the fork-seed boundary). A log with no marker
- *  (a thread created before seeding existed) is returned whole. */
+/** The events a thread produced itself: everything after its last
+ *  `session/end-seed { inherited: true }` fork boundary. Untagged markers
+ *  delimit restore/replay lifecycles, not inherited history. A log with no
+ *  inherited marker (including an already-cut route payload) is returned whole. */
 export declare function threadOwnLogEvents(events: readonly SidechatLogEvent[]): SidechatLogEvent[];
 /** {@link threadOwnLogEvents} over history rows (the client cache shape). */
 export declare function threadOwnEvents(entries: readonly SidebarHistoryEntry[]): SidechatLogEvent[];

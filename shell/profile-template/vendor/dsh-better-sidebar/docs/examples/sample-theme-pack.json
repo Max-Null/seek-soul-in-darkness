@@ -1,0 +1,22 @@
+{
+  "format": "dsh-dream-skin/pack",
+  "version": 1,
+  "manifest": {
+    "id": "aurora-test",
+    "name": "Aurora Test",
+    "nameZh": "极光测试",
+    "author": "RevolutionLA",
+    "version": "1.0.0",
+    "colorScheme": "dark",
+    "accent": "#34d399",
+    "tokens": {
+      "--dsw-alias-bg-base": "#04120f",
+      "--dsw-alias-bg-layer-1": "#0a1d18",
+      "--dsw-alias-brand-primary": "#34d399",
+      "--dsw-alias-label-primary": "#eafaf2",
+      "--dsw-alias-label-secondary": "#92d5b8",
+      "--dsw-alias-border-l1": "#0f2a22",
+      "--dsw-alias-border-l2": "#1a3a30"
+    }
+  }
+}

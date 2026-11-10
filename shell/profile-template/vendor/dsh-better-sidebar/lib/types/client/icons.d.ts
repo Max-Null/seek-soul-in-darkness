@@ -13,6 +13,12 @@ export declare const IconPanelBottomOutline16: ({ size, className }: IconProps) 
  * a rounded frame with a prompt chevron and underscore cursor.
  */
 export declare const IconTerminalOutline16: ({ size, className }: IconProps) => import("react").JSX.Element;
+/**
+ * Settings-navigation glyph for the "Side card" section. The shell asks for a
+ * square edge and tints the SVG with `currentColor`, so this stays a plain
+ * two-tone outline mark: the side panel plus the two rails it docks against.
+ */
+export declare const IconSideCardNav: ({ size, className }: IconProps) => import("react").JSX.Element;
 /** Diff glyph in the app's outline style: a file frame with a plus and a minus row. */
 export declare const IconDiffOutline16: ({ size, className }: IconProps) => import("react").JSX.Element;
 /** Upload glyph in the app's outline style: an arrow rising into a tray

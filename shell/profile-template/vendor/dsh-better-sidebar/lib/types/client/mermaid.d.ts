@@ -1,4 +1,7 @@
 import type { MermaidMarkdownProps } from './mermaid-blocks.ts';
+/** Drop every queued render and detach the current drain loop (test seam:
+ * module state persists across specs in one vitest file). */
+export declare function resetMermaidRenderQueueForTests(): void;
 /**
  * The chunk-resident markdown preview renderer: ONE MarkdownText pass over
  * the full source (cross-fence reference/footnote/list semantics intact),

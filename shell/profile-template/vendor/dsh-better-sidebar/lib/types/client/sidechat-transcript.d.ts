@@ -5,8 +5,9 @@
  * display rows.
  *
  * A thread child's log starts with the ENTIRE inherited parent log as its
- * fork seed. The route already cuts everything up to the LAST
- * `session/end-seed` marker; the mapping re-applies the same cut so any
+ * fork seed. The route already cuts everything up to the last tagged
+ * `session/end-seed { inherited: true }` marker; the mapping re-applies the
+ * same cut (never a restore/replay lifecycle marker) so any
  * seed event that somehow crosses the wire still never renders, and maps
  * context injections (the "Side conversation boundary" prompt,
  * plugin-sourced context) onto a collapsible injection row, so the view
@@ -31,6 +32,7 @@
  * deliverables, not from the call itself.)
  */
 import type { DiffHunk, ReadBlockLine } from '@deepseek-ai/dsh-client-ui-primitives';
+import { type SidechatImageOccurrence } from '../sidechat-images.ts';
 import type { SidebarHistoryEntry } from '../context-types.ts';
 /**
  * Structured render payload for a tool row that maps onto one of the host's
@@ -64,9 +66,9 @@ export interface SidechatDeliverable {
     description?: string;
 }
 /** One compact transcript row rendered in the thread view. `seq` is the
- *  source event's log sequence — stable row identity for React keys across
- *  polls (streaming caches ride the key, so window slides must not re-key
- *  rows). */
+ *  source event's log sequence. Text/reasoning also retain the original
+ *  content-block index: one event can yield several rows, so seq alone is
+ *  not a unique React key across polls. */
 export type SidechatTranscriptRow = 
 /** `messageId` is the durable message identity the log records on the event
  *  (`data.id`); the view uses it to dedupe a still-pending inbox row against
@@ -76,6 +78,7 @@ export type SidechatTranscriptRow =
     seq: number;
     text: string;
     messageId?: string;
+    images?: SidechatImageOccurrence[];
 }
 /** A context injection (the side boundary prompt + the parked in-progress
  *  snapshot, or any plugin-sourced context): rendered as one collapsible
@@ -96,17 +99,20 @@ export type SidechatTranscriptRow =
     text: string;
 }
 /** `settled` distinguishes an assembled message from a still-streaming
- *  chunk accumulation (streaming rows are superseded by the settle). */
+ *  chunk accumulation. Original content-block indexes are never compacted;
+ *  a live chunk that lacks a valid index keeps it undefined. */
  | {
     kind: 'assistant';
     seq: number;
     text: string;
     settled: boolean;
+    contentBlockIndex?: number;
 } | {
     kind: 'reasoning';
     seq: number;
     text: string;
     settled: boolean;
+    contentBlockIndex?: number;
 } | {
     kind: 'tool';
     seq: number;
@@ -149,9 +155,6 @@ export declare function formatTokens(n: number): string;
 /** Compact duration the way the main conversation prints run times
  *  (45.2s / 2m42s — sub-minute keeps one decimal). */
 export declare function formatDurationMs(ms: number): string;
-/** Extract the visible text of a content-block list (`text` blocks verbatim,
- *  joined by blank lines); empty reads `…` so rows never render blank. */
-export declare function blockText(content: readonly unknown[]): string;
 /**
  * One-line summary of a tool call's raw arguments JSON for the collapsed
  * row: the first identifying string field when the JSON parses, else the
@@ -173,3 +176,6 @@ export declare function toolArgsSummary(args: string | undefined): string;
  * @returns display rows in log order.
  */
 export declare function transcriptRows(entries: readonly SidebarHistoryEntry[], prev?: readonly SidechatTranscriptRow[]): SidechatTranscriptRow[];
+/** A single assistant event can have multiple text/reasoning blocks. Keep the
+ * original block index (including skipped blocks), not a filtered row index. */
+export declare function sidechatRowKey(row: SidechatTranscriptRow): string;

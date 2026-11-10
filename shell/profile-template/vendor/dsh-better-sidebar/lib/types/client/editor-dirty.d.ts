@@ -9,6 +9,10 @@
  * - the browser unload (refresh / close tab / navigate away) through a
  *   `beforeunload` guard.
  *
+ * A confirmed discard also drops the file's durable draft backup
+ * (`editor-draft-backup.ts`): that backup is the same draft and must not be
+ * offered back on the next open.
+ *
  * Module-level and keyed by `sessionId::tabId`: a tab id is unique only WITHIN
  * one session — the native right column counts its own `tab1`…, and the bottom
  * workbench reuses `editor:<path>` for the same file in every session. Keyed by
@@ -54,7 +58,8 @@ export declare function editorDirtyRevision(): number;
  * it one commit later anyway.
  *
  * Shared by the sidebar's tab close and the file tree's close-on-delete so
- * both paths warn exactly once, with the same copy.
+ * both paths warn exactly once, with the same copy, and drop the durable
+ * backup of every discarded draft.
  * @param sessionId - the owning session (see {@link isEditorDirty} for the
  *  omitted case).
  */
