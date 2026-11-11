@@ -1,43 +1,55 @@
-# v1.1.8 思灵（SSiD）
+# v1.1.11 思灵（SSiD）
 
-> 状态：**已发布**（2026-10-18）。内核跟进 0.2.1-rc.2；两处界面统计与列表缺陷修复。
+> 状态：**待发布**。内核跟进 0.2.2-rc.1（跨 minor）；随包插件集跟到最新；安装器品牌完成 8 语迁移。
 
 ## 这一版改了什么
 
-### 一、内核跟进 0.2.1-rc.2
+### 一、内核跟进 0.2.2-rc.1
 
-内置内核从 0.2.0-rc.2 升到 **0.2.1-rc.2**：`@deepseek-ai/dsh`、`dsh-desktop-host`、`dsh-desktop-runtime` 三个包同版。
+内置内核从 **0.2.1-rc.2** 直上 **0.2.2-rc.1**。
 
-0.2.1 删除了 `webRuntime` 服务，改由 `webStartup` 承担同一职责（信任主机清单）。profile patch 里 connection 那条注入随之换成 `[webStartup, webServer]` —— 405 的修法本身没变（仍要把 `webServer` 加回 inject），只是服务名跟着换。
+> 说明：v1.1.9 与 v1.1.10 从未对外发布（无 Release）。按「未外发版本合并重打」的既定做法，那两版的内核跟进（rc.4 / rc.5）连同它们的配套改动一并并入本版，**不再单独发布**。所以你从 v1.1.8 升上来，拿到的是从 rc.2 起算的全部内核变化。
+
+这个区间里对思灵影响最大的三处：
+
+**① 上游的 `installer/strings.nsh` 被删除，安装器文案迁进 `installer/locales/*.json`。** 我们原先在那份 `.nsh` 里做的品牌替换（中英各 3 处，共 6 处）必须重做到新位置——**失效是静默的**，不做也不报错，只是安装器界面弹回上游的英文产品名。
+
+**② 这次做全了 8 个语种。** 上游新增的 `scripts/shipped-locales.spec.ts` 会断言 `installer/locales/` 与它自己的语言清单（8 语）对齐，所以那 6 个语种的文件不能删、只能一起改。共替换 24 处（8 文件 × 3 个键：`INSTALLER_LAUNCH_FAILED` / `INSTALLER_RUNNING` / `INSTALLER_PATH_OWNERSHIP`）。德语、日语、俄语的安装界面从此也显示「思灵」而不是上游产品名。
+
+**③ 壳侧合进了上游 2.2 线的全部改动**（9 个文件、19 个冲突块）。其中两处值得记：`PROFILE_TEMPLATES` 的导出从 `app-boot` 挪到了 `official-bundles`（我方 `project-manager.ts` 的 import 随之调整）；主进程新增了插件操作诊断通道（`OperationJournal`），与思灵原有的 `host.log` 并存——两条传输层不同（IPC 消息 vs stdio 字节流），互不吞事件。
 
 ### 二、随包插件跟进最新
 
 | 插件 | 从 | 到 |
 |---|---|---|
-| `@changfenhuang/dsh-genui` | 0.11.3 | 0.13.0 |
-| `ds-harness-remote` | 0.4.27 | 0.5.11 |
-| `dsh-context` | 0.65.0 | 0.73.0 |
-| `dsh-pocket` | 2.10.6 | 2.12.0 |
-| `dsh-session-manager` | 0.6.2 | 0.7.2 |
-| `dsh-better-sidebar`（vendor） | 0.26.1 | 0.28.0 |
-| `@max-null/dsh-memory` | 0.15.1 | 0.16.0 |
-| `@max-null/dsh-achievements` | 0.1.3 | 0.1.4 |
-| `@max-null/dsh-jubensha` | 0.1.0 | 0.1.1 |
-| `@max-null/dsh-skill-mcp-center` | 0.6.0 | 0.6.1 |
+| `@changfenhuang/dsh-genui` | 0.15.0 | **0.16.0** |
+| `ds-harness-remote` | 0.6.0 | **0.6.4** |
+| `dsh-better-sidebar`（vendor） | 0.28.2 | **0.30.1** |
+| `dsh-context` | 0.78.2 | **0.83.1** |
+| `dsh-dream-skin` | 10.31.0 | **11.7.0** |
+| `dsh-wechat` | 0.14.0 | **0.16.2** |
+| `@max-null/dsh-memory` | 0.20.0 | **0.22.1** |
 
-**`ds-harness-remote` 是这次升级的硬前提**：0.4.27 在 0.2.1 下会让 `/api` 的 peer 传递失败——界面卡在「Loading plugins…」，`/api/settings/describe` 返回 `Cannot read properties of undefined (reading 'signal')`。0.5.x 修掉了。这是本版唯一会让装版**完全不可用**的问题，也是它必须同批升级的原因。
+`dsh-better-sidebar` 的 vendor 这次是**整包替换**（503 文件）：当前 vendor 与 npm 官方包逐字节相同、零本地定制，所以不需要保留任何补丁。它 0.30.1 的 host 侧 `inject` 已是 `["webServer","sessions","connection","tools"]`——上游自己把 `webRuntime` 换成了 `connection`。
 
-`dsh-better-sidebar` 仍是 vendor 形态（0.28.0 是上游为 0.2.1 做的适配版，`inject` 里已无 `webRuntime`）。
+`@max-null/dsh-memory` 0.22.x 带来跨环境记忆云同步（`memory_sync` / `memory_conflicts`）。**默认关闭**：没配 `memory.sync.remote` 就不注册那两个工具，模型看不到也就不会误调。
 
-### 三、修复：两处统计与列表
+### 三、应用内菜单与安装器文案
 
-**① 「关于 SSiD」的会话数恒为 0** —— 它找的是 `session.jsonl.zstd`，而 0.2.1 的会话格式 v4 把日志改名为 `session.v4.jsonl.zstd`，于是永远数成 0（实际有 5 个以上）。现在按 `session*.jsonl.zstd` 匹配。同一处的「开关与生效状态不一致」提示也修了：状态文件不存在时以前一律当 false，而隔离其实早由 `SSID_SESSION_ISOLATED_ROOT` 生效，现在以环境变量为准。
-
-**② Skill 面板少了一大半** —— 它只扫磁盘上的 `SKILL.md`，而用 `ctx.skills.register()` 注册的 skill（office 系列、剧本杀的 DM 手册、genui 等）没有文件，一律不显示。现在在磁盘结果之后追加一次运行时目录补齐。侧栏同时**按来源分组**（项目级 / 用户级 / 插件自带 / 内置 / 代码注册），「代码注册」那组标注「由插件在运行时注册，不可在此禁用」，组内条目不渲染开关——它们没有 `SKILL.md` 可写。
+- macOS 应用菜单的「关于」项跟着品牌走（显示「关于 思灵」）。
+- macOS 的 `CFBundleLocalizations` 维持中英两语——思灵的界面字典只有这两语，多声明会让系统按未翻译的语种选中界面。
+- 安装器 `uninstallDisplayName` 与版权行随产品名走（「Copyright © 2026 思灵」）。
 
 ## 升级说明
 
 - **覆盖安装即可**，会话、工作区、插件配置与跨会话记忆都保留。
-- **本版没有改动壳代码**，变化来自内核、随包插件集与上面那两处界面修复。
-- **两个第三方插件仍会停在 pending**：`dream-skin` 与 `video-preview` 的 `inject` 里写死了已被删除的 `webRuntime`，作者尚未适配 0.2.1。它们不影响界面与其余功能。
+- **`@deepseek-ai/dsh-experimental-tool-worktree` 已从随包 bundle 清单里去掉**（它已被上游并入 forge-bundle，继续挂着是功能重复，内核的 Release 说明也要求摘）。**全新安装不受影响**——模板里本来就没有它。**从旧版升上来的已有安装**需要在 profile 的 `dsh.profile.bundles` 里手动摘一次：
+
+  ```powershell
+  node -e "const fs=require('fs'),os=require('os'),p=require('path').join(os.homedir(),'.dsh/profiles/ssid/package.json');const j=JSON.parse(fs.readFileSync(p,'utf8'));j.dsh.profile.bundles=j.dsh.profile.bundles.filter(b=>!b.includes('tool-worktree'));fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n','utf8')"
+  ```
+
+  改完要**重启一次思灵**——bundles 在启动时读取，不重启不报错、只是「Git 工作树」入口还在。
+- **会话格式仍是 V4，普通会话双向可读。** 但 0.2.2 里 `independent-session-forks` 生效了：用本版产生过**普通 fork** 的会话，回退到旧内核可能读不了。回退边界要分开看——全局的「装回旧版安装包」是安全的，按会话生效的那条则不是。
+- **`dsh-video-preview` 仍会停在 pending**：它的 `inject` 里写死了 0.2.1 就已删除的 `webRuntime`，作者尚未适配。它不影响界面与其余功能，属已知哑故障、**不是本版引入的**。
 - **不买证书的既定取舍**：安装包未签名，Windows 的「无法验证发布者」提示点「运行」即可。
