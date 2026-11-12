@@ -42,54 +42,28 @@ window.__ModuleLoader__.load({
 				}
 			});
 		}
-		const SETTINGS_NAV_MARKER = "data-dsh-ssid-panels-settings-nav";
-		const SETTINGS_NAV_CSS = `
-[data-dsh-ssid-panels-settings-nav] > svg:first-child { display: none; }
-[data-dsh-ssid-panels-settings-nav]::before {
-  content: '';
-  flex: none;
-  width: 16px;
-  height: 16px;
-  background: currentColor;
-  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M12 16v-4'/%3E%3Cpath d='M12 8h.01'/%3E%3C/svg%3E") center / contain no-repeat;
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M12 16v-4'/%3E%3Cpath d='M12 8h.01'/%3E%3C/svg%3E") center / contain no-repeat;
-}
-`;
-		function registerSettingsNavIcon(label) {
-			if (typeof document === "undefined") return () => {};
-			let styleInjected = false;
-			const injectStyle = () => {
-				if (styleInjected) return;
-				styleInjected = true;
-				const style = document.createElement("style");
-				style.setAttribute("data-plugin", "@max-null/dsh-ssid-panels");
-				style.textContent = SETTINGS_NAV_CSS;
-				document.head.append(style);
-			};
-			injectStyle();
-			let disposed = false;
-			const sync = () => {
-				if (disposed) return;
-				const currentLabel = label().trim();
-				document.querySelectorAll("[role=\"dialog\"] nav button").forEach((button) => {
-					if (currentLabel.length > 0 && button.textContent?.trim() === currentLabel) button.setAttribute(SETTINGS_NAV_MARKER, "");
-					else button.removeAttribute(SETTINGS_NAV_MARKER);
-				});
-			};
-			sync();
-			const observer = new MutationObserver(sync);
-			observer.observe(document.body, {
-				childList: true,
-				subtree: true,
-				characterData: true
-			});
-			return () => {
-				disposed = true;
-				observer.disconnect();
-				document.querySelectorAll(`[${SETTINGS_NAV_MARKER}]`).forEach((element) => {
-					element.removeAttribute(SETTINGS_NAV_MARKER);
-				});
-			};
+		function SsidNavIcon({ size }) {
+			return (0, react.createElement)("svg", {
+				width: size,
+				height: size,
+				viewBox: "0 0 24 24",
+				fill: "none",
+				stroke: "currentColor",
+				strokeWidth: 2,
+				strokeLinecap: "round",
+				strokeLinejoin: "round"
+			}, (0, react.createElement)("circle", {
+				key: "c",
+				cx: 12,
+				cy: 12,
+				r: 10
+			}), (0, react.createElement)("path", {
+				key: "p1",
+				d: "M12 16v-4"
+			}), (0, react.createElement)("path", {
+				key: "p2",
+				d: "M12 8h.01"
+			}));
 		}
 		const STRINGS = {
 			zh: {
@@ -1491,7 +1465,12 @@ window.__ModuleLoader__.load({
 			face.on?.("locale/change", (snap) => {
 				adoptLocale(snap?.active);
 			});
-			ctx.effect(() => registerSettingsNavIcon(() => STRINGS[localeId].about));
+			ctx.slots.inject("settings.section.icon", () => ctx.slots.register({
+				name: "settings.section.icon",
+				id: "ssid-about",
+				order: 100,
+				label: () => STRINGS[localeId].about
+			}, (props) => (0, react.createElement)(SsidNavIcon, { size: props?.size ?? 16 })));
 			ctx.effect(() => {
 				const host = document.createElement("div");
 				document.body.appendChild(host);
