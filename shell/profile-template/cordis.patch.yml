@@ -123,6 +123,23 @@
 - id: connection
   inject: [webStartup, webServer]
 
+# ── web 搜索/抓取 provider：新装默认启用新版 Web 搜索 API（2026-11-14）──────
+#
+# DSH 出厂默认是「搜索走 Messages（`deepseek-official`）+ 抓取走本地 HTTP」，
+# 于是新装思灵拿不到全家桶的工具层接口（`/v1/tools/search`、`/v1/tools/fetch`）——
+# 搜索要多花一次模型回合，抓取则受本机出网与代理限制。这里把两者都切到新版 API：
+#   - 搜索在服务端完成，不消耗模型 token（按成功请求计费，5 元/千次）；
+#   - 抓取同样在服务端完成，不再依赖本机到目标站点的连通性。
+#
+# ⚠ 代价（`profile-seed.ts:470-482` 的 `owned` 判据）：模板里出现 `- id: web` 后，
+# 该条目被判为**出厂条目**，每次启动以模板为准 —— 用户在「插件 → 内置插件配置 →
+# 网页搜索」里的开关只在本次运行有效，重启后回到这里写的值。要让用户能自行切换，
+# 只能删掉本条目（退回 DSH 出厂默认），二者不可兼得。
+- id: web
+  config:
+    searchProvider: deepseek-search-api
+    fetchProvider: deepseek-fetch-api
+
 # ── session-persistence-jsonl 行：会话根覆盖（SSiD 隔离根）─────────────────
 #
 # 基础层给的是**共享根**（`root: !!js dshHomePath('sessions')`，见
