@@ -21,7 +21,7 @@
  * 失败输出按官方 `formatGateResultReason` 把三类事实**全列出、互不遮蔽**：
  * error / exit N / signal X —— 只报"失败"而不说清是哪一类，会让人查错方向。
  *
- * 用法：node scripts/check-rules.mjs [all|vendor-sync|profile-sync|profile-manifest|bom|legacy-names]
+ * 用法：node scripts/check-rules.mjs [all|vendor-sync|profile-sync|profile-manifest|bom|legacy-names|plugin-peers|plugin-deps|dsh-clean]
  */
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -40,6 +40,7 @@ const MODES = [
   // 脚本 —— 三者在 tag v0.4.0-selfbuilt 之后都不在 main 上了，留着只会对一个
   // 已归档的对象报红。脚本仍在 scripts/check-loader-external.mjs，需要时可单独跑。
   { id: 'plugin-peers', label: '插件 peerDeps 覆盖性', script: 'check-plugin-peers.mjs' },
+  { id: 'plugin-deps', label: '随包插件集依赖完整性', script: 'check-plugin-deps.mjs' },
   { id: 'dsh-clean', label: 'DSH 源码只引用不改', script: 'check-dsh-checkout-clean.mjs' },
 ];
 
