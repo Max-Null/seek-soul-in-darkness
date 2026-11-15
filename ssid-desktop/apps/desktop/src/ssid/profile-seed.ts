@@ -322,12 +322,19 @@ function mergeProfileManifest(
   if (wanted.length > 0) profile['bundles'] = [...current, ...wanted]
 
   const dependencies = (manifest['dependencies'] ??= {}) as Record<string, unknown>
+  // 补缺失的 `link:` 声明。**这是独立的修复通道，不能挂在「有没有新 bundle」下面**：
+  // 一个包可能早已在 `dsh.profile.bundles` 里、`dependencies` 却缺（桌宠的
+  // `install_bridge()`、用户自装插件都会留下这种形态）。若只在 `wanted.length > 0`
+  // 时才写盘，这类条目每次启动都在内存里被补上又丢掉，永远补不上——2026-11-11
+  // 发版守卫的 profile-sync 就是这么红的（@dsh-pet/bridge、dsh-meme 各报一条）。
+  let dependenciesAdded = false
   for (const name of bundles) {
     if (dependencies[name] !== undefined) continue
     dependencies[name] = linkSpecifier(join(pluginSetModules(pluginSetRoot), ...name.split('/')))
+    dependenciesAdded = true
   }
 
-  if (wanted.length === 0) return []
+  if (wanted.length === 0 && !dependenciesAdded) return []
   writeFileSync(manifestPath, `${JSON.stringify(manifest, undefined, 2)}\n`, 'utf8')
   return wanted
 }

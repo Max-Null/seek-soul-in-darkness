@@ -9,8 +9,6 @@ import { runProfile } from '@deepseek-ai/dsh/profile-boot'
 import type {} from '@deepseek-ai/dsh-client-connection'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-deepseek-account'
-import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
-import * as desktopOffice from './office.ts'
 import { localDragResource } from './file-drag.ts'
 import { resolveProfileName } from './profile-name.ts'
 
@@ -20,7 +18,6 @@ import { installPlatformSessionPublisher } from './platform-session.ts'
 import { installSsidNotifyPublisher } from './ssid-notify.ts'
 import { installSsidKeepAwakePublisher } from './ssid-keep-awake.ts'
 import { installSsidScreenshotService } from './ssid-screenshot.ts'
-import { installOfficeEngineResolution } from './office-engine.ts'
 import { installOperationDiagnostics } from './operation-diagnostics.ts'
 
 async function main(): Promise<void> {
@@ -28,7 +25,8 @@ async function main(): Promise<void> {
   if (process.connected) process.send?.({ type: 'starting', runId }, (error) => { if (error !== null) console.error(error) })
   const runtimeDir = process.argv[2] as string
   const projectDir = process.argv[3] as string
-  installOfficeEngineResolution(runtimeDir)
+  // Set before the launch-environment snapshot and profile evaluation; empty means the payload sits beside the runtime directory.
+  process.env.DSH_PRIMARY_RUNTIME = process.argv[4] || join(runtimeDir, '..', 'runtime', 'primary-runtime')
   const installAnchor = join(runtimeDir, 'node_modules', '@deepseek-ai', 'dsh', 'package.json')
   const loadedProfile = loadProfileDirectory('dsh', projectDir, installAnchor)
   // SSiD 纯净模式：插件把内核拖坏时的自救入口，只留官方 bundle 层、丢弃 profile patch
@@ -209,11 +207,6 @@ async function main(): Promise<void> {
   // `ctx.get` 取自己注册的服务：那会形成「取服务 → 调 trigger → 再取服务」的无限递归
   // （2026-09-26 实测：路由返回 500 Maximum call stack size exceeded）。
   installSsidScreenshotService(ctx, requestShot)
-  await ctx.plugin(desktopOffice, {
-    runtimeDir,
-    source: process.argv[4] ?? join(runtimeDir, '..', 'runtime', 'primary-runtime'),
-    root: join(resolveDshHome(), 'dsh-runtimes', 'dsh-primary-runtime'),
-  })
   installPlatformSessionPublisher(ctx, (session) => {
     if (process.connected) process.send?.({ type: 'platform-session', session })
   })

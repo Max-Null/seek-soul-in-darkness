@@ -9,12 +9,12 @@
  * 自动更新靠它，不需要自备静态托管与上传密钥。
  */
 export type MacOSAppUpdateFeed =
-  | { readonly provider?: 'generic', readonly publicUrl: string, readonly channel?: 'nightly' | 'latest' }
+  | { readonly provider?: 'generic', readonly publicUrl: string, readonly channel?: 'nightly' | 'stable' }
   | { readonly provider: 'github', readonly owner: string, readonly repo: string }
 
 /** Packaged electron-updater configuration for macOS. */
 export type MacOSAppUpdateConfig =
-  | { readonly provider: 'generic', readonly url: string, readonly channel: 'nightly' | 'latest', readonly updaterCacheDirName: string }
+  | { readonly provider: 'generic', readonly url: string, readonly channel: 'nightly' | 'stable', readonly updaterCacheDirName: string }
   | { readonly provider: 'github', readonly owner: string, readonly repo: string, readonly updaterCacheDirName: string }
 
 /** Resolve the macOS feed from the final electron-builder configuration (generic COS or GitHub Releases). */

@@ -106,6 +106,21 @@ describe('seedSsidProfile', () => {
       .toBe(`link:${join(pluginSetRoot, 'node_modules', '@max-null', 'dsh-memory').replaceAll('\\', '/')}`)
   })
 
+  it('bundle 已在清单里、dependencies 却缺时补上（不能因为没有新 bundle 就跳过写盘）', () => {
+    // 回归场景：桌宠的 install_bridge() 与用户自装插件都会留下「bundle 有、声明无」的形态。
+    // 修之前 mergeProfileManifest 在 `wanted.length === 0` 时提前 return，补好的依赖只留在
+    // 内存里、从不落盘，于是这类条目每次启动都补一次又丢一次，永远补不上。
+    // 后果是发版守卫的 profile-sync 判定 4 一直红（2026-11-11 实测：@dsh-pet/bridge、dsh-meme 各一条）。
+    makePluginSet(['dsh-meme'])
+    makeProfile(['@deepseek-ai/dsh-base', 'dsh-meme'])
+
+    const summary = seedSsidProfile({ profileDir, pluginSetRoot })
+
+    expect(summary.bundlesAdded).toEqual([]) // 确实没有新 bundle
+    expect(readManifest().dependencies['dsh-meme'])
+      .toBe(`link:${join(pluginSetRoot, 'node_modules', 'dsh-meme').replaceAll('\\', '/')}`)
+  })
+
   it('幂等：第二次调用只 kept，profile 文件逐字节不变', () => {
     makePluginSet(['@max-null/dsh-memory'])
     makeProfile()
