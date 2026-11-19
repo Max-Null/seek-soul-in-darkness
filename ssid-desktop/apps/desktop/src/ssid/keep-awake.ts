@@ -24,26 +24,39 @@ import { ssidNotifyConfigPath } from './notify.ts'
 
 /** 保活相关配置；字段与 `~/.ssid/notify.json` 对应（与通知共用一份配置）。 */
 export interface KeepAwakeConfig {
-  /** 总开关；缺省/未写视为关。 */
+  /** 总开关；缺省/未写按开处理，与设置页的默认值一致。 */
   readonly keepAwake?: unknown
   /** 一轮结束后仍保持多久（覆盖目标模式的轮次空隙）。 */
   readonly keepAwakeTailMs?: unknown
 }
 
 /**
+ * 保活缺省值：与 `dsh-ssid-panels` 的 `NOTIFY_DEFAULTS.keepAwake` / `keepAwakeTailMs`
+ * 逐字一致。
+ *
+ * 设置页与保活读同一份 `notify.json`，文件不存在时各退自己的默认值。值一旦分叉，
+ * 设置页显示「开」而实际不保活（屏幕照样黑）。改这里必须同步插件侧。
+ */
+const DEFAULT_KEEP_AWAKE = true
+const DEFAULT_KEEP_AWAKE_TAIL_MS = 60000
+
+/**
  * 读保活配置。
  *
  * 与通知共用 `notify.json`（路径解析交给 {@link ssidNotifyConfigPath}，所以
- * `SSID_NOTIFY_CONFIG` 的隔离覆盖对两者同时生效）。读取失败返回空对象 ——
- * `keepAwake` 不是 `true` 即视为关，与自建壳同一条判据（开关默认关，用户显式打开才保活）。
- * @returns 保活字段；文件不存在或损坏时为空。
+ * `SSID_NOTIFY_CONFIG` 的隔离覆盖对两者同时生效）。读取失败或字段缺失时退
+ * {@link DEFAULT_KEEP_AWAKE}，与设置页展示的默认值一致。
+ * @returns 保活字段；文件不存在或损坏时取默认值。
  */
 export function readKeepAwakeConfig(): KeepAwakeConfig {
   try {
     const parsed = JSON.parse(readFileSync(ssidNotifyConfigPath(), 'utf8')) as Record<string, unknown>
-    return { keepAwake: parsed['keepAwake'], keepAwakeTailMs: parsed['keepAwakeTailMs'] }
+    return {
+      keepAwake: parsed['keepAwake'] ?? DEFAULT_KEEP_AWAKE,
+      keepAwakeTailMs: parsed['keepAwakeTailMs'] ?? DEFAULT_KEEP_AWAKE_TAIL_MS,
+    }
   } catch {
-    return {}
+    return { keepAwake: DEFAULT_KEEP_AWAKE, keepAwakeTailMs: DEFAULT_KEEP_AWAKE_TAIL_MS }
   }
 }
 

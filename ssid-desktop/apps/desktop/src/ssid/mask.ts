@@ -42,11 +42,17 @@ export interface SsidMaskConfig {
   readonly hotkey: string
 }
 
-/** 缺省配置：与思灵壳的出厂值一致。 */
+/**
+ * 缺省配置：与 `dsh-ssid-panels` 的 `NOTIFY_DEFAULTS.mask` 逐字一致。
+ *
+ * 设置页（插件侧）与遮罩（壳侧）读同一份 `~/.ssid/notify.json`，文件不存在时各退
+ * 自己的默认值。两套值一旦分叉，用户看到的就是「设置页写着 A、遮罩显示 B」，
+ * 且要重新保存一次配置才对得上——改这里必须同步插件侧。
+ */
 const DEFAULT_MASK: SsidMaskConfig = {
-  text: '正在专注，稍后回复',
-  alpha: 0.86,
-  blur: 18,
+  text: '程序执行中，勿动',
+  alpha: 0.12,
+  blur: 10,
   passcode: '',
   hotkey: 'Control+Alt+M',
 }
