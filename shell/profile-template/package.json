@@ -26,8 +26,8 @@
     "@playwright/mcp": "0.0.83",
     "ds-harness-remote": "0.6.5",
     "dsh-better-sidebar": "0.32.1",
-    "dsh-context": "0.84.1",
-    "dsh-dream-skin": "11.14.1",
+    "dsh-context": "0.85.1",
+    "dsh-dream-skin": "11.16.0",
     "dsh-excel-panel": "0.6.1",
     "dsh-meme": "0.1.81",
     "dsh-session-manager": "0.7.8",
@@ -37,7 +37,8 @@
     "@astudioplus/codegraph-mcp": "0.21.0",
     "@max-null/dsh-quick-toolbar": "file:./vendor/dsh-quick-toolbar",
     "@max-null/dsh-skills": "0.1.2",
-    "@max-null/dsh-ssid-env": "file:./vendor/dsh-ssid-env"
+    "@max-null/dsh-ssid-env": "file:./vendor/dsh-ssid-env",
+    "@chaiyahang/dsh-scratchpad": "0.3.3"
   },
   "dsh": {
     "profile": {
@@ -77,6 +78,7 @@
         "@max-null/dsh-jubensha",
         "@dsh-pet/bridge",
         "dsh-meme",
+        "@chaiyahang/dsh-scratchpad",
         "@deepseek-ai/dsh-experimental-plugin-market-bundle"
       ],
       "patchReload": "live"
