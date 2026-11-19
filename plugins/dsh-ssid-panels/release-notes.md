@@ -1,41 +1,48 @@
-# v1.1.12
+# v1.1.13
 
-**发布日期**：2026-11-16
+**发布日期**：2026-11-20
 
 ## 内置升级
 
-- DSH 内核：`0.2.2-rc.1` → **`0.2.2-rc.3`**（跨 rc.2、rc.3 两个版本，共 1574 个提交）
-
-## 调整
-
-- **7 个随包插件跟到 npm 最新**：
-
-  | 插件 | 之前 | 现在 |
-  |---|---|---|
-  | `dsh-dream-skin` | 11.7.0 | 11.14.1 |
-  | `@max-null/dsh-skill-mcp-center` | 0.7.1 | 0.8.0 |
-  | `ds-harness-remote` | 0.6.4 | 0.6.5 |
-  | `dsh-better-sidebar` | `file:./vendor` | 0.32.1（改走 npm 渠道） |
-  | `dsh-context` | 0.84.0 | 0.84.1 |
-  | `dsh-session-manager` | 0.7.5 | 0.7.8 |
-  | `dsh-video-preview` | 0.1.4 | 0.1.5 |
-
-- **新装默认启用新版 Web 搜索 API**：模板新增 `web` 条目，新装的 profile 会把搜索与抓取都切到 DeepSeek 的工具层接口（`/v1/tools/*`）——搜索不再消耗模型回合，抓取改由服务端完成、不受本机出网限制。**代价**：该条目属出厂条目，每次启动以模板为准，设置页的「启用新版 Web 搜索 API」开关重启后失效。
-
-- **Office 组合改由 bundle 预设挂载**：上游 rc.2 把 `apps/desktop-host/src/office.ts` 的内容迁到 `packages/document/`（`office-kit` / `tool-office`），思灵侧不再在 `desktop-host` 里手动挂载。本次跟随上游删除了那段挂载与残留的死导入。
-
-## 修复
-
-- **设置页导航图标重复**：`dsh-memory` / `dsh-skill-mcp-center` / `dsh-achievements` / `dsh-ssid-panels` 四个插件改注册宿主 0.2.2 新增的 `settings.section.icon` 插槽，不再靠 `MutationObserver` + `::before` 打补丁。设置面板里这五行现在各只显示一个图标。
-
-  已知例外：`dsh-dream-skin` 那一行仍可能出现双图标（作者仓库的修复 PR 尚未合并）。验收时请单独看待这一行，它不计入本次修复范围。
+- DSH 内核：`0.2.2-rc.3` → **`0.2.2-rc.5`**（跨 rc.4、rc.5 两个版本，共 13 个提交；其中一条 liveshare 测试改动以 patch-id 相同的 cherry-pick 重复落地，净贡献 0 行）
 
 ## 新增
 
-- **`plugin-deps` 守卫**：新增第 8 道发版守卫，检查随包插件集的运行时依赖是否齐全。此前的形态是「随手抄插件，依赖悄悄丢失」，构建不报错、装上才缺。
+- **便签插件 `@chaiyahang/dsh-scratchpad` 0.3.3**：左栏「便签」面板，随手记、边写边存。
+
+  - 多条便签：置顶、标签筛选、搜索、删除二次确认（删错 7 天内可撤销）
+  - 待办聚合：所有便签里的 `- [ ]` 汇总到一个视图，勾选即写回原便签
+  - 版本历史：每条保留最近 10 版正文
+  - 附件与 Markdown 预览；「发到对话」会把图片/文件作为真实附件送进输入框
+  - Agent 工具：`scratchpad_list` / `search` / `read` / `create` / `append` / `update` / `delete`
+  - 唤起：左栏入口，或 `⌘⇧S`（新建 `⌘⇧N`、聚焦搜索 `⌘⇧F`）
+
+  便签数据写在 `~/.dsh/scratchpad`，**不在 `storages-ssid` 里** —— 需要备份便签时得单独加这条路径。
+
+## 修复
+
+- **遮罩与保活的缺省值与设置页分叉**：设置页（插件侧）与壳各读一份 `~/.ssid/notify.json`，文件不存在时各退自己的默认值。此前壳侧沿用自建壳的旧值，于是「设置页写着 A、遮罩实际显示 B」，要重新保存一次配置才对得上。
+
+  现在壳侧对齐插件侧：遮罩默认文案 `程序执行中，勿动`（此前 `正在专注，稍后回复`）、默认浓度 `0.12`（此前 `0.86`，更透、能看见底层）、默认保活开启（此前缺省视为关）。
+
+## 调整
+
+- **内核行为变化（跟随上游 rc.4）**：DeepSeek 官方请求现在**无条件**发送内容安全审查（`safety_check {level: high}`）。被拒时以 `CONTENT_REFUSED` 失败，**且不重试** —— 某些提问会直接看到这个错误码，而不是自动重试。这是上游行为，不是回归。
+
+- **`dsh-node-appearance` 跟到 0.11.0**。
+
+- **`@max-null/dsh-allostasis` pin 跟到 0.6.3**。
+
+- **隔离测试入口迁入仓库**：`start-dev.ps1` / `start-pkg.ps1` / `stop-dev.ps1` / `stop-pkg.ps1` 从工作区级目录 `.ssid-iso-test/` 迁到 `seek-soul-in-darkness/iso-test/`（受版本控制），运行时数据仍留在原处。对使用者无影响，旧路径保留转发桩。
+
+- **`start-dev.ps1` 新增运行时记录版本校验**：内核换代后起 dev 壳，会自动把开发项目的版本记录刷新成当前内核版本（此前「关于」页会一直显示换代前的版本）。
 
 ## 更新说明
 
-- **老用户升级**：插件集与内核随安装包一并更新，不需要手动操作。设置页的搜索开关如果此前打开过，升级后会回到模板默认值（新 API 全开）。
-- **会话兼容**：会话格式仍是 v4，本次没有不可回退的变更。rc.3 新增了一个 `team/mode` 事件，一旦会话里写入了它，回退到 rc.1 时该会话可能读不了——这是按会话生效的条件性单向门，不影响未使用 AgentTeam 的会话。
-- **macOS 版**：本版只有 Windows x64 未签名包，mac 包需另走 GitHub Actions 构建。
+- **老用户升级**：插件集与内核随安装包一并更新，不需要手动操作。
+
+- **没跟随的一处**：rc.5 把 `web_search` 的出厂默认从「钉死 DeepSeek Search API」改成「按模型路由计算」（DeepSeek 模型会话走免费的 Messages search）。思灵的模板仍显式指定 `searchProvider: deepseek-search-api`，所以**搜索行为与本版之前相同**。要吃到新默认是独立的设计决策，不在本版。
+
+- **会话兼容**：会话格式仍是 v4，事件词汇表逐字节未变，`rc.3 ↔ rc.5` 逻辑上双向可读，本版不引入任何条件性单向门。
+
+- **macOS 版**：本版只有 Windows x64 未签名包，mac 包走 GitHub Actions 另行构建。
