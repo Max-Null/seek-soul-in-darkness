@@ -113,7 +113,9 @@ npm trust list @max-null/<pkg>   # 需要 2FA；输出 "No trust configurations 
 - `Environment` **留空**：workflow 里没有定义 environment，填了就永远匹配不上。
 - `Allowed actions` **必须勾上 allow `npm publish`**：2026-09-03 之后新建的配置默认**只给 `npm stage publish`**。不勾这一项，前面的字段全对也会被拒（E404），看起来和「trust 没配」一模一样。
 
-**新配置有 2 天验证期**：必须在 2 天内完成首次成功发布，否则自动过期、且不能编辑，只能删掉重建。配完立刻触发 workflow，别隔天再跑。
+**新配置有 2 天验证期**（npm 2026-10-02 起的硬规则，[GitHub 公告](https://github.blog/changelog/2026-10-02-unvalidated-npm-trusted-publishing-configurations-now-expire/)）：未验证的配置在创建后 **48 小时**过期，过期后**不能授权发布、也不能编辑**（`Edit` 是灰的），只能 `Delete` → `Add trusted publisher` 重建，48 小时重新起算；首次成功发布之后配置转为已验证，才豁免过期。配完立刻触发 workflow，别隔天再跑。
+
+**存量配置也可能显示 `Expired`**（2026-11-20 实测）：`dsh-node-appearance` 的 0.10.1 在 2026-10-17 成功发布过，11-20 再发却被拒——包页 `Status: Expired`，workflow 里是 `Publishing to https://registry.npmjs.org/` 之后紧跟 `npm error code E404 ... PUT`。所以 **看到 E404 除了查「Allowed actions 没勾 `npm publish`」「Environment 填了」，还要查「配置是否已过期」**；判据是包页那一行 `Status:`，不是 `Permissions`（那次三个 permissions 都还在，纯粹过期）。久不发版的包，发版前先看一眼 Status；同一个包长期不发版时，也容易被这条规则悄悄拦下。
 
 **别信 CLI**：`npm trust github <pkg> --file publish.yml --repo <repo> --yes` 在 2FA 下会中途弹 OTP，失败时**不报错**，事后 `trust list` 仍是空——看起来像成功。
 
