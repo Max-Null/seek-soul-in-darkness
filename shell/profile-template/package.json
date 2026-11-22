@@ -19,7 +19,7 @@
     "@max-null/dsh-memory": "0.23.0",
     "@max-null/dsh-node-appearance": "0.11.0",
     "@max-null/dsh-plugin-center": "0.5.2",
-    "@max-null/dsh-skill-mcp-center": "0.8.2",
+    "@max-null/dsh-skill-mcp-center": "0.8.3",
     "@max-null/dsh-ssid-panels": "file:./vendor/dsh-ssid-panels",
     "@max-null/dsh-ssid-zh-ui": "file:./vendor/dsh-ssid-zh-ui",
     "@max-null/dsh-ssid-pwsh-retry": "file:./vendor/dsh-ssid-pwsh-retry",
