@@ -18,7 +18,7 @@ window.__ModuleLoader__.load({
 		//#region src/client/index.tsx
 		/**
 		* @max-null/dsh-ssid-panels client half: four SSiD tabs registered on
-		* ctx.betterSidebar (memory / guardian state / habit candidates / balances).
+		* ctx.betterSidebar (memory / habit candidates / balances).
 		* dsh-better-sidebar is an optional type-only peer: without it this half
 		* registers nothing and the host routes stay unused.
 		*
@@ -68,16 +68,9 @@ window.__ModuleLoader__.load({
 		const STRINGS = {
 			zh: {
 				about: "关于 SSiD",
-				tabGuardian: "状态",
 				tabHabit: "习惯",
 				tabBalance: "余额",
-				assertions: "断言计数",
-				quiet: "安静",
-				level: "{n} 级",
-				reviewQueue: "编辑审查队列",
 				noPending: "无待审查项",
-				turn: "第 {n} 轮 · ",
-				noPath: "(无路径)",
 				habitCandidates: "候选习惯",
 				evidence: "证据 {n} 条",
 				confirmToMemory: "确认（写入记忆）",
@@ -173,16 +166,9 @@ window.__ModuleLoader__.load({
 			},
 			en: {
 				about: "About SSiD",
-				tabGuardian: "Status",
 				tabHabit: "Habits",
 				tabBalance: "Balance",
-				assertions: "Assertions",
-				quiet: "Quiet",
-				level: "Level {n}",
-				reviewQueue: "Edit review queue",
 				noPending: "No pending reviews",
-				turn: "Turn {n} · ",
-				noPath: "(no path)",
 				habitCandidates: "Habit candidates",
 				evidence: "{n} evidence",
 				confirmToMemory: "Confirm (save to memory)",
@@ -403,49 +389,6 @@ window.__ModuleLoader__.load({
 				strokeLinecap: "round",
 				strokeLinejoin: "round"
 			}, (0, react.createElement)("path", { d: path }));
-		}
-		/**
-		* 记忆面板（0.3.0）：三组分组（待审核/已审核·按需/常驻注入）+ namespace
-		* 筛选 + 搜索 + 「常驻注入」开关（approved 可切、suggested 禁用）+ 确认/
-		* 删除 + 刷新 + 「整理记忆」按钮（一点即发：建会话→open→input 就绪后
-		* setDraft→submit，机制实证自 dsh-better-sidebar conversation-draft.ts）。
-		*/
-		/** 状态面板：Guardian 触发线快照（1s 轮询，可见时）。 */
-		function GuardianView(props) {
-			const t = useT();
-			const [snapshot, setSnapshot] = (0, react.useState)({});
-			(0, react.useEffect)(() => {
-				if (!props.visible) return;
-				const tick = () => {
-					api("guardian.snapshot").then((value) => {
-						setSnapshot(value);
-					}).catch(() => {});
-				};
-				tick();
-				const timer = setInterval(tick, 1e3);
-				return () => {
-					clearInterval(timer);
-				};
-			}, [props.visible]);
-			const session = snapshot.session;
-			const count = session?.assertionCount ?? 0;
-			const level = session?.assertionLevel ?? 0;
-			const queue = snapshot.reviewQueue ?? [];
-			const label = level === 0 ? t("quiet") : t("level", { n: level });
-			return (0, react.createElement)("div", { style: ssid.wrap }, (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, (0, react.createElement)("span", null, t("assertions")), (0, react.createElement)("span", { style: ssid.badge(level) }, label)), (0, react.createElement)("div", { style: {
-				fontSize: 22,
-				fontWeight: 700,
-				color: "var(--dsw-alias-label-primary, #d8e0ea)"
-			} }, String(count))), (0, react.createElement)("div", { style: ssid.card }, (0, react.createElement)("div", { style: ssid.title }, t("reviewQueue")), queue.length === 0 ? (0, react.createElement)("div", { style: ssid.muted }, t("noPending")) : queue.map((item, index) => (0, react.createElement)("div", {
-				key: index,
-				style: {
-					...ssid.text,
-					fontSize: 11.5,
-					overflow: "hidden",
-					textOverflow: "ellipsis",
-					whiteSpace: "nowrap"
-				}
-			}, `${item.turn !== void 0 ? t("turn", { n: item.turn }) : ""}${item.filePath ?? t("noPath")}`))));
 		}
 		function HabitView(props) {
 			const t = useT();
@@ -1512,14 +1455,6 @@ window.__ModuleLoader__.load({
 			ctx.inject(["betterSidebar"], (sidebarCtx) => {
 				const service = sidebarCtx.betterSidebar;
 				if (service === void 0) return;
-				sidebarCtx.effect(() => service.registerTab({
-					id: "@max-null/dsh-ssid-panels:guardian",
-					title: () => STRINGS[localeId].tabGuardian,
-					icon: () => tabIcon("M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2", "#06b6d4"),
-					order: 61,
-					single: true,
-					component: ({ visible }) => (0, react.createElement)(GuardianView, { visible })
-				}));
 				sidebarCtx.effect(() => service.registerTab({
 					id: "@max-null/dsh-ssid-panels:habit",
 					title: () => STRINGS[localeId].tabHabit,

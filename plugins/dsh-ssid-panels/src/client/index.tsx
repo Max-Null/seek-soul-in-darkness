@@ -1,6 +1,6 @@
 /**
  * @max-null/dsh-ssid-panels client half: four SSiD tabs registered on
- * ctx.betterSidebar (memory / guardian state / habit candidates / balances).
+ * ctx.betterSidebar (memory / habit candidates / balances).
  * dsh-better-sidebar is an optional type-only peer: without it this half
  * registers nothing and the host routes stay unused.
  *
@@ -55,16 +55,9 @@ type LocaleId = 'zh' | 'en'
 const STRINGS = {
   zh: {
     about: '关于 SSiD',
-    tabGuardian: '状态',
     tabHabit: '习惯',
     tabBalance: '余额',
-    assertions: '断言计数',
-    quiet: '安静',
-    level: '{n} 级',
-    reviewQueue: '编辑审查队列',
     noPending: '无待审查项',
-    turn: '第 {n} 轮 · ',
-    noPath: '(无路径)',
     habitCandidates: '候选习惯',
     evidence: '证据 {n} 条',
     confirmToMemory: '确认（写入记忆）',
@@ -160,16 +153,9 @@ const STRINGS = {
   },
   en: {
     about: 'About SSiD',
-    tabGuardian: 'Status',
     tabHabit: 'Habits',
     tabBalance: 'Balance',
-    assertions: 'Assertions',
-    quiet: 'Quiet',
-    level: 'Level {n}',
-    reviewQueue: 'Edit review queue',
     noPending: 'No pending reviews',
-    turn: 'Turn {n} · ',
-    noPath: '(no path)',
     habitCandidates: 'Habit candidates',
     evidence: '{n} evidence',
     confirmToMemory: 'Confirm (save to memory)',
@@ -357,43 +343,6 @@ function tabIcon(path: string, color: string): ReactNode {
  * 删除 + 刷新 + 「整理记忆」按钮（一点即发：建会话→open→input 就绪后
  * setDraft→submit，机制实证自 dsh-better-sidebar conversation-draft.ts）。
  */
-
-/** 状态面板：Guardian 触发线快照（1s 轮询，可见时）。 */
-function GuardianView(props: { visible: boolean }): ReactNode {
-  const t = useT()
-  const [snapshot, setSnapshot] = useState<{ session?: { assertionCount?: number, assertionLevel?: number } | null, reviewQueue?: Array<{ filePath?: string, turn?: number }> }>({})
-  useEffect(() => {
-    if (!props.visible) return
-    const tick = (): void => {
-      void api('guardian.snapshot').then(value => { setSnapshot(value as typeof snapshot) }).catch(() => {})
-    }
-    tick()
-    const timer = setInterval(tick, 1000)
-    return () => { clearInterval(timer) }
-  }, [props.visible])
-  const session = snapshot.session
-  const count = session?.assertionCount ?? 0
-  const level = session?.assertionLevel ?? 0
-  const queue = snapshot.reviewQueue ?? []
-  const label = level === 0 ? t('quiet') : t('level', { n: level })
-  return createElement('div', { style: ssid.wrap },
-    createElement('div', { style: ssid.card },
-      createElement('div', { style: ssid.title },
-        createElement('span', null, t('assertions')),
-        createElement('span', { style: ssid.badge(level) }, label),
-      ),
-      createElement('div', { style: { fontSize: 22, fontWeight: 700, color: 'var(--dsw-alias-label-primary, #d8e0ea)' } }, String(count)),
-    ),
-    createElement('div', { style: ssid.card },
-      createElement('div', { style: ssid.title }, t('reviewQueue')),
-      queue.length === 0
-        ? createElement('div', { style: ssid.muted }, t('noPending'))
-        : queue.map((item, index) => createElement('div', { key: index, style: { ...ssid.text, fontSize: 11.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
-          `${item.turn !== undefined ? t('turn', { n: item.turn }) : ''}${item.filePath ?? t('noPath')}`,
-        )),
-    ),
-  )
-}
 
 /** 习惯面板：dsh-habit 候选（第一级人工闸门）。 */
 interface HabitCandidate { id: string, habit: string, confidence: string, evidenceCount: number, status: string }
@@ -1268,19 +1217,11 @@ export function apply(ctx: Context): void {
     () => createElement('span', { style: { fontSize: 13, fontWeight: 600 } }, '思灵'),
   ))
 
-  // 侧栏 3 tab（记忆 tab 已归还 dsh-memory 自带——2026-08-19 归属迁移）：
+  // 侧栏 2 tab（记忆 tab 已归还 dsh-memory 自带——2026-08-19 归属迁移）：
   // betterSidebar 是可选软依赖（未安装时设置页仍可用）。
   ctx.inject(['betterSidebar'], (sidebarCtx: Context) => {
     const service = sidebarCtx.betterSidebar
     if (service === undefined) return
-    sidebarCtx.effect(() => service.registerTab({
-      id: '@max-null/dsh-ssid-panels:guardian',
-      title: () => STRINGS[localeId].tabGuardian,
-      icon: () => tabIcon('M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2', '#06b6d4'),
-      order: 61,
-      single: true,
-      component: ({ visible }) => createElement(GuardianView, { visible }),
-    }))
     sidebarCtx.effect(() => service.registerTab({
       id: '@max-null/dsh-ssid-panels:habit',
       title: () => STRINGS[localeId].tabHabit,

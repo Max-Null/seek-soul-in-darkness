@@ -486,10 +486,9 @@ const require = createRequire(import.meta.url);
 const PLUGIN_ZH = {
 	"@huanlin/dsh-plugin-better-sidebar-plugin-office": "Office 三件套内联预览（docx/xlsx/pptx）",
 	"@max-null/dsh-chinese-thinking": "中文思考——系统提示注入，首轮即中文",
-	"@max-null/dsh-guardian": "Guardian 状态引擎——断言计数、编辑审查队列、无反馈环监控",
 	"@max-null/dsh-habit": "自学习习惯引擎——纠错信号检测、阈值判断、两级人工闸门",
 	"@max-null/dsh-memory": "跨会话明文记忆——BM25 检索、无向量、人工可管",
-	"@max-null/dsh-ssid-panels": "SSiD 面板——记忆/状态/习惯/余额 tab 与关于页",
+	"@max-null/dsh-ssid-panels": "SSiD 面板——记忆/习惯/余额 tab 与关于页",
 	"dsh-better-sidebar": "VSCode 式右侧栏——文件/终端/Git/浏览器，按会话隔离",
 	"dsh-excel-panel": "Excel 编辑面板——多工作表、公式、批量格式、保存回写",
 	"dsh-sidebar-qa": "划选提问——选文本到侧栏追问，不打断主对话",
@@ -500,10 +499,9 @@ const PLUGIN_ZH = {
 const PLUGIN_EN = {
 	"@huanlin/dsh-plugin-better-sidebar-plugin-office": "Inline preview for Office files (docx/xlsx/pptx)",
 	"@max-null/dsh-chinese-thinking": "Chinese thinking — system prompt injection, Chinese from the first turn",
-	"@max-null/dsh-guardian": "Guardian state engine — assertion counts, edit review queue, feedback-loop watch",
 	"@max-null/dsh-habit": "Self-learning habit engine — correction signals, thresholds, two human gates",
 	"@max-null/dsh-memory": "Cross-session plaintext memory — BM25 retrieval, no vectors, human-manageable",
-	"@max-null/dsh-ssid-panels": "SSiD panels — memory/status/habits/balance tabs and the about page",
+	"@max-null/dsh-ssid-panels": "SSiD panels — memory/habits/balance tabs and the about page",
 	"dsh-better-sidebar": "VSCode-style right sidebar — files/terminal/git/browser, per-session",
 	"dsh-excel-panel": "Excel editing panel — multi-sheet, formulas, batch formatting, save back",
 	"dsh-sidebar-qa": "Selection Q&A — ask about selected text in the sidebar without interrupting the main chat",
@@ -1140,12 +1138,6 @@ function apply(ctx) {
 				holder.current = status;
 			})();
 			return holder.current ?? { state: "idle" };
-		},
-		"guardian.snapshot": () => {
-			return required(ctx.get("guardian"), "guardian").snapshot?.() ?? {
-				session: null,
-				reviewQueue: []
-			};
 		},
 		"habit.snapshot": () => {
 			return required(ctx.get("habit"), "habit").snapshot?.() ?? [];
